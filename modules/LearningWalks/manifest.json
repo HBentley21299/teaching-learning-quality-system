@@ -1,0 +1,12 @@
+{
+  "moduleKey": "learning_walks",
+  "name": "Learning Walks",
+  "routePrefix": "/learning-walks",
+  "permissions": ["learning_walk.submit"],
+  "recordTypes": ["learning_walk"],
+  "usesFormEngine": true,
+  "usesActionEngine": true,
+  "usesEvidenceEngine": true,
+  "dashboardWidgets": ["learning_walk_volume", "learning_walk_themes"]
+}
+

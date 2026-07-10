@@ -1,0 +1,12 @@
+{
+  "moduleKey": "cpd",
+  "name": "CPD Management",
+  "routePrefix": "/cpd",
+  "permissions": ["cpd.manage"],
+  "recordTypes": ["cpd_event"],
+  "usesFormEngine": false,
+  "usesActionEngine": true,
+  "usesEvidenceEngine": true,
+  "dashboardWidgets": ["cpd_attendance", "cpd_milestones"]
+}
+

@@ -1,0 +1,12 @@
+{
+  "moduleKey": "actions",
+  "name": "Actions",
+  "routePrefix": "/actions",
+  "permissions": ["actions.manage"],
+  "recordTypes": ["action"],
+  "usesFormEngine": false,
+  "usesActionEngine": true,
+  "usesEvidenceEngine": true,
+  "dashboardWidgets": ["open_actions", "overdue_actions"]
+}
+

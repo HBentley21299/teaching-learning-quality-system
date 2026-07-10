@@ -1,0 +1,12 @@
+{
+  "moduleKey": "identity_access",
+  "name": "User Accounts & Permissions",
+  "routePrefix": "/admin/users",
+  "permissions": ["users.manage", "permissions.manage"],
+  "recordTypes": ["user_account"],
+  "usesFormEngine": false,
+  "usesActionEngine": false,
+  "usesEvidenceEngine": false,
+  "dashboardWidgets": ["role_permission_matrix"]
+}
+

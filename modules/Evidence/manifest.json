@@ -1,0 +1,12 @@
+{
+  "moduleKey": "evidence",
+  "name": "Staff Development Evidence",
+  "routePrefix": "/evidence",
+  "permissions": ["evidence.submit", "evidence.review"],
+  "recordTypes": ["impact_evidence"],
+  "usesFormEngine": true,
+  "usesActionEngine": true,
+  "usesEvidenceEngine": true,
+  "dashboardWidgets": ["evidence_submission_status"]
+}
+

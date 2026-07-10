@@ -1,0 +1,12 @@
+{
+  "moduleKey": "staff",
+  "name": "Staff Management",
+  "routePrefix": "/staff",
+  "permissions": ["staff.read", "staff.manage"],
+  "recordTypes": ["staff_profile"],
+  "usesFormEngine": false,
+  "usesActionEngine": false,
+  "usesEvidenceEngine": false,
+  "dashboardWidgets": ["staff_profile_summary"]
+}
+

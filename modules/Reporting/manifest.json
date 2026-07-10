@@ -1,0 +1,12 @@
+{
+  "moduleKey": "reporting",
+  "name": "Reporting",
+  "routePrefix": "/reports",
+  "permissions": ["reports.view_all", "reports.view_scoped"],
+  "recordTypes": ["dashboard"],
+  "usesFormEngine": false,
+  "usesActionEngine": false,
+  "usesEvidenceEngine": false,
+  "dashboardWidgets": ["tl_overview", "faculty_dashboard", "staff_profile", "cpd_milestones"]
+}
+

@@ -1,0 +1,12 @@
+{
+  "moduleKey": "work_scrutiny",
+  "name": "Work Scrutiny",
+  "routePrefix": "/work-scrutiny",
+  "permissions": ["work_scrutiny.submit"],
+  "recordTypes": ["work_scrutiny"],
+  "usesFormEngine": true,
+  "usesActionEngine": true,
+  "usesEvidenceEngine": true,
+  "dashboardWidgets": ["scrutiny_volume", "scrutiny_actions"]
+}
+

@@ -1,0 +1,17 @@
+[
+  {
+    "staffExternalId": "STAFF_0001",
+    "displayName": "Harry Bentley",
+    "email": "harryjbentley@outlook.com",
+    "role": "Super Admin",
+    "scope": "global"
+  },
+  {
+    "staffExternalId": "STAFF_0002",
+    "displayName": "Example Staff Member",
+    "email": "example.staff@college.example",
+    "role": "Staff",
+    "scope": "self"
+  }
+]
+

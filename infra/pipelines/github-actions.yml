@@ -1,0 +1,39 @@
+name: tlqs-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  api:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore API
+        run: dotnet restore apps/api/TLQS.sln
+      - name: Build API
+        run: dotnet build apps/api/TLQS.sln --configuration Release --no-restore
+      - name: Test API
+        run: dotnet test apps/api/TLQS.sln --configuration Release --no-build
+
+  web:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+      - name: Build web
+        working-directory: apps/web
+        run: npm run build
+
