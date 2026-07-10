@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Archive, CheckCircle2, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Search, Send, X } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { KpiStrip } from "../components/KpiStrip";
@@ -40,6 +40,8 @@ const emptyForm: LivFormState = {
   secondLivOverview: ""
 };
 
+const MAX_STAFF_RESULTS = 8;
+
 export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
   const [records, setRecords] = useState<LivRecordSummary[]>([]);
   const [actions, setActions] = useState<ActionSummary[]>([]);
@@ -49,6 +51,7 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [staffQuery, setStaffQuery] = useState("");
+  const [isStaffResultsOpen, setIsStaffResultsOpen] = useState(false);
   const [selectedStaffId, setSelectedStaffId] = useState("");
   const [form, setForm] = useState<LivFormState>(emptyForm);
   const [statusMessage, setStatusMessage] = useState("");
@@ -56,6 +59,7 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
   const [actionTitle, setActionTitle] = useState("");
   const [actionDetail, setActionDetail] = useState("");
   const [actionDueDate, setActionDueDate] = useState("");
+  const staffInputRef = useRef<HTMLInputElement>(null);
 
   const canSubmitLiv = user.permissions.includes("liv.submit") || user.permissions.includes("liv.manage");
   const canManageLiv = user.permissions.includes("liv.manage");
@@ -85,17 +89,19 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
 
   const filteredStaff = useMemo(() => {
     const query = staffQuery.trim().toLowerCase();
-    if (!query) {
-      return staff;
-    }
-
-    return staff.filter(
-      (staffMember) =>
-        staffMember.displayName.toLowerCase().includes(query) ||
-        staffMember.email.toLowerCase().includes(query) ||
-        staffMember.externalId.toLowerCase().includes(query)
-    );
+    return staff
+      .filter(
+        (staffMember) =>
+          !query ||
+          staffMember.displayName.toLowerCase().includes(query) ||
+          staffMember.email.toLowerCase().includes(query) ||
+          staffMember.externalId.toLowerCase().includes(query)
+      )
+      .sort((left, right) => left.displayName.localeCompare(right.displayName))
+      .slice(0, MAX_STAFF_RESULTS);
   }, [staff, staffQuery]);
+
+  const selectedStaff = staff.find((staffMember) => staffMember.id === selectedStaffId);
 
   const livRecordIds = useMemo(() => new Set(records.map((record) => record.recordId)), [records]);
   const livActions = useMemo(
@@ -106,6 +112,35 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
   const closedActionCount = livActions.filter((action) => Boolean(action.completedDate)).length;
   const overdueActionCount = livActions.filter((action) => action.isOverdue).length;
   const openRecordCount = records.filter((record) => record.status === "open").length;
+
+  function selectStaff(staffMember: StaffSummary) {
+    setSelectedStaffId(staffMember.id);
+    setStaffQuery(staffMember.displayName);
+    setIsStaffResultsOpen(false);
+  }
+
+  function clearStaffSearch() {
+    setStaffQuery("");
+    setSelectedStaffId("");
+    setIsStaffResultsOpen(true);
+    staffInputRef.current?.focus();
+  }
+
+  function clearActionForm() {
+    setActionTitle("");
+    setActionDetail("");
+    setActionDueDate("");
+  }
+
+  function toggleActionForm() {
+    setIsCreatingAction((current) => {
+      if (current) {
+        clearActionForm();
+      }
+      return !current;
+    });
+    setStatusMessage("");
+  }
 
   function buildRequest(saveAsDraft: boolean, staffId: string): SaveLivRecordRequest {
     const subjectStaff = staff.find((staffMember) => staffMember.id === staffId);
@@ -145,6 +180,7 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
       setForm(emptyForm);
       setSelectedStaffId("");
       setStaffQuery("");
+      setIsStaffResultsOpen(false);
       await refreshData();
     } else {
       setStatusMessage(result.message ?? "The LIV record could not be saved.");
@@ -220,8 +256,8 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
   }
 
   async function createLivAction() {
-    if (!selectedRecord || !actionTitle.trim()) {
-      setStatusMessage("A LIV action needs a title.");
+    if (!selectedRecord || !actionTitle.trim() || !actionDetail.trim() || !actionDueDate) {
+      setStatusMessage("Complete the action title, description and review date.");
       return;
     }
 
@@ -240,9 +276,7 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
     if (result.ok) {
       setStatusMessage("LIV action created and assigned to the staff member.");
       setIsCreatingAction(false);
-      setActionTitle("");
-      setActionDetail("");
-      setActionDueDate("");
+      clearActionForm();
       await refreshData();
       await onActionsChanged?.();
     } else {
@@ -280,6 +314,9 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
                 setIsCreating((current) => !current);
                 setIsEditing(false);
                 setForm(emptyForm);
+                setStaffQuery("");
+                setSelectedStaffId("");
+                setIsStaffResultsOpen(false);
                 setStatusMessage("");
               }}
               variant="primary"
@@ -309,29 +346,82 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
           </div>
           <div className="entry-form">
             <div className="entry-field-grid">
-              <label className="entry-field entry-field-wide">
-                <span>Find staff member <strong>Required</strong></span>
-                <div className="topbar-search">
-                  <Search size={16} aria-hidden="true" />
-                  <input
-                    onChange={(event) => setStaffQuery(event.target.value)}
-                    placeholder="Search by name, email or staff ID"
-                    type="text"
-                    value={staffQuery}
-                  />
+              <div className="entry-field entry-field-wide">
+                <span id="liv-staff-label">Staff member <strong>Required</strong></span>
+                <div className="staff-search liv-staff-search">
+                  <div className="search-box staff-search-input">
+                    <Search size={16} aria-hidden="true" />
+                    <input
+                      aria-autocomplete="list"
+                      aria-controls="liv-staff-options"
+                      aria-expanded={isStaffResultsOpen}
+                      aria-labelledby="liv-staff-label"
+                      onChange={(event) => {
+                        setStaffQuery(event.target.value);
+                        setSelectedStaffId("");
+                        setIsStaffResultsOpen(true);
+                      }}
+                      onFocus={() => setIsStaffResultsOpen(true)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && filteredStaff.length > 0) {
+                          event.preventDefault();
+                          selectStaff(filteredStaff[0]);
+                        }
+
+                        if (event.key === "Escape") {
+                          setIsStaffResultsOpen(false);
+                        }
+                      }}
+                      placeholder="Type a name, email or staff ID"
+                      ref={staffInputRef}
+                      role="combobox"
+                      type="text"
+                      value={staffQuery}
+                    />
+                    {staffQuery || selectedStaffId ? (
+                      <button className="icon-button" onClick={clearStaffSearch} title="Clear staff selection" type="button">
+                        <X size={14} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {isStaffResultsOpen ? (
+                    <div
+                      className="staff-search-results"
+                      id="liv-staff-options"
+                      onMouseDown={(event) => event.preventDefault()}
+                      role="listbox"
+                    >
+                      {filteredStaff.length === 0 ? (
+                        <div className="staff-search-empty">No staff match "{staffQuery.trim()}".</div>
+                      ) : (
+                        filteredStaff.map((staffMember) => (
+                          <button
+                            aria-selected={staffMember.id === selectedStaffId}
+                            className="staff-search-result"
+                            key={staffMember.id}
+                            onClick={() => selectStaff(staffMember)}
+                            role="option"
+                            type="button"
+                          >
+                            <strong>{staffMember.displayName}</strong>
+                            <span>
+                              {staffMember.externalId}
+                              {staffMember.jobTitle ? ` - ${staffMember.jobTitle}` : ""}
+                            </span>
+                            <small>{staffMember.email}</small>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-              </label>
-              <label className="entry-field entry-field-wide">
-                <span>Staff member</span>
-                <select onChange={(event) => setSelectedStaffId(event.target.value)} value={selectedStaffId}>
-                  <option value="">Select staff member ({filteredStaff.length} match)</option>
-                  {filteredStaff.map((staffMember) => (
-                    <option key={staffMember.id} value={staffMember.id}>
-                      {staffMember.displayName} ({staffMember.externalId})
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <small>
+                  {selectedStaff
+                    ? `Selected: ${selectedStaff.externalId} - ${selectedStaff.email}`
+                    : "Start typing, then choose a staff member from the same list."}
+                </small>
+              </div>
               <LivFormFields form={form} setForm={setForm} />
             </div>
             <div className="toolbar">
@@ -373,6 +463,8 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
                     setSelectedRecordId(record.id);
                     setIsEditing(false);
                     setIsCreating(false);
+                    setIsCreatingAction(false);
+                    clearActionForm();
                   }}
                   type="button"
                   title="Open LIV record"
@@ -447,12 +539,19 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
                 {canManageLiv ? (
                   <Button disabled={isSaving} icon={Archive} onClick={() => void changeStatus("archive")} variant="quiet">Archive</Button>
                 ) : null}
-                {canManageActions || canSubmitLiv ? (
-                  <Button icon={Plus} onClick={() => setIsCreatingAction((current) => !current)}>LIV action</Button>
-                ) : null}
               </div>
             </>
           )}
+
+          <div className="liv-actions-heading">
+            <div>
+              <h3>Actions</h3>
+              <span>{selectedRecordActions.length} linked to this LIV</span>
+            </div>
+            {canManageActions || canSubmitLiv ? (
+              <Button icon={Plus} onClick={toggleActionForm} variant="primary">Add action</Button>
+            ) : null}
+          </div>
 
           {isCreatingAction ? (
             <div className="entry-form">
@@ -462,17 +561,25 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
                   <input onChange={(event) => setActionTitle(event.target.value)} type="text" value={actionTitle} />
                 </label>
                 <label className="entry-field entry-field-wide">
-                  <span>Descriptor</span>
+                  <span>Description <strong>Required</strong></span>
                   <textarea onChange={(event) => setActionDetail(event.target.value)} rows={3} value={actionDetail} />
                 </label>
                 <label className="entry-field">
-                  <span>Implementation date</span>
+                  <span>Review date <strong>Required</strong></span>
                   <input onChange={(event) => setActionDueDate(event.target.value)} type="date" value={actionDueDate} />
                 </label>
               </div>
               <div className="toolbar">
-                <Button icon={X} onClick={() => setIsCreatingAction(false)}>Cancel</Button>
-                <Button disabled={isSaving} icon={Plus} onClick={() => void createLivAction()} variant="primary">Create action</Button>
+                <Button
+                  icon={X}
+                  onClick={() => {
+                    setIsCreatingAction(false);
+                    clearActionForm();
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button disabled={isSaving} icon={Plus} onClick={() => void createLivAction()} variant="primary">Save action</Button>
               </div>
             </div>
           ) : null}
