@@ -7,7 +7,6 @@ import type {
   CurrentUser,
   FormDefinition,
   FormFieldDefinition,
-  LearningWalkRollupSummary,
   LearningWalkThemeMappingSummary,
   OrgUnitSummary,
   RecordDetail,
@@ -66,7 +65,6 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
-  const [rollup, setRollup] = useState<LearningWalkRollupSummary[]>([]);
   const [actions, setActions] = useState<ActionSummary[]>([]);
   const [selectedDetail, setSelectedDetail] = useState<RecordDetail | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
@@ -154,12 +152,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       setActions(nextActions);
 
       if (mode === "learning") {
-        const [nextMappings, nextRollup] = await Promise.all([
-          api.learningWalkThemeMappings(),
-          api.learningWalkRollup()
-        ]);
+        const nextMappings = await api.learningWalkThemeMappings();
         setThemeMappings(nextMappings);
-        setRollup(nextRollup);
       }
     } catch {
       setStatusMessage("Data could not be loaded from the API.");
@@ -375,6 +369,12 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     }
   }
 
+  function toggleCreateForm() {
+    setIsCreating((current) => !current);
+    setIsEditing(false);
+    setStatusMessage("");
+  }
+
   const linkedActions = selectedDetail
     ? actions.filter((action) => action.sourceRecordId === selectedDetail.id)
     : [];
@@ -419,20 +419,22 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
           <p className="eyebrow">{eyebrow}</p>
           <h1>{title}</h1>
         </div>
-        <div className="toolbar">
-          <Button
-            icon={primaryIcon}
-            onClick={() => {
-              setIsCreating((current) => !current);
-              setIsEditing(false);
-              setStatusMessage("");
-            }}
-            variant="primary"
-          >
+        {mode !== "learning" ? (
+          <div className="toolbar">
+            <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
+              {config.createLabel}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {mode === "learning" ? (
+        <div className="learning-create-action">
+          <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
             {config.createLabel}
           </Button>
         </div>
-      </div>
+      ) : null}
 
       {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
       {definitionError ? <div className="notice-row">{definitionError}</div> : null}
@@ -473,32 +475,6 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
           ) : (
             <p className="muted-copy">Loading form fields...</p>
           )}
-        </section>
-      ) : null}
-
-      {mode === "learning" ? (
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Learning Walk roll-up</h2>
-            <span>Faculty and team level</span>
-          </div>
-          <div className="rollup-list">
-            {rollup.length === 0 ? (
-              <div className="empty-row">No Learning Walk data yet</div>
-            ) : (
-              rollup.map((row) => (
-                <div className="rollup-row" key={`${row.facultyOrgUnitId ?? "none"}-${row.childOrgUnitId ?? "all"}`}>
-                  <div>
-                    <strong>{row.childCode ?? row.facultyCode ?? "Unassigned"}</strong>
-                    <span>{row.childName ?? row.facultyName ?? "No area"}</span>
-                  </div>
-                  <span>{row.facultyCode ?? "No faculty"}</span>
-                  <strong>{row.recordCount}</strong>
-                  <span>{row.latestRecordDate ?? "No date"}</span>
-                </div>
-              ))
-            )}
-          </div>
         </section>
       ) : null}
 
