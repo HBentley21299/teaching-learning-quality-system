@@ -335,6 +335,64 @@ nav {
   font-size: 0.84rem;
 }
 
+.panel-collapse-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 1rem;
+  font-weight: 800;
+  gap: 7px;
+  padding: 0;
+}
+
+.panel-collapse-button svg {
+  transform: rotate(-90deg);
+  transition: transform 150ms ease;
+}
+
+.panel-collapse-button.is-open svg {
+  transform: rotate(0);
+}
+
+.record-filter-bar {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(190px, 1.3fr) minmax(125px, 0.55fr) minmax(160px, 0.75fr) minmax(145px, 0.65fr) auto;
+  margin-bottom: 12px;
+}
+
+.record-filter-field {
+  display: grid;
+  gap: 5px;
+}
+
+.record-filter-field > span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.record-filter-field input,
+.record-filter-field select {
+  background: #ffffff;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  min-height: 40px;
+  min-width: 0;
+  padding: 0 10px;
+  width: 100%;
+}
+
+.record-filter-bar > .button {
+  min-height: 40px;
+}
+
 .two-column,
 .three-column {
   display: grid;
@@ -1413,6 +1471,10 @@ td {
   .form-template-rail {
     position: static;
   }
+
+  .record-filter-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -1493,6 +1555,10 @@ td {
   }
 
   .preview-inline-action {
+    grid-template-columns: 1fr;
+  }
+
+  .record-filter-bar {
     grid-template-columns: 1fr;
   }
 

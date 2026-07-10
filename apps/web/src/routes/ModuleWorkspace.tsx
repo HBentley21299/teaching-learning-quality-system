@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { Archive, CalendarPlus, CheckCircle2, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
+import { Archive, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -65,6 +65,11 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
+  const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(true);
+  const [recordSearch, setRecordSearch] = useState("");
+  const [recordStatusFilter, setRecordStatusFilter] = useState("all");
+  const [recordAreaFilter, setRecordAreaFilter] = useState("all");
+  const [recordSort, setRecordSort] = useState<"newest" | "oldest" | "area" | "status">("newest");
   const [actions, setActions] = useState<ActionSummary[]>([]);
   const [selectedDetail, setSelectedDetail] = useState<RecordDetail | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
@@ -108,10 +113,69 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     [editFacultyId, editTeamId, themeMappings]
   );
 
+  const recordAreaOptions = useMemo(
+    () =>
+      orgUnits
+        .filter((orgUnit) => records.some((record) => record.orgUnitId === orgUnit.id))
+        .map((orgUnit) => {
+          const parent = orgUnits.find((candidate) => candidate.id === orgUnit.parentOrgUnitId);
+          return {
+            id: orgUnit.id,
+            label: parent?.code ? `${parent.code} / ${orgUnit.code}` : orgUnit.code
+          };
+        })
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    [orgUnits, records]
+  );
+
+  const recordStatusOptions = useMemo(
+    () => Array.from(new Set(records.map((record) => record.submissionStatus))).sort(),
+    [records]
+  );
+
+  const displayedRecords = useMemo(() => {
+    if (mode !== "learning") {
+      return records;
+    }
+
+    const query = recordSearch.trim().toLocaleLowerCase();
+    const filtered = records.filter((record) => {
+      const areaLabel = getRecordAreaLabel(record, orgUnits);
+      const matchesSearch =
+        !query ||
+        [record.title, areaLabel, formatStatus(record.submissionStatus), record.recordDate ?? ""]
+          .some((value) => value.toLocaleLowerCase().includes(query));
+      const matchesStatus = recordStatusFilter === "all" || record.submissionStatus === recordStatusFilter;
+      const matchesArea = recordAreaFilter === "all" || record.orgUnitId === recordAreaFilter;
+      return matchesSearch && matchesStatus && matchesArea;
+    });
+
+    return [...filtered].sort((left, right) => {
+      if (recordSort === "oldest") {
+        return getRecordTimestamp(left) - getRecordTimestamp(right);
+      }
+      if (recordSort === "area") {
+        return getRecordAreaLabel(left, orgUnits).localeCompare(getRecordAreaLabel(right, orgUnits));
+      }
+      if (recordSort === "status") {
+        return formatStatus(left.submissionStatus).localeCompare(formatStatus(right.submissionStatus));
+      }
+      return getRecordTimestamp(right) - getRecordTimestamp(left);
+    });
+  }, [mode, orgUnits, recordAreaFilter, recordSearch, recordSort, recordStatusFilter, records]);
+
+  const hasRecordFilters =
+    recordSearch.trim().length > 0 || recordStatusFilter !== "all" || recordAreaFilter !== "all" || recordSort !== "newest";
+
   useEffect(() => {
     setSelectedDetail(null);
     setIsCreating(false);
     setIsEditing(false);
+    setIsActiveRecordsOpen(true);
+    setRecordSearch("");
+    setRecordStatusFilter("all");
+    setRecordAreaFilter("all");
+    setRecordSort("newest");
     setStatusMessage("");
     void refreshData();
     api.formDefinition(config.templateKey)
@@ -375,6 +439,13 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     setStatusMessage("");
   }
 
+  function clearRecordFilters() {
+    setRecordSearch("");
+    setRecordStatusFilter("all");
+    setRecordAreaFilter("all");
+    setRecordSort("newest");
+  }
+
   const linkedActions = selectedDetail
     ? actions.filter((action) => action.sourceRecordId === selectedDetail.id)
     : [];
@@ -480,34 +551,105 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
       <section className="panel">
         <div className="panel-heading">
-          <h2>Active records</h2>
-          <span>{records.length} {config.recordLabel}{records.length === 1 ? "" : "s"}</span>
-        </div>
-        <div className="record-list">
-          {records.length === 0 ? (
-            <div className="empty-row">
-              No {config.recordLabel}s yet. Use "{config.createLabel}" to add the first one.
-            </div>
+          {mode === "learning" ? (
+            <h2>
+              <button
+                aria-controls="learning-walk-active-records"
+                aria-expanded={isActiveRecordsOpen}
+                className={`panel-collapse-button${isActiveRecordsOpen ? " is-open" : ""}`}
+                onClick={() => setIsActiveRecordsOpen((current) => !current)}
+                type="button"
+              >
+                <ChevronDown aria-hidden="true" size={18} />
+                Active records
+              </button>
+            </h2>
           ) : (
-            records.map((record) => {
-              const orgUnit = orgUnits.find((unit) => unit.id === record.orgUnitId);
-              const parent = orgUnits.find((unit) => unit.id === orgUnit?.parentOrgUnitId);
-              return (
-                <div className="record-row" key={record.id}>
-                  <div>
-                    <strong>{record.title}</strong>
-                    <span>{parent?.code ? `${parent.code} / ${orgUnit?.code ?? "No team"}` : orgUnit?.code ?? "No team"}</span>
-                  </div>
-                  <span className={`status-pill status-${record.submissionStatus}`}>{formatStatus(record.submissionStatus)}</span>
-                  <span>{record.recordDate ?? "No date"}</span>
-                  <button className="icon-button" onClick={() => void openRecord(record.id)} type="button" title="Open record">
-                    <Eye size={16} aria-hidden="true" />
-                  </button>
-                </div>
-              );
-            })
+            <h2>Active records</h2>
           )}
+          <span>
+            {mode === "learning" && displayedRecords.length !== records.length
+              ? `${displayedRecords.length} of ${records.length}`
+              : records.length}{" "}
+            {config.recordLabel}{records.length === 1 ? "" : "s"}
+          </span>
         </div>
+
+        {mode !== "learning" || isActiveRecordsOpen ? (
+          <div id={mode === "learning" ? "learning-walk-active-records" : undefined}>
+            {mode === "learning" ? (
+              <div className="record-filter-bar">
+                <label className="record-filter-field record-filter-search">
+                  <span>Search records</span>
+                  <input
+                    onChange={(event) => setRecordSearch(event.target.value)}
+                    placeholder="Title, area, status or date"
+                    type="search"
+                    value={recordSearch}
+                  />
+                </label>
+                <label className="record-filter-field">
+                  <span>Status</span>
+                  <select onChange={(event) => setRecordStatusFilter(event.target.value)} value={recordStatusFilter}>
+                    <option value="all">All statuses</option>
+                    {recordStatusOptions.map((status) => (
+                      <option key={status} value={status}>{formatStatus(status)}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="record-filter-field">
+                  <span>Faculty / team</span>
+                  <select onChange={(event) => setRecordAreaFilter(event.target.value)} value={recordAreaFilter}>
+                    <option value="all">All areas</option>
+                    {recordAreaOptions.map((area) => (
+                      <option key={area.id} value={area.id}>{area.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="record-filter-field">
+                  <span>Sort by</span>
+                  <select onChange={(event) => setRecordSort(event.target.value as typeof recordSort)} value={recordSort}>
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="area">Area A-Z</option>
+                    <option value="status">Status A-Z</option>
+                  </select>
+                </label>
+                {hasRecordFilters ? (
+                  <Button icon={X} onClick={clearRecordFilters} variant="quiet">Clear filters</Button>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="record-list">
+              {records.length === 0 ? (
+                <div className="empty-row">
+                  No {config.recordLabel}s yet. Use "{config.createLabel}" to add the first one.
+                </div>
+              ) : displayedRecords.length === 0 ? (
+                <div className="empty-row">No {config.recordLabel}s match those filters.</div>
+              ) : (
+                displayedRecords.map((record) => {
+                  const orgUnit = orgUnits.find((unit) => unit.id === record.orgUnitId);
+                  const parent = orgUnits.find((unit) => unit.id === orgUnit?.parentOrgUnitId);
+                  return (
+                    <div className="record-row" key={record.id}>
+                      <div>
+                        <strong>{record.title}</strong>
+                        <span>{parent?.code ? `${parent.code} / ${orgUnit?.code ?? "No team"}` : orgUnit?.code ?? "No team"}</span>
+                      </div>
+                      <span className={`status-pill status-${record.submissionStatus}`}>{formatStatus(record.submissionStatus)}</span>
+                      <span>{record.recordDate ?? "No date"}</span>
+                      <button className="icon-button" onClick={() => void openRecord(record.id)} type="button" title="Open record">
+                        <Eye size={16} aria-hidden="true" />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {selectedDetail ? (
@@ -839,6 +981,17 @@ function formatStatus(status: string) {
     default:
       return status || "Submitted";
   }
+}
+
+function getRecordAreaLabel(record: RecordSummary, orgUnits: OrgUnitSummary[]) {
+  const orgUnit = orgUnits.find((unit) => unit.id === record.orgUnitId);
+  const parent = orgUnits.find((unit) => unit.id === orgUnit?.parentOrgUnitId);
+  return parent?.code ? `${parent.code} / ${orgUnit?.code ?? "No team"}` : orgUnit?.code ?? "No team";
+}
+
+function getRecordTimestamp(record: RecordSummary) {
+  const timestamp = Date.parse(record.recordDate ?? record.createdAt);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 function isWideEntryField(fieldType: string) {
