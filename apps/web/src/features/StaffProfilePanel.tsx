@@ -11,7 +11,8 @@ import type {
 } from "../services/types";
 
 /**
- * Full staff profile view (KPIs, reflections, CPD, LIV actions) backed by
+ * Full staff profile view assembled from its source records (Elevate Your
+ * Practice, reflections, CPD, actions and coaching) and backed by
  * GET /staff-profiles/{staffId}. Reflections are editable when the viewer is
  * the staff member themselves or holds staff.manage - the API enforces the
  * same rule on save.
@@ -88,7 +89,8 @@ export function StaffProfilePanel({
   const completedReflectionCount =
     detail?.reflections.filter((reflection) => reflection.status === "completed").length ?? 0;
   const overdueReflection = detail?.reflections.find((reflection) => reflection.status === "overdue");
-  const openActionCount = detail?.livActions.filter((action) => !action.completedDate).length ?? 0;
+  const openActionCount = detail?.actions.filter((action) => !action.completedDate).length ?? 0;
+  const completedActionCount = detail?.actions.filter((action) => Boolean(action.completedDate)).length ?? 0;
 
   async function reloadDetail() {
     try {
@@ -173,7 +175,7 @@ export function StaffProfilePanel({
           </strong>
         </div>
         <div className="kpi kpi-red">
-          <span>Open LIV actions</span>
+          <span>Open actions</span>
           <strong>{openActionCount}</strong>
         </div>
       </section>
@@ -187,8 +189,6 @@ export function StaffProfilePanel({
           <dl className="definition-list">
             <dt>Email</dt>
             <dd>{detail.email}</dd>
-            <dt>Job title</dt>
-            <dd>{detail.jobTitle ?? "Not recorded"}</dd>
             <dt>Team</dt>
             <dd>{detail.primaryOrgCode ?? "Unassigned"}</dd>
             <dt>Directory status</dt>
@@ -206,11 +206,13 @@ export function StaffProfilePanel({
               <span className={`status-pill ${detail.elevatePractice?.status === "submitted" ? "status-complete" : detail.elevatePractice?.status === "draft" ? "status-draft" : "status-overdue"}`}>
                 {detail.elevatePractice?.status === "submitted" ? "Submitted" : detail.elevatePractice?.status === "draft" ? "Draft" : "Not started"}
               </span>
-              <strong>{detail.elevatePractice?.overallAverage?.toFixed(2) ?? "-"}</strong>
-              <span>Overall practice profile</span>
+              <strong className="profile-practice-judgement">
+                {detail.elevatePractice?.judgement ?? "No current judgement"}
+              </strong>
+              <span>Current rubric judgement</span>
             </div>
             {detail.elevatePractice?.status === "submitted" ? (
-              <Button icon={ExternalLink} onClick={() => setShowElevateResult(true)} variant="primary">View result</Button>
+              <Button icon={ExternalLink} onClick={() => setShowElevateResult(true)} variant="primary">View report</Button>
             ) : null}
           </div>
           <p className="muted-copy">
@@ -220,8 +222,43 @@ export function StaffProfilePanel({
                 ? "The annual assessment is in progress and has not been submitted."
                 : "No annual self-assessment has been started yet."}
           </p>
+          {detail.elevatePractice?.developmentAreas.length ? (
+            <div className="profile-development-list">
+              <h3>Current development areas</h3>
+              {detail.elevatePractice.developmentAreas.map((area) => (
+                <article key={area.areaKey}>
+                  <div>
+                    <strong>{area.areaName}</strong>
+                  </div>
+                  {area.developmentApproach ? <p>{area.developmentApproach}</p> : null}
+                  {area.intendedImpact ? <small>Intended impact: {area.intendedImpact}</small> : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="muted-copy">No current development areas have been selected.</p>
+          )}
         </section>
       </div>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <h2>Elevate Your Practice reflections</h2>
+          <span>{detail.elevatePractice?.reflections.length ?? 0} recorded</span>
+        </div>
+        {detail.elevatePractice?.reflections.length ? (
+          <div className="profile-source-reflections">
+            {detail.elevatePractice.reflections.map((reflection) => (
+              <article key={reflection.areaKey}>
+                <strong>{reflection.areaName}</strong>
+                <p>{reflection.reflection}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="muted-copy">No Elevate Your Practice reflections are available for the current assessment.</p>
+        )}
+      </section>
 
       <section className="panel">
         <div className="panel-heading">
@@ -248,6 +285,53 @@ export function StaffProfilePanel({
                     <td>{record.title}</td>
                     <td>{record.eventDate}</td>
                     <td>{formatThemes(record.themes)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <h2>Coaching and mentoring</h2>
+          <span>{detail.coachingRecords.length} sessions</span>
+        </div>
+        <div className="table-shell">
+          <table>
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Date</th>
+                <th>Coach or mentor</th>
+                <th>Focus</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.coachingRecords.length === 0 ? (
+                <tr>
+                  <td colSpan={5}>No coaching or mentoring sessions have been recorded yet.</td>
+                </tr>
+              ) : (
+                detail.coachingRecords.map((record) => (
+                  <tr key={record.id}>
+                    <td>
+                      <strong>{formatCoachingType(record.sessionType)}</strong>
+                      <small className="table-subline">Cycle {record.cycleNumber}, session {record.sessionNumber}</small>
+                    </td>
+                    <td>{formatDate(record.sessionDate)}</td>
+                    <td>{record.coachName}</td>
+                    <td>
+                      {record.mainFocus ?? "Not recorded"}
+                      {record.keyTakeaway ? <small className="table-subline">{record.keyTakeaway}</small> : null}
+                    </td>
+                    <td>
+                      <span className={`status-pill ${record.status === "completed" ? "status-complete" : "status-draft"}`}>
+                        {record.status === "completed" ? "Completed" : "Draft"}
+                      </span>
+                    </td>
                   </tr>
                 ))
               )}
@@ -306,44 +390,44 @@ export function StaffProfilePanel({
 
       <section className="panel">
         <div className="panel-heading">
-          <h2>Learning and Innovation Visit actions</h2>
-          <span>{openActionCount} open</span>
+          <h2>Actions</h2>
+          <span>{openActionCount} open / {completedActionCount} completed</span>
         </div>
         <div className="table-shell">
           <table>
             <thead>
               <tr>
                 <th>Action</th>
-                <th>Created</th>
+                <th>Owner</th>
                 <th>Source</th>
                 <th>Due</th>
                 <th>Status</th>
-                <th>Open</th>
               </tr>
             </thead>
             <tbody>
-              {detail.livActions.length === 0 ? (
+              {detail.actions.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>No LIV actions have been assigned to this staff member.</td>
+                  <td colSpan={5}>No actions are connected to this staff member.</td>
                 </tr>
               ) : (
-                detail.livActions.map((action) => (
+                detail.actions.map((action) => (
                   <tr key={action.id}>
-                    <td>{action.title}</td>
-                    <td>{action.createdAt.slice(0, 10)}</td>
-                    <td>{action.sourceRecordTitle ?? "LIV record"}</td>
-                    <td>{action.dueDate ?? "No due date"}</td>
+                    <td>
+                      <strong>{action.title}</strong>
+                      {action.detail ? <small className="table-subline">{action.detail}</small> : null}
+                    </td>
+                    <td>{action.ownerName}</td>
+                    <td>
+                      {formatActionSource(action.sourceModuleName, action.sourceRecordType)}
+                      {action.sourceRecordTitle ? <small className="table-subline">{action.sourceRecordTitle}</small> : null}
+                    </td>
+                    <td>{action.dueDate ? formatDate(action.dueDate) : "No due date"}</td>
                     <td>
                       <span
                         className={`status-pill ${action.completedDate ? "status-complete" : action.isOverdue ? "status-overdue" : "status-open"}`}
                       >
                         {action.completedDate ? "Closed" : action.isOverdue ? "Overdue" : "Open"}
                       </span>
-                    </td>
-                    <td>
-                      <button className="icon-button" title="Open source LIV record" type="button">
-                        <ExternalLink size={16} aria-hidden="true" />
-                      </button>
                     </td>
                   </tr>
                 ))
@@ -397,4 +481,31 @@ function formatDateTime(value: string) {
     dateStyle: "short",
     timeStyle: "short"
   });
+}
+
+function formatDate(value: string) {
+  return new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+function formatActionSource(moduleName?: string, recordType?: string) {
+  if (moduleName) {
+    return moduleName;
+  }
+
+  if (recordType) {
+    return recordType
+      .split("_")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  }
+
+  return "Action engine";
+}
+
+function formatCoachingType(value: "coaching" | "mentoring" | "combined") {
+  return value === "combined" ? "Coaching and mentoring" : value.charAt(0).toUpperCase() + value.slice(1);
 }

@@ -5,7 +5,7 @@ type ButtonProps = {
   children: string;
   disabled?: boolean;
   icon?: ComponentType<LucideProps>;
-  variant?: "primary" | "secondary" | "quiet";
+  variant?: "primary" | "secondary" | "quiet" | "danger";
   onClick?: () => void;
   title?: string;
 };

@@ -258,6 +258,16 @@ nav {
   color: #1f2a27;
 }
 
+.button-danger {
+  background: #ffffff;
+  border-color: #bd3b3b;
+  color: #9b2828;
+}
+
+.button-danger:hover {
+  background: #fff1f1;
+}
+
 .button-quiet {
   background: transparent;
   color: #31423c;
@@ -1134,6 +1144,13 @@ td {
   padding: 5px 8px;
 }
 
+.likert-control button > i {
+  background: var(--rating-color);
+  border-radius: 3px;
+  flex: 0 0 8px;
+  height: 28px;
+}
+
 .likert-control button:hover,
 .likert-control button.is-selected {
   border-color: var(--rating-color);
@@ -1146,15 +1163,24 @@ td {
 }
 
 .likert-control button strong {
-  color: var(--rating-color);
-  font-size: 1rem;
+  color: #263832;
+  font-size: 0.78rem;
 }
 
 .likert-control button span {
+  display: grid;
+  gap: 2px;
   font-size: 0.68rem;
   font-weight: 700;
   line-height: 1.1;
   text-align: left;
+}
+
+.likert-control button small {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 500;
+  line-height: 1.2;
 }
 
 .practice-reflection {
@@ -1187,27 +1213,13 @@ td {
   border-bottom: 1px solid var(--line);
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(190px, 1fr) minmax(120px, 2fr) 42px;
+  grid-template-columns: minmax(190px, 1fr) minmax(150px, auto);
   min-height: 42px;
-}
-
-.practice-score-list > div > div,
-.practice-result-areas > div > div {
-  background: #e2e9e5;
-  border-radius: 999px;
-  height: 8px;
-  overflow: hidden;
-}
-
-.practice-score-list i,
-.practice-result-areas i {
-  background: #287c68;
-  display: block;
-  height: 100%;
 }
 
 .practice-score-list strong,
 .practice-result-areas strong {
+  color: var(--teal);
   text-align: right;
 }
 
@@ -1316,10 +1328,6 @@ td {
   gap: 8px;
 }
 
-.practice-review-date {
-  max-width: 250px;
-}
-
 .practice-result {
   display: grid;
   gap: 18px;
@@ -1364,7 +1372,8 @@ td {
 }
 
 .practice-result-score strong {
-  font-size: 2rem;
+  font-size: 1.3rem;
+  line-height: 1.2;
 }
 
 .practice-result-header small {
@@ -1474,9 +1483,173 @@ td {
   font-size: 2rem;
 }
 
+.profile-practice-tile .profile-practice-judgement {
+  font-size: 1.45rem;
+  line-height: 1.2;
+}
+
 .profile-practice-tile > div > span:last-child {
   color: var(--text-muted);
   font-size: 0.8rem;
+}
+
+.profile-development-list {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0;
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.profile-development-list h3 {
+  font-size: 0.9rem;
+  margin: 0 0 4px;
+}
+
+.profile-development-list article {
+  display: grid;
+  gap: 5px;
+  padding: 10px 0;
+}
+
+.profile-development-list article + article {
+  border-top: 1px solid var(--line);
+}
+
+.profile-development-list article > div {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.profile-development-list article span,
+.profile-development-list article small {
+  color: var(--text-muted);
+}
+
+.profile-development-list article p,
+.profile-source-reflections p {
+  margin: 0;
+}
+
+.profile-source-reflections {
+  display: grid;
+  gap: 0;
+}
+
+.profile-source-reflections article {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+}
+
+.profile-source-reflections article + article {
+  border-top: 1px solid var(--line);
+}
+
+.admin-record-editor-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.admin-elevate-status {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.admin-elevate-status span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.admin-elevate-status select {
+  background: #ffffff;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  min-height: 36px;
+  padding: 0 9px;
+}
+
+.admin-elevate-filters {
+  grid-template-columns: minmax(220px, 1.2fr) repeat(3, minmax(140px, 0.45fr));
+}
+
+.admin-elevate-note {
+  align-items: center;
+  background: #edf6f2;
+  border-left: 4px solid var(--teal);
+  color: #28463d;
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.admin-elevate-note p {
+  margin: 0;
+}
+
+.audit-history-list {
+  border-top: 1px solid var(--line);
+  display: grid;
+  margin-top: 14px;
+}
+
+.audit-history-list details {
+  border-bottom: 1px solid var(--line);
+}
+
+.audit-history-list summary {
+  align-items: center;
+  cursor: pointer;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px 4px;
+}
+
+.audit-history-list summary > span {
+  display: grid;
+  gap: 3px;
+}
+
+.audit-history-list summary > span:last-child {
+  text-align: right;
+}
+
+.audit-history-list summary small {
+  color: var(--text-muted);
+}
+
+.audit-change-grid {
+  background: #f7faf8;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 14px;
+}
+
+.audit-change-grid > div {
+  min-width: 0;
+}
+
+.audit-change-grid pre {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  margin: 8px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @media (max-width: 1050px) {
@@ -1544,6 +1717,11 @@ td {
   .filter-toolbar {
     grid-template-columns: 1fr;
   }
+
+  .admin-elevate-filters,
+  .audit-change-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1601,7 +1779,7 @@ td {
 
   .practice-score-list > div,
   .practice-result-areas > div {
-    grid-template-columns: minmax(130px, 1fr) minmax(80px, 1fr) 36px;
+    grid-template-columns: minmax(130px, 1fr) minmax(120px, auto);
   }
 
   .practice-result-header {
@@ -1612,6 +1790,16 @@ td {
     border-block: 1px solid #45675d;
     border-inline: 0;
     padding-block: 12px;
+  }
+
+  .admin-record-editor-heading,
+  .admin-elevate-status {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-record-editor-heading .button {
+    width: 100%;
   }
 }
 
@@ -1900,7 +2088,7 @@ td {
   align-items: stretch;
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.55fr);
+  grid-template-columns: minmax(260px, 0.6fr) minmax(0, 1.4fr);
 }
 
 .profile-progress-grid {

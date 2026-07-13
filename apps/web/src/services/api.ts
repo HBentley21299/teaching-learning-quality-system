@@ -1,5 +1,6 @@
 import type {
   ActionSummary,
+  AdminSaveElevatePracticeAssessmentRequest,
   AdminRoleSummary,
   AdminUserSummary,
   CoachingContext,
@@ -13,6 +14,7 @@ import type {
   CurrentUser,
   DashboardSummary,
   ElevatePracticeProgress,
+  ElevatePracticeAudit,
   ElevatePracticeWorkspace,
   FormDefinition,
   FormTemplateSummary,
@@ -74,7 +76,7 @@ async function getJson<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function sendJson<TRequest, TResponse = never>(url: string, method: "POST" | "PUT", body?: TRequest): Promise<ApiResult<TResponse>> {
+async function sendJson<TRequest, TResponse = never>(url: string, method: "POST" | "PUT" | "DELETE", body?: TRequest): Promise<ApiResult<TResponse>> {
   try {
     const response = await fetch(`${apiBaseUrl}${url}`, {
       body: body ? JSON.stringify(body) : undefined,
@@ -169,6 +171,18 @@ export const api = {
   saveElevatePractice: (request: SaveElevatePracticeAssessmentRequest) =>
     sendJson<SaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>("/api/v1/elevate-practice/me", "PUT", request),
   elevatePracticeProgress: () => getJson<ElevatePracticeProgress[]>("/api/v1/elevate-practice/progress"),
+  adminElevatePracticeRecord: (assessmentId: string) =>
+    getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/admin/records/${assessmentId}`),
+  saveAdminElevatePracticeRecord: (assessmentId: string, request: AdminSaveElevatePracticeAssessmentRequest) =>
+    sendJson<AdminSaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>(
+      `/api/v1/elevate-practice/admin/records/${assessmentId}`,
+      "PUT",
+      request
+    ),
+  deleteAdminElevatePracticeRecord: (assessmentId: string) =>
+    sendJson(`/api/v1/elevate-practice/admin/records/${assessmentId}`, "DELETE"),
+  elevatePracticeAudit: (assessmentId: string) =>
+    getJson<ElevatePracticeAudit[]>(`/api/v1/elevate-practice/admin/records/${assessmentId}/audit`),
   elevatePracticeResult: (staffId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/latest`),
   coachingSessions: () => getJson<CoachingSessionSummary[]>("/api/v1/coaching/sessions"),

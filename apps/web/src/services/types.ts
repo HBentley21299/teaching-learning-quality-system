@@ -226,7 +226,7 @@ export type StaffProfileRecordSummary = {
   reflectionPointCount: number;
   completedReflections: number;
   overdueReflections: number;
-  openLivActions: number;
+  openActions: number;
 };
 
 export type StaffReflectionSummary = {
@@ -247,22 +247,44 @@ export type StaffCpdRecordSummary = {
   themes?: string;
 };
 
-export type StaffLivActionSummary = {
+export type StaffProfileActionSummary = {
   id: string;
   title: string;
+  detail?: string;
   createdAt: string;
   sourceRecordId?: string;
   sourceRecordTitle?: string;
+  sourceRecordType?: string;
+  sourceModuleName?: string;
+  ownerName: string;
+  statusKey?: string;
   dueDate?: string;
   completedDate?: string;
   isOverdue: boolean;
 };
 
+export type StaffProfileCoachingSummary = {
+  id: string;
+  recordId: string;
+  cycleNumber: number;
+  sessionNumber: number;
+  sessionDate: string;
+  sessionType: CoachingSessionType;
+  status: "draft" | "completed";
+  coachName: string;
+  mainFocus?: string;
+  keyTakeaway?: string;
+};
+
 export type ElevatePracticeRatingScale = {
-  score: number;
+  id: string;
+  descriptorKey: string;
   descriptor: string;
   meaning: string;
-  colorHex: string;
+  displayOrder: number;
+  colourClassification?: string;
+  colorHex?: string;
+  isActive: boolean;
 };
 
 export type ElevatePracticeSupportOption = {
@@ -275,7 +297,7 @@ export type ElevatePracticeStatement = {
   statementKey: string;
   text: string;
   displayOrder: number;
-  score?: number;
+  descriptorId?: string;
 };
 
 export type ElevatePracticeArea = {
@@ -285,7 +307,7 @@ export type ElevatePracticeArea = {
   name: string;
   reflectionPrompt: string;
   displayOrder: number;
-  averageScore?: number;
+  judgement?: string;
   reflection?: string;
   statements: ElevatePracticeStatement[];
 };
@@ -297,7 +319,6 @@ export type ElevatePracticePlan = {
   supportDetails: string;
   successEvidence: string;
   intendedImpact: string;
-  reviewDate?: string;
   actionId?: string;
 };
 
@@ -312,6 +333,7 @@ export type ElevatePracticeWorkspace = {
   facultyName?: string;
   teamName?: string;
   canEdit: boolean;
+  overallJudgement?: string;
   ratingScale: ElevatePracticeRatingScale[];
   supportOptions: ElevatePracticeSupportOption[];
   areas: ElevatePracticeArea[];
@@ -323,7 +345,7 @@ export type ElevatePracticeWorkspace = {
 };
 
 export type SaveElevatePracticeAssessmentRequest = {
-  ratings: Array<{ statementId: string; score: number }>;
+  ratings: Array<{ statementId: string; descriptorId: string }>;
   reflections: Array<{ areaKey: string; text: string }>;
   strengthAreaKeys: string[];
   developmentAreaKeys: string[];
@@ -334,12 +356,27 @@ export type SaveElevatePracticeAssessmentRequest = {
     supportDetails: string;
     successEvidence: string;
     intendedImpact: string;
-    reviewDate?: string;
   }>;
   submit: boolean;
 };
 
+export type AdminSaveElevatePracticeAssessmentRequest = Omit<SaveElevatePracticeAssessmentRequest, "submit"> & {
+  status: "draft" | "submitted";
+};
+
+export type ElevatePracticeAudit = {
+  id: string;
+  action: string;
+  summary?: string;
+  actorName: string;
+  beforeJson?: string;
+  afterJson?: string;
+  createdAt: string;
+};
+
 export type ElevatePracticeProgress = {
+  assessmentId?: string;
+  recordId?: string;
   staffId: string;
   externalId: string;
   staffName: string;
@@ -520,10 +557,29 @@ export type CoachingSessionSaveSummary = {
 
 export type StaffElevatePracticeSummary = {
   assessmentId: string;
+  recordId: string;
   academicYear: string;
   status: "draft" | "submitted";
-  overallAverage?: number;
+  judgement?: string;
   submittedAt?: string;
+  developmentAreas: StaffElevateDevelopmentAreaSummary[];
+  reflections: StaffElevateReflectionSummary[];
+};
+
+export type StaffElevateDevelopmentAreaSummary = {
+  areaKey: string;
+  areaName: string;
+  developmentApproach?: string;
+  supportDetails?: string;
+  successEvidence?: string;
+  intendedImpact?: string;
+  actionId?: string;
+};
+
+export type StaffElevateReflectionSummary = {
+  areaKey: string;
+  areaName: string;
+  reflection: string;
 };
 
 export type StaffProfileDetail = {
@@ -531,14 +587,14 @@ export type StaffProfileDetail = {
   externalId: string;
   displayName: string;
   email: string;
-  jobTitle?: string;
   primaryOrgCode?: string;
   accountStatus: string;
   evidenceSubmitted: number;
   milestonesCompleted: number;
   reflections: StaffReflectionSummary[];
   cpdRecords: StaffCpdRecordSummary[];
-  livActions: StaffLivActionSummary[];
+  actions: StaffProfileActionSummary[];
+  coachingRecords: StaffProfileCoachingSummary[];
   elevatePractice?: StaffElevatePracticeSummary;
 };
 

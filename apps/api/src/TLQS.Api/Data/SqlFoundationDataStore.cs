@@ -1279,9 +1279,31 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             sections);
     }
 
-    public Task<IReadOnlyList<ActionSummary>> GetActionsAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
-        QueryAsync(
-            """
+    public Task<IReadOnlyList<ActionSummary>> GetActionsAsync(CurrentUser currentUser, CancellationToken cancellationToken)
+    {
+        var canViewAll = CanViewAllRecords(currentUser);
+        var sql = canViewAll
+            ? """
+              SELECT a.id, a.source_record_id, a.subject_staff_id, a.owner_staff_id, a.title, a.detail, a.due_date, a.completed_date,
+                     r.title AS source_record_title,
+                     subject_staff.display_name AS subject_staff_name,
+                     owner_staff.display_name AS owner_staff_name,
+                     status_value.value_key AS status_key,
+                     priority_value.value_key AS priority_key,
+                     a.completion_note
+              FROM quality.actions a
+              LEFT JOIN core.records r ON r.id = a.source_record_id
+              LEFT JOIN people.staff subject_staff ON subject_staff.id = a.subject_staff_id
+              LEFT JOIN people.staff owner_staff ON owner_staff.id = a.owner_staff_id
+              LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
+              LEFT JOIN core.lookup_values priority_value ON priority_value.id = a.priority_lookup_value_id
+              WHERE a.archived_at IS NULL
+              ORDER BY
+                  CASE WHEN a.completed_date IS NULL THEN 0 ELSE 1 END,
+                  a.due_date,
+                  a.created_at DESC;
+              """
+            : """
             WITH scoped_org_units AS (
                 SELECT org_unit_id
                 FROM auth.access_scopes
@@ -1342,8 +1364,11 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 CASE WHEN a.completed_date IS NULL THEN 0 ELSE 1 END,
                 a.due_date,
                 a.created_at DESC;
-            """,
-            command => AddScopeParameters(command, currentUser),
+            """;
+
+        return QueryAsync(
+            sql,
+            canViewAll ? null : command => AddScopeParameters(command, currentUser),
             reader =>
             {
                 var dueDate = GetDateOnlyOrNull(reader, 6);
@@ -1366,6 +1391,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     dueDate.HasValue && completedDate is null && dueDate.Value < DateOnly.FromDateTime(DateTime.UtcNow));
             },
             cancellationToken);
+    }
 
     public Task<IReadOnlyList<DashboardSummary>> GetDashboardsAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
         QueryAsync(
@@ -1826,9 +1852,26 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 GetDateOnlyOrNull(reader, 7)),
             cancellationToken);
 
-    public Task<IReadOnlyList<StaffProfileSummary>> GetStaffProfileSummariesAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
-        QueryAsync(
-            """
+    public Task<IReadOnlyList<StaffProfileSummary>> GetStaffProfileSummariesAsync(CurrentUser currentUser, CancellationToken cancellationToken)
+    {
+        var canViewAll = CanViewAllStaff(currentUser);
+        var sql = canViewAll
+            ? """
+              SELECT
+                  profile.staff_id,
+                  profile.external_id,
+                  profile.display_name,
+                  profile.email,
+                  profile.job_title,
+                  profile.primary_org_code,
+                  profile.cpd_sessions_attended,
+                  profile.evidence_records,
+                  profile.open_actions,
+                  profile.overdue_actions
+              FROM reporting.v_staff_profile_summary profile
+              ORDER BY profile.display_name;
+              """
+            : """
             WITH scoped_org_units AS (
                 SELECT org_unit_id
                 FROM auth.access_scopes
@@ -1856,8 +1899,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 profile.overdue_actions
             FROM reporting.v_staff_profile_summary profile
             JOIN people.staff staff ON staff.id = profile.staff_id
-            WHERE @canViewAll = 1
-               OR profile.staff_id = @currentStaffId
+            WHERE profile.staff_id = @currentStaffId
                OR (
                     @canViewScoped = 1
                     AND (
@@ -1872,10 +1914,12 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     )
                )
             ORDER BY profile.display_name;
-            """,
-            command =>
+            """;
+
+        return QueryAsync(
+            sql,
+            canViewAll ? null : command =>
             {
-                command.Parameters.AddWithValue("@canViewAll", CanViewAllStaff(currentUser));
                 command.Parameters.AddWithValue("@canViewScoped", currentUser.HasPermission(PermissionKeys.ReportsViewScoped));
                 command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
                 command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
@@ -1892,6 +1936,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 Convert.ToInt32(reader.GetValue(8)),
                 Convert.ToInt32(reader.GetValue(9))),
             cancellationToken);
+    }
 
     public async Task<Guid> CreateRecordAsync(CreateRecordRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
@@ -3214,10 +3259,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                    )) AS overdue_reflections,
                 (SELECT COUNT(*)
                  FROM quality.actions a
-                 JOIN core.records r ON r.id = a.source_record_id AND r.record_type = 'liv'
-                 WHERE a.subject_staff_id = s.id
+                 WHERE (a.subject_staff_id = s.id OR a.owner_staff_id = s.id)
                    AND a.archived_at IS NULL
-                   AND a.completed_date IS NULL) AS open_liv_actions
+                   AND a.completed_date IS NULL) AS open_actions
             FROM people.staff s
             LEFT JOIN org.org_units ou ON ou.id = s.primary_org_unit_id
             WHERE s.archived_at IS NULL
@@ -3273,7 +3317,6 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 s.external_id,
                 s.display_name,
                 s.email,
-                s.job_title,
                 ou.code,
                 s.account_status,
                 (SELECT COUNT(*)
@@ -3298,10 +3341,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 reader.GetString(2),
                 reader.GetString(3),
                 GetStringOrNull(reader, 4),
-                GetStringOrNull(reader, 5),
-                reader.GetString(6),
-                reader.GetInt32(7),
-                reader.GetInt32(8)),
+                reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7)),
             cancellationToken);
 
         if (headers.Count == 0)
@@ -3380,13 +3422,27 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 GetStringOrNull(reader, 3)),
             cancellationToken);
 
-        var livActions = await QueryAsync(
+        var actions = await QueryAsync(
             """
-            SELECT a.id, a.title, a.created_at, a.source_record_id, r.title, a.due_date, a.completed_date
+            SELECT
+                a.id,
+                a.title,
+                a.detail,
+                a.created_at,
+                a.source_record_id,
+                r.title,
+                r.record_type,
+                module.name,
+                owner.display_name,
+                status_value.value_key,
+                a.due_date,
+                a.completed_date
             FROM quality.actions a
-            JOIN core.records r ON r.id = a.source_record_id
-                AND r.record_type = 'liv'
-            WHERE a.subject_staff_id = @staffId
+            JOIN people.staff owner ON owner.id = a.owner_staff_id
+            LEFT JOIN core.records r ON r.id = a.source_record_id
+            LEFT JOIN core.modules module ON module.id = r.module_id
+            LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
+            WHERE (a.subject_staff_id = @staffId OR a.owner_staff_id = @staffId)
               AND a.archived_at IS NULL
             ORDER BY
                 CASE WHEN a.completed_date IS NULL THEN 0 ELSE 1 END,
@@ -3396,18 +3452,58 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             command => command.Parameters.AddWithValue("@staffId", staffId),
             reader =>
             {
-                var dueDate = GetDateOnlyOrNull(reader, 5);
-                var completedDate = GetDateOnlyOrNull(reader, 6);
-                return new StaffLivActionSummary(
+                var dueDate = GetDateOnlyOrNull(reader, 10);
+                var completedDate = GetDateOnlyOrNull(reader, 11);
+                return new StaffProfileActionSummary(
                     reader.GetGuid(0),
                     reader.GetString(1),
-                    reader.GetFieldValue<DateTimeOffset>(2),
-                    GetGuidOrNull(reader, 3),
-                    GetStringOrNull(reader, 4),
+                    GetStringOrNull(reader, 2),
+                    reader.GetFieldValue<DateTimeOffset>(3),
+                    GetGuidOrNull(reader, 4),
+                    GetStringOrNull(reader, 5),
+                    GetStringOrNull(reader, 6),
+                    GetStringOrNull(reader, 7),
+                    reader.GetString(8),
+                    GetStringOrNull(reader, 9),
                     dueDate,
                     completedDate,
                     dueDate.HasValue && completedDate is null && dueDate.Value < today);
             },
+            cancellationToken);
+
+        var coachingRecords = await QueryAsync(
+            """
+            SELECT
+                session.id,
+                session.record_id,
+                cycle.cycle_number,
+                session.session_number,
+                session.session_date,
+                session.session_type,
+                session.status,
+                coach.display_name,
+                session.main_focus,
+                session.key_takeaway
+            FROM quality.coaching_sessions session
+            JOIN quality.coaching_cycles cycle ON cycle.id = session.cycle_id
+            JOIN people.staff coach ON coach.id = session.coach_staff_id
+            WHERE session.staff_id = @staffId
+              AND session.archived_at IS NULL
+              AND cycle.archived_at IS NULL
+            ORDER BY session.session_date DESC, cycle.cycle_number DESC, session.session_number DESC;
+            """,
+            command => command.Parameters.AddWithValue("@staffId", staffId),
+            reader => new StaffProfileCoachingSummary(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetInt32(2),
+                reader.GetInt32(3),
+                DateOnly.FromDateTime(reader.GetDateTime(4)),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                GetStringOrNull(reader, 8),
+                GetStringOrNull(reader, 9)),
             cancellationToken);
 
         var header = headers[0];
@@ -3417,14 +3513,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             header.ExternalId,
             header.DisplayName,
             header.Email,
-            header.JobTitle,
             header.PrimaryOrgCode,
             header.AccountStatus,
             header.EvidenceSubmitted,
             header.MilestonesCompleted,
             reflections,
             cpdRecords,
-            livActions,
+            actions,
+            coachingRecords,
             elevatePractice);
     }
 
@@ -6204,7 +6300,6 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         string ExternalId,
         string DisplayName,
         string Email,
-        string? JobTitle,
         string? PrimaryOrgCode,
         string AccountStatus,
         int EvidenceSubmitted,

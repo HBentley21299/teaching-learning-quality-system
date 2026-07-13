@@ -457,6 +457,51 @@ public static class FoundationEndpoints
                 : Results.Forbid();
         });
 
+        api.MapGet("/elevate-practice/admin/records/{assessmentId:guid}", async (Guid assessmentId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            {
+                return Results.Forbid();
+            }
+
+            var result = await store.GetAdminElevatePracticeWorkspaceAsync(assessmentId, cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        });
+
+        api.MapPut("/elevate-practice/admin/records/{assessmentId:guid}", async (Guid assessmentId, AdminSaveElevatePracticeAssessmentRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            {
+                return Results.Forbid();
+            }
+
+            var result = await store.AdminSaveElevatePracticeAssessmentAsync(assessmentId, request, currentUser, cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        });
+
+        api.MapDelete("/elevate-practice/admin/records/{assessmentId:guid}", async (Guid assessmentId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.ArchiveElevatePracticeAssessmentAsync(assessmentId, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        api.MapGet("/elevate-practice/admin/records/{assessmentId:guid}/audit", async (Guid assessmentId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return currentUser.HasPermission(PermissionKeys.UsersManage)
+                ? Results.Ok(await store.GetElevatePracticeAuditHistoryAsync(assessmentId, cancellationToken))
+                : Results.Forbid();
+        });
+
         api.MapGet("/elevate-practice/staff/{staffId:guid}/latest", async (Guid staffId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
@@ -871,21 +916,21 @@ public sealed record StaffProfileRecordSummary(
     int ReflectionPointCount,
     int CompletedReflections,
     int OverdueReflections,
-    int OpenLivActions);
+    int OpenActions);
 
 public sealed record StaffProfileDetail(
     Guid StaffId,
     string ExternalId,
     string DisplayName,
     string Email,
-    string? JobTitle,
     string? PrimaryOrgCode,
     string AccountStatus,
     int EvidenceSubmitted,
     int MilestonesCompleted,
     IReadOnlyList<StaffReflectionSummary> Reflections,
     IReadOnlyList<StaffCpdRecordSummary> CpdRecords,
-    IReadOnlyList<StaffLivActionSummary> LivActions,
+    IReadOnlyList<StaffProfileActionSummary> Actions,
+    IReadOnlyList<StaffProfileCoachingSummary> CoachingRecords,
     StaffElevatePracticeSummary? ElevatePractice);
 
 public sealed record StaffReflectionSummary(
@@ -900,15 +945,32 @@ public sealed record StaffReflectionSummary(
 
 public sealed record StaffCpdRecordSummary(Guid Id, string Title, DateOnly EventDate, string? Themes);
 
-public sealed record StaffLivActionSummary(
+public sealed record StaffProfileActionSummary(
     Guid Id,
     string Title,
+    string? Detail,
     DateTimeOffset CreatedAt,
     Guid? SourceRecordId,
     string? SourceRecordTitle,
+    string? SourceRecordType,
+    string? SourceModuleName,
+    string OwnerName,
+    string? StatusKey,
     DateOnly? DueDate,
     DateOnly? CompletedDate,
     bool IsOverdue);
+
+public sealed record StaffProfileCoachingSummary(
+    Guid Id,
+    Guid RecordId,
+    int CycleNumber,
+    int SessionNumber,
+    DateOnly SessionDate,
+    string SessionType,
+    string Status,
+    string CoachName,
+    string? MainFocus,
+    string? KeyTakeaway);
 
 public sealed record SaveReflectionRequest(string? Text);
 

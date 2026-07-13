@@ -57,20 +57,22 @@ export function App() {
         return;
       }
 
-      const [nextModules, nextOrgUnits, nextStaff, nextActions, nextProcessRecords, nextProfiles] = await Promise.all([
+      const [nextModules, nextOrgUnits, nextStaff, nextActions, nextProfiles] = await Promise.all([
         api.modules(),
         api.orgUnits(),
         api.staff().catch(() => [] as StaffSummary[]),
         api.actions(),
-        api.processDashboardRecords().catch(() => [] as ProcessDashboardRecordSummary[]),
         api.staffProfiles()
       ]);
       setModules(nextModules);
       setOrgUnits(nextOrgUnits);
       setStaff(nextStaff);
       setActions(nextActions);
-      setProcessRecords(nextProcessRecords);
       setProfiles(nextProfiles);
+      void api
+        .processDashboardRecords()
+        .then(setProcessRecords)
+        .catch(() => setProcessRecords([]));
     } catch {
       setLoadError(
         "The Teaching & Learning API could not be reached. Start the API (scripts\\run-api.ps1) and check the database, then refresh."
