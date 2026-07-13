@@ -41,6 +41,7 @@ public sealed class FormField : AuditableEntity
     public int DisplayOrder { get; set; }
     public string? HelpText { get; set; }
     public string? ValidationJson { get; set; }
+    public string? ConfigurationJson { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
@@ -63,4 +64,3 @@ public sealed class FormResponse : AuditableEntity
     public Guid? ResponseLookupValueId { get; set; }
     public string? ResponseJson { get; set; }
 }
-

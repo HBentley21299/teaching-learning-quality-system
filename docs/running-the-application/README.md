@@ -8,6 +8,35 @@ The system has three moving parts:
 - API: `http://127.0.0.1:5001`
 - Web app: usually `http://127.0.0.1:5173` for development
 
+## Recommended One-Command Start
+
+From the project folder, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
+```
+
+This prepares the database, starts the API and web app in the background, checks
+that both are responding, and writes logs under `.localappdata\local-run\logs`.
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+Stop both services with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\stop-local.ps1
+```
+
+For a faster daily start when the database is already prepared:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps1 -SkipDatabase
+```
+
 ## 1. Open PowerShell in the Project Folder
 
 ```powershell
@@ -40,13 +69,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fix-localdb.ps1 -R
 
 This recreates the local `TLQS` database and applies the SQL scripts.
 
-Use this without `-Reset` when you want to keep existing local data:
+Use this without `-Reset` when you want to start and keep the existing local database:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fix-localdb.ps1
 ```
 
-Important: `-Reset` removes the local development database. Do not use it if you need to keep test records.
+Normal startup does not reapply the foundation schema to an existing database. Important:
+`-Reset` removes the local development database. Do not use it if you need to keep test records.
 
 ## 4. Start the API
 
@@ -100,13 +130,11 @@ cd "C:\Users\Harry\OneDrive\Documents\New project 2"
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-web.ps1
 ```
 
-This builds the web app and starts a preview server. The preview server normally runs at:
+This starts the Vite development server at:
 
 ```text
-http://127.0.0.1:4173
+http://127.0.0.1:5173
 ```
-
-Use `5173` for day-to-day development and `4173` when checking the built preview.
 
 ## 6. Normal Daily Startup
 

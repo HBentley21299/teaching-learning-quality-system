@@ -16,6 +16,20 @@ export type StaffSummary = {
   jobTitle?: string;
   primaryOrgUnitId?: string;
   accountStatus: string;
+  orgUnitIds: string[];
+};
+
+export type LookupSummary = {
+  lookupKey: string;
+  name: string;
+  values: string[];
+};
+
+export type LookupValueSummary = {
+  id: string;
+  valueKey: string;
+  displayName: string;
+  displayOrder: number;
 };
 
 export type ActionSummary = {
@@ -163,6 +177,31 @@ export type DashboardSummary = {
   facultyScopeRequired: boolean;
 };
 
+export type ProcessDashboardRecordSummary = {
+  id: string;
+  processKey: "learning_walk" | "work_scrutiny" | "cpd_event" | "elevate_environment";
+  title: string;
+  summary?: string;
+  recordDate?: string;
+  createdAt: string;
+  status: string;
+  orgUnitId?: string;
+  areaCode?: string;
+  areaName?: string;
+  parentAreaCode?: string;
+  ownerDisplayName?: string;
+  subjectDisplayName?: string;
+  theme?: string;
+  detail?: string;
+  participantAreaBreakdown?: string;
+  participantCount: number;
+  attendanceCredits: number;
+  sampleSize: number;
+  scoreTotal: number;
+  scoreCount: number;
+  barrierCount: number;
+};
+
 export type StaffProfileSummary = {
   staffId: string;
   externalId: string;
@@ -219,6 +258,110 @@ export type StaffLivActionSummary = {
   isOverdue: boolean;
 };
 
+export type ElevatePracticeRatingScale = {
+  score: number;
+  descriptor: string;
+  meaning: string;
+  colorHex: string;
+};
+
+export type ElevatePracticeSupportOption = {
+  key: string;
+  name: string;
+};
+
+export type ElevatePracticeStatement = {
+  id: string;
+  statementKey: string;
+  text: string;
+  displayOrder: number;
+  score?: number;
+};
+
+export type ElevatePracticeArea = {
+  id: string;
+  areaKey: string;
+  category: string;
+  name: string;
+  reflectionPrompt: string;
+  displayOrder: number;
+  averageScore?: number;
+  reflection?: string;
+  statements: ElevatePracticeStatement[];
+};
+
+export type ElevatePracticePlan = {
+  areaKey: string;
+  developmentApproach: string;
+  supportKeys: string[];
+  supportDetails: string;
+  successEvidence: string;
+  intendedImpact: string;
+  reviewDate?: string;
+  actionId?: string;
+};
+
+export type ElevatePracticeWorkspace = {
+  academicYear: string;
+  assessmentId?: string;
+  recordId?: string;
+  status: "not_started" | "draft" | "submitted";
+  submittedAt?: string;
+  staffId: string;
+  staffName: string;
+  facultyName?: string;
+  teamName?: string;
+  canEdit: boolean;
+  ratingScale: ElevatePracticeRatingScale[];
+  supportOptions: ElevatePracticeSupportOption[];
+  areas: ElevatePracticeArea[];
+  strengthAreaKeys: string[];
+  developmentAreaKeys: string[];
+  suggestedStrengthAreaKeys: string[];
+  suggestedDevelopmentAreaKeys: string[];
+  developmentPlans: ElevatePracticePlan[];
+};
+
+export type SaveElevatePracticeAssessmentRequest = {
+  ratings: Array<{ statementId: string; score: number }>;
+  reflections: Array<{ areaKey: string; text: string }>;
+  strengthAreaKeys: string[];
+  developmentAreaKeys: string[];
+  developmentPlans: Array<{
+    areaKey: string;
+    developmentApproach: string;
+    supportKeys: string[];
+    supportDetails: string;
+    successEvidence: string;
+    intendedImpact: string;
+    reviewDate?: string;
+  }>;
+  submit: boolean;
+};
+
+export type ElevatePracticeProgress = {
+  staffId: string;
+  externalId: string;
+  staffName: string;
+  email: string;
+  facultyCode?: string;
+  facultyName?: string;
+  teamCode?: string;
+  teamName?: string;
+  academicYear: string;
+  status: "not_started" | "draft" | "submitted";
+  updatedAt?: string;
+  submittedAt?: string;
+};
+
+export type StaffElevatePracticeSummary = {
+  assessmentId: string;
+  academicYear: string;
+  status: "draft" | "submitted";
+  overallAverage?: number;
+  submittedAt?: string;
+};
+
 export type StaffProfileDetail = {
   staffId: string;
   externalId: string;
@@ -232,6 +375,7 @@ export type StaffProfileDetail = {
   reflections: StaffReflectionSummary[];
   cpdRecords: StaffCpdRecordSummary[];
   livActions: StaffLivActionSummary[];
+  elevatePractice?: StaffElevatePracticeSummary;
 };
 
 export type AdminUserScopeSummary = {
@@ -273,6 +417,7 @@ export type AdminRoleSummary = {
   name: string;
   description?: string;
   isSystem: boolean;
+  precedence: number;
   permissions: PermissionSummary[];
 };
 
@@ -312,6 +457,7 @@ export type UpdateFormTemplateStructureRequest = {
       isRequired: boolean;
       displayOrder: number;
       helpText?: string;
+      options?: string[];
     }>;
   }>;
 };
@@ -332,6 +478,20 @@ export type OrgUnitSummary = {
   code: string;
   name: string;
   isActive: boolean;
+};
+
+export type RoomSummary = {
+  id: string;
+  roomCode: string;
+  buildingName: string;
+};
+
+export type CourseSummary = {
+  id: string;
+  courseCode: string;
+  courseName: string;
+  orgUnitId: string;
+  academicYear?: string;
 };
 
 export type FormTemplateSummary = {
@@ -380,6 +540,7 @@ export type FormFieldDefinition = {
   isRequired: boolean;
   displayOrder: number;
   helpText?: string;
+  options?: string[];
 };
 
 export type LearningWalkThemeMappingSummary = {
@@ -405,6 +566,8 @@ export type SubmitFormRequest = {
   recordDate?: string;
   responses: Array<{ fieldId: string; value?: string }>;
   saveAsDraft?: boolean;
+  courseIds?: string[];
+  actions?: Array<{ title: string; ownerStaffId: string; dueDate: string }>;
 };
 
 export type UpdateFormSubmissionRequest = {

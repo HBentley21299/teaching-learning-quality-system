@@ -6,8 +6,9 @@ import { isAuthEnabled, signOut } from "../services/auth";
 import type {
   ActionSummary,
   CurrentUser,
-  DashboardSummary,
   ModuleSummary,
+  OrgUnitSummary,
+  ProcessDashboardRecordSummary,
   StaffProfileSummary,
   StaffSummary
 } from "../services/types";
@@ -19,6 +20,7 @@ import { ModuleWorkspace } from "../routes/ModuleWorkspace";
 import { ActionsView } from "../routes/ActionsView";
 import { PermissionsView } from "../routes/PermissionsView";
 import { StaffProfileWorkspace } from "../routes/StaffProfileWorkspace";
+import { ElevatePractice } from "../routes/ElevatePractice";
 
 const emptyUser: CurrentUser = {
   displayName: "Loading...",
@@ -31,9 +33,10 @@ export function App() {
   const [route, setRoute] = useState<AppRoute>("dashboard");
   const [user, setUser] = useState<CurrentUser>(emptyUser);
   const [modules, setModules] = useState<ModuleSummary[]>([]);
+  const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [staff, setStaff] = useState<StaffSummary[]>([]);
   const [actions, setActions] = useState<ActionSummary[]>([]);
-  const [dashboards, setDashboards] = useState<DashboardSummary[]>([]);
+  const [processRecords, setProcessRecords] = useState<ProcessDashboardRecordSummary[]>([]);
   const [profiles, setProfiles] = useState<StaffProfileSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -41,19 +44,31 @@ export function App() {
   const loadCoreData = useCallback(async () => {
     setLoadError("");
     try {
-      const [nextUser, nextModules, nextStaff, nextActions, nextDashboards, nextProfiles] = await Promise.all([
-        api.currentUser(),
+      const nextUser = await api.currentUser();
+      setUser(nextUser);
+      if (!nextUser.userAccountId) {
+        setModules([]);
+        setOrgUnits([]);
+        setStaff([]);
+        setActions([]);
+        setProcessRecords([]);
+        setProfiles([]);
+        return;
+      }
+
+      const [nextModules, nextOrgUnits, nextStaff, nextActions, nextProcessRecords, nextProfiles] = await Promise.all([
         api.modules(),
+        api.orgUnits(),
         api.staff().catch(() => [] as StaffSummary[]),
         api.actions(),
-        api.dashboards(),
+        api.processDashboardRecords().catch(() => [] as ProcessDashboardRecordSummary[]),
         api.staffProfiles()
       ]);
-      setUser(nextUser);
       setModules(nextModules);
+      setOrgUnits(nextOrgUnits);
       setStaff(nextStaff);
       setActions(nextActions);
-      setDashboards(nextDashboards);
+      setProcessRecords(nextProcessRecords);
       setProfiles(nextProfiles);
     } catch {
       setLoadError(
@@ -141,14 +156,27 @@ export function App() {
             <div className="route-stack">
               <p className="muted-copy">Loading the Teaching &amp; Learning system...</p>
             </div>
+          ) : !user.userAccountId ? (
+            <section className="access-denied-panel">
+              <AlertTriangle size={22} aria-hidden="true" />
+              <div>
+                <h1>Account not provisioned</h1>
+                <p>
+                  Your Microsoft sign-in was successful, but this email address is not linked to an active Quality System account.
+                </p>
+                <p className="muted-copy">Signed in as {user.email || "unknown account"}</p>
+              </div>
+              {isAuthEnabled ? (
+                <button onClick={signOut} type="button">Sign out</button>
+              ) : null}
+            </section>
           ) : (
             <>
               {route === "dashboard" ? (
                 <Dashboard
-                  modules={modules}
                   actions={actions}
-                  dashboards={dashboards}
-                  staffProfiles={profiles}
+                  orgUnits={orgUnits}
+                  processRecords={processRecords}
                   user={user}
                   onRefresh={loadCoreData}
                 />
@@ -159,6 +187,17 @@ export function App() {
                 <ModuleWorkspace title="Learning Walks" eyebrow="Quality activity" mode="learning" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
               {route === "liv" ? <LivVisits staff={staff} user={user} onActionsChanged={refreshActions} /> : null}
+              {route === "elevate" ? (
+                <ModuleWorkspace
+                  title="Elevate Learning Environments"
+                  eyebrow="Learning environment quality"
+                  mode="elevate"
+                  staff={staff}
+                  user={user}
+                  onActionsChanged={refreshActions}
+                />
+              ) : null}
+              {route === "practice" ? <ElevatePractice user={user} onActionsChanged={refreshActions} /> : null}
               {route === "scrutiny" ? (
                 <ModuleWorkspace title="Work Scrutiny" eyebrow="Quality activity" mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}

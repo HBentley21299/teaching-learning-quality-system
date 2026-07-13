@@ -10,6 +10,7 @@ const apiScope = import.meta.env.VITE_ENTRA_API_SCOPE ?? "";
 // When the Entra settings are absent the app runs without sign-in and sends no
 // Authorization header, matching the API's development authentication handler.
 export const isAuthEnabled = Boolean(clientId && tenantId && apiScope);
+export const passwordResetUrl = "https://passwordreset.microsoftonline.com/";
 
 const msalInstance = isAuthEnabled
   ? new PublicClientApplication({
@@ -41,10 +42,15 @@ export async function initializeAuth(): Promise<void> {
   const [account] = msalInstance.getAllAccounts();
   if (account) {
     msalInstance.setActiveAccount(account);
-    return;
   }
+}
 
-  await msalInstance.loginRedirect(tokenRequest);
+export function hasSignedInAccount(): boolean {
+  return !isAuthEnabled || Boolean(msalInstance?.getActiveAccount());
+}
+
+export function signIn(): void {
+  void msalInstance?.loginRedirect(tokenRequest);
 }
 
 export async function getAccessToken(): Promise<string | null> {

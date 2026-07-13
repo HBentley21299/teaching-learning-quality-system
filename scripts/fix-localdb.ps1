@@ -71,17 +71,40 @@ $server = "(localdb)\$Instance"
 $sqlOptions = @("-No", "-C")
 
 Write-Host "Creating database $Database if needed..."
+$databaseCheckArguments = @(
+    "-S", $server,
+    "-E",
+    "-b",
+    "-h", "-1",
+    "-W"
+) + $sqlOptions + @("-Q", "SET NOCOUNT ON; SELECT CASE WHEN DB_ID(N'$Database') IS NULL THEN 0 ELSE 1 END;")
+$databaseCheckOutput = & $sqlCmd @databaseCheckArguments
+if ($LASTEXITCODE -ne 0) {
+    throw "$sqlCmd failed while checking for database $Database."
+}
+$databaseExists = ($databaseCheckOutput -join "`n") -match "(^|\s)1(\s|$)"
+$applyScripts = $false
+
 if ($Reset) {
     Write-Host "Resetting local development database $Database..."
     $databaseSql = "IF DB_ID(N'$Database') IS NOT NULL BEGIN ALTER DATABASE [$Database] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$Database]; END; CREATE DATABASE [$Database];"
-} else {
-    $databaseSql = "IF DB_ID(N'$Database') IS NULL CREATE DATABASE [$Database];"
+    $applyScripts = $true
+}
+elseif (!$databaseExists) {
+    Write-Host "Creating local development database $Database..."
+    $databaseSql = "CREATE DATABASE [$Database];"
+    $applyScripts = $true
+}
+else {
+    Write-Host "Database $Database already exists; keeping its data and schema."
 }
 
-$createDatabaseArguments = @("-S", $server, "-E", "-b") + $sqlOptions + @("-Q", $databaseSql)
-Invoke-Native -FilePath $sqlCmd -Arguments $createDatabaseArguments
+if ($applyScripts) {
+    $createDatabaseArguments = @("-S", $server, "-E", "-b") + $sqlOptions + @("-Q", $databaseSql)
+    Invoke-Native -FilePath $sqlCmd -Arguments $createDatabaseArguments
 
-Write-Host "Applying TLQS database scripts..."
-& (Join-Path $PSScriptRoot "apply-database.ps1") -Server $server -Database $Database -SqlCmd $sqlCmd -SqlCmdOptions $sqlOptions
+    Write-Host "Applying TLQS database scripts..."
+    & (Join-Path $PSScriptRoot "apply-database.ps1") -Server $server -Database $Database -SqlCmd $sqlCmd -SqlCmdOptions $sqlOptions
+}
 
 Write-Host "Local database is ready: $server / $Database"

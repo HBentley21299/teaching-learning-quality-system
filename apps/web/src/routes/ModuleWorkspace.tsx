@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { Archive, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
+import { Archive, Building2, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { CpdParticipantPicker } from "../components/CpdParticipantPicker";
+import { StaffSearchSelect } from "../components/StaffSearchSelect";
+import { WorkScrutinyCreateForm } from "../components/WorkScrutinyCreateForm";
 import { api } from "../services/api";
 import type {
   ActionSummary,
@@ -11,10 +14,11 @@ import type {
   OrgUnitSummary,
   RecordDetail,
   RecordSummary,
+  RoomSummary,
   StaffSummary
 } from "../services/types";
 
-type WorkspaceMode = "learning" | "scrutiny" | "cpd";
+type WorkspaceMode = "learning" | "scrutiny" | "cpd" | "elevate";
 
 type ModuleWorkspaceProps = {
   title: string;
@@ -52,6 +56,13 @@ const workspaceConfig: Record<WorkspaceMode, {
     recordLabel: "CPD event",
     createLabel: "Create event",
     submitLabel: "Submit event"
+  },
+  elevate: {
+    templateKey: "elevate_learning_environments_core",
+    recordType: "elevate_environment",
+    recordLabel: "Elevate environment check",
+    createLabel: "Start room check",
+    submitLabel: "Complete check"
   }
 };
 
@@ -63,7 +74,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [definition, setDefinition] = useState<FormDefinition | null>(null);
   const [definitionError, setDefinitionError] = useState("");
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
+  const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
+  const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(true);
   const [recordSearch, setRecordSearch] = useState("");
@@ -82,7 +95,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
   const canManageForms = user.permissions.includes("forms.manage");
   const canManageActions = user.permissions.includes("actions.manage");
-  const primaryIcon = mode === "cpd" ? CalendarPlus : FilePlus2;
+  const primaryIcon = mode === "cpd" ? CalendarPlus : mode === "elevate" ? Building2 : FilePlus2;
 
   const createSections = definition?.sections ?? [];
   const selectedFacultyId = getResponseValue(createSections, responses, "faculty_area");
@@ -178,6 +191,11 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     setRecordSort("newest");
     setStatusMessage("");
     void refreshData();
+    if (mode === "scrutiny") {
+      setDefinition(null);
+      setDefinitionError("");
+      return;
+    }
     api.formDefinition(config.templateKey)
       .then((nextDefinition) => {
         setDefinition(nextDefinition);
@@ -206,14 +224,18 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
   async function refreshData() {
     try {
-      const [nextRecords, nextOrgUnits, nextActions] = await Promise.all([
+      const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups] = await Promise.all([
         api.records(),
         api.orgUnits(),
-        api.actions()
+        api.actions(),
+        mode === "elevate" ? api.rooms() : Promise.resolve([] as RoomSummary[]),
+        mode === "cpd" ? api.lookups() : Promise.resolve([])
       ]);
       setRecords(nextRecords.filter((record) => record.recordType === config.recordType));
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
       setActions(nextActions);
+      setRooms(nextRooms);
+      setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
 
       if (mode === "learning") {
         const nextMappings = await api.learningWalkThemeMappings();
@@ -228,19 +250,25 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     const dateValue =
       getResponseValue(sections, values, "visit_date") ??
       getResponseValue(sections, values, "scrutiny_date") ??
+      getResponseValue(sections, values, "assessment_date") ??
       getResponseValue(sections, values, "date_time")?.slice(0, 10);
-    const orgUnitId = getResponseValue(sections, values, "team_level") ?? getResponseValue(sections, values, "faculty_area");
+    const orgUnitId = mode === "elevate"
+      ? undefined
+      : getResponseValue(sections, values, "team_level") ?? getResponseValue(sections, values, "faculty_area");
     const subjectStaffId = getResponseValue(sections, values, "staff_id");
     let recordTitle: string;
     if (mode === "cpd") {
       recordTitle = getResponseValue(sections, values, "cpd_title") || "Untitled CPD event";
+    } else if (mode === "elevate") {
+      recordTitle = `Elevate check - ${getResponseValue(sections, values, "room_code") || "Room"}`;
     } else {
       const areaCode = team?.code ?? faculty?.code ?? "Team";
       recordTitle = `${mode === "learning" ? "Learning Walk" : "Work Scrutiny"} - ${areaCode}`;
     }
 
-    const summary =
-      (mode === "learning" ? theme : undefined) ??
+    const summary = mode === "elevate"
+      ? getResponseValue(sections, values, "building_name")
+      : (mode === "learning" ? theme : undefined) ??
       getResponseValue(sections, values, "development_areas") ??
       getResponseValue(sections, values, "cpd_themes");
 
@@ -250,6 +278,30 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   function validateForSubmit(sections: Array<{ fields: FormFieldDefinition[] }>, values: Record<string, string>, facultyId?: string, teamId?: string, theme?: string) {
     if (mode === "learning" && facultyId && teamId && !theme) {
       return "No agreed Learning Walk theme is configured for that faculty and team.";
+    }
+
+    if (mode === "elevate") {
+      const roomCode = getResponseValue(sections, values, "room_code");
+      if (!rooms.some((room) => room.roomCode.toLocaleLowerCase() === roomCode?.toLocaleLowerCase())) {
+        return "Select a room from the room register before completing the check.";
+      }
+
+      for (const valueKey of elevateValueKeys) {
+        const score = getResponseValue(sections, values, `${valueKey}_score`);
+        const action = getResponseValue(sections, values, `${valueKey}_action`);
+        const owner = getResponseValue(sections, values, `${valueKey}_owner`);
+        const target = getResponseValue(sections, values, `${valueKey}_target`);
+        if (score === "0" && !action) {
+          return `A Barrier score for ${formatElevateValue(valueKey)} requires an immediate action.`;
+        }
+        if (action && (!owner || !target)) {
+          return `The ${formatElevateValue(valueKey)} action needs an owner and target date.`;
+        }
+      }
+    }
+
+    if (mode === "cpd" && !getResponseValue(sections, values, "staff_search")) {
+      return "Select at least one participant before submitting the CPD event.";
     }
 
     if (hasMissingRequired(sections, values)) {
@@ -342,7 +394,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       }
     }
 
-    const context = buildRecordContext(editSections, editResponses, editAgreedTheme, editTeam, editFaculty);
+    const context = mode === "scrutiny"
+      ? {
+          dateValue: selectedDetail.recordDate,
+          orgUnitId: selectedDetail.orgUnitId,
+          subjectStaffId: undefined,
+          recordTitle: selectedDetail.title,
+          summary: selectedDetail.summary
+        }
+      : buildRecordContext(editSections, editResponses, editAgreedTheme, editTeam, editFaculty);
     setIsSaving(true);
     const result = await api.updateFormSubmission(selectedDetail.submissionId, {
       title: context.recordTitle,
@@ -434,7 +494,13 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   }
 
   function toggleCreateForm() {
-    setIsCreating((current) => !current);
+    setIsCreating((current) => {
+      if (!current && mode === "elevate") {
+        const dateField = findField(createSections, "assessment_date");
+        setResponses(dateField ? { [dateField.id]: getTodayDate() } : {});
+      }
+      return !current;
+    });
     setIsEditing(false);
     setStatusMessage("");
   }
@@ -460,7 +526,14 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     user.permissions.includes("forms.manage") ||
     user.permissions.includes("reports.view_all");
 
-  if (!canUseLearningWalks) {
+  const canUseElevate =
+    mode !== "elevate" ||
+    user.permissions.includes("elevate.submit") ||
+    user.permissions.includes("elevate.manage") ||
+    user.permissions.includes("forms.manage") ||
+    user.permissions.includes("reports.view_all");
+
+  if (!canUseLearningWalks || !canUseElevate) {
     return (
       <div className="route-stack">
         <div className="route-header">
@@ -475,8 +548,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
             <span>Programme leaders and above</span>
           </div>
           <p className="muted-copy">
-            Learning Walks are recorded by programme leaders and above. Actions arising from a walk appear on your
-            Actions tab, and your own development record is on the Staff Profile tab.
+            {mode === "elevate"
+              ? "Elevate Learning Environment checks are completed by leaders, managers and the Teaching & Learning team."
+              : "Learning Walks are recorded by programme leaders and above. Actions arising from a walk appear on your Actions tab, and your own development record is on the Staff Profile tab."}
           </p>
         </section>
       </div>
@@ -510,7 +584,23 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
       {definitionError ? <div className="notice-row">{definitionError}</div> : null}
 
-      {isCreating ? (
+      {isCreating && mode === "scrutiny" ? (
+        <WorkScrutinyCreateForm
+          onCancel={() => setIsCreating(false)}
+          onSubmitted={async (recordId) => {
+            setIsCreating(false);
+            setStatusMessage("Work Scrutiny submitted with its sampled courses and linked actions.");
+            await refreshData();
+            await openRecord(recordId);
+            await onActionsChanged?.();
+          }}
+          orgUnits={orgUnits}
+          staff={staff}
+          user={user}
+        />
+      ) : null}
+
+      {isCreating && mode !== "scrutiny" ? (
         <section className="panel">
           <div className="panel-heading">
             <h2>{definition?.name ?? "Loading template"}</h2>
@@ -518,16 +608,32 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
           </div>
           {definition ? (
             <div className="entry-form">
+              {mode === "elevate" ? (
+                <div className="elevate-rubric-guide">
+                  <strong>Fit for purpose is the core test</strong>
+                  <span>2 is the expected secure standard. Use 3 only where the environment clearly adds value.</span>
+                  <span>A serious safety or access barrier requires an immediate action.</span>
+                  <div className="elevate-score-legend" aria-label="Elevate score guide">
+                    <span><b>0</b> Barrier</span>
+                    <span><b>1</b> Emerging</span>
+                    <span><b>2</b> Secure</span>
+                    <span><b>3</b> Elevate</span>
+                  </div>
+                  <small>Created by {user.displayName}</small>
+                </div>
+              ) : null}
               {definition.sections.map((section) => (
                 <div className="entry-section" key={section.id}>
                   <h3>{section.title}</h3>
                   <div className="entry-field-grid">
-                    {section.fields.map((field) => (
+                    {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
                       <FieldInput
+                        cpdThemes={cpdThemes}
                         field={field}
                         key={field.id}
-                        onChange={(value) => setResponses((current) => updateResponseMap(createSections, current, field, value))}
+                        onChange={(value) => setResponses((current) => updateResponseMap(createSections, current, field, value, rooms))}
                         orgUnits={orgUnits}
+                        rooms={rooms}
                         selectedFacultyId={selectedFacultyId}
                         staff={staff}
                         value={responses[field.id] ?? ""}
@@ -537,8 +643,10 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 </div>
               ))}
               <div className="toolbar">
-                <Button disabled={isSaving} icon={Save} onClick={() => void saveRecord(true)}>Save draft</Button>
-                <Button disabled={isSaving} icon={Send} onClick={() => void saveRecord(false)} variant="primary">
+                {mode !== "elevate" ? (
+                  <Button disabled={isSaving} icon={Save} onClick={() => void saveRecord(true)}>Save draft</Button>
+                ) : null}
+                <Button disabled={isSaving} icon={mode === "elevate" ? CheckCircle2 : Send} onClick={() => void saveRecord(false)} variant="primary">
                   {config.submitLabel}
                 </Button>
               </div>
@@ -636,7 +744,11 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                     <div className="record-row" key={record.id}>
                       <div>
                         <strong>{record.title}</strong>
-                        <span>{parent?.code ? `${parent.code} / ${orgUnit?.code ?? "No team"}` : orgUnit?.code ?? "No team"}</span>
+                        <span>
+                          {mode === "elevate"
+                            ? "Room environment assessment"
+                            : parent?.code ? `${parent.code} / ${orgUnit?.code ?? "No team"}` : orgUnit?.code ?? "No team"}
+                        </span>
                       </div>
                       <span className={`status-pill status-${record.submissionStatus}`}>{formatStatus(record.submissionStatus)}</span>
                       <span>{record.recordDate ?? "No date"}</span>
@@ -659,11 +771,21 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
             <span>v{selectedDetail.templateVersion}</span>
           </div>
           <div className="record-detail-meta">
-            <span>{selectedDetail.parentOrgUnitCode ? `${selectedDetail.parentOrgUnitCode} / ` : ""}{selectedDetail.orgUnitCode ?? "No team"}</span>
+            <span>
+              {mode === "elevate"
+                ? selectedDetail.summary ?? "Room environment"
+                : `${selectedDetail.parentOrgUnitCode ? `${selectedDetail.parentOrgUnitCode} / ` : ""}${selectedDetail.orgUnitCode ?? "No team"}`}
+            </span>
             <span>{selectedDetail.recordDate ?? "No date"}</span>
             <span>{selectedDetail.ownerDisplayName ?? "No owner"}</span>
             <span className={`status-pill status-${detailStatus}`}>{formatStatus(detailStatus)}</span>
           </div>
+          {mode === "scrutiny" && selectedDetail.summary ? (
+            <div className="record-context-note">
+              <strong>Courses sampled</strong>
+              <span>{selectedDetail.summary}</span>
+            </div>
+          ) : null}
 
           {isEditing ? (
             <div className="entry-form">
@@ -671,12 +793,14 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 <div className="entry-section" key={section.id}>
                   <h3>{section.title}</h3>
                   <div className="entry-field-grid">
-                    {section.fields.map((field) => (
+                    {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
                       <FieldInput
+                        cpdThemes={cpdThemes}
                         field={field}
                         key={field.id}
-                        onChange={(value) => setEditResponses((current) => updateResponseMap(editSections, current, field, value))}
+                        onChange={(value) => setEditResponses((current) => updateResponseMap(editSections, current, field, value, rooms))}
                         orgUnits={orgUnits}
+                        rooms={rooms}
                         selectedFacultyId={editFacultyId}
                         staff={staff}
                         value={editResponses[field.id] ?? ""}
@@ -697,7 +821,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   <div className="answer-section" key={section.id}>
                     <h3>{section.title}</h3>
                     <div className="answer-grid">
-                      {section.fields.map((field) => (
+                      {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
                         <div className={isWideEntryField(field.fieldType) ? "answer-item answer-item-wide" : "answer-item"} key={field.id}>
                           <span>{field.label}</span>
                           <strong>{formatAnswer(field.value, field.fieldType, orgUnits, staff)}</strong>
@@ -790,13 +914,17 @@ function FieldInput({
   field,
   onChange,
   orgUnits,
+  rooms,
   selectedFacultyId,
   staff,
+  cpdThemes,
   value
 }: {
+  cpdThemes: string[];
   field: FormFieldDefinition;
   onChange: (value: string) => void;
   orgUnits: OrgUnitSummary[];
+  rooms: RoomSummary[];
   selectedFacultyId?: string;
   staff: StaffSummary[];
   value: string;
@@ -805,11 +933,29 @@ function FieldInput({
   const teams = orgUnits.filter(
     (orgUnit) =>
       orgUnit.parentOrgUnitId === selectedFacultyId &&
-      ["faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType)
+      ["team", "faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType)
   );
   const selectedFaculty = orgUnits.find((orgUnit) => orgUnit.id === selectedFacultyId);
   const teamOptions = teams.length > 0 ? teams : selectedFaculty ? [selectedFaculty] : [];
   const selectedValues = splitDelimitedValues(value);
+
+  if (field.fieldType === "staff_multi_select" && field.fieldKey === "staff_search") {
+    return (
+      <div className="entry-field entry-field-wide">
+        <span>
+          {field.label}
+          {field.isRequired ? <strong>Required</strong> : null}
+        </span>
+        <CpdParticipantPicker
+          id={`participants-${field.id}`}
+          onChange={onChange}
+          orgUnits={orgUnits}
+          staff={staff}
+          value={value}
+        />
+      </div>
+    );
+  }
 
   return (
     <label className={isWideEntryField(field.fieldType) ? "entry-field entry-field-wide" : "entry-field"}>
@@ -828,6 +974,24 @@ function FieldInput({
       ) : null}
       {field.fieldType === "number" ? (
         <input min="0" type="number" value={value} onChange={(event) => onChange(event.target.value)} />
+      ) : null}
+      {field.fieldType === "room_lookup" ? (
+        <>
+          <input
+            autoComplete="off"
+            list={`room-options-${field.id}`}
+            onChange={(event) => onChange(event.target.value.toLocaleUpperCase())}
+            placeholder="Start typing a room code"
+            role="combobox"
+            type="text"
+            value={value}
+          />
+          <datalist id={`room-options-${field.id}`}>
+            {rooms.map((room) => (
+              <option key={room.id} value={room.roomCode}>{room.buildingName}</option>
+            ))}
+          </datalist>
+        </>
       ) : null}
       {field.fieldType === "faculty_lookup" ? (
         <select value={value} onChange={(event) => onChange(event.target.value)}>
@@ -853,18 +1017,28 @@ function FieldInput({
         <input
           readOnly
           type="text"
-          value={value || (selectedFacultyId ? "No agreed theme configured" : "Select faculty and team")}
+          value={value || (field.fieldKey === "building_name"
+            ? "Select a room code"
+            : selectedFacultyId ? "No agreed theme configured" : "Select faculty and team")}
         />
       ) : null}
-      {field.fieldType === "staff_lookup" ? (
+      {field.fieldType === "score_0_3" ? (
         <select value={value} onChange={(event) => onChange(event.target.value)}>
-          <option value="">Select staff member</option>
-          {staff.map((staffMember) => (
-            <option key={staffMember.id} value={staffMember.id}>
-              {staffMember.displayName}
-            </option>
-          ))}
+          <option value="">Select score</option>
+          <option value="0">0 - Barrier</option>
+          <option value="1">1 - Emerging</option>
+          <option value="2">2 - Secure</option>
+          <option value="3">3 - Elevate</option>
         </select>
+      ) : null}
+      {field.fieldType === "staff_lookup" ? (
+        <StaffSearchSelect
+          helperText="Start typing, then select the action owner from the results."
+          id={`staff-${field.id}`}
+          onChange={onChange}
+          staff={staff}
+          value={value}
+        />
       ) : null}
       {field.fieldType === "staff_multi_select" ? (
         <select
@@ -902,11 +1076,17 @@ function FieldInput({
       {field.fieldType === "single_select" ? (
         <select value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">Select option</option>
-          {getSingleSelectOptions(field.fieldKey).map((option) => (
+          {(field.options?.length ? field.options : getSingleSelectOptions(field.fieldKey)).map((option) => (
             <option key={option} value={option}>
               {option}
             </option>
           ))}
+        </select>
+      ) : null}
+      {field.fieldType === "rubric_scale" ? (
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">Select rubric level</option>
+          {(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
         </select>
       ) : null}
       {field.fieldType === "yes_no_partial" ? (
@@ -919,7 +1099,21 @@ function FieldInput({
       ) : null}
       {field.fieldType === "checkbox_group" ? (
         <div className="preview-check-list">
-          {getCheckboxOptions(field.fieldKey).map((option) => (
+          {(field.options?.length ? field.options : getCheckboxOptions(field.fieldKey, cpdThemes)).map((option) => (
+            <label key={option}>
+              <input
+                checked={selectedValues.includes(option)}
+                onChange={() => onChange(toggleDelimitedValue(value, option))}
+                type="checkbox"
+              />
+              <span>{option}</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
+      {field.fieldType === "multi_select" ? (
+        <div className="preview-check-list">
+          {(field.options ?? []).map((option) => (
             <label key={option}>
               <input
                 checked={selectedValues.includes(option)}
@@ -939,20 +1133,11 @@ function FieldInput({
   );
 }
 
-const cpdThemeOptions = [
-  "Teaching, learning and assessment",
-  "Digital learning",
-  "Assessment and feedback",
-  "Inclusive practice",
-  "Safeguarding and wellbeing",
-  "Curriculum development"
-];
-
 const workScrutinyTagOptions = ["Good Practice", "Development", "Compliance", "Assessment", "Feedback"];
 
-function getCheckboxOptions(fieldKey: string) {
+function getCheckboxOptions(fieldKey: string, cpdThemes: string[]) {
   if (fieldKey === "cpd_themes") {
-    return cpdThemeOptions;
+    return cpdThemes;
   }
 
   return [];
@@ -995,9 +1180,13 @@ function getRecordTimestamp(record: RecordSummary) {
 }
 
 function isWideEntryField(fieldType: string) {
-  return ["checkbox_group", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add"].includes(
+  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add"].includes(
     fieldType
   );
+}
+
+function isLegacyCpdParticipantField(mode: WorkspaceMode, field: FormFieldDefinition) {
+  return mode === "cpd" && ["team_bulk_add", "selected_staff_list"].includes(field.fieldType);
 }
 
 function splitDelimitedValues(value?: string) {
@@ -1044,7 +1233,8 @@ function updateResponseMap(
   sections: Array<{ fields: FormFieldDefinition[] }>,
   current: Record<string, string>,
   field: FormFieldDefinition,
-  value: string
+  value: string,
+  rooms: RoomSummary[] = []
 ) {
   const next = { ...current, [field.id]: value };
 
@@ -1055,6 +1245,14 @@ function updateResponseMap(
 
   if (field.fieldKey === "team_level") {
     deleteFieldResponse(sections, next, "learning_walk_theme");
+  }
+
+  if (field.fieldKey === "room_code") {
+    const buildingField = findField(sections, "building_name");
+    const room = rooms.find((candidate) => candidate.roomCode.toLocaleLowerCase() === value.toLocaleLowerCase());
+    if (buildingField) {
+      next[buildingField.id] = room?.buildingName ?? "";
+    }
   }
 
   return next;
@@ -1117,13 +1315,17 @@ function formatAnswer(
     return staff.find((staffMember) => staffMember.id === value)?.displayName ?? value;
   }
 
+  if (fieldType === "score_0_3") {
+    return elevateScoreLabels[value] ?? value;
+  }
+
   if (fieldType === "staff_multi_select") {
     return splitDelimitedValues(value)
       .map((staffId) => staff.find((staffMember) => staffMember.id === staffId)?.displayName ?? staffId)
       .join("\n");
   }
 
-  if (fieldType === "checkbox_group") {
+  if (["checkbox_group", "multi_select"].includes(fieldType)) {
     return splitDelimitedValues(value).join("\n");
   }
 
@@ -1132,4 +1334,23 @@ function formatAnswer(
   }
 
   return value;
+}
+
+const elevateValueKeys = ["aspirational", "collaborative", "respectful", "innovative", "inclusion"] as const;
+
+const elevateScoreLabels: Record<string, string> = {
+  "0": "0 - Barrier",
+  "1": "1 - Emerging",
+  "2": "2 - Secure",
+  "3": "3 - Elevate"
+};
+
+function formatElevateValue(valueKey: string) {
+  return valueKey.charAt(0).toLocaleUpperCase() + valueKey.slice(1);
+}
+
+function getTodayDate() {
+  const now = new Date();
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 10);
 }

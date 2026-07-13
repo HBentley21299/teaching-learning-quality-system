@@ -11,16 +11,14 @@ Web application for managing a college's Teaching & Learning workflows: Learning
 ## Local Setup
 
 1. Install the .NET 10 SDK, Node.js and SQL Server LocalDB (run `.\scripts\check-prerequisites.ps1` to verify).
-2. Create the `TLQS` database and run the SQL files **in order**:
-   - `database/migrations/001_foundation.sql`
-   - `database/seed/001_seed_foundation.sql`
-   - `database/migrations/002_form_template_admin.sql`
-   - `database/migrations/003_learning_walk_brief.sql`
-   - `database/migrations/004_workflows_liv_actions.sql`
-   - `database/seed/002_seed_demo.sql` (optional demo staff, roles, scopes and actions)
-   - `database/views/001_reporting_views.sql`
-3. Run the API: `.\scripts\run-api.ps1` (listens on `http://127.0.0.1:5001`).
-4. Run the web app: `.\scripts\run-web.ps1` (Vite dev server on `http://127.0.0.1:5173`).
+2. Start the database, API and web app:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps1`
+3. Open `http://127.0.0.1:5173`.
+4. Stop the local services with:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\stop-local.ps1`
+
+Use `-SkipDatabase` for a faster start when LocalDB is already prepared. Use
+`-ResetDatabase` only when you intentionally want to delete and recreate local test data.
 
 ## Configuration
 
@@ -67,6 +65,8 @@ Web application for managing a college's Teaching & Learning workflows: Learning
 ## Useful Scripts
 
 - `.\scripts\check-prerequisites.ps1`
+- `.\scripts\start-local.ps1` / `.\scripts\stop-local.ps1`
+- `.\scripts\apply-org-structure.ps1` (applies the official faculty/team hierarchy to an existing database)
 - `.\scripts\build-api.ps1` / `dotnet build apps\api\TLQS.sln`
 - `dotnet test apps\api\TLQS.sln`
 - `.\scripts\apply-database.ps1 -Server <server> -Database <database>`

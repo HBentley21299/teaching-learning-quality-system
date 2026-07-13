@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using TLQS.Domain.CPD;
 using TLQS.Domain.Core;
+using TLQS.Domain.Curriculum;
 using TLQS.Domain.Evidence;
 using TLQS.Domain.Forms;
 using TLQS.Domain.IdentityAccess;
@@ -38,6 +39,8 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
     public DbSet<Activity> Activities => Set<Activity>();
     public DbSet<LearningWalkDetail> LearningWalkDetails => Set<LearningWalkDetail>();
     public DbSet<WorkScrutinyDetail> WorkScrutinyDetails => Set<WorkScrutinyDetail>();
+    public DbSet<WorkScrutinyCourseSample> WorkScrutinyCourseSamples => Set<WorkScrutinyCourseSample>();
+    public DbSet<Course> Courses => Set<Course>();
     public DbSet<ActionItem> Actions => Set<ActionItem>();
     public DbSet<CpdEvent> CpdEvents => Set<CpdEvent>();
     public DbSet<CpdAttendance> CpdAttendance => Set<CpdAttendance>();
@@ -76,6 +79,8 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
         modelBuilder.Entity<Activity>().ToTable("activities", "quality");
         modelBuilder.Entity<LearningWalkDetail>().ToTable("learning_walk_details", "quality");
         modelBuilder.Entity<WorkScrutinyDetail>().ToTable("work_scrutiny_details", "quality");
+        modelBuilder.Entity<WorkScrutinyCourseSample>().ToTable("work_scrutiny_course_samples", "quality");
+        modelBuilder.Entity<Course>().ToTable("courses", "curriculum");
         modelBuilder.Entity<ActionItem>().ToTable("actions", "quality");
         modelBuilder.Entity<CpdEvent>().ToTable("cpd_events", "cpd");
         modelBuilder.Entity<CpdAttendance>().ToTable("cpd_attendance", "cpd");
@@ -91,6 +96,7 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
         modelBuilder.Entity<UserRole>().HasKey(x => x.Id);
         modelBuilder.Entity<LearningWalkDetail>().HasKey(x => x.ActivityId);
         modelBuilder.Entity<WorkScrutinyDetail>().HasKey(x => x.ActivityId);
+        modelBuilder.Entity<WorkScrutinyCourseSample>().HasKey(x => new { x.RecordId, x.CourseId });
         modelBuilder.Entity<FileAsset>().HasKey(x => x.Id);
         modelBuilder.Entity<FileAttachment>().HasKey(x => x.Id);
         modelBuilder.Entity<AuditLog>().HasKey(x => x.Id);
@@ -187,4 +193,3 @@ public sealed class DashboardActivityOverviewReadModel
     public DateOnly? FirstRecordDate { get; set; }
     public DateOnly? LatestRecordDate { get; set; }
 }
-

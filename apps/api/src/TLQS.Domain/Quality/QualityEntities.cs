@@ -7,7 +7,7 @@ public sealed class Activity : AuditableEntity
     public Guid RecordId { get; set; }
     public string ActivityType { get; set; } = string.Empty;
     public DateOnly ActivityDate { get; set; }
-    public Guid SubjectStaffId { get; set; }
+    public Guid? SubjectStaffId { get; set; }
     public Guid? ReviewerStaffId { get; set; }
     public Guid? OrgUnitId { get; set; }
     public string? ProgrammeArea { get; set; }
@@ -40,6 +40,13 @@ public sealed class WorkScrutinyDetail
     public byte[] RowVersion { get; set; } = [];
 }
 
+public sealed class WorkScrutinyCourseSample
+{
+    public Guid RecordId { get; set; }
+    public Guid CourseId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public sealed class ActionItem : AuditableEntity
 {
     public Guid? SourceRecordId { get; set; }
@@ -56,4 +63,3 @@ public sealed class ActionItem : AuditableEntity
     public bool PublishedToStaff { get; set; }
     public Guid? CreatedByUserAccountId { get; set; }
 }
-

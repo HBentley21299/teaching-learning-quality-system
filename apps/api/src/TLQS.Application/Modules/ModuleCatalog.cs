@@ -17,9 +17,9 @@ public static class ModuleCatalog
         new("learning_walks", "Learning Walks", "/learning-walks", ["learning_walk.submit"], ["learning_walk"], true),
         new("work_scrutiny", "Work Scrutiny", "/work-scrutiny", ["work_scrutiny.submit"], ["work_scrutiny"], true),
         new("cpd", "CPD Management", "/cpd", ["cpd.manage"], ["cpd_event"], false),
+        new("elevate_practice", "Elevate Your Practice", "/elevate-your-practice", ["elevate_practice.submit"], ["elevate_practice_assessment"], false),
         new("evidence", "Staff Development Evidence", "/evidence", ["evidence.submit", "evidence.review"], ["impact_evidence"], true),
         new("actions", "Actions", "/actions", ["actions.manage"], ["action"], false),
         new("reporting", "Reporting", "/reports", ["reports.view_all", "reports.view_scoped"], ["dashboard"], false)
     ];
 }
-

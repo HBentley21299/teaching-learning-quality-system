@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, ExternalLink, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
+import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
 import type {
   CurrentUser,
   StaffProfileDetail,
@@ -29,8 +30,10 @@ export function StaffProfilePanel({
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
+  const [showElevateResult, setShowElevateResult] = useState(false);
 
   useEffect(() => {
+    setShowElevateResult(false);
     if (!staffId) {
       setDetail(null);
       setIsLoading(false);
@@ -69,7 +72,6 @@ export function StaffProfilePanel({
     };
   }, [staffId]);
 
-  const summary = profiles.find((profile) => profile.staffId === detail?.staffId);
   const canEditReflections =
     Boolean(detail) && (detail?.staffId === user.staffId || user.permissions.includes("staff.manage"));
 
@@ -137,6 +139,10 @@ export function StaffProfilePanel({
     );
   }
 
+  if (showElevateResult) {
+    return <ElevatePracticeResultPage onBack={() => setShowElevateResult(false)} staffId={detail.staffId} />;
+  }
+
   return (
     <>
       {overdueReflection ? (
@@ -193,23 +199,27 @@ export function StaffProfilePanel({
         <section className="panel">
           <div className="panel-heading">
             <h2>Elevate Your Practice</h2>
-            <span>Progress</span>
+            <span>{detail.elevatePractice?.academicYear ?? "Current year"}</span>
           </div>
-          <div className="profile-progress-grid">
+          <div className="profile-practice-tile">
             <div>
-              <strong>{detail.evidenceSubmitted}</strong>
-              <span>Evidence submitted</span>
+              <span className={`status-pill ${detail.elevatePractice?.status === "submitted" ? "status-complete" : detail.elevatePractice?.status === "draft" ? "status-draft" : "status-overdue"}`}>
+                {detail.elevatePractice?.status === "submitted" ? "Submitted" : detail.elevatePractice?.status === "draft" ? "Draft" : "Not started"}
+              </span>
+              <strong>{detail.elevatePractice?.overallAverage?.toFixed(2) ?? "-"}</strong>
+              <span>Overall practice profile</span>
             </div>
-            <div>
-              <strong>{detail.milestonesCompleted}</strong>
-              <span>Milestones completed</span>
-            </div>
+            {detail.elevatePractice?.status === "submitted" ? (
+              <Button icon={ExternalLink} onClick={() => setShowElevateResult(true)} variant="primary">View result</Button>
+            ) : null}
           </div>
-          {summary ? (
-            <p className="muted-copy">
-              {summary.openActions} open action{summary.openActions === 1 ? "" : "s"}, {summary.overdueActions} overdue.
-            </p>
-          ) : null}
+          <p className="muted-copy">
+            {detail.elevatePractice?.status === "submitted"
+              ? "The submitted assessment is locked. Development plans are available in Actions."
+              : detail.elevatePractice?.status === "draft"
+                ? "The annual assessment is in progress and has not been submitted."
+                : "No annual self-assessment has been started yet."}
+          </p>
         </section>
       </div>
 

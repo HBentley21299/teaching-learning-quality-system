@@ -33,7 +33,7 @@ type TemplateEditor = {
 
 const managedModuleOrder: ModuleKey[] = ["learning_walks", "work_scrutiny", "cpd"];
 
-const fieldTypeOptions = [
+const systemFieldTypeOptions = [
   { value: "short_text", label: "Short text" },
   { value: "long_text", label: "Long text" },
   { value: "date", label: "Date" },
@@ -51,19 +51,23 @@ const fieldTypeOptions = [
   { value: "yes_no_partial", label: "Yes / No / Partial" }
 ];
 
-const cpdThemeOptions = [
-  "Teaching, learning and assessment",
-  "Digital learning",
-  "Assessment and feedback",
-  "Inclusive practice",
-  "Safeguarding and wellbeing",
-  "Curriculum development"
+const workScrutinyFieldTypeOptions = [
+  { value: "short_text", label: "Short text" },
+  { value: "long_text", label: "Long text" },
+  { value: "number", label: "Number" },
+  { value: "date", label: "Date" },
+  { value: "yes_no_partial", label: "Yes / No / Partial" },
+  { value: "single_select", label: "Single choice" },
+  { value: "multi_select", label: "Multiple choice" },
+  { value: "checkbox_group", label: "Checklist" },
+  { value: "rubric_scale", label: "Rubric scale" }
 ];
 
 export function FormBuilder({ embedded = false, user }: { embedded?: boolean; user: CurrentUser }) {
   const [templates, setTemplates] = useState<FormTemplateSummary[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
+  const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [themeDrafts, setThemeDrafts] = useState<Record<string, string>>({});
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [editor, setEditor] = useState<TemplateEditor | null>(null);
@@ -118,14 +122,16 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
 
   async function refreshStudio() {
     try {
-      const [nextTemplates, nextOrgUnits, nextMappings] = await Promise.all([
+      const [nextTemplates, nextOrgUnits, nextMappings, nextLookups] = await Promise.all([
         api.formTemplates(),
         api.orgUnits(),
-        api.learningWalkThemeMappings()
+        api.learningWalkThemeMappings(),
+        api.lookups()
       ]);
       setTemplates(nextTemplates);
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
       setThemeMappings(nextMappings);
+      setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
       setThemeDrafts(Object.fromEntries(nextMappings.map((mapping) => [mapping.childOrgUnitId, mapping.agreedTheme])));
       return nextTemplates;
     } catch {
@@ -143,11 +149,11 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
   }, [templates]);
 
   const allocatableOrgUnits = orgUnits.filter((orgUnit) =>
-    ["faculty", "faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType)
+    ["team", "faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType)
   );
 
   const themeRows = orgUnits
-    .filter((orgUnit) => ["faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType))
+    .filter((orgUnit) => ["team", "faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType))
     .map((childOrgUnit) => ({
       childOrgUnit,
       faculty: orgUnits.find((orgUnit) => orgUnit.id === childOrgUnit.parentOrgUnitId),
@@ -210,7 +216,8 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
           fieldType: field.fieldType,
           isRequired: field.isRequired,
           displayOrder: (fieldIndex + 1) * 10,
-          helpText: field.helpText || undefined
+          helpText: field.helpText || undefined,
+          options: field.options ?? []
         }))
       }))
     });
@@ -348,7 +355,8 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
               label: "New field",
               fieldType: "short_text",
               isRequired: false,
-              displayOrder: fieldNumber * 10
+              displayOrder: fieldNumber * 10,
+              options: []
             }
           ]
         };
@@ -419,7 +427,7 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
               Save draft
             </Button>
           </div>
-          <p className="muted-copy">Manage form templates, form display names, faculty allocation and template structure.</p>
+          <p className="muted-copy">Create sub-team Work Scrutiny templates while the universal context, course sample and actions remain controlled.</p>
         </section>
       )}
 
@@ -440,14 +448,14 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
               value={newTemplateName}
             />
             <select
-              aria-label="Allocated faculty or child code"
+              aria-label="Allocated sub-team"
               onChange={(event) => setNewTemplateOrgUnitId(event.target.value)}
               value={newTemplateOrgUnitId}
             >
-              <option value="">Allocate to faculty or child code</option>
+              <option value="">Allocate to sub-team</option>
               {allocatableOrgUnits.map((orgUnit) => (
                 <option key={orgUnit.id} value={orgUnit.id}>
-                  {orgUnit.code} - {orgUnit.name}
+                  {formatOrgUnitOption(orgUnit)}
                 </option>
               ))}
             </select>
@@ -513,6 +521,14 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
               </div>
             </div>
 
+            {selectedTemplate.moduleKey === "work_scrutiny" ? (
+              <div className="work-scrutiny-core-contract">
+                <div><strong>Context</strong><span>Faculty, sub-team, date and reviewer</span></div>
+                <div><strong>Sample</strong><span>Search and select multiple courses</span></div>
+                <div><strong>Actions</strong><span>Action, owner and date due</span></div>
+              </div>
+            ) : null}
+
             <div className="template-meta-grid">
               <label className="studio-field">
                 <span>Template name</span>
@@ -537,10 +553,10 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
                   onChange={(event) => updateEditor({ orgUnitId: event.target.value })}
                   value={editor.orgUnitId}
                 >
-                  <option value="">System-wide</option>
+                  <option value="">Select sub-team</option>
                   {allocatableOrgUnits.map((orgUnit) => (
                     <option key={orgUnit.id} value={orgUnit.id}>
-                      {orgUnit.code} - {orgUnit.name}
+                      {formatOrgUnitOption(orgUnit)}
                     </option>
                   ))}
                 </select>
@@ -628,10 +644,20 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
                             <span>Type</span>
                             <select
                               disabled={!canEditSelected}
-                              onChange={(event) => updateField(section.id, field.id, { fieldType: event.target.value })}
+                              onChange={(event) => {
+                                const fieldType = event.target.value;
+                                updateField(section.id, field.id, {
+                                  fieldType,
+                                  options: usesConfiguredOptions(fieldType)
+                                    ? field.options?.length ? field.options : defaultFieldOptions(fieldType)
+                                    : []
+                                });
+                              }}
                               value={field.fieldType}
                             >
-                              {fieldTypeOptions.map((option) => (
+                              {(selectedTemplate.moduleKey === "work_scrutiny"
+                                ? workScrutinyFieldTypeOptions
+                                : systemFieldTypeOptions).map((option) => (
                                 <option key={option.value} value={option.value}>
                                   {option.label}
                                 </option>
@@ -657,6 +683,20 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
                               value={field.helpText ?? ""}
                             />
                           </label>
+                          {usesConfiguredOptions(field.fieldType) ? (
+                            <label className="studio-field field-editor-options">
+                              <span>Response options</span>
+                              <textarea
+                                disabled={!canEditSelected}
+                                onChange={(event) => updateField(section.id, field.id, {
+                                  options: event.target.value.split(/\r?\n/).map((option) => option.trim()).filter(Boolean)
+                                })}
+                                placeholder="One option per line"
+                                rows={4}
+                                value={(field.options ?? []).join("\n")}
+                              />
+                            </label>
+                          ) : null}
                         </div>
                       ))}
                       <Button disabled={!canEditSelected} icon={Plus} onClick={() => addField(section.id)}>
@@ -670,12 +710,12 @@ export function FormBuilder({ embedded = false, user }: { embedded?: boolean; us
 
             <section className="panel preview-panel">
               <div className="panel-heading">
-                <h2>Preview</h2>
+                <h2>{selectedTemplate.moduleKey === "work_scrutiny" ? "Faculty response preview" : "Preview"}</h2>
                 <span>
                   <Eye size={15} aria-hidden="true" /> {selectedTemplate.status}
                 </span>
               </div>
-              <TemplatePreview orgUnits={orgUnits} sections={editor.sections} themeMappings={themeMappings} />
+              <TemplatePreview cpdThemes={cpdThemes} orgUnits={orgUnits} sections={editor.sections} themeMappings={themeMappings} />
             </section>
           </div>
         </div>
@@ -736,17 +776,19 @@ function buildEditor(template: FormTemplateSummary, sections: Array<{
         sectionKey: section.sectionKey,
         title: section.title,
         displayOrder: section.displayOrder,
-        fields: section.fields.map((field) => ({ ...field }))
+        fields: section.fields.map((field) => ({ ...field, options: field.options ?? [] }))
       }))
       .sort((a, b) => a.displayOrder - b.displayOrder)
   };
 }
 
 function TemplatePreview({
+  cpdThemes,
   orgUnits,
   sections,
   themeMappings
 }: {
+  cpdThemes: string[];
   orgUnits: OrgUnitSummary[];
   sections: EditableSection[];
   themeMappings: LearningWalkThemeMappingSummary[];
@@ -761,7 +803,7 @@ function TemplatePreview({
         <div className="preview-section" key={section.id}>
           <h3>{section.title}</h3>
           <div className="preview-field-grid">
-            {section.fields.map((field) => (
+            {section.fields.filter((field) => !["team_bulk_add", "selected_staff_list"].includes(field.fieldType)).map((field) => (
               <label
                 className={isWidePreviewField(field.fieldType) ? "preview-field preview-field-wide" : "preview-field"}
                 key={field.id}
@@ -770,7 +812,7 @@ function TemplatePreview({
                   {field.label}
                   {field.isRequired ? <strong>Required</strong> : null}
                 </span>
-                {renderPreviewControl(field, orgUnits, themeMappings)}
+                {renderPreviewControl(field, orgUnits, themeMappings, cpdThemes)}
                 {field.helpText ? <small>{field.helpText}</small> : null}
               </label>
             ))}
@@ -784,7 +826,8 @@ function TemplatePreview({
 function renderPreviewControl(
   field: EditableField,
   orgUnits: OrgUnitSummary[],
-  themeMappings: LearningWalkThemeMappingSummary[]
+  themeMappings: LearningWalkThemeMappingSummary[],
+  cpdThemes: string[]
 ) {
   if (field.fieldType === "date") {
     return <input disabled type="date" />;
@@ -814,7 +857,7 @@ function renderPreviewControl(
       <select defaultValue="" disabled>
         <option value="">Select team or child code</option>
         {orgUnits
-          .filter((orgUnit) => ["faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType))
+          .filter((orgUnit) => ["team", "faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType))
           .map((orgUnit) => (
             <option key={orgUnit.id} value={orgUnit.id}>
               {orgUnit.code} - {orgUnit.name}
@@ -834,11 +877,11 @@ function renderPreviewControl(
 
   if (field.fieldType === "staff_multi_select") {
     return (
-      <div className="preview-inline-action">
-        <input disabled placeholder="Search staff by name" />
-        <button disabled type="button">
-          Add
-        </button>
+      <div className="preview-cpd-participants">
+        <input disabled placeholder="Search by name, email or staff ID" />
+        <select defaultValue="" disabled>
+          <option value="">Add faculty or sub-team</option>
+        </select>
       </div>
     );
   }
@@ -850,10 +893,23 @@ function renderPreviewControl(
   if (field.fieldType === "checkbox_group") {
     return (
       <div className="preview-check-list">
-        {cpdThemeOptions.map((theme) => (
-          <label key={theme}>
+        {(field.options?.length ? field.options : cpdThemes).map((option) => (
+          <label key={option}>
             <input disabled type="checkbox" />
-            <span>{theme}</span>
+            <span>{option}</span>
+          </label>
+        ))}
+      </div>
+    );
+  }
+
+  if (field.fieldType === "multi_select") {
+    return (
+      <div className="preview-check-list">
+        {(field.options ?? []).map((option) => (
+          <label key={option}>
+            <input disabled type="checkbox" />
+            <span>{option}</span>
           </label>
         ))}
       </div>
@@ -914,6 +970,16 @@ function renderPreviewControl(
     return (
       <select defaultValue="" disabled>
         <option value="">Select option</option>
+        {(field.options ?? []).map((option) => <option key={option}>{option}</option>)}
+      </select>
+    );
+  }
+
+  if (field.fieldType === "rubric_scale") {
+    return (
+      <select defaultValue="" disabled>
+        <option value="">Select rubric level</option>
+        {(field.options ?? []).map((option) => <option key={option}>{option}</option>)}
       </select>
     );
   }
@@ -925,10 +991,26 @@ function countFields(sections: EditableSection[]) {
   return sections.reduce((total, section) => total + section.fields.length, 0);
 }
 
+function formatOrgUnitOption(orgUnit: OrgUnitSummary) {
+  const level = orgUnit.orgUnitType === "faculty" ? "Faculty" : "Team";
+  return `${level}: ${orgUnit.code} - ${orgUnit.name}`;
+}
+
 function isWidePreviewField(fieldType: string) {
-  return ["long_text", "checkbox_group", "staff_multi_select", "team_bulk_add", "selected_staff_list"].includes(
+  return ["long_text", "checkbox_group", "multi_select", "staff_multi_select", "team_bulk_add", "selected_staff_list"].includes(
     fieldType
   );
+}
+
+function usesConfiguredOptions(fieldType: string) {
+  return ["single_select", "multi_select", "checkbox_group", "rubric_scale"].includes(fieldType);
+}
+
+function defaultFieldOptions(fieldType: string) {
+  if (fieldType === "rubric_scale") {
+    return ["1 - Emerging", "2 - Secure", "3 - Strong"];
+  }
+  return ["Option 1", "Option 2"];
 }
 
 function formatOrgUnits(template: FormTemplateSummary, editor: TemplateEditor, orgUnits: OrgUnitSummary[]) {

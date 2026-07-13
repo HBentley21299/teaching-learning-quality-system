@@ -40,10 +40,15 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\003_learning_walk_brief.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\004_workflows_liv_actions.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\005_staff_profiles_admin.sql"),
-    # Demo dataset (dummy staff, roles, scopes and learning walk records for
-    # permission validation). Remove these lines when provisioning a real environment.
-    (Join-Path -Path $root -ChildPath "database\seed\002_seed_demo.sql"),
-    (Join-Path -Path $root -ChildPath "database\seed\003_seed_learning_walks.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\006_official_org_structure.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\007_elevate_learning_environments.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\008_work_scrutiny_reframe.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\009_staff_onboarding_and_role_hierarchy.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\010_cpd_theme_and_participant_controls.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\011_elevate_your_practice.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\012_remove_sustainable_resource_area.sql"),
+    (Join-Path -Path $root -ChildPath "database\seed\004_seed_elevate_rooms.sql"),
+    (Join-Path -Path $root -ChildPath "database\seed\005_seed_official_curriculum_staff.sql")
 )
 
 foreach ($script in $scripts) {

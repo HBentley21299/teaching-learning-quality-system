@@ -9,8 +9,7 @@ try {
         npm.cmd install --cache .\.npm-cache
     }
 
-    npm.cmd run build
-    npm.cmd run preview
+    npm.cmd run dev
 }
 finally {
     Pop-Location

@@ -15,6 +15,9 @@ public static class PermissionKeys
     public const string ActionsManage = "actions.manage";
     public const string LivSubmit = "liv.submit";
     public const string LivManage = "liv.manage";
+    public const string ElevateSubmit = "elevate.submit";
+    public const string ElevateManage = "elevate.manage";
+    public const string ElevatePracticeSubmit = "elevate_practice.submit";
     public const string ReportsViewAll = "reports.view_all";
     public const string ReportsViewScoped = "reports.view_scoped";
 
@@ -33,8 +36,10 @@ public static class PermissionKeys
         ActionsManage,
         LivSubmit,
         LivManage,
+        ElevateSubmit,
+        ElevateManage,
+        ElevatePracticeSubmit,
         ReportsViewAll,
         ReportsViewScoped
     ];
 }
-

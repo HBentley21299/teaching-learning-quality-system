@@ -93,7 +93,8 @@ export const mockStaff: StaffSummary[] = [
     displayName: "Harry Bentley",
     email: "harryjbentley@outlook.com",
     jobTitle: "Digital Teaching & Learning Lead",
-    accountStatus: "active"
+    accountStatus: "active",
+    orgUnitIds: []
   },
   {
     id: "40000000-0000-0000-0000-000000000002",
@@ -101,7 +102,8 @@ export const mockStaff: StaffSummary[] = [
     displayName: "Example Staff Member",
     email: "example.staff@college.example",
     jobTitle: "Lecturer",
-    accountStatus: "active"
+    accountStatus: "active",
+    orgUnitIds: []
   }
 ];
 

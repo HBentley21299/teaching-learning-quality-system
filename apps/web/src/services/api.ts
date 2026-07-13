@@ -2,21 +2,29 @@ import type {
   ActionSummary,
   AdminRoleSummary,
   AdminUserSummary,
+  CourseSummary,
   CreateActionRequest,
   CreateAdminUserRequest,
   CreateFormTemplateRequest,
   CurrentUser,
   DashboardSummary,
+  ElevatePracticeProgress,
+  ElevatePracticeWorkspace,
   FormDefinition,
   FormTemplateSummary,
   LearningWalkThemeMappingSummary,
   LearningWalkRollupSummary,
   LivRecordSummary,
+  LookupSummary,
+  LookupValueSummary,
   ModuleSummary,
   OrgUnitSummary,
+  ProcessDashboardRecordSummary,
   RecordDetail,
   RecordSummary,
+  RoomSummary,
   SaveLivRecordRequest,
+  SaveElevatePracticeAssessmentRequest,
   StaffProfileDetail,
   StaffProfileRecordSummary,
   StaffProfileSummary,
@@ -33,9 +41,10 @@ import { getAccessToken } from "./auth";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:5001";
 
-export type ApiResult = {
+export type ApiResult<T = never> = {
   ok: boolean;
   message?: string;
+  data?: T;
 };
 
 async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> {
@@ -60,7 +69,7 @@ async function getJson<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function sendJson<TRequest>(url: string, method: "POST" | "PUT", body?: TRequest): Promise<ApiResult> {
+async function sendJson<TRequest, TResponse = never>(url: string, method: "POST" | "PUT", body?: TRequest): Promise<ApiResult<TResponse>> {
   try {
     const response = await fetch(`${apiBaseUrl}${url}`, {
       body: body ? JSON.stringify(body) : undefined,
@@ -69,7 +78,11 @@ async function sendJson<TRequest>(url: string, method: "POST" | "PUT", body?: TR
     });
 
     if (response.ok) {
-      return { ok: true };
+      const contentType = response.headers.get("content-type") ?? "";
+      const data = response.status !== 204 && contentType.includes("application/json")
+        ? (await response.json()) as TResponse
+        : undefined;
+      return { ok: true, data };
     }
 
     let message = `The request failed (${response.status}).`;
@@ -93,7 +106,21 @@ async function sendJson<TRequest>(url: string, method: "POST" | "PUT", body?: TR
 export const api = {
   currentUser: () => getJson<CurrentUser>("/api/v1/me"),
   modules: () => getJson<ModuleSummary[]>("/api/v1/modules"),
+  lookups: () => getJson<LookupSummary[]>("/api/v1/lookups"),
+  adminLookupValues: (lookupKey: string) =>
+    getJson<LookupValueSummary[]>(`/api/v1/admin/lookups/${encodeURIComponent(lookupKey)}/values`),
+  addLookupValue: (lookupKey: string, displayName: string) =>
+    sendJson<{ displayName: string }, LookupValueSummary>(
+      `/api/v1/admin/lookups/${encodeURIComponent(lookupKey)}/values`,
+      "POST",
+      { displayName }
+    ),
+  archiveLookupValue: (lookupKey: string, id: string) =>
+    sendJson(`/api/v1/admin/lookups/${encodeURIComponent(lookupKey)}/values/${id}/archive`, "POST"),
   orgUnits: () => getJson<OrgUnitSummary[]>("/api/v1/org-units"),
+  rooms: () => getJson<RoomSummary[]>("/api/v1/rooms"),
+  courses: (orgUnitId: string) =>
+    getJson<CourseSummary[]>(`/api/v1/courses?orgUnitId=${encodeURIComponent(orgUnitId)}`),
   staff: () => getJson<StaffSummary[]>("/api/v1/staff"),
   records: () => getJson<RecordSummary[]>("/api/v1/records"),
   recordDetail: (id: string) => getJson<RecordDetail>(`/api/v1/records/${id}`),
@@ -101,11 +128,15 @@ export const api = {
   createAction: (request: CreateActionRequest) => sendJson("/api/v1/actions", "POST", request),
   updateAction: (id: string, request: UpdateActionRequest) => sendJson(`/api/v1/actions/${id}`, "PUT", request),
   dashboards: () => getJson<DashboardSummary[]>("/api/v1/reports/dashboards"),
+  processDashboardRecords: () =>
+    getJson<ProcessDashboardRecordSummary[]>("/api/v1/reports/process-records"),
   learningWalkRollup: () =>
     getJson<LearningWalkRollupSummary[]>("/api/v1/reports/learning-walk-rollup"),
   formTemplates: () => getJson<FormTemplateSummary[]>("/api/v1/form-templates"),
   formDefinition: (templateKey: string) =>
     getJson<FormDefinition>(`/api/v1/form-templates/${templateKey}/definition`),
+  workScrutinyTemplate: (orgUnitId: string) =>
+    getJson<FormDefinition>(`/api/v1/work-scrutiny/template/${encodeURIComponent(orgUnitId)}`),
   learningWalkThemeMappings: () =>
     getJson<LearningWalkThemeMappingSummary[]>("/api/v1/learning-walk/theme-mappings"),
   updateLearningWalkThemeMapping: (request: UpdateLearningWalkThemeMappingRequest) =>
@@ -113,7 +144,8 @@ export const api = {
   createFormTemplate: (request: CreateFormTemplateRequest) =>
     sendJson("/api/v1/form-templates", "POST", request),
   archiveFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/archive`, "POST"),
-  submitForm: (request: SubmitFormRequest) => sendJson("/api/v1/form-submissions", "POST", request),
+  submitForm: (request: SubmitFormRequest) =>
+    sendJson<SubmitFormRequest, { id: string; recordId: string }>("/api/v1/form-submissions", "POST", request),
   updateFormSubmission: (id: string, request: UpdateFormSubmissionRequest) =>
     sendJson(`/api/v1/form-submissions/${id}`, "PUT", request),
   changeSubmissionStatus: (id: string, action: "submit" | "reopen" | "archive") =>
@@ -128,6 +160,12 @@ export const api = {
     getJson<StaffProfileSummary[]>("/api/v1/reports/staff-profile-summaries"),
   staffProfileRecords: () => getJson<StaffProfileRecordSummary[]>("/api/v1/staff-profiles"),
   staffProfile: (staffId: string) => getJson<StaffProfileDetail>(`/api/v1/staff-profiles/${staffId}`),
+  elevatePracticeMe: () => getJson<ElevatePracticeWorkspace>("/api/v1/elevate-practice/me"),
+  saveElevatePractice: (request: SaveElevatePracticeAssessmentRequest) =>
+    sendJson<SaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>("/api/v1/elevate-practice/me", "PUT", request),
+  elevatePracticeProgress: () => getJson<ElevatePracticeProgress[]>("/api/v1/elevate-practice/progress"),
+  elevatePracticeResult: (staffId: string) =>
+    getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/latest`),
   saveReflection: (staffId: string, pointKey: string, text: string) =>
     sendJson(`/api/v1/staff-profiles/${staffId}/reflections/${pointKey}`, "PUT", { text }),
   adminUsers: () => getJson<AdminUserSummary[]>("/api/v1/admin/users"),

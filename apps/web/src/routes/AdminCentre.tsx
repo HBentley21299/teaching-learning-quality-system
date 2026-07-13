@@ -1,5 +1,5 @@
-import { Database, FileText, LayoutDashboard, Save, ShieldCheck, SlidersHorizontal, UserCog } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Database, FileText, LayoutDashboard, ListChecks, Plus, RefreshCw, Save, Search, ShieldCheck, SlidersHorizontal, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -85,10 +85,16 @@ export function AdminCentre({
       </div>
 
       {activeTab === "overview" ? (
-        <AdminOverview modules={modules} permissionRows={permissionRows} user={user} />
+        <AdminOverview
+          modules={modules}
+          onOpenLookups={() => setActiveTab("lookups")}
+          permissionRows={permissionRows}
+          user={user}
+        />
       ) : null}
       {activeTab === "staff" ? <StaffAdminPanel user={user} /> : null}
-      {activeTab === "permissions" ? <PermissionAdminPanel /> : null}
+      {activeTab === "permissions" ? <PermissionAdminPanel user={user} /> : null}
+      {activeTab === "lookups" ? <LookupAdminPanel /> : null}
       {activeTab === "forms" ? <FormBuilder embedded user={user} /> : null}
       {activeTab === "records" ? <RecordCorrectionPanel profiles={profiles} staff={staff} /> : null}
       {activeTab === "dashboards" ? <DashboardAdminPanel /> : null}
@@ -96,12 +102,13 @@ export function AdminCentre({
   );
 }
 
-type AdminTabKey = "overview" | "staff" | "permissions" | "forms" | "records" | "dashboards";
+type AdminTabKey = "overview" | "staff" | "permissions" | "lookups" | "forms" | "records" | "dashboards";
 
 const adminTabs: Array<{ key: AdminTabKey; label: string; icon: typeof SlidersHorizontal }> = [
   { key: "overview", label: "Overview", icon: SlidersHorizontal },
   { key: "staff", label: "Staff accounts", icon: UserCog },
   { key: "permissions", label: "Permissions", icon: ShieldCheck },
+  { key: "lookups", label: "Lookups", icon: ListChecks },
   { key: "forms", label: "Forms", icon: FileText },
   { key: "records", label: "Submitted records", icon: Database },
   { key: "dashboards", label: "Dashboards", icon: LayoutDashboard }
@@ -109,10 +116,12 @@ const adminTabs: Array<{ key: AdminTabKey; label: string; icon: typeof SlidersHo
 
 function AdminOverview({
   modules,
+  onOpenLookups,
   permissionRows,
   user
 }: {
   modules: ModuleSummary[];
+  onOpenLookups: () => void;
   permissionRows: string[][];
   user: CurrentUser;
 }) {
@@ -155,11 +164,7 @@ function AdminOverview({
             <span>Admin editable</span>
           </div>
           <div className="lookup-list">
-            {["Account status", "Action status", "Priority", "CPD theme", "Impact milestone"].map((lookup) => (
-              <button key={lookup} className="lookup-row" type="button">
-                {lookup}
-              </button>
-            ))}
+            <button className="lookup-row" onClick={onOpenLookups} type="button">CPD themes</button>
           </div>
         </section>
       </div>
@@ -180,6 +185,104 @@ function AdminOverview({
         </div>
       </section>
     </>
+  );
+}
+
+function LookupAdminPanel() {
+  const [themes, setThemes] = useState<Awaited<ReturnType<typeof api.adminLookupValues>>>([]);
+  const [newTheme, setNewTheme] = useState("");
+  const [status, setStatus] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    void refreshThemes();
+  }, []);
+
+  async function refreshThemes(nextStatus = "") {
+    try {
+      setThemes(await api.adminLookupValues("cpd_theme"));
+      setStatus(nextStatus);
+    } catch {
+      setStatus("CPD themes could not be loaded from the API.");
+    }
+  }
+
+  async function addTheme() {
+    if (!newTheme.trim()) {
+      setStatus("Enter a CPD theme before adding it.");
+      return;
+    }
+
+    setIsSaving(true);
+    const result = await api.addLookupValue("cpd_theme", newTheme.trim());
+    setIsSaving(false);
+    if (!result.ok) {
+      setStatus(result.message ?? "The CPD theme could not be added.");
+      return;
+    }
+
+    setNewTheme("");
+    await refreshThemes("CPD theme added.");
+  }
+
+  async function removeTheme(id: string) {
+    setIsSaving(true);
+    const result = await api.archiveLookupValue("cpd_theme", id);
+    setIsSaving(false);
+    if (!result.ok) {
+      setStatus(result.message ?? "The CPD theme could not be removed.");
+      return;
+    }
+
+    await refreshThemes("CPD theme removed. Existing CPD records are unchanged.");
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <h2>CPD themes</h2>
+        <span>{themes.length} active</span>
+      </div>
+
+      <div className="lookup-admin-toolbar">
+        <label className="entry-field">
+          <span>New theme</span>
+          <input
+            onChange={(event) => setNewTheme(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void addTheme();
+              }
+            }}
+            placeholder="Enter CPD theme"
+            type="text"
+            value={newTheme}
+          />
+        </label>
+        <Button disabled={isSaving || !newTheme.trim()} icon={Plus} onClick={() => void addTheme()} variant="primary">Add theme</Button>
+      </div>
+
+      {status ? <div className="notice-row" role="status">{status}</div> : null}
+
+      <div className="lookup-value-list">
+        {themes.map((theme) => (
+          <div className="lookup-value-row" key={theme.id}>
+            <strong>{theme.displayName}</strong>
+            <button
+              aria-label={`Remove ${theme.displayName}`}
+              className="icon-button"
+              disabled={isSaving || themes.length <= 1}
+              onClick={() => void removeTheme(theme.id)}
+              title={`Remove ${theme.displayName}`}
+              type="button"
+            >
+              <X aria-hidden="true" size={16} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -210,7 +313,8 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
   const [roles, setRoles] = useState<AdminRoleSummary[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [form, setForm] = useState<NewAccountForm>(emptyAccountForm);
-  const [rowEdits, setRowEdits] = useState<Record<string, { roleKey: string; accountStatus: string }>>({});
+  const [rowEdits, setRowEdits] = useState<Record<string, { accountStatus: string }>>({});
+  const [accountSearch, setAccountSearch] = useState("");
   const [panelStatus, setPanelStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -276,8 +380,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
 
     setIsSaving(true);
     const result = await api.updateAdminUser(account.userAccountId, {
-      accountStatus: edit.accountStatus !== account.accountStatus ? edit.accountStatus : undefined,
-      roleKeys: edit.roleKey !== (account.roles[0]?.roleKey ?? "") ? [edit.roleKey].filter(Boolean) : undefined
+      accountStatus: edit.accountStatus !== account.accountStatus ? edit.accountStatus : undefined
     });
     setIsSaving(false);
 
@@ -305,14 +408,26 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
   function rowEdit(account: AdminUserSummary) {
     return (
       rowEdits[account.userAccountId] ?? {
-        roleKey: account.roles[0]?.roleKey ?? "",
         accountStatus: account.accountStatus
       }
     );
   }
 
+  const visibleAccounts = useMemo(() => {
+    const query = accountSearch.trim().toLowerCase();
+    if (!query) {
+      return accounts;
+    }
+
+    return accounts.filter((account) =>
+      [account.displayName, account.email, account.externalId, account.primaryOrgCode]
+        .filter(Boolean)
+        .some((value) => value!.toLowerCase().includes(query))
+    );
+  }, [accountSearch, accounts]);
+
   const scopeOrgUnits = orgUnits.filter((orgUnit) =>
-    ["faculty", "faculty_child_code", "faculty_child", "directorate"].includes(orgUnit.orgUnitType)
+    ["faculty", "team", "faculty_child_code", "faculty_child", "directorate"].includes(orgUnit.orgUnitType)
   );
 
   return (
@@ -335,7 +450,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
             <span>Staff email address</span>
             <input
               onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
-              placeholder="name@college.example"
+              placeholder="AD0000@oldham.ac.uk"
               type="email"
               value={form.email}
             />
@@ -344,7 +459,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
             <span>Staff ID</span>
             <input
               onChange={(event) => setForm((current) => ({ ...current, externalId: event.target.value }))}
-              placeholder="STAFF_0000"
+              placeholder="AD0000"
               value={form.externalId}
             />
           </label>
@@ -379,7 +494,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
               <option value="">No primary team</option>
               {orgUnits.map((orgUnit) => (
                 <option key={orgUnit.id} value={orgUnit.id}>
-                  {orgUnit.code} - {orgUnit.name}
+                  {formatOrgUnitOption(orgUnit)}
                 </option>
               ))}
             </select>
@@ -393,7 +508,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
               <option value="">No assigned scope</option>
               {scopeOrgUnits.map((orgUnit) => (
                 <option key={orgUnit.id} value={orgUnit.id}>
-                  {orgUnit.code} - {orgUnit.name}
+                  {formatOrgUnitOption(orgUnit)}
                 </option>
               ))}
             </select>
@@ -421,7 +536,22 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
       <section className="panel">
         <div className="panel-heading">
           <h2>User accounts</h2>
-          <span>{accounts.length} accounts</span>
+          <div className="toolbar">
+            <span>{visibleAccounts.length} of {accounts.length} accounts</span>
+            <Button icon={RefreshCw} onClick={() => void refreshData()} variant="secondary">Refresh</Button>
+          </div>
+        </div>
+        <div className="admin-list-toolbar">
+          <label className="admin-search-field">
+            <Search size={16} aria-hidden="true" />
+            <input
+              aria-label="Search user accounts"
+              onChange={(event) => setAccountSearch(event.target.value)}
+              placeholder="Search name, AD number, email or team"
+              value={accountSearch}
+            />
+          </label>
+          <span className="muted-copy">Manage role membership in the Permissions tab.</span>
         </div>
         <div className="table-shell">
           <table>
@@ -437,14 +567,17 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
               </tr>
             </thead>
             <tbody>
-              {accounts.length === 0 ? (
+              {visibleAccounts.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>No user accounts were returned by the API.</td>
+                  <td colSpan={7}>No user accounts match the current search.</td>
                 </tr>
               ) : (
-                accounts.map((account) => {
+                visibleAccounts.map((account) => {
                   const edit = rowEdit(account);
                   const isSelf = account.userAccountId === user.userAccountId;
+                  const orderedRoles = [...account.roles].sort(
+                    (left, right) => rolePrecedence(right.roleKey, roles) - rolePrecedence(left.roleKey, roles)
+                  );
                   return (
                     <tr key={account.userAccountId}>
                       <td>
@@ -454,26 +587,13 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
                       </td>
                       <td>{account.externalId}</td>
                       <td>
-                        <select
-                          aria-label={`Role for ${account.displayName}`}
-                          onChange={(event) =>
-                            setRowEdits((current) => ({
-                              ...current,
-                              [account.userAccountId]: { ...edit, roleKey: event.target.value }
-                            }))
-                          }
-                          value={edit.roleKey}
-                        >
-                          <option value="">No role</option>
-                          {roles.map((role) => (
-                            <option key={role.roleKey} value={role.roleKey}>
+                        <div className="role-chip-list">
+                          {orderedRoles.map((role, index) => (
+                            <span className={index === 0 ? "role-chip role-chip-effective" : "role-chip"} key={role.roleKey}>
                               {role.name}
-                            </option>
+                            </span>
                           ))}
-                        </select>
-                        {account.roles.length > 1 ? (
-                          <small className="muted-copy">+{account.roles.length - 1} more</small>
-                        ) : null}
+                        </div>
                       </td>
                       <td>
                         {account.scopes.length === 0
@@ -530,39 +650,232 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
   );
 }
 
-function PermissionAdminPanel() {
+function PermissionAdminPanel({ user }: { user: CurrentUser }) {
   const [roles, setRoles] = useState<AdminRoleSummary[]>([]);
+  const [accounts, setAccounts] = useState<AdminUserSummary[]>([]);
+  const [selectedRoleKey, setSelectedRoleKey] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [candidateSearch, setCandidateSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    api
-      .adminRoles()
-      .then(setRoles)
-      .catch(() => setLoadError("Roles and permissions could not be loaded from the API."));
+    void refreshData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function refreshData(preferredRoleKey?: string) {
+    try {
+      const [nextRoles, nextAccounts] = await Promise.all([api.adminRoles(), api.adminUsers()]);
+      setRoles(nextRoles);
+      setAccounts(nextAccounts);
+      setSelectedRoleKey((current) => preferredRoleKey || current || nextRoles[0]?.roleKey || "");
+      setLoadError("");
+    } catch {
+      setLoadError("Roles and account allocations could not be loaded from the API.");
+    }
+  }
+
+  const selectedRole = roles.find((role) => role.roleKey === selectedRoleKey);
+  const members = useMemo(() => {
+    const query = memberSearch.trim().toLowerCase();
+    return accounts
+      .filter((account) => account.roles.some((role) => role.roleKey === selectedRoleKey))
+      .filter((account) => !query || [account.displayName, account.email, account.externalId]
+        .some((value) => value.toLowerCase().includes(query)))
+      .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  }, [accounts, memberSearch, selectedRoleKey]);
+
+  const candidates = useMemo(() => {
+    const query = candidateSearch.trim().toLowerCase();
+    if (!query) {
+      return [];
+    }
+
+    return accounts
+      .filter((account) => !account.roles.some((role) => role.roleKey === selectedRoleKey))
+      .filter((account) => [account.displayName, account.email, account.externalId]
+        .some((value) => value.toLowerCase().includes(query)))
+      .sort((left, right) => left.displayName.localeCompare(right.displayName))
+      .slice(0, 8);
+  }, [accounts, candidateSearch, selectedRoleKey]);
+
+  async function changeRole(account: AdminUserSummary, action: "add" | "remove") {
+    if (!selectedRole) {
+      return;
+    }
+
+    const nextRoleKeys = new Set(account.roles.map((role) => role.roleKey));
+    if (action === "add") {
+      nextRoleKeys.add(selectedRole.roleKey);
+    } else {
+      nextRoleKeys.delete(selectedRole.roleKey);
+    }
+
+    setIsSaving(true);
+    const result = await api.updateAdminUser(account.userAccountId, { roleKeys: [...nextRoleKeys] });
+    setIsSaving(false);
+    if (!result.ok) {
+      setStatus(result.message ?? "The role allocation could not be updated.");
+      return;
+    }
+
+    setStatus(`${selectedRole.name} ${action === "add" ? "added to" : "removed from"} ${account.displayName}.`);
+    setCandidateSearch("");
+    await refreshData(selectedRole.roleKey);
+  }
+
   return (
-    <section className="panel">
-      <div className="panel-heading">
-        <h2>Permission management</h2>
-        <span>Level and scope</span>
+    <section className="panel permission-admin-panel">
+      <div className="panel-heading permission-admin-heading">
+        <div>
+          <h2>Role allocations</h2>
+          <p className="muted-copy">Staff can hold multiple roles. The highest level is shown as their effective role.</p>
+        </div>
+        <div className="toolbar">
+          <span>{accounts.length} accounts</span>
+          <Button icon={RefreshCw} onClick={() => void refreshData()} variant="secondary">Refresh</Button>
+        </div>
       </div>
       {loadError ? <div className="notice-row">{loadError}</div> : null}
-      <div className="permission-grid">
-        {roles.map((role) => (
-          <div className="permission-row" key={role.roleKey}>
-            <strong>{role.name}</strong>
-            <span>{role.description ?? "No description recorded."}</span>
-            <span>
-              {role.permissions.length === 0
-                ? "No permissions"
-                : role.permissions.map((permission) => permission.name).join(", ")}
-            </span>
+      <div className="role-admin-layout">
+        <div className="role-level-list" aria-label="Permission levels">
+          {roles.map((role) => {
+            const allocationCount = accounts.filter((account) =>
+              account.roles.some((assignedRole) => assignedRole.roleKey === role.roleKey)
+            ).length;
+            return (
+              <button
+                aria-pressed={selectedRoleKey === role.roleKey}
+                className={selectedRoleKey === role.roleKey ? "role-level-button role-level-button-active" : "role-level-button"}
+                key={role.roleKey}
+                onClick={() => {
+                  setSelectedRoleKey(role.roleKey);
+                  setMemberSearch("");
+                  setCandidateSearch("");
+                  setStatus("");
+                }}
+                type="button"
+              >
+                <span>
+                  <strong>{role.name}</strong>
+                  <small>Level {role.precedence}</small>
+                </span>
+                <b>{allocationCount}</b>
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedRole ? (
+          <div className="role-member-panel">
+            <div className="role-member-header">
+              <div>
+                <p className="eyebrow">Permission level</p>
+                <h3>{selectedRole.name}</h3>
+                <p>{selectedRole.description ?? "No description recorded."}</p>
+              </div>
+              <span className="role-rank-badge">Level {selectedRole.precedence}</span>
+            </div>
+
+            <div className="role-permission-summary">
+              {selectedRole.permissions.map((permission) => (
+                <span key={permission.permissionKey}>{permission.name}</span>
+              ))}
+            </div>
+
+            <div className="role-add-control">
+              <label className="entry-field">
+                <span>Add staff member</span>
+                <div className="role-candidate-input">
+                  <UserPlus size={17} aria-hidden="true" />
+                  <input
+                    aria-autocomplete="list"
+                    aria-controls="role-candidates"
+                    aria-expanded={candidates.length > 0}
+                    onChange={(event) => setCandidateSearch(event.target.value)}
+                    placeholder="Type a name, AD number or email"
+                    role="combobox"
+                    value={candidateSearch}
+                  />
+                </div>
+              </label>
+              {candidates.length > 0 ? (
+                <div className="role-candidate-list" id="role-candidates" role="listbox">
+                  {candidates.map((account) => (
+                    <button
+                      disabled={isSaving}
+                      key={account.userAccountId}
+                      onClick={() => void changeRole(account, "add")}
+                      role="option"
+                      type="button"
+                    >
+                      <span><strong>{account.displayName}</strong><small>{account.externalId} · {account.email}</small></span>
+                      <UserPlus size={16} aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            {status ? <div className="notice-row">{status}</div> : null}
+
+            <div className="role-member-toolbar">
+              <h3>Allocated staff</h3>
+              <label className="admin-search-field">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  aria-label={`Search ${selectedRole.name} allocations`}
+                  onChange={(event) => setMemberSearch(event.target.value)}
+                  placeholder="Filter allocated staff"
+                  value={memberSearch}
+                />
+              </label>
+            </div>
+
+            <div className="role-member-list">
+              {members.length === 0 ? <p className="muted-copy">No staff are allocated to this role.</p> : null}
+              {members.map((account) => {
+                const effectiveRole = getEffectiveRole(account, roles);
+                const isProtectedAdmin = selectedRole.roleKey === "super_admin"
+                  && account.userAccountId === user.userAccountId;
+                return (
+                  <div className="role-member-row" key={account.userAccountId}>
+                    <div>
+                      <strong>{account.displayName}</strong>
+                      <span>{account.externalId} · {account.email}</span>
+                    </div>
+                    <span className="effective-role-label">Effective: {effectiveRole?.name ?? "None"}</span>
+                    <button
+                      className="icon-button"
+                      disabled={isSaving || isProtectedAdmin || account.roles.length === 1}
+                      onClick={() => void changeRole(account, "remove")}
+                      title={isProtectedAdmin ? "Your own Admin role is protected" : `Remove ${selectedRole.name}`}
+                      type="button"
+                    >
+                      <UserMinus size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        ))}
+        ) : null}
       </div>
     </section>
   );
+}
+
+function rolePrecedence(roleKey: string, roles: AdminRoleSummary[]) {
+  return roles.find((role) => role.roleKey === roleKey)?.precedence ?? 0;
+}
+
+function getEffectiveRole(account: AdminUserSummary, roles: AdminRoleSummary[]) {
+  return [...account.roles]
+    .map((assignedRole) => roles.find((role) => role.roleKey === assignedRole.roleKey))
+    .filter((role): role is AdminRoleSummary => Boolean(role))
+    .sort((left, right) => right.precedence - left.precedence)[0];
 }
 
 function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSummary[]; staff: StaffSummary[] }) {
@@ -675,6 +988,11 @@ function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSumm
 function formatReflectionSummary(record: StaffProfileRecordSummary) {
   const base = `${record.completedReflections}/${record.reflectionPointCount} completed`;
   return record.overdueReflections > 0 ? `${base}, ${record.overdueReflections} overdue` : base;
+}
+
+function formatOrgUnitOption(orgUnit: OrgUnitSummary) {
+  const level = orgUnit.orgUnitType === "faculty" ? "Faculty" : "Team";
+  return `${level}: ${orgUnit.code} - ${orgUnit.name}`;
 }
 
 function DashboardAdminPanel() {
