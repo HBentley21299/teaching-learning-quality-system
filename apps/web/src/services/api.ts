@@ -2,6 +2,10 @@ import type {
   ActionSummary,
   AdminRoleSummary,
   AdminUserSummary,
+  CoachingContext,
+  CoachingSessionDetail,
+  CoachingSessionSaveSummary,
+  CoachingSessionSummary,
   CourseSummary,
   CreateActionRequest,
   CreateAdminUserRequest,
@@ -24,6 +28,7 @@ import type {
   RecordSummary,
   RoomSummary,
   SaveLivRecordRequest,
+  SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
   StaffProfileDetail,
   StaffProfileRecordSummary,
@@ -166,6 +171,16 @@ export const api = {
   elevatePracticeProgress: () => getJson<ElevatePracticeProgress[]>("/api/v1/elevate-practice/progress"),
   elevatePracticeResult: (staffId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/latest`),
+  coachingSessions: () => getJson<CoachingSessionSummary[]>("/api/v1/coaching/sessions"),
+  coachingSession: (id: string) => getJson<CoachingSessionDetail>(`/api/v1/coaching/sessions/${id}`),
+  coachingContext: (staffId: string, cycleId?: string) =>
+    getJson<CoachingContext>(
+      `/api/v1/coaching/staff/${staffId}/context${cycleId ? `?cycleId=${encodeURIComponent(cycleId)}` : ""}`
+    ),
+  createCoachingSession: (request: SaveCoachingSessionRequest) =>
+    sendJson<SaveCoachingSessionRequest, CoachingSessionSaveSummary>("/api/v1/coaching/sessions", "POST", request),
+  updateCoachingSession: (id: string, request: SaveCoachingSessionRequest) =>
+    sendJson<SaveCoachingSessionRequest, CoachingSessionSaveSummary>(`/api/v1/coaching/sessions/${id}`, "PUT", request),
   saveReflection: (staffId: string, pointKey: string, text: string) =>
     sendJson(`/api/v1/staff-profiles/${staffId}/reflections/${pointKey}`, "PUT", { text }),
   adminUsers: () => getJson<AdminUserSummary[]>("/api/v1/admin/users"),

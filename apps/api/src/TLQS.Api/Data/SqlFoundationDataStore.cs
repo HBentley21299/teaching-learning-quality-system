@@ -1502,7 +1502,10 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 r.summary,
                 r.record_date,
                 r.created_at,
-                COALESCE(latest_submission.status, 'submitted') AS submission_status,
+                CASE WHEN r.record_type = 'coaching_session'
+                     THEN coaching_session.status
+                     ELSE COALESCE(latest_submission.status, 'submitted')
+                END AS submission_status,
                 r.org_unit_id,
                 CASE
                     WHEN r.record_type = 'elevate_environment' THEN elevate_room.room_code
@@ -1531,10 +1534,20 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     WHEN r.record_type = 'elevate_environment'
                          AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 2 THEN 'Secure'
                     WHEN r.record_type = 'elevate_environment' THEN 'Emerging'
+                    WHEN r.record_type = 'coaching_session' THEN CASE coaching_session.main_focus
+                        WHEN 'teaching_learning' THEN 'Teaching & learning'
+                        WHEN 'subject_practice' THEN 'Subject practice'
+                        ELSE REPLACE(coaching_session.main_focus, '_', ' ')
+                    END
                     ELSE theme_response.response_text
                 END AS theme,
                 CASE
                     WHEN r.record_type = 'work_scrutiny' THEN r.summary
+                    WHEN r.record_type = 'coaching_session' THEN CONCAT(
+                        REPLACE(coaching_session.session_type, '_', ' '),
+                        CASE WHEN coaching_session.duration_minutes IS NULL THEN ''
+                             ELSE CONCAT(', ', coaching_session.duration_minutes, ' minutes') END
+                    )
                     ELSE detail_response.response_text
                 END AS detail,
                 cpd_metrics.participant_area_breakdown,
@@ -1554,6 +1567,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             LEFT JOIN quality.work_scrutiny_details scrutiny_detail ON scrutiny_detail.activity_id = activity.id
             LEFT JOIN quality.elevate_environment_assessments elevate_assessment ON elevate_assessment.record_id = r.id
             LEFT JOIN quality.rooms elevate_room ON elevate_room.id = elevate_assessment.room_id
+            LEFT JOIN quality.coaching_sessions coaching_session ON coaching_session.record_id = r.id
+                AND coaching_session.archived_at IS NULL
             OUTER APPLY (
                 SELECT TOP (1) submission.id, submission.status
                 FROM forms.form_submissions submission
@@ -1630,9 +1645,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 ) area_metrics
             ) cpd_metrics
             WHERE r.archived_at IS NULL
-              AND r.record_type IN ('learning_walk', 'work_scrutiny', 'cpd_event', 'elevate_environment')
+              AND r.record_type IN ('learning_walk', 'work_scrutiny', 'cpd_event', 'elevate_environment', 'coaching_session')
               AND (
-                    COALESCE(latest_submission.status, 'submitted') <> 'draft'
+                    COALESCE(coaching_session.status, latest_submission.status, 'submitted') <> 'draft'
                     OR r.owner_staff_id = @currentStaffId
                     OR @canViewAll = 1
               )
@@ -1693,6 +1708,20 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                                   SELECT 1 FROM scoped_org_units sou
                                   WHERE sou.org_unit_id = COALESCE(scoped_attendance.org_unit_id_at_time, scoped_attendee.primary_org_unit_id)
                               )
+                        )
+                    )
+                    OR (
+                        @canViewScopedActivities = 1
+                        AND r.record_type = 'coaching_session'
+                        AND (
+                            r.owner_staff_id = @currentStaffId
+                            OR r.subject_staff_id = @currentStaffId
+                            OR subject_staff.line_manager_staff_id = @currentStaffId
+                            OR EXISTS (
+                                SELECT 1 FROM scoped_org_units sou
+                                WHERE sou.org_unit_id = r.org_unit_id
+                                   OR sou.org_unit_id = subject_staff.primary_org_unit_id
+                            )
                         )
                     )
               )
@@ -5999,6 +6028,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         || currentUser.HasPermission(PermissionKeys.WorkScrutinySubmit)
         || currentUser.HasPermission(PermissionKeys.ElevateSubmit)
         || currentUser.HasPermission(PermissionKeys.ElevateManage)
+        || currentUser.HasPermission(PermissionKeys.CoachingSubmit)
+        || currentUser.HasPermission(PermissionKeys.CoachingManage)
         || currentUser.HasPermission(PermissionKeys.ActionsManage);
 
     private async Task<SqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)

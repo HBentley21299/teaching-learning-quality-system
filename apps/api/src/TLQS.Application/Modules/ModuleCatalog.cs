@@ -18,6 +18,7 @@ public static class ModuleCatalog
         new("work_scrutiny", "Work Scrutiny", "/work-scrutiny", ["work_scrutiny.submit"], ["work_scrutiny"], true),
         new("cpd", "CPD Management", "/cpd", ["cpd.manage"], ["cpd_event"], false),
         new("elevate_practice", "Elevate Your Practice", "/elevate-your-practice", ["elevate_practice.submit"], ["elevate_practice_assessment"], false),
+        new("coaching_mentoring", "Coaching and Mentoring", "/coaching-mentoring", ["coaching.submit", "coaching.manage"], ["coaching_session"], false),
         new("evidence", "Staff Development Evidence", "/evidence", ["evidence.submit", "evidence.review"], ["impact_evidence"], true),
         new("actions", "Actions", "/actions", ["actions.manage"], ["action"], false),
         new("reporting", "Reporting", "/reports", ["reports.view_all", "reports.view_scoped"], ["dashboard"], false)

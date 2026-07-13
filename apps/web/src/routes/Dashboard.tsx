@@ -4,6 +4,7 @@ import {
   Building2,
   ClipboardCheck,
   GraduationCap,
+  MessagesSquare,
   RefreshCw,
   RotateCcw,
   Search
@@ -45,7 +46,8 @@ const processDefinitions: ProcessDefinition[] = [
   { key: "learning_walk", label: "Learning Walks", singular: "Learning Walk", icon: BookOpenCheck, tone: "teal" },
   { key: "work_scrutiny", label: "Work Scrutiny", singular: "Work Scrutiny", icon: ClipboardCheck, tone: "blue" },
   { key: "cpd_event", label: "CPD", singular: "CPD event", icon: GraduationCap, tone: "green" },
-  { key: "elevate_environment", label: "Elevate Environments", singular: "environment check", icon: Building2, tone: "amber" }
+  { key: "elevate_environment", label: "Elevate Environments", singular: "environment check", icon: Building2, tone: "amber" },
+  { key: "coaching_session", label: "Coaching & Mentoring", singular: "session", icon: MessagesSquare, tone: "teal" }
 ];
 
 export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }: DashboardProps) {
@@ -265,9 +267,9 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
           </label>
           {selectedProcess !== "work_scrutiny" ? (
             <label className="record-filter-field">
-              <span>{selectedProcess === "elevate_environment" ? "Overall standard" : "Theme"}</span>
+              <span>{selectedProcess === "elevate_environment" ? "Overall standard" : selectedProcess === "coaching_session" ? "Focus" : "Theme"}</span>
               <select onChange={(event) => setThemeFilter(event.target.value)} value={themeFilter}>
-                <option value="all">All {selectedProcess === "elevate_environment" ? "standards" : "themes"}</option>
+                <option value="all">All {selectedProcess === "elevate_environment" ? "standards" : selectedProcess === "coaching_session" ? "focus areas" : "themes"}</option>
                 {themeOptions.map((theme) => <option key={theme} value={theme}>{theme}</option>)}
               </select>
             </label>
@@ -296,7 +298,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
           <DashboardBars title="Action status" subtitle="Actions linked to scrutinies" data={actionStatusData} />
         ) : (
           <DashboardBars
-            title={selectedProcess === "elevate_environment" ? "Overall standards" : "Themes and focus"}
+            title={selectedProcess === "elevate_environment" ? "Overall standards" : selectedProcess === "coaching_session" ? "Session focus" : "Themes and focus"}
             subtitle="Frequency in the current view"
             data={themeData}
           />
@@ -366,7 +368,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
               { key: "area", header: "Area", render: (record) => formatArea(record) },
               {
                 key: "focus",
-                header: selectedProcess === "work_scrutiny" ? "Courses sampled" : selectedProcess === "elevate_environment" ? "Standard / purpose" : "Theme / detail",
+                header: selectedProcess === "work_scrutiny" ? "Courses sampled" : selectedProcess === "elevate_environment" ? "Standard / purpose" : selectedProcess === "coaching_session" ? "Focus / session" : "Theme / detail",
                 render: (record) => formatRecordFocus(record)
               },
               {
@@ -471,6 +473,16 @@ function buildKpis(
     ];
   }
 
+  if (processKey === "coaching_session") {
+    return [
+      { label: "Completed sessions", value: records.filter((record) => record.status === "completed").length, tone: "blue" as const },
+      { label: "Staff supported", value: new Set(records.map((record) => record.subjectDisplayName).filter(Boolean)).size, tone: "green" as const },
+      { label: "Agreed actions", value: actions.length, tone: "blue" as const },
+      { label: "Open actions", value: openActions.length, tone: "amber" as const },
+      { label: "Overdue actions", value: overdueActions.length, tone: overdueActions.length ? "red" as const : "green" as const }
+    ];
+  }
+
   return [
     { label: "Learning walks", value: records.length, tone: "blue" as const },
     { label: "Areas covered", value: areaCount, tone: "blue" as const },
@@ -492,6 +504,10 @@ function getTileSupportingMetric(processKey: ProcessKey, records: ProcessDashboa
   }
   if (processKey === "work_scrutiny") {
     const completed = records.filter((record) => record.status === "submitted").length;
+    return `${completed} completed`;
+  }
+  if (processKey === "coaching_session") {
+    const completed = records.filter((record) => record.status === "completed").length;
     return `${completed} completed`;
   }
   const areas = countRecordAreas(records);
@@ -703,6 +719,9 @@ function getRecordMeasure(record: ProcessDashboardRecordSummary, processKey: Pro
   if (processKey === "elevate_environment") {
     return record.scoreCount ? `${(record.scoreTotal / record.scoreCount).toFixed(1)} / 3` : "Not scored";
   }
+  if (processKey === "coaching_session") {
+    return record.ownerDisplayName ?? "Not recorded";
+  }
   return record.ownerDisplayName ?? "Not recorded";
 }
 
@@ -715,6 +734,9 @@ function getMeasureHeader(processKey: ProcessKey) {
   }
   if (processKey === "elevate_environment") {
     return "Average score";
+  }
+  if (processKey === "coaching_session") {
+    return "Coach or mentor";
   }
   return "Recorded by";
 }

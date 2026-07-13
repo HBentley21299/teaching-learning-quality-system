@@ -21,6 +21,7 @@ import { ActionsView } from "../routes/ActionsView";
 import { PermissionsView } from "../routes/PermissionsView";
 import { StaffProfileWorkspace } from "../routes/StaffProfileWorkspace";
 import { ElevatePractice } from "../routes/ElevatePractice";
+import { CoachingMentoring } from "../routes/CoachingMentoring";
 
 const emptyUser: CurrentUser = {
   displayName: "Loading...",
@@ -198,6 +199,9 @@ export function App() {
                 />
               ) : null}
               {route === "practice" ? <ElevatePractice user={user} onActionsChanged={refreshActions} /> : null}
+              {route === "coaching" ? (
+                <CoachingMentoring staff={staff} user={user} onActionsChanged={refreshActions} />
+              ) : null}
               {route === "scrutiny" ? (
                 <ModuleWorkspace title="Work Scrutiny" eyebrow="Quality activity" mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}

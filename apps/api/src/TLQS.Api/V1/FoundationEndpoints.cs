@@ -472,6 +472,61 @@ public static class FoundationEndpoints
             return result is null ? Results.NotFound() : Results.Ok(result);
         });
 
+        api.MapGet("/coaching/sessions", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return Results.Ok(await store.GetCoachingSessionsAsync(currentUser, cancellationToken));
+        });
+
+        api.MapGet("/coaching/sessions/{id:guid}", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var result = await store.GetCoachingSessionAsync(id, currentUser, cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        });
+
+        api.MapGet("/coaching/staff/{staffId:guid}/context", async (Guid staffId, Guid? cycleId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.CoachingSubmit)
+                && !currentUser.HasPermission(PermissionKeys.CoachingManage))
+            {
+                return Results.Forbid();
+            }
+
+            if (!await store.CanStartCoachingForStaffAsync(staffId, currentUser, cancellationToken))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetCoachingContextAsync(staffId, cycleId, currentUser, cancellationToken));
+        });
+
+        api.MapPost("/coaching/sessions", async (SaveCoachingSessionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.CoachingSubmit)
+                && !currentUser.HasPermission(PermissionKeys.CoachingManage))
+            {
+                return Results.Forbid();
+            }
+
+            var result = await store.SaveCoachingSessionAsync(null, request, currentUser, cancellationToken);
+            return Results.Created($"/api/v1/coaching/sessions/{result.Id}", result);
+        });
+
+        api.MapPut("/coaching/sessions/{id:guid}", async (Guid id, SaveCoachingSessionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.CoachingSubmit)
+                && !currentUser.HasPermission(PermissionKeys.CoachingManage))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.SaveCoachingSessionAsync(id, request, currentUser, cancellationToken));
+        });
+
         api.MapPut("/staff-profiles/{staffId:guid}/reflections/{pointKey}", async (Guid staffId, string pointKey, SaveReflectionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);

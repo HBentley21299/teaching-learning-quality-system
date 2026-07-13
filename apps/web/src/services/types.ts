@@ -179,7 +179,7 @@ export type DashboardSummary = {
 
 export type ProcessDashboardRecordSummary = {
   id: string;
-  processKey: "learning_walk" | "work_scrutiny" | "cpd_event" | "elevate_environment";
+  processKey: "learning_walk" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session";
   title: string;
   summary?: string;
   recordDate?: string;
@@ -352,6 +352,170 @@ export type ElevatePracticeProgress = {
   status: "not_started" | "draft" | "submitted";
   updatedAt?: string;
   submittedAt?: string;
+};
+
+export type CoachingCycleSummary = {
+  id: string;
+  cycleNumber: number;
+  cycleType: CoachingSessionType;
+  status: "active" | "closed";
+  startedOn: string;
+  closedOn?: string;
+  coachStaffId: string;
+  coachName: string;
+  sessionCount: number;
+};
+
+export type CoachingPreviousActionSummary = {
+  actionId: string;
+  title: string;
+  targetDate?: string;
+  status: CoachingPreviousActionStatus;
+  latestUpdate?: string;
+};
+
+export type CoachingContext = {
+  staffId: string;
+  staffName: string;
+  coachStaffId: string;
+  coachName: string;
+  coachSource: "assigned" | "line_manager" | "current_user" | "cycle";
+  cycles: CoachingCycleSummary[];
+  selectedCycleId?: string;
+  nextSessionNumber: number;
+  previousActions: CoachingPreviousActionSummary[];
+};
+
+export type CoachingSessionType = "coaching" | "mentoring" | "combined";
+export type CoachingPreviousActionStatus = "not_started" | "in_progress" | "completed" | "not_applicable";
+
+export type CoachingSessionSummary = {
+  id: string;
+  recordId: string;
+  cycleId: string;
+  cycleNumber: number;
+  staffId: string;
+  staffName: string;
+  coachStaffId: string;
+  coachName: string;
+  sessionNumber: number;
+  sessionDate: string;
+  sessionType: CoachingSessionType;
+  status: "draft" | "completed";
+  mainFocus?: string;
+  createdAt: string;
+  updatedAt?: string;
+  canEdit: boolean;
+};
+
+export type CoachingSessionAction = {
+  id?: string;
+  actionId?: string;
+  actionOrder?: number;
+  actionText: string;
+  ownerType: "staff" | "coach" | "joint";
+  targetDate: string;
+  evidenceText?: string;
+};
+
+export type CoachingPreviousActionUpdate = {
+  actionId: string;
+  status: CoachingPreviousActionStatus;
+  updateText?: string;
+};
+
+export type CoachingSessionDetail = {
+  id: string;
+  recordId: string;
+  cycleId: string;
+  cycleNumber: number;
+  staffId: string;
+  staffName: string;
+  coachStaffId: string;
+  coachName: string;
+  sessionNumber: number;
+  sessionDate: string;
+  sessionType: CoachingSessionType;
+  deliveryMethod?: "in_person" | "online" | "telephone";
+  durationMinutes?: number;
+  status: "draft" | "completed";
+  progressReflection?: string;
+  mainFocus?: string;
+  additionalFocusAreas: string[];
+  sessionReason?: string;
+  goal?: string;
+  whyThisMatters?: string;
+  confidenceBefore?: number;
+  currentSituation?: string;
+  whatsWorking?: string;
+  challenges?: string;
+  keyDiscussionPoints?: string;
+  supportTypes: string[];
+  supportResources?: string;
+  intendedImpactAreas: string[];
+  impactStatement?: string;
+  confidenceToComplete?: number;
+  supportNeeded: string[];
+  additionalSupportDetails?: string;
+  keyTakeaway?: string;
+  sessionSummary?: string;
+  staffAgrees: boolean;
+  coachAgrees: boolean;
+  anotherSessionRequired?: "yes" | "no" | "to_be_confirmed";
+  nextSessionDate?: string;
+  nextFocus?: string;
+  completedAt?: string;
+  canEdit: boolean;
+  previousActions: CoachingPreviousActionSummary[];
+  previousActionUpdates: CoachingPreviousActionUpdate[];
+  actions: CoachingSessionAction[];
+};
+
+export type SaveCoachingSessionRequest = {
+  staffId: string;
+  cycleId?: string;
+  createNewCycle: boolean;
+  sessionDate: string;
+  sessionType: CoachingSessionType;
+  deliveryMethod?: "in_person" | "online" | "telephone";
+  durationMinutes?: number;
+  status: "draft" | "completed";
+  progressReflection?: string;
+  mainFocus?: string;
+  additionalFocusAreas: string[];
+  sessionReason?: string;
+  goal?: string;
+  whyThisMatters?: string;
+  confidenceBefore?: number;
+  currentSituation?: string;
+  whatsWorking?: string;
+  challenges?: string;
+  keyDiscussionPoints?: string;
+  supportTypes: string[];
+  supportResources?: string;
+  intendedImpactAreas: string[];
+  impactStatement?: string;
+  confidenceToComplete?: number;
+  supportNeeded: string[];
+  additionalSupportDetails?: string;
+  keyTakeaway?: string;
+  sessionSummary?: string;
+  staffAgrees: boolean;
+  coachAgrees: boolean;
+  anotherSessionRequired?: "yes" | "no" | "to_be_confirmed";
+  nextSessionDate?: string;
+  nextFocus?: string;
+  previousActionUpdates: CoachingPreviousActionUpdate[];
+  actions: CoachingSessionAction[];
+};
+
+export type CoachingSessionSaveSummary = {
+  id: string;
+  recordId: string;
+  cycleId: string;
+  cycleNumber: number;
+  sessionNumber: number;
+  status: "draft" | "completed";
 };
 
 export type StaffElevatePracticeSummary = {

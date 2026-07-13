@@ -14,6 +14,8 @@ const permissions = [
   "evidence.submit",
   "evidence.review",
   "actions.manage",
+  "coaching.submit",
+  "coaching.manage",
   "reports.view_all",
   "reports.view_scoped"
 ];
