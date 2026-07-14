@@ -223,21 +223,44 @@ export type StaffProfileRecordSummary = {
   jobTitle?: string;
   primaryOrgCode?: string;
   accountStatus: string;
-  reflectionPointCount: number;
-  completedReflections: number;
-  overdueReflections: number;
+  reflectionCount: number;
+  submittedReflections: number;
+  draftReflections: number;
   openActions: number;
 };
 
+export type StaffReflectionDevelopmentAreaSummary = {
+  developmentAreaId: string;
+  textSnapshot: string;
+  displayOrder: number;
+};
+
 export type StaffReflectionSummary = {
-  pointKey: string;
-  name: string;
-  dueDate: string;
-  status: "completed" | "overdue" | "not_yet_due";
-  evidenceItemId?: string;
-  text?: string;
-  completionDate?: string;
-  lastSavedAt?: string;
+  id: string;
+  staffId: string;
+  elevatePracticeAssessmentId: string;
+  elevatePracticeRecordId: string;
+  elevatePracticeAcademicYear: string;
+  reflectionDate: string;
+  progress?: string;
+  impact?: string;
+  examples?: string;
+  status: "draft" | "submitted";
+  developmentAreas: StaffReflectionDevelopmentAreaSummary[];
+  createdByUserAccountId?: string;
+  createdByName?: string;
+  createdAt: string;
+  updatedByUserAccountId?: string;
+  updatedByName?: string;
+  updatedAt?: string;
+};
+
+export type SaveStaffReflectionRequest = {
+  reflectionDate: string;
+  progress?: string;
+  impact?: string;
+  examples?: string;
+  status: "draft" | "submitted";
 };
 
 export type StaffCpdRecordSummary = {

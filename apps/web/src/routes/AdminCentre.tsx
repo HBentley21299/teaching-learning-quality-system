@@ -900,9 +900,10 @@ function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSumm
     const matchesSearch = !query || matchingText.includes(query);
     const matchesReflection =
       reflectionFilter === "all" ||
-      (reflectionFilter === "completed" && record.completedReflections === record.reflectionPointCount) ||
-      (reflectionFilter === "overdue" && record.overdueReflections > 0) ||
-      (reflectionFilter === "outstanding" && record.completedReflections < record.reflectionPointCount);
+      (reflectionFilter === "has_reflections" && record.reflectionCount > 0) ||
+      (reflectionFilter === "none" && record.reflectionCount === 0) ||
+      (reflectionFilter === "submitted" && record.submittedReflections > 0) ||
+      (reflectionFilter === "draft" && record.draftReflections > 0);
     return matchesSearch && matchesReflection;
   });
 
@@ -929,9 +930,10 @@ function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSumm
             value={reflectionFilter}
           >
             <option value="all">All reflection statuses</option>
-            <option value="completed">All reflections completed</option>
-            <option value="outstanding">Reflections outstanding</option>
-            <option value="overdue">Reflections overdue</option>
+            <option value="has_reflections">Has reflection records</option>
+            <option value="none">No reflection records</option>
+            <option value="submitted">Has submitted reflections</option>
+            <option value="draft">Has draft reflections</option>
           </select>
         </div>
         <div className="table-shell">
@@ -989,8 +991,11 @@ function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSumm
 }
 
 function formatReflectionSummary(record: StaffProfileRecordSummary) {
-  const base = `${record.completedReflections}/${record.reflectionPointCount} completed`;
-  return record.overdueReflections > 0 ? `${base}, ${record.overdueReflections} overdue` : base;
+  if (record.reflectionCount === 0) {
+    return "No records";
+  }
+
+  return `${record.submittedReflections} submitted, ${record.draftReflections} draft`;
 }
 
 function formatOrgUnitOption(orgUnit: OrgUnitSummary) {

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, ExternalLink, Save } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ExternalLink, Plus, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
@@ -7,8 +7,11 @@ import type {
   CurrentUser,
   StaffProfileDetail,
   StaffProfileSummary,
-  StaffReflectionSummary
+  StaffReflectionSummary,
+  SaveStaffReflectionRequest
 } from "../services/types";
+
+type StaffReflectionDraft = SaveStaffReflectionRequest;
 
 /**
  * Full staff profile view assembled from its source records (Elevate Your
@@ -27,9 +30,10 @@ export function StaffProfilePanel({
   profiles?: StaffProfileSummary[];
 }) {
   const [detail, setDetail] = useState<StaffProfileDetail | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, StaffReflectionDraft>>({});
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
+  const [savingReflectionId, setSavingReflectionId] = useState<string | null>(null);
+  const [isCreatingReflection, setIsCreatingReflection] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [showElevateResult, setShowElevateResult] = useState(false);
 
@@ -52,9 +56,7 @@ export function StaffProfilePanel({
         }
 
         setDetail(nextDetail);
-        setDrafts(
-          Object.fromEntries(nextDetail.reflections.map((reflection) => [reflection.pointKey, reflection.text ?? ""]))
-        );
+        setDrafts(buildReflectionDrafts(nextDetail.reflections));
       })
       .catch(() => {
         if (!cancelled) {
@@ -76,19 +78,8 @@ export function StaffProfilePanel({
   const canEditReflections =
     Boolean(detail) && (detail?.staffId === user.staffId || user.permissions.includes("staff.manage"));
 
-  const dirtyReflections = useMemo(() => {
-    if (!detail) {
-      return [] as StaffReflectionSummary[];
-    }
-
-    return detail.reflections.filter(
-      (reflection) => (drafts[reflection.pointKey] ?? "").trim() !== (reflection.text ?? "").trim()
-    );
-  }, [detail, drafts]);
-
-  const completedReflectionCount =
-    detail?.reflections.filter((reflection) => reflection.status === "completed").length ?? 0;
-  const overdueReflection = detail?.reflections.find((reflection) => reflection.status === "overdue");
+  const submittedReflectionCount =
+    detail?.reflections.filter((reflection) => reflection.status === "submitted").length ?? 0;
   const openActionCount = detail?.actions.filter((action) => !action.completedDate).length ?? 0;
   const completedActionCount = detail?.actions.filter((action) => Boolean(action.completedDate)).length ?? 0;
 
@@ -96,33 +87,64 @@ export function StaffProfilePanel({
     try {
       const nextDetail = await api.staffProfile(staffId);
       setDetail(nextDetail);
-      setDrafts(
-        Object.fromEntries(nextDetail.reflections.map((reflection) => [reflection.pointKey, reflection.text ?? ""]))
-      );
+      setDrafts(buildReflectionDrafts(nextDetail.reflections));
     } catch {
       setStatusMessage("The Staff Profile could not be reloaded from the API.");
     }
   }
 
-  async function saveReflections() {
-    if (!detail || dirtyReflections.length === 0) {
-      setStatusMessage("There are no reflection changes to save.");
+  async function createReflection() {
+    if (!detail) {
       return;
     }
 
-    setIsSaving(true);
-    let failureMessage = "";
-    for (const reflection of dirtyReflections) {
-      const result = await api.saveReflection(detail.staffId, reflection.pointKey, drafts[reflection.pointKey] ?? "");
-      if (!result.ok) {
-        failureMessage = result.message ?? `${reflection.name} could not be saved.`;
-        break;
-      }
+    setIsCreatingReflection(true);
+    setStatusMessage("");
+    const result = await api.createStaffReflection(detail.staffId);
+    setIsCreatingReflection(false);
+    if (!result.ok) {
+      setStatusMessage(result.message ?? "The reflection could not be created.");
+      return;
     }
 
-    setIsSaving(false);
-    setStatusMessage(failureMessage || "Reflections saved to the Staff Profile.");
+    setStatusMessage("Reflection draft created from the current Elevate Your Practice assessment.");
     await reloadDetail();
+  }
+
+  async function saveReflection(reflection: StaffReflectionSummary) {
+    if (!detail) {
+      return;
+    }
+
+    const draft = drafts[reflection.id];
+    if (!draft) {
+      return;
+    }
+
+    setSavingReflectionId(reflection.id);
+    setStatusMessage("");
+    const result = await api.updateStaffReflection(detail.staffId, reflection.id, draft);
+    setSavingReflectionId(null);
+    if (!result.ok) {
+      setStatusMessage(result.message ?? "The reflection could not be saved.");
+      return;
+    }
+
+    setStatusMessage(draft.status === "submitted" ? "Reflection submitted." : "Reflection draft saved.");
+    await reloadDetail();
+  }
+
+  function updateReflectionDraft<Key extends keyof StaffReflectionDraft>(
+    reflectionId: string,
+    key: Key,
+    value: StaffReflectionDraft[Key]
+  ) {
+    setDrafts((current) => {
+      const draft = current[reflectionId];
+      return draft
+        ? { ...current, [reflectionId]: { ...draft, [key]: value } }
+        : current;
+    });
   }
 
   if (isLoading && !detail) {
@@ -147,12 +169,6 @@ export function StaffProfilePanel({
 
   return (
     <>
-      {overdueReflection ? (
-        <div className="notice-row warning-row">
-          <AlertCircle size={16} aria-hidden="true" />
-          <span>{overdueReflection.name} is overdue. Complete the reflection to update the compliance status.</span>
-        </div>
-      ) : null}
       {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
 
       <section className="kpi-strip" aria-label="Staff Profile summary">
@@ -171,7 +187,7 @@ export function StaffProfilePanel({
         <div className="kpi kpi-amber">
           <span>Reflections</span>
           <strong>
-            {completedReflectionCount}/{detail.reflections.length}
+            {submittedReflectionCount}/{detail.reflections.length}
           </strong>
         </div>
         <div className="kpi kpi-red">
@@ -342,49 +358,132 @@ export function StaffProfilePanel({
 
       <section className="panel">
         <div className="panel-heading">
-          <h2>Reflection records</h2>
+          <div>
+            <h2>Staff reflections</h2>
+            <span>{detail.reflections.length} record{detail.reflections.length === 1 ? "" : "s"}</span>
+          </div>
           {canEditReflections ? (
             <Button
-              disabled={isSaving || dirtyReflections.length === 0}
-              icon={Save}
-              onClick={() => void saveReflections()}
+              disabled={isCreatingReflection || detail.elevatePractice?.status !== "submitted"}
+              icon={Plus}
+              onClick={() => void createReflection()}
               variant="primary"
             >
-              {isSaving ? "Saving..." : "Save reflections"}
+              {isCreatingReflection ? "Creating..." : "Add reflection"}
             </Button>
           ) : (
             <span>Read only</span>
           )}
         </div>
-        <div className="reflection-grid">
-          {detail.reflections.map((reflection) => (
-            <div className="reflection-card" key={reflection.pointKey}>
-              <div className="reflection-card-heading">
-                <strong>{reflection.name}</strong>
-                <span className={`status-pill ${reflectionStatusClass(reflection.status)}`}>
-                  {reflectionStatusLabel(reflection.status)}
-                </span>
-              </div>
-              <div className="record-detail-meta">
-                <span>Due {reflection.dueDate}</span>
-                <span>{reflection.completionDate ? `Completed ${reflection.completionDate}` : "Not completed"}</span>
-              </div>
-              <label className="entry-field">
-                <span>Reflection</span>
-                <textarea
-                  disabled={!canEditReflections}
-                  onChange={(event) =>
-                    setDrafts((current) => ({ ...current, [reflection.pointKey]: event.target.value }))
-                  }
-                  rows={5}
-                  value={drafts[reflection.pointKey] ?? ""}
-                />
-              </label>
-              {reflection.lastSavedAt ? (
-                <small className="muted-copy">Last saved {formatDateTime(reflection.lastSavedAt)}</small>
-              ) : null}
-            </div>
-          ))}
+        <div className="staff-reflection-list">
+          {detail.reflections.length === 0 ? (
+            <p className="muted-copy">No staff reflections have been recorded.</p>
+          ) : detail.reflections.map((reflection) => {
+            const draft = drafts[reflection.id] ?? reflectionToDraft(reflection);
+            const isSaving = savingReflectionId === reflection.id;
+            const hasChanges = reflectionHasChanges(reflection, draft);
+            return (
+              <article className="staff-reflection-entry" key={reflection.id}>
+                <div className="staff-reflection-heading">
+                  <div>
+                    <h3>Reflection from {formatDate(reflection.reflectionDate)}</h3>
+                    <span>Elevate Your Practice {reflection.elevatePracticeAcademicYear}</span>
+                  </div>
+                  <span className={`status-pill ${reflection.status === "submitted" ? "status-complete" : "status-draft"}`}>
+                    {reflection.status === "submitted" ? "Submitted" : "Draft"}
+                  </span>
+                </div>
+
+                <div className="staff-reflection-meta-grid">
+                  <label className="entry-field">
+                    <span>Reflection date</span>
+                    <input
+                      disabled={!canEditReflections}
+                      onChange={(event) => updateReflectionDraft(reflection.id, "reflectionDate", event.target.value)}
+                      type="date"
+                      value={draft.reflectionDate}
+                    />
+                  </label>
+                  <label className="entry-field">
+                    <span>Record status</span>
+                    <select
+                      disabled={!canEditReflections}
+                      onChange={(event) => updateReflectionDraft(
+                        reflection.id,
+                        "status",
+                        event.target.value as StaffReflectionDraft["status"]
+                      )}
+                      value={draft.status}
+                    >
+                      <option value="draft">Draft</option>
+                      <option value="submitted">Submitted</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="staff-reflection-areas">
+                  <strong>Linked development areas</strong>
+                  {reflection.developmentAreas.length === 0 ? (
+                    <span>None selected in the linked assessment</span>
+                  ) : (
+                    <ul>
+                      {reflection.developmentAreas.map((area) => (
+                        <li key={area.developmentAreaId}>{area.textSnapshot}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div className="staff-reflection-fields">
+                  <label className="entry-field">
+                    <span>Progress</span>
+                    <textarea
+                      disabled={!canEditReflections}
+                      onChange={(event) => updateReflectionDraft(reflection.id, "progress", event.target.value)}
+                      rows={4}
+                      value={draft.progress ?? ""}
+                    />
+                  </label>
+                  <label className="entry-field">
+                    <span>Impact</span>
+                    <textarea
+                      disabled={!canEditReflections}
+                      onChange={(event) => updateReflectionDraft(reflection.id, "impact", event.target.value)}
+                      rows={4}
+                      value={draft.impact ?? ""}
+                    />
+                  </label>
+                  <label className="entry-field">
+                    <span>Examples</span>
+                    <textarea
+                      disabled={!canEditReflections}
+                      onChange={(event) => updateReflectionDraft(reflection.id, "examples", event.target.value)}
+                      rows={4}
+                      value={draft.examples ?? ""}
+                    />
+                  </label>
+                </div>
+
+                <div className="staff-reflection-footer">
+                  <small className="muted-copy">
+                    {reflection.updatedAt
+                      ? `Updated ${formatDateTime(reflection.updatedAt)}${reflection.updatedByName ? ` by ${reflection.updatedByName}` : ""}`
+                      : `Created ${formatDateTime(reflection.createdAt)}${reflection.createdByName ? ` by ${reflection.createdByName}` : ""}`}
+                  </small>
+                  {canEditReflections ? (
+                    <Button
+                      disabled={isSaving || !hasChanges}
+                      icon={Save}
+                      onClick={() => void saveReflection(reflection)}
+                      variant="primary"
+                    >
+                      {isSaving ? "Saving..." : "Save reflection"}
+                    </Button>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
         </div>
       </section>
 
@@ -452,28 +551,33 @@ function formatThemes(themes?: string) {
     .join(", ");
 }
 
-function reflectionStatusLabel(status: StaffReflectionSummary["status"]) {
-  if (status === "completed") {
-    return "Completed";
-  }
-
-  if (status === "overdue") {
-    return "Overdue";
-  }
-
-  return "Not yet due";
+function buildReflectionDrafts(reflections: StaffReflectionSummary[]) {
+  return Object.fromEntries(
+    reflections.map((reflection) => [reflection.id, reflectionToDraft(reflection)])
+  ) as Record<string, StaffReflectionDraft>;
 }
 
-function reflectionStatusClass(status: StaffReflectionSummary["status"]) {
-  if (status === "completed") {
-    return "status-complete";
-  }
+function reflectionToDraft(reflection: StaffReflectionSummary): StaffReflectionDraft {
+  return {
+    reflectionDate: reflection.reflectionDate,
+    progress: reflection.progress ?? "",
+    impact: reflection.impact ?? "",
+    examples: reflection.examples ?? "",
+    status: reflection.status
+  };
+}
 
-  if (status === "overdue") {
-    return "status-overdue";
-  }
+function reflectionHasChanges(reflection: StaffReflectionSummary, draft: StaffReflectionDraft) {
+  const original = reflectionToDraft(reflection);
+  return original.reflectionDate !== draft.reflectionDate
+    || original.status !== draft.status
+    || normalizeDraftText(original.progress) !== normalizeDraftText(draft.progress)
+    || normalizeDraftText(original.impact) !== normalizeDraftText(draft.impact)
+    || normalizeDraftText(original.examples) !== normalizeDraftText(draft.examples);
+}
 
-  return "status-draft";
+function normalizeDraftText(value?: string) {
+  return value?.trim() ?? "";
 }
 
 function formatDateTime(value: string) {

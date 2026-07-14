@@ -572,17 +572,20 @@ public static class FoundationEndpoints
             return Results.Ok(await store.SaveCoachingSessionAsync(id, request, currentUser, cancellationToken));
         });
 
-        api.MapPut("/staff-profiles/{staffId:guid}/reflections/{pointKey}", async (Guid staffId, string pointKey, SaveReflectionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/staff-profiles/{staffId:guid}/reflections", async (Guid staffId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            var result = await store.SaveStaffReflectionAsync(staffId, pointKey, request.Text, currentUser, cancellationToken);
+            var result = await store.CreateStaffReflectionAsync(staffId, currentUser, cancellationToken);
 
-            return result switch
-            {
-                FormSubmissionUpdateResult.Saved => Results.NoContent(),
-                FormSubmissionUpdateResult.Forbidden => Results.Forbid(),
-                _ => Results.NotFound()
-            };
+            return MapStaffReflectionMutation(result, created: true);
+        });
+
+        api.MapPut("/staff-profiles/{staffId:guid}/reflections/{reflectionId:guid}", async (Guid staffId, Guid reflectionId, SaveStaffReflectionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var result = await store.UpdateStaffReflectionAsync(staffId, reflectionId, request, currentUser, cancellationToken);
+
+            return MapStaffReflectionMutation(result, created: false);
         });
 
         api.MapGet("/admin/users", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -696,6 +699,19 @@ public static class FoundationEndpoints
             : (Guid?)null;
         return store.GetCurrentUserAsync(email, providerSubjectId, tenantId, cancellationToken);
     }
+
+    private static IResult MapStaffReflectionMutation(StaffReflectionMutationResult result, bool created) =>
+        result.Status switch
+        {
+            StaffReflectionMutationStatus.Saved when created => Results.Created(
+                $"/api/v1/staff-profiles/{result.Reflection!.StaffId}/reflections/{result.Reflection.Id}",
+                result.Reflection),
+            StaffReflectionMutationStatus.Saved => Results.Ok(result.Reflection),
+            StaffReflectionMutationStatus.Forbidden => Results.Forbid(),
+            StaffReflectionMutationStatus.NoSubmittedElevateAssessment => Results.Conflict(new { message = result.Message }),
+            StaffReflectionMutationStatus.ValidationFailed => Results.BadRequest(new { message = result.Message }),
+            _ => Results.NotFound()
+        };
 
     private static bool CanCreateRecord(CurrentUser currentUser, string recordType)
     {
@@ -913,9 +929,9 @@ public sealed record StaffProfileRecordSummary(
     string? JobTitle,
     string? PrimaryOrgCode,
     string AccountStatus,
-    int ReflectionPointCount,
-    int CompletedReflections,
-    int OverdueReflections,
+    int ReflectionCount,
+    int SubmittedReflections,
+    int DraftReflections,
     int OpenActions);
 
 public sealed record StaffProfileDetail(
@@ -934,14 +950,49 @@ public sealed record StaffProfileDetail(
     StaffElevatePracticeSummary? ElevatePractice);
 
 public sealed record StaffReflectionSummary(
-    string PointKey,
-    string Name,
-    DateOnly DueDate,
+    Guid Id,
+    Guid StaffId,
+    Guid ElevatePracticeAssessmentId,
+    Guid ElevatePracticeRecordId,
+    string ElevatePracticeAcademicYear,
+    DateOnly ReflectionDate,
+    string? Progress,
+    string? Impact,
+    string? Examples,
     string Status,
-    Guid? EvidenceItemId,
-    string? Text,
-    DateOnly? CompletionDate,
-    DateTimeOffset? LastSavedAt);
+    IReadOnlyList<StaffReflectionDevelopmentAreaSummary> DevelopmentAreas,
+    Guid? CreatedByUserAccountId,
+    string? CreatedByName,
+    DateTimeOffset CreatedAt,
+    Guid? UpdatedByUserAccountId,
+    string? UpdatedByName,
+    DateTimeOffset? UpdatedAt);
+
+public sealed record StaffReflectionDevelopmentAreaSummary(
+    Guid DevelopmentAreaId,
+    string TextSnapshot,
+    int DisplayOrder);
+
+public sealed record SaveStaffReflectionRequest(
+    DateOnly ReflectionDate,
+    string? Progress,
+    string? Impact,
+    string? Examples,
+    string Status);
+
+public enum StaffReflectionMutationStatus
+{
+    Saved,
+    NotFound,
+    Forbidden,
+    NoSubmittedElevateAssessment,
+    ValidationFailed
+}
+
+public sealed record StaffReflectionMutationResult(
+    StaffReflectionMutationStatus Status,
+    StaffReflectionSummary? Reflection,
+    string? Message);
 
 public sealed record StaffCpdRecordSummary(Guid Id, string Title, DateOnly EventDate, string? Themes);
 
@@ -971,8 +1022,6 @@ public sealed record StaffProfileCoachingSummary(
     string CoachName,
     string? MainFocus,
     string? KeyTakeaway);
-
-public sealed record SaveReflectionRequest(string? Text);
 
 public sealed record AdminUserSummary(
     Guid UserAccountId,

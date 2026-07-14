@@ -32,9 +32,11 @@ import type {
   SaveLivRecordRequest,
   SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
+  SaveStaffReflectionRequest,
   StaffProfileDetail,
   StaffProfileRecordSummary,
   StaffProfileSummary,
+  StaffReflectionSummary,
   StaffSummary,
   SubmitFormRequest,
   UpdateActionRequest,
@@ -195,8 +197,14 @@ export const api = {
     sendJson<SaveCoachingSessionRequest, CoachingSessionSaveSummary>("/api/v1/coaching/sessions", "POST", request),
   updateCoachingSession: (id: string, request: SaveCoachingSessionRequest) =>
     sendJson<SaveCoachingSessionRequest, CoachingSessionSaveSummary>(`/api/v1/coaching/sessions/${id}`, "PUT", request),
-  saveReflection: (staffId: string, pointKey: string, text: string) =>
-    sendJson(`/api/v1/staff-profiles/${staffId}/reflections/${pointKey}`, "PUT", { text }),
+  createStaffReflection: (staffId: string) =>
+    sendJson<never, StaffReflectionSummary>(`/api/v1/staff-profiles/${staffId}/reflections`, "POST"),
+  updateStaffReflection: (staffId: string, reflectionId: string, request: SaveStaffReflectionRequest) =>
+    sendJson<SaveStaffReflectionRequest, StaffReflectionSummary>(
+      `/api/v1/staff-profiles/${staffId}/reflections/${reflectionId}`,
+      "PUT",
+      request
+    ),
   adminUsers: () => getJson<AdminUserSummary[]>("/api/v1/admin/users"),
   createAdminUser: (request: CreateAdminUserRequest) => sendJson("/api/v1/admin/users", "POST", request),
   updateAdminUser: (id: string, request: UpdateAdminUserRequest) =>

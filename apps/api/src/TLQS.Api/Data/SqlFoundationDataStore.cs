@@ -3230,33 +3230,19 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 ou.code,
                 s.account_status,
                 (SELECT COUNT(*)
-                 FROM quality.reflection_points rp
-                 WHERE rp.archived_at IS NULL AND rp.is_active = 1) AS reflection_point_count,
+                 FROM quality.staff_reflections reflection
+                 WHERE reflection.staff_id = s.id
+                   AND reflection.archived_at IS NULL) AS reflection_count,
                 (SELECT COUNT(*)
-                 FROM quality.reflection_points rp
-                 WHERE rp.archived_at IS NULL
-                   AND rp.is_active = 1
-                   AND EXISTS (
-                       SELECT 1
-                       FROM evidence.evidence_items ev
-                       WHERE ev.staff_id = s.id
-                         AND ev.milestone_lookup_value_id = rp.milestone_lookup_value_id
-                         AND ev.pillar_or_theme = 'reflection'
-                         AND ev.archived_at IS NULL
-                   )) AS completed_reflections,
+                 FROM quality.staff_reflections reflection
+                 WHERE reflection.staff_id = s.id
+                   AND reflection.status = 'submitted'
+                   AND reflection.archived_at IS NULL) AS submitted_reflections,
                 (SELECT COUNT(*)
-                 FROM quality.reflection_points rp
-                 WHERE rp.archived_at IS NULL
-                   AND rp.is_active = 1
-                   AND rp.due_date < CONVERT(date, sysutcdatetime())
-                   AND NOT EXISTS (
-                       SELECT 1
-                       FROM evidence.evidence_items ev
-                       WHERE ev.staff_id = s.id
-                         AND ev.milestone_lookup_value_id = rp.milestone_lookup_value_id
-                         AND ev.pillar_or_theme = 'reflection'
-                         AND ev.archived_at IS NULL
-                   )) AS overdue_reflections,
+                 FROM quality.staff_reflections reflection
+                 WHERE reflection.staff_id = s.id
+                   AND reflection.status = 'draft'
+                   AND reflection.archived_at IS NULL) AS draft_reflections,
                 (SELECT COUNT(*)
                  FROM quality.actions a
                  WHERE (a.subject_staff_id = s.id OR a.owner_staff_id = s.id)
@@ -3352,46 +3338,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         }
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var reflections = await QueryAsync(
-            """
-            SELECT
-                rp.point_key,
-                rp.name,
-                rp.due_date,
-                ev.id,
-                ev.impact_summary,
-                ev.evidence_date,
-                COALESCE(ev.updated_at, ev.created_at) AS last_saved_at
-            FROM quality.reflection_points rp
-            LEFT JOIN evidence.evidence_items ev ON ev.milestone_lookup_value_id = rp.milestone_lookup_value_id
-                AND ev.staff_id = @staffId
-                AND ev.pillar_or_theme = 'reflection'
-                AND ev.archived_at IS NULL
-            WHERE rp.archived_at IS NULL
-              AND rp.is_active = 1
-            ORDER BY rp.display_order;
-            """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
-            reader =>
-            {
-                var dueDate = DateOnly.FromDateTime(reader.GetDateTime(2));
-                var evidenceItemId = GetGuidOrNull(reader, 3);
-                var status = evidenceItemId.HasValue
-                    ? "completed"
-                    : dueDate < today
-                        ? "overdue"
-                        : "not_yet_due";
-                return new StaffReflectionSummary(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    dueDate,
-                    status,
-                    evidenceItemId,
-                    GetStringOrNull(reader, 4),
-                    GetDateOnlyOrNull(reader, 5),
-                    GetDateTimeOffsetOrNull(reader, 6));
-            },
-            cancellationToken);
+        var reflections = await GetStaffReflectionsAsync(staffId, cancellationToken);
 
         var cpdRecords = await QueryAsync(
             """
