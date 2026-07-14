@@ -74,6 +74,7 @@ export function OrganisationStructureAdmin() {
   }, [faculties, teamsByFaculty, unitSearch]);
 
   const managerCandidates = useMemo(() => {
+    if (selectedManagerId) return [];
     const query = managerSearch.trim().toLocaleLowerCase();
     if (!query) return [];
     return staff
@@ -85,7 +86,7 @@ export function OrganisationStructureAdmin() {
         person.primaryOrgCode ?? ""
       ].some((value) => value.toLocaleLowerCase().includes(query)))
       .slice(0, 8);
-  }, [managerSearch, selectedUnit?.manager?.staffId, staff]);
+  }, [managerSearch, selectedManagerId, selectedUnit?.manager?.staffId, staff]);
 
   const selectedManager = staff.find((person) => person.staffId === selectedManagerId) ?? null;
   const managedUnitCount = units.filter((unit) => unit.manager).length;
@@ -258,7 +259,7 @@ export function OrganisationStructureAdmin() {
             <div className="organisation-manager-assignment">
               <div className="admin-detail-heading">
                 <h3>{selectedUnit.manager ? "Change manager" : "Assign manager"}</h3>
-                <span>{selectedUnit.totalStaffCount} staff records in scope</span>
+                <span>{selectedUnit.totalStaffCount} staff records covered by this role</span>
               </div>
               <label className="entry-field">
                 <span>Staff search</span>
