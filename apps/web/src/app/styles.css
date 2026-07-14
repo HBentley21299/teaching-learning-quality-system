@@ -4831,6 +4831,18 @@ td {
   font-size: 13px;
 }
 
+.startup-error-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #f3f6f5;
+}
+
+.startup-error-shell .access-denied-panel {
+  width: min(100%, 680px);
+}
+
 .access-denied-panel {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

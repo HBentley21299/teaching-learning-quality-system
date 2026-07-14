@@ -115,10 +115,10 @@ else {
 
 $state | ConvertTo-Json | Set-Content -Path $stateFile -Encoding utf8
 
-Wait-ForUrl -Url "http://127.0.0.1:5001/health"
+Wait-ForUrl -Url "http://127.0.0.1:5001/health/ready"
 Wait-ForUrl -Url "http://127.0.0.1:5173/"
 
-$health = Invoke-RestMethod -Uri "http://127.0.0.1:5001/health" -TimeoutSec 5
+$health = Invoke-RestMethod -Uri "http://127.0.0.1:5001/health/ready" -TimeoutSec 5
 if ($health.database -ne "connected") {
     throw "The API started but LocalDB is unavailable. Check $logDirectory\api.err.log."
 }
@@ -127,6 +127,6 @@ Write-Host ""
 Write-Host "TLQS is ready."
 Write-Host "Web app: http://127.0.0.1:5173"
 Write-Host "API:     http://127.0.0.1:5001"
-Write-Host "Health:  http://127.0.0.1:5001/health"
+Write-Host "Ready:   http://127.0.0.1:5001/health/ready"
 Write-Host "Logs:    $logDirectory"
 Write-Host "Stop:    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\stop-local.ps1"

@@ -68,7 +68,12 @@ import type {
 
 import { getAccessToken } from "./auth";
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:5001";
+const configuredApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
+const apiBaseUrl = configuredApiBaseUrl || (import.meta.env.DEV ? "http://127.0.0.1:5001" : "");
+const configuredTimeout = Number.parseInt(import.meta.env.VITE_API_TIMEOUT_MS ?? "30000", 10);
+const apiRequestTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout >= 1000
+  ? configuredTimeout
+  : 30000;
 
 export type ApiResult<T = never> = {
   ok: boolean;
@@ -90,7 +95,7 @@ async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> 
 }
 
 async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${url}`, { headers: await buildHeaders(false) });
+  const response = await requestApi(url, { headers: await buildHeaders(false) });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText} for ${url}`);
   }
@@ -100,7 +105,7 @@ async function getJson<T>(url: string): Promise<T> {
 
 async function sendJson<TRequest, TResponse = never>(url: string, method: "POST" | "PUT" | "DELETE", body?: TRequest): Promise<ApiResult<TResponse>> {
   try {
-    const response = await fetch(`${apiBaseUrl}${url}`, {
+    const response = await requestApi(url, {
       body: body ? JSON.stringify(body) : undefined,
       headers: await buildHeaders(Boolean(body)),
       method
@@ -127,8 +132,26 @@ async function sendJson<TRequest, TResponse = never>(url: string, method: "POST"
     }
 
     return { ok: false, message };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return { ok: false, message: "The API request timed out. Please try again." };
+    }
     return { ok: false, message: "The API could not be reached. Check it is running." };
+  }
+}
+
+async function requestApi(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), apiRequestTimeoutMs);
+
+  try {
+    return await fetch(`${apiBaseUrl}${url}`, {
+      ...init,
+      cache: "no-store",
+      signal: controller.signal
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 

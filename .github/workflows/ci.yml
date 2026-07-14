@@ -26,10 +26,20 @@ jobs:
           dotnet-version: 10.0.x
       - name: Restore
         run: dotnet restore apps/api/TLQS.sln --source https://api.nuget.org/v3/index.json
+      - name: Audit dependencies
+        run: dotnet list apps/api/TLQS.sln package --vulnerable --include-transitive --source https://api.nuget.org/v3/index.json
       - name: Build
         run: dotnet build apps/api/TLQS.sln --configuration Release --no-restore
       - name: Test
         run: dotnet test apps/api/TLQS.sln --configuration Release --no-build
+      - name: Publish
+        run: dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj --configuration Release --no-build --output artifacts/api
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tlqs-api
+          path: artifacts/api
+          if-no-files-found: error
+          retention-days: 14
 
   web:
     name: Web
@@ -45,6 +55,15 @@ jobs:
       - name: Install dependencies
         working-directory: apps/web
         run: npm ci
+      - name: Audit production dependencies
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high
       - name: Build
         working-directory: apps/web
         run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tlqs-web
+          path: apps/web/dist
+          if-no-files-found: error
+          retention-days: 14

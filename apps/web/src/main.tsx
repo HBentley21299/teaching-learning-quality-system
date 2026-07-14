@@ -5,12 +5,31 @@ import { LoginScreen } from "./components/LoginScreen";
 import { hasSignedInAccount, initializeAuth, isAuthEnabled } from "./services/auth";
 import "./app/styles.css";
 
+const rootElement = document.getElementById("root");
+if (!rootElement) {
+  throw new Error("The application root element is missing.");
+}
+
+const root = createRoot(rootElement);
+
+function render(content: React.ReactNode) {
+  root.render(<React.StrictMode>{content}</React.StrictMode>);
+}
+
 // Complete any returning MSAL redirect before deciding whether to show the app
 // or the explicit sign-in screen. This is a no-op in local development.
 void initializeAuth().then(() => {
-  createRoot(document.getElementById("root")!).render(
-    <React.StrictMode>
-      {isAuthEnabled && !hasSignedInAccount() ? <LoginScreen /> : <App />}
-    </React.StrictMode>
+  render(isAuthEnabled && !hasSignedInAccount() ? <LoginScreen /> : <App />);
+}).catch(() => {
+  render(
+    <main className="startup-error-shell">
+      <section className="access-denied-panel" role="alert">
+        <div>
+          <h1>Sign-in could not be started</h1>
+          <p>The authentication service did not respond. No application data has been loaded.</p>
+        </div>
+        <button onClick={() => window.location.reload()} type="button">Try again</button>
+      </section>
+    </main>
   );
 });

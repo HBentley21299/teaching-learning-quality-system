@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, LogOut, PanelLeftClose, Search } from "lucide-react";
 import { navigationItems, type AppRoute } from "./navigation";
 import { api } from "../services/api";
@@ -13,16 +13,17 @@ import type {
   StaffProfileSummary,
   StaffSummary
 } from "../services/types";
-import { Dashboard } from "../routes/Dashboard";
-import { StaffProfiles } from "../routes/StaffProfiles";
-import { AdminCentre } from "../routes/AdminCentre";
-import { LivVisits } from "../routes/LivVisits";
-import { ModuleWorkspace } from "../routes/ModuleWorkspace";
-import { ActionsView } from "../routes/ActionsView";
-import { StaffProfileWorkspace } from "../routes/StaffProfileWorkspace";
-import { ElevatePractice } from "../routes/ElevatePractice";
-import { CoachingMentoring } from "../routes/CoachingMentoring";
-import { MyTeam } from "../routes/MyTeam";
+
+const Dashboard = lazy(() => import("../routes/Dashboard").then((module) => ({ default: module.Dashboard })));
+const StaffProfiles = lazy(() => import("../routes/StaffProfiles").then((module) => ({ default: module.StaffProfiles })));
+const AdminCentre = lazy(() => import("../routes/AdminCentre").then((module) => ({ default: module.AdminCentre })));
+const LivVisits = lazy(() => import("../routes/LivVisits").then((module) => ({ default: module.LivVisits })));
+const ModuleWorkspace = lazy(() => import("../routes/ModuleWorkspace").then((module) => ({ default: module.ModuleWorkspace })));
+const ActionsView = lazy(() => import("../routes/ActionsView").then((module) => ({ default: module.ActionsView })));
+const StaffProfileWorkspace = lazy(() => import("../routes/StaffProfileWorkspace").then((module) => ({ default: module.StaffProfileWorkspace })));
+const ElevatePractice = lazy(() => import("../routes/ElevatePractice").then((module) => ({ default: module.ElevatePractice })));
+const CoachingMentoring = lazy(() => import("../routes/CoachingMentoring").then((module) => ({ default: module.CoachingMentoring })));
+const MyTeam = lazy(() => import("../routes/MyTeam").then((module) => ({ default: module.MyTeam })));
 
 const emptyUser: CurrentUser = {
   displayName: "Loading...",
@@ -250,7 +251,7 @@ export function App() {
               ) : null}
             </section>
           ) : (
-            <>
+            <Suspense fallback={<div className="route-stack"><p className="muted-copy">Loading this workspace...</p></div>}>
               {route === "dashboard" ? (
                 <Dashboard
                   actions={actions}
@@ -292,7 +293,7 @@ export function App() {
               {route === "actions" ? (
                 <ActionsView actions={actions} initialStaffId={actionStaffId} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} onChanged={refreshActions} />
               ) : null}
-            </>
+            </Suspense>
           )}
         </div>
       </main>
