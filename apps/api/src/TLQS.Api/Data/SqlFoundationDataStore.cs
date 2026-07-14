@@ -4650,6 +4650,20 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 ua.last_login_at,
                 r.role_key,
                 r.name,
+                CONVERT(bit, CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM org.org_unit_leaderships leadership
+                    JOIN org.org_units leadership_unit ON leadership_unit.id = leadership.org_unit_id
+                    WHERE leadership.leader_staff_id = s.id
+                      AND leadership.leadership_role = N'manager'
+                      AND leadership.archived_at IS NULL
+                      AND leadership.active_from <= CONVERT(date, sysutcdatetime())
+                      AND (leadership.active_to IS NULL OR leadership.active_to >= CONVERT(date, sysutcdatetime()))
+                      AND r.role_key = CASE leadership_unit.org_unit_type
+                          WHEN N'faculty' THEN N'head_of_faculty'
+                          WHEN N'team' THEN N'programme_leader'
+                      END
+                ) THEN 1 ELSE 0 END),
                 sc.scope_type,
                 sc.org_unit_id,
                 scope_org.code
@@ -4683,9 +4697,10 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 GetDateTimeOffsetOrNull(reader, 10),
                 GetStringOrNull(reader, 11),
                 GetStringOrNull(reader, 12),
-                GetStringOrNull(reader, 13),
-                GetGuidOrNull(reader, 14),
-                GetStringOrNull(reader, 15)),
+                reader.GetBoolean(13),
+                GetStringOrNull(reader, 14),
+                GetGuidOrNull(reader, 15),
+                GetStringOrNull(reader, 16)),
             cancellationToken);
 
         return rows
@@ -4695,8 +4710,11 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 var first = group.First();
                 var roles = group
                     .Where(row => row.RoleKey is not null)
-                    .Select(row => new RoleSummary(row.RoleKey!, row.RoleName ?? row.RoleKey!))
-                    .DistinctBy(role => role.RoleKey)
+                    .GroupBy(row => row.RoleKey!, StringComparer.OrdinalIgnoreCase)
+                    .Select(roleRows => new RoleSummary(
+                        roleRows.Key,
+                        roleRows.First().RoleName ?? roleRows.Key,
+                        roleRows.Any(row => row.IsOrganisationManaged)))
                     .OrderBy(role => role.Name)
                     .ToArray();
                 var scopes = group
@@ -5643,15 +5661,32 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
         await using (var command = new SqlCommand(
             """
-            UPDATE auth.user_roles
+            UPDATE user_role
             SET active_to = sysutcdatetime()
-            WHERE user_account_id = @userAccountId
-              AND active_from <= sysutcdatetime()
-              AND (active_to IS NULL OR active_to > sysutcdatetime())
-              AND role_id NOT IN (
-                  SELECT r.id
-                  FROM auth.roles r
-                  WHERE r.role_key IN (SELECT value FROM STRING_SPLIT(@roleKeysCsv, ','))
+            FROM auth.user_roles user_role
+            WHERE user_role.user_account_id = @userAccountId
+              AND user_role.active_from <= sysutcdatetime()
+              AND (user_role.active_to IS NULL OR user_role.active_to > sysutcdatetime())
+              AND user_role.role_id NOT IN (
+                   SELECT r.id
+                   FROM auth.roles r
+                   WHERE r.role_key IN (SELECT value FROM STRING_SPLIT(@roleKeysCsv, ','))
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM auth.user_accounts account
+                  JOIN org.org_unit_leaderships leadership ON leadership.leader_staff_id = account.staff_id
+                      AND leadership.leadership_role = N'manager'
+                      AND leadership.archived_at IS NULL
+                      AND leadership.active_from <= CONVERT(date, sysutcdatetime())
+                      AND (leadership.active_to IS NULL OR leadership.active_to >= CONVERT(date, sysutcdatetime()))
+                  JOIN org.org_units unit ON unit.id = leadership.org_unit_id
+                  JOIN auth.roles managed_role ON managed_role.role_key = CASE unit.org_unit_type
+                      WHEN N'faculty' THEN N'head_of_faculty'
+                      WHEN N'team' THEN N'programme_leader'
+                  END
+                  WHERE account.id = @userAccountId
+                    AND managed_role.id = user_role.role_id
               );
             """,
             connection,
@@ -5709,7 +5744,18 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
               AND (org_unit_id IS NULL OR NOT EXISTS (
                   SELECT 1 FROM STRING_SPLIT(@orgUnitIdsCsv, ',') requested
                   WHERE TRY_CONVERT(uniqueidentifier, requested.value) = org_unit_id
-              ));
+              ))
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM auth.user_accounts account
+                  JOIN org.org_unit_leaderships leadership ON leadership.leader_staff_id = account.staff_id
+                      AND leadership.leadership_role = N'manager'
+                      AND leadership.archived_at IS NULL
+                      AND leadership.active_from <= CONVERT(date, sysutcdatetime())
+                      AND (leadership.active_to IS NULL OR leadership.active_to >= CONVERT(date, sysutcdatetime()))
+                  WHERE account.id = @userAccountId
+                    AND leadership.org_unit_id = auth.access_scopes.org_unit_id
+              );
             """,
             connection,
             (SqlTransaction)transaction))
@@ -7560,6 +7606,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         DateTimeOffset? LastLoginAt,
         string? RoleKey,
         string? RoleName,
+        bool IsOrganisationManaged,
         string? ScopeType,
         Guid? ScopeOrgUnitId,
         string? ScopeOrgCode);

@@ -3,6 +3,7 @@ import type {
   ActionExtensionSummary,
   ActionOwnerOption,
   AdminManagedList,
+  AdminOrganisationStructure,
   AdminOrganisationStaff,
   AdminRecord,
   AdminWorkScrutinyRecord,
@@ -43,6 +44,7 @@ import type {
   RoomSummary,
   SaveLivRecordRequest,
   SaveManagerRelationshipRequest,
+  SaveOrgUnitManagerRequest,
   SaveOrganisationMembershipRequest,
   SaveLivVisitRequest,
   SaveLearningWalkThemeRequest,
@@ -273,6 +275,16 @@ export const api = {
   adminUsers: () => getJson<AdminUserSummary[]>("/api/v1/admin/users"),
   adminOrganisationStaff: () =>
     getJson<AdminOrganisationStaff[]>("/api/v1/admin/organisation/staff"),
+  adminOrganisationStructure: () =>
+    getJson<AdminOrganisationStructure>("/api/v1/admin/organisation/structure"),
+  saveOrgUnitManager: (orgUnitId: string, request: SaveOrgUnitManagerRequest) =>
+    sendJson<SaveOrgUnitManagerRequest, { id: string }>(
+      `/api/v1/admin/organisation/units/${orgUnitId}/manager`,
+      "PUT",
+      request
+    ),
+  archiveOrgUnitManager: (orgUnitId: string, reason: string) =>
+    sendJson(`/api/v1/admin/organisation/units/${orgUnitId}/manager/archive`, "POST", { reason }),
   saveOrganisationMembership: (staffId: string, request: SaveOrganisationMembershipRequest) =>
     sendJson<SaveOrganisationMembershipRequest, { id: string }>(
       `/api/v1/admin/organisation/staff/${staffId}/memberships`,

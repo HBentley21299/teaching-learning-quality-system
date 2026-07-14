@@ -499,6 +499,11 @@ public sealed partial class SqlFoundationDataStore
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        if (request.IsPrimary)
+        {
+            throw new WorkflowValidationException("Primary reporting lines are managed from faculty and team manager assignments.");
+        }
+
         if (staffId == request.ManagerStaffId)
         {
             throw new WorkflowValidationException("A staff member cannot manage themselves.");
@@ -639,7 +644,7 @@ public sealed partial class SqlFoundationDataStore
             var exists = await ScalarExistsAsync(
                 connection,
                 transaction,
-                "SELECT 1 FROM org.staff_manager_relationships WHERE id = @relationshipId AND staff_id = @staffId AND archived_at IS NULL;",
+                "SELECT 1 FROM org.staff_manager_relationships WHERE id = @relationshipId AND staff_id = @staffId AND assignment_source <> N'org_unit_leadership' AND archived_at IS NULL;",
                 command =>
                 {
                     command.Parameters.AddWithValue("@relationshipId", relationshipId);

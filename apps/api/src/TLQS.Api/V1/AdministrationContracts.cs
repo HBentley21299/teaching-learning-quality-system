@@ -57,6 +57,42 @@ public sealed record SaveManagerRelationshipRequest(
     DateOnly? ActiveFrom,
     DateOnly? ActiveTo);
 
+public sealed record AdminOrganisationStructureSummary(
+    IReadOnlyList<AdminOrganisationUnitSummary> Units,
+    IReadOnlyList<AdminOrganisationStaffOption> Staff);
+
+public sealed record AdminOrganisationUnitSummary(
+    Guid Id,
+    Guid? ParentOrgUnitId,
+    string OrgUnitType,
+    string Code,
+    string Name,
+    int DirectStaffCount,
+    int TotalStaffCount,
+    int ChildTeamCount,
+    int ManagedTeamCount,
+    AdminOrganisationManagerSummary? Manager,
+    AdminOrganisationManagerSummary? ParentManager);
+
+public sealed record AdminOrganisationManagerSummary(
+    Guid AssignmentId,
+    Guid StaffId,
+    string ExternalId,
+    string DisplayName,
+    string Email,
+    string PermissionLevel,
+    DateOnly ActiveFrom);
+
+public sealed record AdminOrganisationStaffOption(
+    Guid StaffId,
+    string ExternalId,
+    string DisplayName,
+    string Email,
+    string EffectivePermissionLevel,
+    string? PrimaryOrgCode);
+
+public sealed record SaveOrgUnitManagerRequest(Guid ManagerStaffId, string? Reason);
+
 public sealed record ArchiveReasonRequest(string Reason);
 
 public sealed record AdminManagedListSummary(

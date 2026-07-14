@@ -879,6 +879,39 @@ public static class FoundationEndpoints
                 : Results.Forbid();
         });
 
+        api.MapGet("/admin/organisation/structure", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return AdministrationAccessPolicy.CanManageOrganisation(currentUser)
+                ? Results.Ok(await store.GetAdminOrganisationStructureAsync(cancellationToken))
+                : Results.Forbid();
+        });
+
+        api.MapPut("/admin/organisation/units/{orgUnitId:guid}/manager", async (Guid orgUnitId, SaveOrgUnitManagerRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageOrganisation(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            var id = await store.SaveOrgUnitManagerAsync(orgUnitId, request, currentUser, cancellationToken);
+            return Results.Ok(new { Id = id });
+        });
+
+        api.MapPost("/admin/organisation/units/{orgUnitId:guid}/manager/archive", async (Guid orgUnitId, ArchiveReasonRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageOrganisation(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.ArchiveOrgUnitManagerAsync(orgUnitId, request.Reason, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
         api.MapPost("/admin/organisation/staff/{staffId:guid}/memberships", async (Guid staffId, SaveOrganisationMembershipRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
@@ -1272,7 +1305,7 @@ public sealed record ElevateEnvironmentPillarSummary(
     string AssetUri,
     string AssetAltText);
 public sealed record CourseSummary(Guid Id, string CourseCode, string CourseName, Guid OrgUnitId, string? AcademicYear);
-public sealed record RoleSummary(string RoleKey, string Name);
+public sealed record RoleSummary(string RoleKey, string Name, bool IsOrganisationManaged = false);
 public sealed record PermissionSummary(string PermissionKey, string Name, string Category);
 public sealed record AssignedOrgUnitSummary(Guid Id, string Code, string Name);
 public sealed record FormTemplateSummary(

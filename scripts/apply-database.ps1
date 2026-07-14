@@ -58,7 +58,8 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\021_my_team.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\022_organisation_admin_and_shared_governance.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\004_seed_elevate_rooms.sql"),
-    (Join-Path -Path $root -ChildPath "database\seed\005_seed_official_curriculum_staff.sql")
+    (Join-Path -Path $root -ChildPath "database\seed\005_seed_official_curriculum_staff.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\023_org_unit_management.sql")
 )
 
 foreach ($script in $scripts) {

@@ -834,6 +834,7 @@ export type AdminUserSummary = {
 export type RoleSummary = {
   roleKey: string;
   name: string;
+  isOrganisationManaged?: boolean;
 };
 
 export type PermissionSummary = {
@@ -962,6 +963,49 @@ export type AdminOrganisationStaff = {
   memberships: AdminOrganisationMembership[];
   directManagers: AdminManagerRelationship[];
   reportingLine: AdminReportingLine[];
+};
+
+export type AdminOrganisationManager = {
+  assignmentId: string;
+  staffId: string;
+  externalId: string;
+  displayName: string;
+  email: string;
+  permissionLevel: string;
+  activeFrom: string;
+};
+
+export type AdminOrganisationUnit = {
+  id: string;
+  parentOrgUnitId?: string;
+  orgUnitType: "faculty" | "team";
+  code: string;
+  name: string;
+  directStaffCount: number;
+  totalStaffCount: number;
+  childTeamCount: number;
+  managedTeamCount: number;
+  manager?: AdminOrganisationManager;
+  parentManager?: AdminOrganisationManager;
+};
+
+export type AdminOrganisationStaffOption = {
+  staffId: string;
+  externalId: string;
+  displayName: string;
+  email: string;
+  effectivePermissionLevel: string;
+  primaryOrgCode?: string;
+};
+
+export type AdminOrganisationStructure = {
+  units: AdminOrganisationUnit[];
+  staff: AdminOrganisationStaffOption[];
+};
+
+export type SaveOrgUnitManagerRequest = {
+  managerStaffId: string;
+  reason?: string;
 };
 
 export type SaveOrganisationMembershipRequest = {

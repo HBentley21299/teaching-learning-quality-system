@@ -945,6 +945,8 @@ function PermissionAdminPanel({ user }: { user: CurrentUser }) {
               {members.length === 0 ? <p className="muted-copy">No staff are allocated to this role.</p> : null}
               {members.map((account) => {
                 const effectiveRole = getEffectiveRole(account, roles);
+                const selectedAssignment = account.roles.find((role) => role.roleKey === selectedRole.roleKey);
+                const isOrganisationManaged = selectedAssignment?.isOrganisationManaged === true;
                 const isProtectedAdmin = selectedRole.roleKey === "super_admin"
                   && account.userAccountId === user.userAccountId;
                 return (
@@ -953,12 +955,18 @@ function PermissionAdminPanel({ user }: { user: CurrentUser }) {
                       <strong>{account.displayName}</strong>
                       <span>{account.externalId} · {account.email}</span>
                     </div>
-                    <span className="effective-role-label">Effective: {effectiveRole?.name ?? "None"}</span>
+                    <span className="effective-role-label">
+                      {isOrganisationManaged ? "Organisation managed" : `Effective: ${effectiveRole?.name ?? "None"}`}
+                    </span>
                     <button
                       className="icon-button"
-                      disabled={isSaving || isProtectedAdmin || account.roles.length === 1}
+                      disabled={isSaving || isProtectedAdmin || isOrganisationManaged || account.roles.length === 1}
                       onClick={() => void changeRole(account, "remove")}
-                      title={isProtectedAdmin ? "Your own Admin role is protected" : `Remove ${selectedRole.name}`}
+                      title={isProtectedAdmin
+                        ? "Your own Admin role is protected"
+                        : isOrganisationManaged
+                          ? "Change this role from Organisation Structure"
+                          : `Remove ${selectedRole.name}`}
                       type="button"
                     >
                       <UserMinus size={16} aria-hidden="true" />

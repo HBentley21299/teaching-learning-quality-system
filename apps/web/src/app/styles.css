@@ -5158,60 +5158,108 @@ td {
   justify-content: flex-end;
 }
 
-.organisation-admin {
+.organisation-unit-admin {
   overflow: hidden;
 }
 
-.organisation-admin-layout {
+.organisation-unit-layout {
   display: grid;
-  grid-template-columns: minmax(245px, 300px) minmax(0, 1fr);
+  grid-template-columns: minmax(310px, 380px) minmax(0, 1fr);
   margin: 0 -18px -18px;
-  min-height: 620px;
+  min-height: 680px;
 }
 
-.organisation-directory {
+.organisation-unit-directory {
   background: #f6f8f7;
   border-right: 1px solid var(--line);
   padding: 14px;
 }
 
-.organisation-person-list {
+.organisation-faculty-list {
   display: grid;
-  gap: 3px;
+  gap: 8px;
   margin-top: 10px;
-  max-height: 670px;
+  max-height: 720px;
   overflow: auto;
+  padding-right: 3px;
 }
 
-.organisation-person-list button {
+.organisation-faculty-group {
+  border-bottom: 1px solid #d8e0dd;
+  padding-bottom: 8px;
+}
+
+.organisation-unit-button {
+  align-items: center;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 5px;
   color: #24362f;
   cursor: pointer;
   display: grid;
-  gap: 3px;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) minmax(80px, auto) auto;
   padding: 9px 10px;
   text-align: left;
+  width: 100%;
 }
 
-.organisation-person-list button:hover,
-.organisation-person-list button.is-selected {
+.organisation-unit-button:hover,
+.organisation-unit-button.is-selected {
   background: #ffffff;
   border-color: #bfd0c8;
 }
 
-.organisation-person-list span {
-  color: var(--text-muted);
-  font-size: 0.76rem;
+.organisation-unit-button.is-selected {
+  box-shadow: inset 3px 0 0 var(--teal-strong);
 }
 
-.organisation-person-detail {
+.organisation-unit-button > span:first-of-type {
+  display: grid;
+  min-width: 0;
+}
+
+.organisation-unit-button small {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unit-manager-name {
+  color: #315c4e;
+  font-size: 0.72rem;
+  max-width: 110px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unit-manager-name.is-unassigned {
+  color: #8a5b28;
+}
+
+.organisation-team-list {
+  border-left: 1px solid #cad6d1;
+  display: grid;
+  margin: 3px 0 0 18px;
+  padding-left: 5px;
+}
+
+.organisation-team-list .organisation-unit-button {
+  grid-template-columns: auto minmax(0, 1fr) minmax(80px, auto) auto;
+  padding-bottom: 7px;
+  padding-top: 7px;
+}
+
+.organisation-unit-detail {
   min-width: 0;
   padding: 18px;
 }
 
-.organisation-person-heading,
+.organisation-unit-heading,
 .admin-detail-heading {
   align-items: center;
   display: flex;
@@ -5219,77 +5267,187 @@ td {
   justify-content: space-between;
 }
 
-.organisation-person-heading h3,
+.organisation-unit-heading h3,
 .admin-detail-heading h3 {
   margin: 0;
 }
 
-.organisation-person-heading span,
 .admin-detail-heading span {
   color: var(--text-muted);
   font-size: 0.82rem;
 }
 
-.organisation-person-badges {
-  align-items: flex-end;
+.status-chip {
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 5px 9px;
+}
+
+.status-chip-active {
+  background: #eaf5ef;
+  border-color: #a9cdbd;
+  color: #245d49;
+}
+
+.status-chip-muted {
+  background: #fff6e8;
+  border-color: #e4c38f;
+  color: #7b5324;
+}
+
+.organisation-unit-metrics {
+  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.organisation-unit-metrics > div {
+  border-right: 1px solid var(--line);
   display: grid;
   gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
 }
 
-.organisation-person-badges strong {
-  color: var(--teal-strong);
+.organisation-unit-metrics > div:last-child {
+  border-right: 0;
 }
 
-.admin-detail-section {
-  border-top: 1px solid var(--line);
-  margin-top: 18px;
-  padding-top: 16px;
+.organisation-unit-metrics span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
-.admin-allocation-row {
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+.organisation-unit-metrics strong {
+  color: #24362f;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
 }
 
-.admin-manager-row {
-  grid-template-columns: auto minmax(0, 1fr) auto;
+.organisation-unit-metrics > div:nth-child(2) strong {
+  color: #2d6682;
 }
 
-.admin-inline-form {
-  align-items: end;
-  background: #f6f8f7;
-  border-top: 1px solid var(--line);
+.organisation-unit-metrics > div:nth-child(3) strong {
+  color: #8a5b28;
+}
+
+.organisation-manager-section,
+.organisation-manager-assignment {
+  margin-top: 20px;
+}
+
+.organisation-current-manager,
+.organisation-selected-manager {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(2, minmax(150px, 1fr));
-  margin-top: 14px;
-  padding: 14px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  padding: 14px 0;
 }
 
-.admin-inline-form .toggle-row {
-  min-height: 40px;
+.organisation-current-manager > div,
+.organisation-selected-manager > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
-.reporting-chain {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  padding-top: 12px;
-}
-
-.reporting-chain > span {
+.organisation-current-manager span,
+.organisation-selected-manager span {
   color: var(--text-muted);
   font-size: 0.78rem;
-  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.organisation-reporting-rule {
+  align-items: center;
+  background: #eef4f7;
+  border-left: 3px solid #4d8299;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-top: 14px;
+  padding: 11px 12px;
+}
+
+.organisation-reporting-rule > div {
+  display: grid;
+  gap: 3px;
+}
+
+.organisation-reporting-rule span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.organisation-manager-assignment {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  position: relative;
+}
+
+.organisation-manager-assignment .entry-field {
+  margin-top: 12px;
+}
+
+.staff-combobox {
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  display: flex;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 11px;
+}
+
+.entry-field .staff-combobox input {
+  background: transparent;
+  border: 0;
+  min-width: 0;
+  padding: 0;
   width: 100%;
 }
 
-.reporting-chain strong {
-  background: #eef3f1;
-  border: 1px solid #cad7d2;
-  border-radius: 5px;
-  font-size: 0.78rem;
-  padding: 5px 8px;
+.organisation-manager-candidates {
+  margin-top: 6px;
+  position: static;
+}
+
+.organisation-manager-candidates button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.organisation-manager-candidates button:hover,
+.organisation-manager-candidates button:focus-visible {
+  background: var(--surface-muted);
+}
+
+.organisation-manager-candidates button > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.organisation-manager-candidates small,
+.organisation-manager-candidates button > span:last-child {
+  color: var(--text-muted);
+  font-size: 0.76rem;
 }
 
 .admin-reason-dialog {
@@ -5435,21 +5593,20 @@ td {
 }
 
 @media (max-width: 900px) {
-  .organisation-admin-layout {
+  .organisation-unit-layout {
     grid-template-columns: 1fr;
   }
 
-  .organisation-directory {
+  .organisation-unit-directory {
     border-bottom: 1px solid var(--line);
     border-right: 0;
   }
 
-  .organisation-person-list {
-    max-height: 230px;
+  .organisation-faculty-list {
+    max-height: 310px;
   }
 
-  .admin-list-selector,
-  .admin-inline-form {
+  .admin-list-selector {
     grid-template-columns: 1fr;
   }
 }
@@ -5463,19 +5620,44 @@ td {
     grid-column: auto;
   }
 
-  .admin-allocation-row,
-  .admin-manager-row {
+  .organisation-unit-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .organisation-unit-metrics > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .organisation-unit-metrics > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .organisation-current-manager,
+  .organisation-selected-manager {
     align-items: start;
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
-  .admin-allocation-row > span {
+  .organisation-current-manager > span {
     grid-column: 2;
   }
 
-  .admin-allocation-row .admin-row-actions {
+  .organisation-current-manager .icon-button {
     grid-column: 3;
     grid-row: 1 / span 2;
+  }
+
+  .organisation-selected-manager .button {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .organisation-unit-button {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .organisation-unit-button .unit-manager-name {
+    display: none;
   }
 
   .admin-audit-row,
