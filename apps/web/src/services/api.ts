@@ -1,5 +1,7 @@
 import type {
   ActionSummary,
+  AdminWorkScrutinyRecord,
+  AdminWorkScrutinyAction,
   AdminSaveElevatePracticeAssessmentRequest,
   AdminRoleSummary,
   AdminUserSummary,
@@ -19,6 +21,7 @@ import type {
   FormDefinition,
   FormTemplateSummary,
   LearningWalkThemeMappingSummary,
+  LearningWalkThemeGroup,
   LearningWalkRollupSummary,
   LivRecordSummary,
   LookupSummary,
@@ -27,9 +30,11 @@ import type {
   OrgUnitSummary,
   ProcessDashboardRecordSummary,
   RecordDetail,
+  RecordAudit,
   RecordSummary,
   RoomSummary,
   SaveLivRecordRequest,
+  SaveLearningWalkThemeRequest,
   SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
   SaveStaffReflectionRequest,
@@ -133,6 +138,18 @@ export const api = {
   staff: () => getJson<StaffSummary[]>("/api/v1/staff"),
   records: () => getJson<RecordSummary[]>("/api/v1/records"),
   recordDetail: (id: string) => getJson<RecordDetail>(`/api/v1/records/${id}`),
+  adminWorkScrutinyRecords: () =>
+    getJson<AdminWorkScrutinyRecord[]>("/api/v1/admin/work-scrutiny/records"),
+  adminWorkScrutinyRecord: (id: string) =>
+    getJson<RecordDetail>(`/api/v1/admin/work-scrutiny/records/${id}`),
+  workScrutinyRecordAudit: (id: string) =>
+    getJson<RecordAudit[]>(`/api/v1/admin/work-scrutiny/records/${id}/audit`),
+  adminWorkScrutinyActions: (id: string) =>
+    getJson<AdminWorkScrutinyAction[]>(`/api/v1/admin/work-scrutiny/records/${id}/actions`),
+  deleteWorkScrutinyRecord: (id: string) =>
+    sendJson(`/api/v1/admin/work-scrutiny/records/${id}`, "DELETE"),
+  restoreWorkScrutinyRecord: (id: string) =>
+    sendJson(`/api/v1/admin/work-scrutiny/records/${id}/restore`, "POST"),
   actions: () => getJson<ActionSummary[]>("/api/v1/actions"),
   createAction: (request: CreateActionRequest) => sendJson("/api/v1/actions", "POST", request),
   updateAction: (id: string, request: UpdateActionRequest) => sendJson(`/api/v1/actions/${id}`, "PUT", request),
@@ -150,6 +167,18 @@ export const api = {
     getJson<LearningWalkThemeMappingSummary[]>("/api/v1/learning-walk/theme-mappings"),
   updateLearningWalkThemeMapping: (request: UpdateLearningWalkThemeMappingRequest) =>
     sendJson("/api/v1/learning-walk/theme-mappings", "PUT", request),
+  learningWalkThemes: () =>
+    getJson<LearningWalkThemeGroup[]>("/api/v1/learning-walk/themes"),
+  adminLearningWalkThemes: () =>
+    getJson<LearningWalkThemeGroup[]>("/api/v1/admin/learning-walk/themes"),
+  createLearningWalkTheme: (request: SaveLearningWalkThemeRequest) =>
+    sendJson<SaveLearningWalkThemeRequest, { id: string }>("/api/v1/admin/learning-walk/themes", "POST", request),
+  updateLearningWalkTheme: (id: string, request: SaveLearningWalkThemeRequest) =>
+    sendJson(`/api/v1/admin/learning-walk/themes/${id}`, "PUT", request),
+  setLearningWalkThemeStatus: (id: string, isActive: boolean) =>
+    sendJson(`/api/v1/admin/learning-walk/themes/${id}/status`, "POST", { isActive }),
+  reorderLearningWalkThemes: (themeGroupId: string, themeIds: string[]) =>
+    sendJson("/api/v1/admin/learning-walk/themes/reorder", "PUT", { themeGroupId, themeIds }),
   createFormTemplate: (request: CreateFormTemplateRequest) =>
     sendJson("/api/v1/form-templates", "POST", request),
   archiveFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/archive`, "POST"),

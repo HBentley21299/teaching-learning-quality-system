@@ -401,6 +401,7 @@ export const mockLearningWalkDetail: RecordDetail = {
   submissionStatus: "submitted",
   submittedAt: "2026-09-18T10:00:00Z",
   canEdit: true,
+  courseIds: [],
   sections: mockLearningWalkDefinition.sections.map((section) => ({
     ...section,
     fields: section.fields.map((field) => ({

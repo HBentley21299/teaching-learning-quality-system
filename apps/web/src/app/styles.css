@@ -1584,6 +1584,36 @@ td {
   grid-template-columns: minmax(220px, 1.2fr) repeat(3, minmax(140px, 0.45fr));
 }
 
+.admin-work-scrutiny-filters {
+  grid-template-columns: minmax(240px, 1fr) minmax(170px, 0.35fr);
+}
+
+.admin-linked-action-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-linked-action-list article {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.35fr) auto;
+  padding: 11px 12px;
+}
+
+.admin-linked-action-list article > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.admin-linked-action-list article > div span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
 .admin-elevate-note {
   align-items: center;
   background: #edf6f2;
@@ -1725,6 +1755,13 @@ td {
 
   .admin-elevate-filters,
   .audit-change-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-work-scrutiny-filters,
+  .admin-linked-action-list article {
     grid-template-columns: 1fr;
   }
 }
@@ -3254,6 +3291,145 @@ td {
   }
 }
 
+.learning-walk-theme-picker-groups {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.learning-walk-theme-picker fieldset {
+  background: #f8faf9;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  padding: 10px 12px 12px;
+}
+
+.learning-walk-theme-picker legend {
+  color: #29453a;
+  font-size: 0.84rem;
+  font-weight: 800;
+  padding: 0 4px;
+}
+
+.learning-walk-theme-picker fieldset label {
+  align-items: flex-start;
+  display: flex;
+  gap: 8px;
+}
+
+.learning-walk-theme-picker fieldset input {
+  accent-color: var(--teal);
+  flex: 0 0 auto;
+  height: 16px;
+  margin-top: 2px;
+  width: 16px;
+}
+
+.learning-walk-theme-picker fieldset span {
+  font-weight: 500;
+  justify-content: flex-start;
+}
+
+.learning-theme-add-row {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(200px, 0.45fr) minmax(260px, 1fr) auto;
+}
+
+.learning-theme-groups {
+  border-top: 1px solid var(--line);
+  display: grid;
+  margin-top: 16px;
+}
+
+.learning-theme-group {
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+}
+
+.learning-theme-group:last-child {
+  border-bottom: 0;
+}
+
+.learning-theme-group-heading {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.learning-theme-group-heading h3 {
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.learning-theme-group-heading span,
+.learning-theme-name span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.learning-theme-admin-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-height: 48px;
+  padding: 5px 0;
+}
+
+.learning-theme-admin-row.is-inactive {
+  opacity: 0.62;
+}
+
+.learning-theme-admin-row > input,
+.learning-theme-admin-row > select {
+  background: #ffffff;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: #1f2a27;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.learning-theme-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.learning-theme-name strong {
+  overflow-wrap: anywhere;
+}
+
+.learning-theme-order-actions,
+.learning-theme-row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+@media (max-width: 760px) {
+  .learning-walk-theme-picker-groups,
+  .learning-theme-add-row {
+    grid-template-columns: 1fr;
+  }
+
+  .learning-theme-admin-row {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .learning-theme-admin-row > select {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
 .staff-search {
   max-width: 520px;
   position: relative;
@@ -3409,12 +3585,16 @@ td {
   border-top: 1px solid var(--line);
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1fr) 170px 36px;
-  padding-top: 12px;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1fr) 170px;
+  padding: 12px 46px 0 0;
+  position: relative;
 }
 
 .scrutiny-action-remove {
-  margin-top: 25px;
+  margin-top: 0;
+  position: absolute;
+  right: 0;
+  top: 12px;
 }
 
 .checkbox-field-grid {
@@ -3562,9 +3742,6 @@ td {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .scrutiny-action-remove {
-    margin-top: 0;
-  }
 }
 
 @media (max-width: 760px) {

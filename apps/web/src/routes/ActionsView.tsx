@@ -13,10 +13,12 @@ type ActionsViewProps = {
 };
 
 type StatusFilter = "all" | "open" | "overdue" | "complete";
+type OwnershipFilter = "all" | "mine" | "team";
 
 export function ActionsView({ actions, staff, user, onChanged }: ActionsViewProps) {
   const [statusMessage, setStatusMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [ownershipFilter, setOwnershipFilter] = useState<OwnershipFilter>("all");
   const [isCreating, setIsCreating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [title, setTitle] = useState("");
@@ -28,10 +30,20 @@ export function ActionsView({ actions, staff, user, onChanged }: ActionsViewProp
   const [completionNote, setCompletionNote] = useState("");
 
   const canManageActions = user.permissions.includes("actions.manage");
+  const canViewTeamActions = canManageActions
+    || user.permissions.includes("reports.view_scoped")
+    || user.permissions.includes("reports.view_all");
 
   const visibleActions = useMemo(
     () =>
       actions.filter((action) => {
+        const isMine = action.ownerStaffId === user.staffId || action.subjectStaffId === user.staffId;
+        if (ownershipFilter === "mine" && !isMine) {
+          return false;
+        }
+        if (ownershipFilter === "team" && isMine) {
+          return false;
+        }
         if (statusFilter === "open") {
           return !action.completedDate;
         }
@@ -43,7 +55,7 @@ export function ActionsView({ actions, staff, user, onChanged }: ActionsViewProp
         }
         return true;
       }),
-    [actions, statusFilter]
+    [actions, ownershipFilter, statusFilter, user.staffId]
   );
 
   async function createAction() {
@@ -125,6 +137,16 @@ export function ActionsView({ actions, staff, user, onChanged }: ActionsViewProp
           <h1>Actions</h1>
         </div>
         <div className="toolbar">
+          {canViewTeamActions ? (
+            <label className="mini-filter">
+              <span>View</span>
+              <select onChange={(event) => setOwnershipFilter(event.target.value as OwnershipFilter)} value={ownershipFilter}>
+                <option value="all">All permitted</option>
+                <option value="mine">My actions</option>
+                <option value="team">My team</option>
+              </select>
+            </label>
+          ) : null}
           <label className="mini-filter">
             <span>Status</span>
             <select onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} value={statusFilter}>

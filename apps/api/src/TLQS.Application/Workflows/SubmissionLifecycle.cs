@@ -30,6 +30,15 @@ public static class SubmissionLifecycle
     public static bool CanEditResponses(string currentStatus, bool isOwner, bool canManageForms) =>
         canManageForms || (isOwner && currentStatus is Draft or Reopened);
 
+    public static bool CanEditRecord(string recordType, string currentStatus, bool isOwner, bool canManageForms) =>
+        CanEditResponses(currentStatus, isOwner, canManageForms)
+        || (recordType.Equals("work_scrutiny", StringComparison.OrdinalIgnoreCase) && isOwner);
+
+    public static bool CanArchiveRecord(string recordType, bool canManageForms, bool canManageUsers) =>
+        recordType.Equals("work_scrutiny", StringComparison.OrdinalIgnoreCase)
+            ? canManageUsers
+            : canManageForms;
+
     public static bool CanPerform(string action, bool isOwner, bool canManageForms) =>
         action switch
         {

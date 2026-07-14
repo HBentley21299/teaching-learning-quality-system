@@ -50,6 +50,7 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\013_coaching_and_mentoring.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\014_elevate_practice_rubric_and_admin.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\015_staff_reflections.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\016_learning_walk_themes_and_actions.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\004_seed_elevate_rooms.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\005_seed_official_curriculum_staff.sql")
 )

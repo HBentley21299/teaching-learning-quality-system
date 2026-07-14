@@ -10,6 +10,8 @@ import type {
   CurrentUser,
   FormDefinition,
   FormFieldDefinition,
+  LearningWalkTheme,
+  LearningWalkThemeGroup,
   LearningWalkThemeMappingSummary,
   OrgUnitSummary,
   RecordDetail,
@@ -19,6 +21,13 @@ import type {
 } from "../services/types";
 
 type WorkspaceMode = "learning" | "scrutiny" | "cpd" | "elevate";
+
+type DraftLearningWalkAction = {
+  id: string;
+  title: string;
+  ownerStaffId: string;
+  dueDate: string;
+};
 
 type ModuleWorkspaceProps = {
   title: string;
@@ -76,6 +85,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
+  const [learningWalkThemeGroups, setLearningWalkThemeGroups] = useState<LearningWalkThemeGroup[]>([]);
+  const [learningWalkActions, setLearningWalkActions] = useState<DraftLearningWalkAction[]>([]);
   const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(true);
@@ -238,8 +249,12 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
 
       if (mode === "learning") {
-        const nextMappings = await api.learningWalkThemeMappings();
+        const [nextMappings, nextThemeGroups] = await Promise.all([
+          api.learningWalkThemeMappings(),
+          api.learningWalkThemes()
+        ]);
         setThemeMappings(nextMappings);
+        setLearningWalkThemeGroups(nextThemeGroups);
       }
     } catch {
       setStatusMessage("Data could not be loaded from the API.");
@@ -316,11 +331,33 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       return;
     }
 
+    if (mode === "learning" && asDraft && learningWalkActions.length > 0) {
+      setStatusMessage("Submit the Learning Walk to assign its actions, or remove the actions before saving a draft.");
+      return;
+    }
+
     if (!asDraft) {
       const validationMessage = validateForSubmit(createSections, responses, selectedFacultyId, selectedTeamId, agreedTheme);
       if (validationMessage) {
         setStatusMessage(validationMessage);
         return;
+      }
+
+      if (mode === "learning") {
+        const otherValidation = validateLearningWalkOtherContext(
+          createSections,
+          responses,
+          learningWalkThemeGroups
+        );
+        if (otherValidation) {
+          setStatusMessage(otherValidation);
+          return;
+        }
+
+        if (learningWalkActions.some((action) => !action.title.trim() || !action.ownerStaffId || !action.dueDate)) {
+          setStatusMessage("Every added action needs an action, owner and implementation date.");
+          return;
+        }
       }
     }
 
@@ -335,12 +372,20 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       orgUnitId: context.orgUnitId,
       recordDate: context.dateValue,
       responses: flattenResponses(createSections, responses, false),
-      saveAsDraft: asDraft
+      saveAsDraft: asDraft,
+      actions: mode === "learning" && !asDraft
+        ? learningWalkActions.map((action) => ({
+            title: action.title.trim(),
+            ownerStaffId: action.ownerStaffId,
+            dueDate: action.dueDate
+          }))
+        : undefined
     });
     setIsSaving(false);
 
     if (result.ok) {
       setResponses({});
+      setLearningWalkActions([]);
       setIsCreating(false);
       setStatusMessage(asDraft ? `${config.recordLabel} saved as draft.` : `${config.recordLabel} submitted.`);
       await refreshData();
@@ -391,6 +436,18 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       if (validationMessage) {
         setStatusMessage(validationMessage);
         return;
+      }
+
+      if (mode === "learning") {
+        const otherValidation = validateLearningWalkOtherContext(
+          editSections,
+          editResponses,
+          learningWalkThemeGroups
+        );
+        if (otherValidation) {
+          setStatusMessage(otherValidation);
+          return;
+        }
       }
     }
 
@@ -455,8 +512,10 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   }
 
   async function createLinkedAction() {
-    if (!selectedDetail || !actionTitle.trim() || !actionOwnerId) {
-      setStatusMessage("A linked action needs a title and an owner.");
+    if (!selectedDetail || !actionTitle.trim() || !actionOwnerId || (mode === "learning" && !actionDueDate)) {
+      setStatusMessage(mode === "learning"
+        ? "A Learning Walk action needs an action, owner and implementation date."
+        : "A linked action needs a title and an owner.");
       return;
     }
 
@@ -499,10 +558,24 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         const dateField = findField(createSections, "assessment_date");
         setResponses(dateField ? { [dateField.id]: getTodayDate() } : {});
       }
+      if (!current && mode === "learning") {
+        setLearningWalkActions([]);
+      }
       return !current;
     });
     setIsEditing(false);
     setStatusMessage("");
+  }
+
+  function addLearningWalkAction() {
+    setLearningWalkActions((current) => [
+      ...current,
+      { id: crypto.randomUUID(), title: "", ownerStaffId: "", dueDate: "" }
+    ]);
+  }
+
+  function updateLearningWalkAction(id: string, changes: Partial<DraftLearningWalkAction>) {
+    setLearningWalkActions((current) => current.map((action) => action.id === id ? { ...action, ...changes } : action));
   }
 
   function clearRecordFilters() {
@@ -626,11 +699,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 <div className="entry-section" key={section.id}>
                   <h3>{section.title}</h3>
                   <div className="entry-field-grid">
-                    {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
+                    {section.fields
+                      .filter((field) => !isLegacyCpdParticipantField(mode, field))
+                      .filter((field) => shouldShowLearningWalkField(mode, field, createSections, responses, learningWalkThemeGroups))
+                      .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
-                        field={field}
+                        field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
+                        learningWalkThemeGroups={learningWalkThemeGroups}
                         onChange={(value) => setResponses((current) => updateResponseMap(createSections, current, field, value, rooms))}
                         orgUnits={orgUnits}
                         rooms={rooms}
@@ -642,6 +719,63 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   </div>
                 </div>
               ))}
+              {mode === "learning" ? (
+                <div className="entry-section">
+                  <div className="section-heading-row">
+                    <div>
+                      <h3>Actions</h3>
+                      <small>Actions are assigned through the central action engine when the walk is submitted.</small>
+                    </div>
+                    <Button icon={Plus} onClick={addLearningWalkAction}>Action</Button>
+                  </div>
+                  {learningWalkActions.length === 0 ? (
+                    <div className="empty-row">No actions added.</div>
+                  ) : (
+                    <div className="scrutiny-action-list">
+                      {learningWalkActions.map((action, index) => (
+                        <div className="scrutiny-action-row" key={action.id}>
+                          <label className="entry-field scrutiny-action-text">
+                            <span>Action {index + 1} <strong>Required</strong></span>
+                            <textarea
+                              maxLength={300}
+                              onChange={(event) => updateLearningWalkAction(action.id, { title: event.target.value })}
+                              rows={3}
+                              value={action.title}
+                            />
+                          </label>
+                          <label className="entry-field">
+                            <span>Owner <strong>Required</strong></span>
+                            <StaffSearchSelect
+                              id={`learning-walk-action-owner-${action.id}`}
+                              onChange={(ownerStaffId) => updateLearningWalkAction(action.id, { ownerStaffId })}
+                              staff={staff}
+                              value={action.ownerStaffId}
+                            />
+                          </label>
+                          <label className="entry-field">
+                            <span>Date to be implemented by <strong>Required</strong></span>
+                            <input
+                              min={getResponseValue(createSections, responses, "visit_date")}
+                              onChange={(event) => updateLearningWalkAction(action.id, { dueDate: event.target.value })}
+                              type="date"
+                              value={action.dueDate}
+                            />
+                          </label>
+                          <button
+                            aria-label={`Remove action ${index + 1}`}
+                            className="icon-button scrutiny-action-remove"
+                            onClick={() => setLearningWalkActions((current) => current.filter((candidate) => candidate.id !== action.id))}
+                            title="Remove action"
+                            type="button"
+                          >
+                            <X size={16} aria-hidden="true" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
               <div className="toolbar">
                 {mode !== "elevate" ? (
                   <Button disabled={isSaving} icon={Save} onClick={() => void saveRecord(true)}>Save draft</Button>
@@ -793,11 +927,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 <div className="entry-section" key={section.id}>
                   <h3>{section.title}</h3>
                   <div className="entry-field-grid">
-                    {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
+                    {section.fields
+                      .filter((field) => !isLegacyCpdParticipantField(mode, field))
+                      .filter((field) => shouldShowLearningWalkField(mode, field, editSections, editResponses, learningWalkThemeGroups))
+                      .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
-                        field={field}
+                        field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
+                        learningWalkThemeGroups={learningWalkThemeGroups}
                         onChange={(value) => setEditResponses((current) => updateResponseMap(editSections, current, field, value, rooms))}
                         orgUnits={orgUnits}
                         rooms={rooms}
@@ -821,7 +959,10 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   <div className="answer-section" key={section.id}>
                     <h3>{section.title}</h3>
                     <div className="answer-grid">
-                      {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
+                      {section.fields
+                        .filter((field) => !isLegacyCpdParticipantField(mode, field))
+                        .filter((field) => field.fieldKey !== "additional_focus_other" || Boolean(field.value))
+                        .map((field) => (
                         <div className={isWideEntryField(field.fieldType) ? "answer-item answer-item-wide" : "answer-item"} key={field.id}>
                           <span>{field.label}</span>
                           <strong>{formatAnswer(field.value, field.fieldType, orgUnits, staff)}</strong>
@@ -841,7 +982,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 {detailStatus === "submitted" && canManageForms ? (
                   <Button disabled={isSaving} icon={RotateCcw} onClick={() => void changeStatus("reopen")}>Reopen</Button>
                 ) : null}
-                {canManageForms ? (
+                {canManageForms && (mode !== "scrutiny" || user.permissions.includes("users.manage")) ? (
                   <Button disabled={isSaving} icon={Archive} onClick={() => void changeStatus("archive")} variant="quiet">Archive</Button>
                 ) : null}
                 {canManageActions ? (
@@ -860,15 +1001,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 </label>
                 <label className="entry-field">
                   <span>Owner <strong>Required</strong></span>
-                  <select onChange={(event) => setActionOwnerId(event.target.value)} value={actionOwnerId}>
-                    <option value="">Select owner</option>
-                    {staff.map((staffMember) => (
-                      <option key={staffMember.id} value={staffMember.id}>{staffMember.displayName}</option>
-                    ))}
-                  </select>
+                  <StaffSearchSelect
+                    id={`linked-action-owner-${selectedDetail.id}`}
+                    onChange={setActionOwnerId}
+                    staff={staff}
+                    value={actionOwnerId}
+                  />
                 </label>
                 <label className="entry-field">
-                  <span>Due date</span>
+                  <span>Date to be implemented by {mode === "learning" ? <strong>Required</strong> : null}</span>
                   <input onChange={(event) => setActionDueDate(event.target.value)} type="date" value={actionDueDate} />
                 </label>
               </div>
@@ -918,6 +1059,7 @@ function FieldInput({
   selectedFacultyId,
   staff,
   cpdThemes,
+  learningWalkThemeGroups,
   value
 }: {
   cpdThemes: string[];
@@ -927,6 +1069,7 @@ function FieldInput({
   rooms: RoomSummary[];
   selectedFacultyId?: string;
   staff: StaffSummary[];
+  learningWalkThemeGroups: LearningWalkThemeGroup[];
   value: string;
 }) {
   const faculties = orgUnits.filter((orgUnit) => orgUnit.orgUnitType === "faculty");
@@ -953,6 +1096,45 @@ function FieldInput({
           staff={staff}
           value={value}
         />
+      </div>
+    );
+  }
+
+  if (field.fieldType === "learning_walk_theme_group") {
+    const selected = parseLearningWalkThemeSelections(value);
+    const selectedIds = selected.map((theme) => theme.id);
+    return (
+      <div className="entry-field entry-field-wide learning-walk-theme-picker">
+        <span>
+          {field.label}
+          {field.isRequired ? <strong>Required</strong> : null}
+        </span>
+        <div className="learning-walk-theme-picker-groups">
+          {learningWalkThemeGroups.map((group) => {
+            const visibleThemes = group.themes.filter((theme) => theme.isActive || selectedIds.includes(theme.id));
+            if (visibleThemes.length === 0) {
+              return null;
+            }
+
+            return (
+              <fieldset key={group.id}>
+                <legend>{group.name}</legend>
+                {visibleThemes.map((theme) => (
+                  <label key={theme.id}>
+                    <input
+                      checked={selectedIds.includes(theme.id)}
+                      disabled={!theme.isActive && !selectedIds.includes(theme.id)}
+                      onChange={() => onChange(toggleLearningWalkTheme(value, theme, group))}
+                      type="checkbox"
+                    />
+                    <span>{theme.name}{theme.isActive ? "" : " (inactive)"}</span>
+                  </label>
+                ))}
+              </fieldset>
+            );
+          })}
+        </div>
+        {field.helpText ? <small>{field.helpText}</small> : null}
       </div>
     );
   }
@@ -1180,7 +1362,7 @@ function getRecordTimestamp(record: RecordSummary) {
 }
 
 function isWideEntryField(fieldType: string) {
-  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add"].includes(
+  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add", "learning_walk_theme_group"].includes(
     fieldType
   );
 }
@@ -1191,6 +1373,73 @@ function isLegacyCpdParticipantField(mode: WorkspaceMode, field: FormFieldDefini
 
 function splitDelimitedValues(value?: string) {
   return value ? value.split("|").filter(Boolean) : [];
+}
+
+type LearningWalkThemeSelection = {
+  id: string;
+  name: string;
+  groupName: string;
+  isOther: boolean;
+};
+
+function parseLearningWalkThemeSelections(value?: string): LearningWalkThemeSelection[] {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as LearningWalkThemeSelection[];
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item?.id === "string" && typeof item?.name === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function toggleLearningWalkTheme(
+  currentValue: string,
+  theme: LearningWalkTheme,
+  group: LearningWalkThemeGroup
+) {
+  const selected = parseLearningWalkThemeSelections(currentValue);
+  const next = selected.some((item) => item.id === theme.id)
+    ? selected.filter((item) => item.id !== theme.id)
+    : [...selected, { id: theme.id, name: theme.name, groupName: group.name, isOther: theme.isOther }];
+  return JSON.stringify(next);
+}
+
+function shouldShowLearningWalkField(
+  mode: WorkspaceMode,
+  field: FormFieldDefinition,
+  sections: Array<{ fields: FormFieldDefinition[] }>,
+  responses: Record<string, string>,
+  groups: LearningWalkThemeGroup[]
+) {
+  if (mode !== "learning" || field.fieldKey !== "additional_focus_other") {
+    return true;
+  }
+
+  const themeValue = getResponseValue(sections, responses, "additional_focus_context");
+  const otherThemeIds = groups.flatMap((group) => group.themes).filter((theme) => theme.isOther).map((theme) => theme.id);
+  return parseLearningWalkThemeSelections(themeValue).some((selection) =>
+    selection.isOther || otherThemeIds.includes(selection.id));
+}
+
+function validateLearningWalkOtherContext(
+  sections: Array<{ fields: FormFieldDefinition[] }>,
+  responses: Record<string, string>,
+  groups: LearningWalkThemeGroup[]
+) {
+  const otherField = findField(sections, "additional_focus_other");
+  if (!otherField || shouldShowLearningWalkField("learning", otherField, sections, responses, groups)
+      && responses[otherField.id]?.trim()) {
+    return "";
+  }
+
+  return shouldShowLearningWalkField("learning", otherField, sections, responses, groups)
+    ? "Describe the other focus or context before submitting the Learning Walk."
+    : "";
 }
 
 function toggleDelimitedValue(currentValue: string, option: string) {
@@ -1327,6 +1576,17 @@ function formatAnswer(
 
   if (["checkbox_group", "multi_select"].includes(fieldType)) {
     return splitDelimitedValues(value).join("\n");
+  }
+
+  if (fieldType === "learning_walk_theme_group") {
+    const selections = parseLearningWalkThemeSelections(value);
+    if (selections.length === 0) {
+      return "Not recorded";
+    }
+
+    return selections
+      .map((selection) => `${selection.groupName}: ${selection.name}`)
+      .join("\n");
   }
 
   if (fieldType === "datetime") {

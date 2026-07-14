@@ -141,8 +141,48 @@ export type RecordDetail = {
   templateVersion: string;
   submissionStatus: string;
   submittedAt?: string;
+  archivedAt?: string;
   canEdit: boolean;
+  courseIds: string[];
   sections: RecordDetailSection[];
+};
+
+export type AdminWorkScrutinyRecord = {
+  id: string;
+  title: string;
+  summary?: string;
+  orgUnitId?: string;
+  orgUnitCode?: string;
+  orgUnitName?: string;
+  parentOrgUnitCode?: string;
+  recordDate?: string;
+  createdAt: string;
+  ownerDisplayName?: string;
+  submissionId: string;
+  submissionStatus: string;
+  archivedAt?: string;
+  openActionCount: number;
+  completedActionCount: number;
+};
+
+export type RecordAudit = {
+  id: string;
+  action: string;
+  summary?: string;
+  actorName: string;
+  beforeJson?: string;
+  afterJson?: string;
+  createdAt: string;
+};
+
+export type AdminWorkScrutinyAction = {
+  id: string;
+  title: string;
+  ownerDisplayName?: string;
+  dueDate?: string;
+  completedDate?: string;
+  statusKey?: string;
+  archivedAt?: string;
 };
 
 export type RecordDetailSection = {
@@ -799,6 +839,28 @@ export type UpdateLearningWalkThemeMappingRequest = {
   agreedTheme: string;
 };
 
+export type LearningWalkTheme = {
+  id: string;
+  themeGroupId: string;
+  name: string;
+  displayOrder: number;
+  isOther: boolean;
+  isActive: boolean;
+};
+
+export type LearningWalkThemeGroup = {
+  id: string;
+  groupKey: string;
+  name: string;
+  displayOrder: number;
+  themes: LearningWalkTheme[];
+};
+
+export type SaveLearningWalkThemeRequest = {
+  themeGroupId: string;
+  name: string;
+};
+
 export type SubmitFormRequest = {
   templateKey: string;
   recordType: string;
@@ -820,4 +882,5 @@ export type UpdateFormSubmissionRequest = {
   orgUnitId?: string;
   recordDate?: string;
   responses: Array<{ fieldId: string; value?: string }>;
+  courseIds?: string[];
 };
