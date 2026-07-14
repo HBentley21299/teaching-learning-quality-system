@@ -446,25 +446,43 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             reader => new RoomSummary(reader.GetGuid(0), reader.GetString(1), reader.GetString(2)),
             cancellationToken);
 
+    public Task<IReadOnlyList<ElevateEnvironmentPillarSummary>> GetElevateEnvironmentPillarsAsync(
+        CancellationToken cancellationToken) =>
+        QueryAsync(
+            """
+            SELECT pillar.id,
+                   pillar.pillar_key,
+                   pillar.name,
+                   pillar.description,
+                   pillar.display_order,
+                   CASE WHEN pillar.is_active = 1 AND asset.is_active = 1 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,
+                   asset.asset_uri,
+                   asset.alt_text
+            FROM quality.elevate_environment_pillars pillar
+            JOIN core.system_assets asset ON asset.id = pillar.system_asset_id
+            WHERE pillar.archived_at IS NULL
+              AND asset.archived_at IS NULL
+            ORDER BY pillar.display_order, pillar.name;
+            """,
+            reader => new ElevateEnvironmentPillarSummary(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt32(4),
+                reader.GetBoolean(5),
+                reader.GetString(6),
+                reader.GetString(7)),
+            cancellationToken);
+
     public Task<IReadOnlyList<CourseSummary>> GetCoursesAsync(
         Guid orgUnitId,
         CurrentUser currentUser,
         CancellationToken cancellationToken) =>
         QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT course.id, course.course_code, course.course_name, course.org_unit_id, course.academic_year
             FROM curriculum.courses course
@@ -476,8 +494,15 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
               AND team.archived_at IS NULL
               AND (
                     @canViewAll = 1
-                    OR EXISTS (SELECT 1 FROM scoped_org_units scoped WHERE scoped.org_unit_id = course.org_unit_id)
+                    OR EXISTS (SELECT 1 FROM visible_org_units scoped WHERE scoped.org_unit_id = course.org_unit_id)
                     OR current_staff.primary_org_unit_id = course.org_unit_id
+                    OR EXISTS (
+                        SELECT 1
+                        FROM org.staff_org_memberships membership
+                        WHERE membership.staff_id = @currentStaffId
+                          AND membership.org_unit_id = course.org_unit_id
+                          AND membership.archived_at IS NULL
+                    )
               )
             ORDER BY course.course_code, course.course_name;
             """,
@@ -503,19 +528,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     {
         var keys = await QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT TOP (1) template.template_key
             FROM forms.form_templates template
@@ -532,8 +546,15 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
               AND assignment.org_unit_id = @orgUnitId
               AND (
                     @canViewAll = 1
-                    OR EXISTS (SELECT 1 FROM scoped_org_units scoped WHERE scoped.org_unit_id = assignment.org_unit_id)
+                    OR EXISTS (SELECT 1 FROM visible_org_units scoped WHERE scoped.org_unit_id = assignment.org_unit_id)
                     OR current_staff.primary_org_unit_id = assignment.org_unit_id
+                    OR EXISTS (
+                        SELECT 1
+                        FROM org.staff_org_memberships membership
+                        WHERE membership.staff_id = @currentStaffId
+                          AND membership.org_unit_id = assignment.org_unit_id
+                          AND membership.archived_at IS NULL
+                    )
               )
             ORDER BY version.active_from DESC, version.created_at DESC;
             """,
@@ -552,23 +573,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
     public Task<IReadOnlyList<StaffSummary>> GetStaffAsync(CurrentUser currentUser, CancellationToken cancellationToken)
     {
-        var canViewAll = CanViewAllStaff(currentUser);
         return QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
-            )
             SELECT
                 s.id,
                 s.external_id,
@@ -579,6 +585,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 s.account_status,
                 memberships.org_unit_ids
             FROM people.staff s
+            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = s.id
             OUTER APPLY (
                 SELECT STRING_AGG(CONVERT(nvarchar(36), membership.org_unit_id), '|') AS org_unit_ids
                 FROM (
@@ -589,27 +596,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 ) membership
             ) memberships
             WHERE s.archived_at IS NULL
-              AND (
-                    @canViewAll = 1
-                    OR s.id = @currentStaffId
-                    OR s.line_manager_staff_id = @currentStaffId
-                    OR EXISTS (SELECT 1 FROM scoped_org_units sou WHERE sou.org_unit_id = s.primary_org_unit_id)
-                    OR EXISTS (
-                        SELECT 1
-                        FROM org.staff_org_memberships som
-                        JOIN scoped_org_units sou ON sou.org_unit_id = som.org_unit_id
-                        WHERE som.staff_id = s.id
-                          AND som.archived_at IS NULL
-                    )
-              )
             ORDER BY s.display_name;
             """,
-            command =>
-            {
-                command.Parameters.AddWithValue("@canViewAll", canViewAll);
-                command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
-                command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
-            },
+            command => command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId)),
             reader => new StaffSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -957,13 +946,17 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 theme.display_order,
                 theme.is_other,
                 theme.is_active
-            FROM quality.learning_walk_theme_groups theme_group
-            LEFT JOIN quality.learning_walk_themes theme
+            FROM core.theme_groups theme_group
+            LEFT JOIN core.themes theme
                 ON theme.theme_group_id = theme_group.id
                AND theme.archived_at IS NULL
                AND (@includeInactive = 1 OR theme.is_active = 1)
+            LEFT JOIN core.theme_applications application
+                ON application.theme_id = theme.id
+               AND application.application_key = 'learning_walk'
             WHERE theme_group.archived_at IS NULL
               AND theme_group.is_active = 1
+              AND (theme.id IS NULL OR application.theme_id IS NOT NULL)
             ORDER BY theme_group.display_order, theme.display_order, theme.name;
             """,
             command => command.Parameters.AddWithValue("@includeInactive", includeInactive),
@@ -1007,43 +1000,52 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var id = Guid.NewGuid();
+        var keyPrefix = Slugify(request.Name);
+        var themeKey = $"{keyPrefix[..Math.Min(keyPrefix.Length, 110)]}_{id:N}";
 
         try
         {
             await using (var command = new SqlCommand(
                 """
                 IF NOT EXISTS (
-                    SELECT 1 FROM quality.learning_walk_theme_groups
+                    SELECT 1 FROM core.theme_groups
                     WHERE id = @themeGroupId AND is_active = 1 AND archived_at IS NULL
                 )
                     THROW 51000, 'The selected Learning Walk theme area was not found.', 1;
 
                 IF EXISTS (
-                    SELECT 1 FROM quality.learning_walk_themes
+                    SELECT 1 FROM core.themes
                     WHERE theme_group_id = @themeGroupId
                       AND name = @name
                       AND archived_at IS NULL
                 )
                     THROW 51000, 'That Learning Walk theme already exists in this area.', 1;
 
-                INSERT INTO quality.learning_walk_themes (
-                    id, theme_group_id, name, display_order, created_by_user_account_id
+                INSERT INTO core.themes (
+                    id, theme_group_id, theme_key, name, display_order, created_by_user_account_id
                 )
                 SELECT
                     @id,
                     @themeGroupId,
+                    @themeKey,
                     @name,
                     COALESCE(MAX(display_order), 0) + 10,
                     @userAccountId
-                FROM quality.learning_walk_themes
+                FROM core.themes
                 WHERE theme_group_id = @themeGroupId
                   AND archived_at IS NULL;
+
+                INSERT INTO core.theme_applications (theme_id, application_key, display_order)
+                SELECT @id, application_key,
+                       (SELECT display_order FROM core.themes WHERE id = @id)
+                FROM (VALUES ('learning_walk'), ('liv'), ('reporting')) application(application_key);
                 """,
                 connection,
                 (SqlTransaction)transaction))
             {
                 command.Parameters.AddWithValue("@id", id);
                 command.Parameters.AddWithValue("@themeGroupId", request.ThemeGroupId);
+                command.Parameters.AddWithValue("@themeKey", themeKey);
                 command.Parameters.AddWithValue("@name", request.Name.Trim());
                 command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
                 await command.ExecuteNonQueryAsync(cancellationToken);
@@ -1088,7 +1090,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 """
                 SELECT (
                     SELECT theme_group_id AS themeGroupId, name, is_active AS isActive
-                    FROM quality.learning_walk_themes
+                    FROM core.themes
                     WHERE id = @id AND archived_at IS NULL
                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
                 );
@@ -1109,15 +1111,15 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             await using (var command = new SqlCommand(
                 """
                 IF NOT EXISTS (
-                    SELECT 1 FROM quality.learning_walk_theme_groups
+                    SELECT 1 FROM core.theme_groups
                     WHERE id = @themeGroupId AND is_active = 1 AND archived_at IS NULL
                 )
                     THROW 51000, 'The selected Learning Walk theme area was not found.', 1;
 
                 IF EXISTS (
                     SELECT 1
-                    FROM quality.learning_walk_themes theme
-                    JOIN quality.learning_walk_theme_groups theme_group ON theme_group.id = @themeGroupId
+                    FROM core.themes theme
+                    JOIN core.theme_groups theme_group ON theme_group.id = @themeGroupId
                     WHERE theme.id = @id
                       AND theme.is_other = 1
                       AND theme_group.group_key <> 'other'
@@ -1125,7 +1127,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     THROW 51000, 'The system Other theme must remain in the Other area.', 1;
 
                 IF EXISTS (
-                    SELECT 1 FROM quality.learning_walk_themes
+                    SELECT 1 FROM core.themes
                     WHERE theme_group_id = @themeGroupId
                       AND name = @name
                       AND id <> @id
@@ -1133,7 +1135,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 )
                     THROW 51000, 'That Learning Walk theme already exists in this area.', 1;
 
-                UPDATE quality.learning_walk_themes
+                UPDATE core.themes
                 SET theme_group_id = @themeGroupId,
                     name = @name,
                     updated_by_user_account_id = @userAccountId,
@@ -1182,7 +1184,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = new SqlCommand(
             """
-            UPDATE quality.learning_walk_themes
+            UPDATE core.themes
             SET is_active = @isActive,
                 updated_by_user_account_id = @userAccountId,
                 updated_at = sysutcdatetime()
@@ -1225,7 +1227,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             await using (var validateCommand = new SqlCommand(
                 """
                 SELECT COUNT(*)
-                FROM quality.learning_walk_themes
+                FROM core.themes
                 WHERE theme_group_id = @themeGroupId
                   AND archived_at IS NULL;
                 """,
@@ -1244,13 +1246,18 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             {
                 await using var command = new SqlCommand(
                     """
-                    UPDATE quality.learning_walk_themes
+                    UPDATE core.themes
                     SET display_order = @displayOrder,
                         updated_by_user_account_id = @userAccountId,
                         updated_at = sysutcdatetime()
                     WHERE id = @id
                       AND theme_group_id = @themeGroupId
                       AND archived_at IS NULL;
+
+                    UPDATE core.theme_applications
+                    SET display_order = @displayOrder,
+                        updated_at = sysutcdatetime()
+                    WHERE theme_id = @id;
                     """,
                     connection,
                     (SqlTransaction)transaction);
@@ -1289,19 +1296,11 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     public Task<IReadOnlyList<RecordSummary>> GetRecordsAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
         QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT r.id, r.module_id, r.record_type, r.title, r.subject_staff_id, r.owner_staff_id, r.org_unit_id, r.record_date, r.created_at,
                    COALESCE(latest_submission.status, 'submitted') AS submission_status
@@ -1313,8 +1312,6 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                   AND fsub.archived_at IS NULL
                 ORDER BY fsub.created_at DESC
             ) latest_submission
-            LEFT JOIN people.staff subject_staff ON subject_staff.id = r.subject_staff_id
-            LEFT JOIN people.staff owner_staff ON owner_staff.id = r.owner_staff_id
             WHERE r.archived_at IS NULL
               AND (
                     COALESCE(latest_submission.status, 'submitted') <> 'draft'
@@ -1325,54 +1322,25 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     @canViewAll = 1
                     OR r.owner_staff_id = @currentStaffId
                     OR (
-                        -- Learning walks are visible by who created them: the
-                        -- walk's owner must sit inside the viewer's scope or
-                        -- report to them directly, and the walk itself must be
-                        -- in the viewer's scoped area.
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
-                        AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = owner_staff.primary_org_unit_id
-                            )
-                            OR owner_staff.line_manager_staff_id = @currentStaffId
-                        )
-                        AND EXISTS (
-                            SELECT 1 FROM scoped_org_units sou
-                            WHERE sou.org_unit_id = r.org_unit_id
-                        )
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'work_scrutiny'
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = subject_staff.primary_org_unit_id
-                            )
-                            OR EXISTS (
-                                SELECT 1
-                                FROM auth.access_scopes line_scope
-                                WHERE line_scope.user_account_id = @currentUserAccountId
-                                  AND line_scope.scope_type = 'line_managed_staff'
-                                  AND line_scope.is_active = 1
-                                  AND line_scope.archived_at IS NULL
-                                  AND subject_staff.line_manager_staff_id = @currentStaffId
-                            )
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.subject_staff_id)
                         )
                     )
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'elevate_environment'
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = owner_staff.primary_org_unit_id
-                            )
-                            OR owner_staff.line_manager_staff_id = @currentStaffId
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         )
                     )
               )
@@ -1400,19 +1368,11 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     {
         var rows = await QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT
                 r.id,
@@ -1464,7 +1424,6 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             LEFT JOIN forms.form_responses response ON response.form_submission_id = fsub.id
                 AND response.form_field_id = field.id
                 AND response.archived_at IS NULL
-            LEFT JOIN people.staff subject_staff ON subject_staff.id = r.subject_staff_id
             LEFT JOIN people.staff owner ON owner.id = r.owner_staff_id
             LEFT JOIN org.org_units org_unit ON org_unit.id = r.org_unit_id
             LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
@@ -1474,52 +1433,25 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     @canViewAll = 1
                     OR r.owner_staff_id = @currentStaffId
                     OR (
-                        -- Learning walk visibility follows the record's creator,
-                        -- and the walk itself must be in the viewer's scoped area.
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
-                        AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = owner.primary_org_unit_id
-                            )
-                            OR owner.line_manager_staff_id = @currentStaffId
-                        )
-                        AND EXISTS (
-                            SELECT 1 FROM scoped_org_units sou
-                            WHERE sou.org_unit_id = r.org_unit_id
-                        )
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'work_scrutiny'
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = subject_staff.primary_org_unit_id
-                            )
-                            OR EXISTS (
-                                SELECT 1
-                                FROM auth.access_scopes line_scope
-                                WHERE line_scope.user_account_id = @currentUserAccountId
-                                  AND line_scope.scope_type = 'line_managed_staff'
-                                  AND line_scope.is_active = 1
-                                  AND line_scope.archived_at IS NULL
-                                  AND subject_staff.line_manager_staff_id = @currentStaffId
-                            )
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.subject_staff_id)
                         )
                     )
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'elevate_environment'
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = owner.primary_org_unit_id
-                            )
-                            OR owner.line_manager_staff_id = @currentStaffId
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         )
                     )
               )
@@ -1643,59 +1575,87 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             sections);
     }
 
-    public Task<IReadOnlyList<ActionSummary>> GetActionsAsync(CurrentUser currentUser, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<ActionSummary>> GetActionsAsync(
+        CurrentUser currentUser,
+        bool includeDeleted,
+        CancellationToken cancellationToken)
     {
         var canViewAll = CanViewAllRecords(currentUser);
-        var sql = canViewAll
-            ? """
-              SELECT a.id, a.source_record_id, a.subject_staff_id, a.owner_staff_id, a.title, a.detail, a.due_date, a.completed_date,
-                     r.title AS source_record_title,
-                     subject_staff.display_name AS subject_staff_name,
-                     owner_staff.display_name AS owner_staff_name,
-                     status_value.value_key AS status_key,
-                     priority_value.value_key AS priority_key,
-                     a.completion_note
-              FROM quality.actions a
-              LEFT JOIN core.records r ON r.id = a.source_record_id
-              LEFT JOIN people.staff subject_staff ON subject_staff.id = a.subject_staff_id
-              LEFT JOIN people.staff owner_staff ON owner_staff.id = a.owner_staff_id
-              LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
-              LEFT JOIN core.lookup_values priority_value ON priority_value.id = a.priority_lookup_value_id
-              WHERE a.archived_at IS NULL
-              ORDER BY
-                  CASE WHEN a.completed_date IS NULL THEN 0 ELSE 1 END,
-                  a.due_date,
-                  a.created_at DESC;
-              """
-            : """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+        var canIncludeDeleted = includeDeleted && currentUser.HasPermission(PermissionKeys.ActionsManage);
+        const string sql = """
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
-            SELECT a.id, a.source_record_id, a.subject_staff_id, a.owner_staff_id, a.title, a.detail, a.due_date, a.completed_date,
+            SELECT a.id,
+                   a.source_record_id,
+                   COALESCE(a.source_form_type, r.record_type, 'standalone') AS source_form_type,
+                   a.source_sub_record_type,
+                   a.source_sub_record_id,
+                   a.source_sub_record_key,
+                   a.subject_staff_id,
+                   a.owner_staff_id,
+                   a.title,
+                   a.detail,
+                   a.due_date,
+                   a.original_due_date,
+                   a.revised_due_date,
+                   a.completed_date,
                    r.title AS source_record_title,
                    subject_staff.display_name AS subject_staff_name,
                    owner_staff.display_name AS owner_staff_name,
                    status_value.value_key AS status_key,
                    priority_value.value_key AS priority_key,
-                   a.completion_note
+                   a.completion_note,
+                   a.cancellation_comments,
+                   a.visibility_setting,
+                   a.published_to_staff,
+                   a.created_at,
+                   a.updated_at,
+                   a.archived_at,
+                   creator_staff.display_name AS created_by_name,
+                   updater_staff.display_name AS updated_by_name,
+                   completer_staff.display_name AS completed_by_name,
+                   canceller_staff.display_name AS cancelled_by_name,
+                   deleter_staff.display_name AS deleted_by_name,
+                   a.deletion_reason,
+                   faculty.id AS faculty_id,
+                   faculty.code AS faculty_code,
+                   faculty.name AS faculty_name,
+                   team.id AS team_id,
+                   team.code AS team_code,
+                   team.name AS team_name,
+                   (SELECT COUNT(*) FROM quality.action_extensions extension WHERE extension.action_id = a.id),
+                   latest_extension.reason,
+                   a.liv_visit_id
             FROM quality.actions a
             LEFT JOIN core.records r ON r.id = a.source_record_id
             LEFT JOIN people.staff subject_staff ON subject_staff.id = a.subject_staff_id
             LEFT JOIN people.staff owner_staff ON owner_staff.id = a.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
             LEFT JOIN core.lookup_values priority_value ON priority_value.id = a.priority_lookup_value_id
-            WHERE a.archived_at IS NULL
+            LEFT JOIN auth.user_accounts creator_account ON creator_account.id = a.created_by_user_account_id
+            LEFT JOIN people.staff creator_staff ON creator_staff.id = creator_account.staff_id
+            LEFT JOIN auth.user_accounts updater_account ON updater_account.id = a.updated_by_user_account_id
+            LEFT JOIN people.staff updater_staff ON updater_staff.id = updater_account.staff_id
+            LEFT JOIN auth.user_accounts completer_account ON completer_account.id = a.completed_by_user_account_id
+            LEFT JOIN people.staff completer_staff ON completer_staff.id = completer_account.staff_id
+            LEFT JOIN auth.user_accounts canceller_account ON canceller_account.id = a.cancelled_by_user_account_id
+            LEFT JOIN people.staff canceller_staff ON canceller_staff.id = canceller_account.staff_id
+            LEFT JOIN auth.user_accounts deleter_account ON deleter_account.id = a.deleted_by_user_account_id
+            LEFT JOIN people.staff deleter_staff ON deleter_staff.id = deleter_account.staff_id
+            LEFT JOIN org.org_units area ON area.id = COALESCE(r.org_unit_id, subject_staff.primary_org_unit_id, owner_staff.primary_org_unit_id)
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            OUTER APPLY (
+                SELECT TOP (1) extension.reason
+                FROM quality.action_extensions extension
+                WHERE extension.action_id = a.id
+                ORDER BY extension.created_at DESC
+            ) latest_extension
+            WHERE (@includeDeleted = 1 OR a.archived_at IS NULL)
               AND (
                     @canViewAll = 1
                     OR a.owner_staff_id = @currentStaffId
@@ -1704,58 +1664,86 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     OR (
                         @canViewScopedActivities = 1
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = subject_staff.primary_org_unit_id
-                                   OR sou.org_unit_id = owner_staff.primary_org_unit_id
-                            )
-                            OR EXISTS (
-                                SELECT 1
-                                FROM auth.access_scopes line_scope
-                                WHERE line_scope.user_account_id = @currentUserAccountId
-                                  AND line_scope.scope_type = 'line_managed_staff'
-                                  AND line_scope.is_active = 1
-                                  AND line_scope.archived_at IS NULL
-                                  AND (
-                                      subject_staff.line_manager_staff_id = @currentStaffId
-                                      OR owner_staff.line_manager_staff_id = @currentStaffId
-                                  )
-                            )
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = a.subject_staff_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = a.owner_staff_id)
                         )
                     )
               )
-            ORDER BY
-                CASE WHEN a.completed_date IS NULL THEN 0 ELSE 1 END,
-                a.due_date,
-                a.created_at DESC;
+              AND (
+                    @canViewAll = 1
+                    OR a.visibility_setting = 'staff_and_management'
+                    OR (a.visibility_setting = 'owner_only' AND a.owner_staff_id = @currentStaffId)
+                    OR (a.visibility_setting = 'source_editors' AND (
+                        a.created_by_user_account_id = @currentUserAccountId
+                        OR r.owner_staff_id = @currentStaffId
+                    ))
+                    OR (a.visibility_setting = 'management_only' AND @canViewScopedActivities = 1)
+              );
             """;
 
-        return QueryAsync(
+        var actions = await QueryAsync(
             sql,
-            canViewAll ? null : command => AddScopeParameters(command, currentUser),
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@includeDeleted", canIncludeDeleted);
+            },
             reader =>
             {
-                var dueDate = GetDateOnlyOrNull(reader, 6);
-                var completedDate = GetDateOnlyOrNull(reader, 7);
+                var dueDate = GetDateOnlyOrNull(reader, 10);
+                var completedDate = GetDateOnlyOrNull(reader, 13);
                 return new ActionSummary(
                     reader.GetGuid(0),
                     GetGuidOrNull(reader, 1),
-                    GetStringOrNull(reader, 8),
-                    GetGuidOrNull(reader, 2),
-                    GetStringOrNull(reader, 9),
-                    reader.GetGuid(3),
-                    GetStringOrNull(reader, 10),
-                    reader.GetString(4),
+                    GetStringOrNull(reader, 14),
+                    reader.GetString(2),
+                    GetStringOrNull(reader, 3),
+                    GetGuidOrNull(reader, 4),
                     GetStringOrNull(reader, 5),
-                    GetStringOrNull(reader, 11),
-                    GetStringOrNull(reader, 12),
+                    GetGuidOrNull(reader, 6),
+                    GetStringOrNull(reader, 15),
+                    reader.GetGuid(7),
+                    GetStringOrNull(reader, 16),
+                    reader.GetString(8),
+                    GetStringOrNull(reader, 9),
+                    GetStringOrNull(reader, 17),
+                    GetStringOrNull(reader, 18),
                     dueDate,
+                    GetDateOnlyOrNull(reader, 11),
+                    GetDateOnlyOrNull(reader, 12),
                     completedDate,
-                    GetStringOrNull(reader, 13),
-                    dueDate.HasValue && completedDate is null && dueDate.Value < DateOnly.FromDateTime(DateTime.UtcNow));
+                    GetStringOrNull(reader, 19),
+                    GetStringOrNull(reader, 20),
+                    reader.GetString(21),
+                    reader.GetBoolean(22),
+                    dueDate.HasValue && completedDate is null && dueDate.Value < DateOnly.FromDateTime(DateTime.UtcNow),
+                    reader.GetFieldValue<DateTimeOffset>(23),
+                    GetDateTimeOffsetOrNull(reader, 24),
+                    GetDateTimeOffsetOrNull(reader, 25),
+                    GetStringOrNull(reader, 26),
+                    GetStringOrNull(reader, 27),
+                    GetStringOrNull(reader, 28),
+                    GetStringOrNull(reader, 29),
+                    GetStringOrNull(reader, 30),
+                    GetStringOrNull(reader, 31),
+                    GetGuidOrNull(reader, 32),
+                    GetStringOrNull(reader, 33),
+                    GetStringOrNull(reader, 34),
+                    GetGuidOrNull(reader, 35),
+                    GetStringOrNull(reader, 36),
+                    GetStringOrNull(reader, 37),
+                    reader.GetInt32(38),
+                    GetStringOrNull(reader, 39),
+                    GetGuidOrNull(reader, 40));
             },
             cancellationToken);
+
+        return actions
+            .OrderBy(action => action.IsDeleted)
+            .ThenBy(action => action.CompletedDate.HasValue)
+            .ThenBy(action => action.DueDate)
+            .ToArray();
     }
 
     public Task<IReadOnlyList<DashboardSummary>> GetDashboardsAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
@@ -1783,76 +1771,39 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     public Task<IReadOnlyList<ActivityOverviewSummary>> GetActivityOverviewAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
         QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT m.module_key, m.name AS module_name, r.record_type, COUNT_BIG(*) AS record_count
             FROM core.records r
             JOIN core.modules m ON m.id = r.module_id
-            LEFT JOIN people.staff subject_staff ON subject_staff.id = r.subject_staff_id
-            LEFT JOIN people.staff owner_staff ON owner_staff.id = r.owner_staff_id
             WHERE r.archived_at IS NULL
               AND (
                     @canViewAll = 1
                     OR r.owner_staff_id = @currentStaffId
                     OR (
-                        -- Learning walk visibility follows the record's creator,
-                        -- and the walk itself must be in the viewer's scoped area.
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
-                        AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = owner_staff.primary_org_unit_id
-                            )
-                            OR owner_staff.line_manager_staff_id = @currentStaffId
-                        )
-                        AND EXISTS (
-                            SELECT 1 FROM scoped_org_units sou
-                            WHERE sou.org_unit_id = r.org_unit_id
-                        )
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'work_scrutiny'
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = subject_staff.primary_org_unit_id
-                            )
-                            OR EXISTS (
-                                SELECT 1
-                                FROM auth.access_scopes line_scope
-                                WHERE line_scope.user_account_id = @currentUserAccountId
-                                  AND line_scope.scope_type = 'line_managed_staff'
-                                  AND line_scope.is_active = 1
-                                  AND line_scope.archived_at IS NULL
-                                  AND subject_staff.line_manager_staff_id = @currentStaffId
-                            )
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.subject_staff_id)
                         )
                     )
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'elevate_environment'
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = owner_staff.primary_org_unit_id
-                            )
-                            OR owner_staff.line_manager_staff_id = @currentStaffId
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         )
                     )
               )
@@ -1872,19 +1823,11 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         CancellationToken cancellationToken) =>
         QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT
                 r.id,
@@ -2028,8 +1971,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                             @canViewAll = 1
                             OR attendance.staff_id = @currentStaffId
                             OR EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = COALESCE(attendance.org_unit_id_at_time, attendee.primary_org_unit_id)
+                                SELECT 1 FROM visible_org_units unit
+                                WHERE unit.org_unit_id = COALESCE(attendance.org_unit_id_at_time, attendee.primary_org_unit_id)
                             )
                       )
                     GROUP BY attendee_org.id, attendee_org.code, attendee_org.name, attendee_parent.code
@@ -2048,40 +1991,23 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
-                        AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = owner_staff.primary_org_unit_id
-                            )
-                            OR owner_staff.line_manager_staff_id = @currentStaffId
-                        )
-                        AND EXISTS (
-                            SELECT 1 FROM scoped_org_units sou
-                            WHERE sou.org_unit_id = r.org_unit_id
-                        )
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'work_scrutiny'
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = subject_staff.primary_org_unit_id
-                            )
-                            OR subject_staff.line_manager_staff_id = @currentStaffId
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.subject_staff_id)
                         )
                     )
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'elevate_environment'
                         AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = owner_staff.primary_org_unit_id
-                            )
-                            OR owner_staff.line_manager_staff_id = @currentStaffId
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         )
                     )
                     OR (
@@ -2096,8 +2022,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                             WHERE scoped_event.record_id = r.id
                               AND scoped_event.archived_at IS NULL
                               AND EXISTS (
-                                  SELECT 1 FROM scoped_org_units sou
-                                  WHERE sou.org_unit_id = COALESCE(scoped_attendance.org_unit_id_at_time, scoped_attendee.primary_org_unit_id)
+                                  SELECT 1 FROM visible_org_units unit
+                                  WHERE unit.org_unit_id = COALESCE(scoped_attendance.org_unit_id_at_time, scoped_attendee.primary_org_unit_id)
                               )
                         )
                     )
@@ -2107,12 +2033,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                         AND (
                             r.owner_staff_id = @currentStaffId
                             OR r.subject_staff_id = @currentStaffId
-                            OR subject_staff.line_manager_staff_id = @currentStaffId
-                            OR EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = r.org_unit_id
-                                   OR sou.org_unit_id = subject_staff.primary_org_unit_id
-                            )
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.subject_staff_id)
+                            OR EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                         )
                     )
               )
@@ -2148,19 +2070,11 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     public Task<IReadOnlyList<LearningWalkRollupSummary>> GetLearningWalkRollupAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
         QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT
                 COALESCE(parent_org.id, org_unit.id) AS faculty_org_unit_id,
@@ -2181,20 +2095,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     @canViewAll = 1
                     OR r.owner_staff_id = @currentStaffId
                     OR (
-                        -- Learning walk visibility follows the record's creator,
-                        -- and the walk itself must be in the viewer's scoped area.
                         @canViewScopedActivities = 1
-                        AND (
-                            EXISTS (
-                                SELECT 1 FROM scoped_org_units sou
-                                WHERE sou.org_unit_id = owner_staff.primary_org_unit_id
-                            )
-                            OR owner_staff.line_manager_staff_id = @currentStaffId
-                        )
-                        AND EXISTS (
-                            SELECT 1 FROM scoped_org_units sou
-                            WHERE sou.org_unit_id = r.org_unit_id
-                        )
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
               )
             GROUP BY
@@ -2220,38 +2123,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
     public Task<IReadOnlyList<StaffProfileSummary>> GetStaffProfileSummariesAsync(CurrentUser currentUser, CancellationToken cancellationToken)
     {
-        var canViewAll = CanViewAllStaff(currentUser);
-        var sql = canViewAll
-            ? """
-              SELECT
-                  profile.staff_id,
-                  profile.external_id,
-                  profile.display_name,
-                  profile.email,
-                  profile.job_title,
-                  profile.primary_org_code,
-                  profile.cpd_sessions_attended,
-                  profile.evidence_records,
-                  profile.open_actions,
-                  profile.overdue_actions
-              FROM reporting.v_staff_profile_summary profile
-              ORDER BY profile.display_name;
-              """
-            : """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
-            )
+        const string sql = """
             SELECT
                 profile.staff_id,
                 profile.external_id,
@@ -2264,32 +2136,13 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 profile.open_actions,
                 profile.overdue_actions
             FROM reporting.v_staff_profile_summary profile
-            JOIN people.staff staff ON staff.id = profile.staff_id
-            WHERE profile.staff_id = @currentStaffId
-               OR (
-                    @canViewScoped = 1
-                    AND (
-                        EXISTS (SELECT 1 FROM scoped_org_units sou WHERE sou.org_unit_id = staff.primary_org_unit_id)
-                        OR EXISTS (
-                            SELECT 1
-                            FROM org.staff_org_memberships membership
-                            JOIN scoped_org_units sou ON sou.org_unit_id = membership.org_unit_id
-                            WHERE membership.staff_id = staff.id
-                              AND membership.archived_at IS NULL
-                        )
-                    )
-               )
+            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = profile.staff_id
             ORDER BY profile.display_name;
             """;
 
         return QueryAsync(
             sql,
-            canViewAll ? null : command =>
-            {
-                command.Parameters.AddWithValue("@canViewScoped", currentUser.HasPermission(PermissionKeys.ReportsViewScoped));
-                command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
-                command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
-            },
+            command => command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId)),
             reader => new StaffProfileSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -2302,6 +2155,254 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 Convert.ToInt32(reader.GetValue(8)),
                 Convert.ToInt32(reader.GetValue(9))),
             cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MyTeamMemberSummary>> GetMyTeamAsync(
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        var canViewAll = CanViewAllStaff(currentUser);
+        var canOpenProfiles = MyTeamAccessPolicy.CanOpenStaffProfile(currentUser);
+        var members = await QueryAsync(
+            """
+            WITH ranked_assessments AS (
+                SELECT
+                    assessment.id,
+                    assessment.staff_id,
+                    assessment.framework_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY assessment.staff_id
+                        ORDER BY assessment.academic_year DESC, assessment.submitted_at DESC
+                    ) AS assessment_rank
+                FROM quality.elevate_practice_assessments assessment
+                WHERE assessment.status = 'submitted'
+                  AND assessment.archived_at IS NULL
+            ),
+            assessment_scores AS (
+                SELECT rating.assessment_id, AVG(CAST(rating.score AS decimal(10, 2))) AS average_score
+                FROM quality.elevate_practice_ratings rating
+                GROUP BY rating.assessment_id
+            )
+            SELECT
+                staff.id,
+                staff.external_id,
+                staff.display_name,
+                staff.email,
+                staff.account_status,
+                judgement.visible_wording
+            FROM people.staff staff
+            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = staff.id
+            LEFT JOIN ranked_assessments latest_assessment ON latest_assessment.staff_id = staff.id
+                AND latest_assessment.assessment_rank = 1
+            LEFT JOIN assessment_scores assessment_score ON assessment_score.assessment_id = latest_assessment.id
+            OUTER APPLY (
+                SELECT TOP (1) descriptor.visible_wording
+                FROM quality.elevate_practice_rubric_descriptors descriptor
+                WHERE descriptor.framework_id = latest_assessment.framework_id
+                  AND descriptor.archived_at IS NULL
+                ORDER BY ABS(CAST(descriptor.hidden_numeric_value AS decimal(10, 2)) - assessment_score.average_score),
+                         descriptor.display_order
+            ) judgement
+            WHERE staff.archived_at IS NULL
+              AND staff.account_status = 'active'
+              AND staff.id <> @currentStaffId
+            ORDER BY staff.display_name;
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
+            },
+            reader => new MyTeamMemberRow(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                GetStringOrNull(reader, 5)),
+            cancellationToken);
+
+        if (members.Count == 0)
+        {
+            return [];
+        }
+
+        var memberIdsJson = JsonSerializer.Serialize(members.Select(member => member.StaffId));
+        var orgAssignments = await QueryAsync(
+            """
+            WITH member_ids AS (
+                SELECT id
+                FROM OPENJSON(@memberIdsJson) WITH (id uniqueidentifier '$')
+            ),
+            assignments AS (
+                SELECT staff.id AS staff_id, unit.id AS org_unit_id
+                FROM member_ids staff
+                JOIN people.staff person ON person.id = staff.id
+                JOIN org.org_units unit ON unit.id = person.primary_org_unit_id
+                WHERE unit.archived_at IS NULL
+                UNION
+                SELECT membership.staff_id, membership.org_unit_id
+                FROM org.staff_org_memberships membership
+                JOIN member_ids staff ON staff.id = membership.staff_id
+                WHERE membership.archived_at IS NULL
+                  AND (membership.active_from IS NULL OR membership.active_from <= CAST(sysutcdatetime() AS date))
+                  AND (membership.active_to IS NULL OR membership.active_to >= CAST(sysutcdatetime() AS date))
+            )
+            SELECT DISTINCT
+                assignment.staff_id,
+                CASE WHEN parent.id IS NULL THEN unit.id ELSE parent.id END AS faculty_id,
+                CASE WHEN parent.id IS NULL THEN unit.code ELSE parent.code END AS faculty_code,
+                CASE WHEN parent.id IS NULL THEN unit.name ELSE parent.name END AS faculty_name,
+                CASE WHEN parent.id IS NULL THEN NULL ELSE unit.id END AS team_id,
+                CASE WHEN parent.id IS NULL THEN NULL ELSE unit.code END AS team_code,
+                CASE WHEN parent.id IS NULL THEN NULL ELSE unit.name END AS team_name
+            FROM assignments assignment
+            JOIN org.org_units unit ON unit.id = assignment.org_unit_id
+                AND unit.archived_at IS NULL
+                AND unit.is_active = 1
+            LEFT JOIN org.org_units parent ON parent.id = unit.parent_org_unit_id
+                AND parent.archived_at IS NULL
+                AND parent.is_active = 1
+            ORDER BY faculty_name, team_name;
+            """,
+            command => command.Parameters.AddWithValue("@memberIdsJson", memberIdsJson),
+            reader => new MyTeamOrgAssignmentRow(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                GetGuidOrNull(reader, 4),
+                GetStringOrNull(reader, 5),
+                GetStringOrNull(reader, 6)),
+            cancellationToken);
+
+        var roles = await QueryAsync(
+            """
+            WITH member_ids AS (
+                SELECT id
+                FROM OPENJSON(@memberIdsJson) WITH (id uniqueidentifier '$')
+            )
+            SELECT DISTINCT account.staff_id, role.name, role.precedence
+            FROM member_ids staff
+            JOIN auth.user_accounts account ON account.staff_id = staff.id
+                AND account.archived_at IS NULL
+                AND account.is_disabled = 0
+            JOIN auth.user_roles user_role ON user_role.user_account_id = account.id
+                AND user_role.active_from <= sysutcdatetime()
+                AND (user_role.active_to IS NULL OR user_role.active_to > sysutcdatetime())
+            JOIN auth.roles role ON role.id = user_role.role_id
+                AND role.is_active = 1
+                AND role.archived_at IS NULL
+            ORDER BY account.staff_id, role.precedence DESC, role.name;
+            """,
+            command => command.Parameters.AddWithValue("@memberIdsJson", memberIdsJson),
+            reader => new MyTeamRoleRow(reader.GetGuid(0), reader.GetString(1)),
+            cancellationToken);
+
+        var actionCounts = await QueryAsync(
+            """
+            WITH member_ids AS (
+                SELECT id
+                FROM OPENJSON(@memberIdsJson) WITH (id uniqueidentifier '$')
+            ),
+            visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
+            ),
+            permitted_actions AS (
+                SELECT DISTINCT
+                    action.id,
+                    associated_staff.staff_id,
+                    action.due_date,
+                    action.completed_date,
+                    status_value.value_key AS status_key
+                FROM quality.actions action
+                LEFT JOIN core.records record ON record.id = action.source_record_id
+                LEFT JOIN people.staff subject_staff ON subject_staff.id = action.subject_staff_id
+                LEFT JOIN people.staff owner_staff ON owner_staff.id = action.owner_staff_id
+                LEFT JOIN core.lookup_values status_value ON status_value.id = action.status_lookup_value_id
+                CROSS APPLY (VALUES (action.subject_staff_id), (action.owner_staff_id)) associated_staff(staff_id)
+                JOIN member_ids member ON member.id = associated_staff.staff_id
+                WHERE action.archived_at IS NULL
+                  AND (
+                        @canViewAll = 1
+                        OR action.owner_staff_id = @currentStaffId
+                        OR action.subject_staff_id = @currentStaffId
+                        OR record.owner_staff_id = @currentStaffId
+                        OR (
+                            @canViewScopedActivities = 1
+                            AND (
+                                EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = record.org_unit_id)
+                                OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = action.subject_staff_id)
+                                OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = action.owner_staff_id)
+                            )
+                        )
+                  )
+                  AND (
+                        @canViewAll = 1
+                        OR action.visibility_setting = 'staff_and_management'
+                        OR (action.visibility_setting = 'owner_only' AND action.owner_staff_id = @currentStaffId)
+                        OR (action.visibility_setting = 'source_editors' AND (
+                            action.created_by_user_account_id = @currentUserAccountId
+                            OR record.owner_staff_id = @currentStaffId
+                        ))
+                        OR (action.visibility_setting = 'management_only' AND @canViewScopedActivities = 1)
+                  )
+            )
+            SELECT
+                staff_id,
+                SUM(CASE
+                    WHEN completed_date IS NULL AND COALESCE(status_key, 'open') NOT IN ('complete', 'cancelled') THEN 1
+                    ELSE 0
+                END) AS open_action_count,
+                SUM(CASE
+                    WHEN completed_date IS NULL
+                         AND COALESCE(status_key, 'open') NOT IN ('complete', 'cancelled')
+                         AND due_date < CAST(sysutcdatetime() AS date) THEN 1
+                    ELSE 0
+                END) AS overdue_action_count
+            FROM permitted_actions
+            GROUP BY staff_id;
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("@memberIdsJson", memberIdsJson);
+                AddScopeParameters(command, currentUser);
+            },
+            reader => new MyTeamActionCountRow(reader.GetGuid(0), reader.GetInt32(1), reader.GetInt32(2)),
+            cancellationToken);
+
+        return members.Select(member =>
+        {
+            var memberAssignments = orgAssignments.Where(assignment => assignment.StaffId == member.StaffId).ToArray();
+            var memberActionCounts = actionCounts.FirstOrDefault(count => count.StaffId == member.StaffId);
+
+            return new MyTeamMemberSummary(
+                member.StaffId,
+                member.ExternalId,
+                member.DisplayName,
+                member.Email,
+                member.AccountStatus,
+                memberAssignments
+                    .Select(assignment => new MyTeamOrgUnitSummary(assignment.FacultyId, assignment.FacultyCode, assignment.FacultyName))
+                    .DistinctBy(unit => unit.Id)
+                    .OrderBy(unit => unit.Name)
+                    .ToArray(),
+                memberAssignments
+                    .Where(assignment => assignment.TeamId.HasValue)
+                    .Select(assignment => new MyTeamOrgUnitSummary(assignment.TeamId!.Value, assignment.TeamCode!, assignment.TeamName!))
+                    .DistinctBy(unit => unit.Id)
+                    .OrderBy(unit => unit.Name)
+                    .ToArray(),
+                roles.Where(role => role.StaffId == member.StaffId).Select(role => role.RoleName).ToArray(),
+                memberActionCounts?.OpenActionCount ?? 0,
+                memberActionCounts?.OverdueActionCount ?? 0,
+                canOpenProfiles ? member.ElevateJudgement : null,
+                canOpenProfiles,
+                MyTeamAccessPolicy.CanManageActions(currentUser));
+        }).ToArray();
     }
 
     public async Task<Guid> CreateRecordAsync(CreateRecordRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
@@ -2351,16 +2452,81 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
     public async Task<Guid> CreateActionAsync(CreateActionRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
+        var ownerOptions = await GetActionOwnerOptionsAsync(
+            request.SourceRecordId,
+            request.SubjectStaffId,
+            currentUser,
+            cancellationToken);
+        if (!ownerOptions.Any(option => option.StaffId == request.OwnerStaffId))
+        {
+            throw new WorkflowValidationException("The selected owner is not available for this action and your access scope.");
+        }
+
+        var sourceSubRecordType = request.SourceSubRecordType
+            ?? (request.LivVisitId.HasValue ? "liv_visit" : null);
+        var sourceSubRecordId = request.SourceSubRecordId ?? request.LivVisitId;
+        var visibilitySetting = NormalizeActionVisibility(request.VisibilitySetting, request.PublishedToStaff);
+
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
         try
         {
+            if (string.Equals(sourceSubRecordType, "liv_visit", StringComparison.OrdinalIgnoreCase)
+                && sourceSubRecordId.HasValue)
+            {
+                await using var validationCommand = new SqlCommand(
+                    """
+                    SELECT COUNT(*)
+                    FROM quality.liv_visits visit
+                    JOIN quality.liv_records liv ON liv.id = visit.liv_record_id
+                    WHERE visit.id = @livVisitId
+                      AND liv.record_id = @sourceRecordId
+                      AND visit.archived_at IS NULL
+                      AND liv.archived_at IS NULL;
+                    """,
+                    connection,
+                    (SqlTransaction)transaction);
+                validationCommand.Parameters.AddWithValue("@livVisitId", sourceSubRecordId.Value);
+                validationCommand.Parameters.AddWithValue("@sourceRecordId", ToDbValue(request.SourceRecordId));
+                if (Convert.ToInt32(await validationCommand.ExecuteScalarAsync(cancellationToken)) != 1)
+                {
+                    throw new WorkflowValidationException("The selected LIV visit does not belong to the source record.");
+                }
+            }
+
+            if (request.SourceRecordId.HasValue && !request.DueDate.HasValue)
+            {
+                await using var dueDateCommand = new SqlCommand(
+                    """
+                    SELECT record_type
+                    FROM core.records
+                    WHERE id = @sourceRecordId
+                      AND archived_at IS NULL;
+                    """,
+                    connection,
+                    (SqlTransaction)transaction);
+                dueDateCommand.Parameters.AddWithValue("@sourceRecordId", request.SourceRecordId.Value);
+                var sourceRecordType = await dueDateCommand.ExecuteScalarAsync(cancellationToken) as string;
+                if (string.Equals(sourceRecordType, "learning_walk", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(sourceRecordType, "elevate_environment", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new WorkflowValidationException(
+                        string.Equals(sourceRecordType, "elevate_environment", StringComparison.OrdinalIgnoreCase)
+                            ? "Learning Environment actions require a date for review."
+                            : "Learning Walk actions require an implementation date.");
+                }
+            }
+
             Guid actionId;
             await using (var command = new SqlCommand(
                 """
                 INSERT INTO quality.actions (
                     source_record_id,
+                    source_form_type,
+                    source_sub_record_type,
+                    source_sub_record_id,
+                    source_sub_record_key,
                     subject_staff_id,
                     owner_staff_id,
                     title,
@@ -2368,32 +2534,54 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     priority_lookup_value_id,
                     status_lookup_value_id,
                     due_date,
+                    original_due_date,
                     published_to_staff,
-                    created_by_user_account_id
+                    visibility_setting,
+                    created_by_user_account_id,
+                    liv_visit_id
                 )
                 OUTPUT inserted.id
                 VALUES (
                     @sourceRecordId,
+                    COALESCE(
+                        NULLIF(@sourceFormType, ''),
+                        (SELECT record_type FROM core.records WHERE id = @sourceRecordId),
+                        'standalone'),
+                    @sourceSubRecordType,
+                    @sourceSubRecordId,
+                    @sourceSubRecordKey,
                     @subjectStaffId,
                     @ownerStaffId,
                     @title,
                     @detail,
                     @priorityLookupValueId,
                     COALESCE(
-                        @statusLookupValueId,
+                        (SELECT value.id
+                         FROM core.lookup_values value
+                         JOIN core.lookup_types type ON type.id = value.lookup_type_id
+                         WHERE value.id = @statusLookupValueId
+                           AND type.lookup_key = 'action_status'
+                           AND value.value_key IN ('open', 'complete', 'extended', 'cancelled')),
                         (SELECT TOP (1) lv.id
                          FROM core.lookup_values lv
                          JOIN core.lookup_types lt ON lt.id = lv.lookup_type_id
                          WHERE lt.lookup_key = 'action_status' AND lv.value_key = 'open')),
                     @dueDate,
+                    @dueDate,
                     @publishedToStaff,
-                    @createdByUserAccountId
+                    @visibilitySetting,
+                    @createdByUserAccountId,
+                    CASE WHEN @sourceSubRecordType = 'liv_visit' THEN @sourceSubRecordId ELSE NULL END
                 );
                 """,
                 connection,
                 (SqlTransaction)transaction))
             {
                 command.Parameters.AddWithValue("@sourceRecordId", ToDbValue(request.SourceRecordId));
+                command.Parameters.AddWithValue("@sourceFormType", ToDbValue(request.SourceFormType));
+                command.Parameters.AddWithValue("@sourceSubRecordType", ToDbValue(sourceSubRecordType));
+                command.Parameters.AddWithValue("@sourceSubRecordId", ToDbValue(sourceSubRecordId));
+                command.Parameters.AddWithValue("@sourceSubRecordKey", ToDbValue(request.SourceSubRecordKey));
                 command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(request.SubjectStaffId));
                 command.Parameters.AddWithValue("@ownerStaffId", request.OwnerStaffId);
                 command.Parameters.AddWithValue("@title", request.Title);
@@ -2402,6 +2590,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 command.Parameters.AddWithValue("@statusLookupValueId", ToDbValue(request.StatusLookupValueId));
                 command.Parameters.AddWithValue("@dueDate", ToDbValue(request.DueDate));
                 command.Parameters.AddWithValue("@publishedToStaff", request.PublishedToStaff);
+                command.Parameters.AddWithValue("@visibilitySetting", visibilitySetting);
                 command.Parameters.AddWithValue("@createdByUserAccountId", ToDbValue(currentUser.UserAccountId));
 
                 actionId = (Guid)(await command.ExecuteScalarAsync(cancellationToken)
@@ -2424,6 +2613,10 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     detail = request.Detail,
                     ownerStaffId = request.OwnerStaffId,
                     dueDate = request.DueDate?.ToString("yyyy-MM-dd"),
+                    sourceFormType = request.SourceFormType,
+                    sourceSubRecordType,
+                    sourceSubRecordId,
+                    visibilitySetting,
                     status = "open"
                 }),
                 cancellationToken);
@@ -2444,6 +2637,15 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        if (request.OwnerStaffId.HasValue)
+        {
+            var ownerOptions = await GetActionOwnerOptionsAsync(null, null, currentUser, cancellationToken);
+            if (!ownerOptions.Any(option => option.StaffId == request.OwnerStaffId.Value))
+            {
+                throw new WorkflowValidationException("The selected owner is not available within your access scope.");
+            }
+        }
+
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
@@ -2453,9 +2655,10 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             await using (var command = new SqlCommand(
                 """
                 SELECT a.owner_staff_id, a.title, a.detail, a.due_date, a.completed_date, a.completion_note, a.source_record_id,
-                       status_value.value_key
+                       status_value.value_key, source_record.owner_staff_id, a.visibility_setting, a.cancellation_comments
                 FROM quality.actions a
                 LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
+                LEFT JOIN core.records source_record ON source_record.id = a.source_record_id
                 WHERE a.id = @actionId AND a.archived_at IS NULL;
                 """,
                 connection,
@@ -2476,21 +2679,36 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     GetDateOnlyOrNull(reader, 4),
                     GetStringOrNull(reader, 5),
                     GetGuidOrNull(reader, 6),
-                    GetStringOrNull(reader, 7));
+                    GetStringOrNull(reader, 7),
+                    GetGuidOrNull(reader, 8),
+                    reader.GetString(9),
+                    GetStringOrNull(reader, 10));
             }
 
             // The assigned owner can progress or complete their own action;
             // wider edits need actions.manage.
             var isOwner = currentUser.StaffId == action.OwnerStaffId;
+            var isSourceOwner = currentUser.StaffId.HasValue && currentUser.StaffId == action.SourceOwnerStaffId;
             var canManage = currentUser.HasPermission(PermissionKeys.ActionsManage);
-            if (!isOwner && !canManage)
+            if (!isOwner && !isSourceOwner && !canManage)
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return FormSubmissionUpdateResult.Forbidden;
             }
 
             var completing = string.Equals(request.Status, "complete", StringComparison.OrdinalIgnoreCase);
-            var reopening = string.Equals(request.Status, "open", StringComparison.OrdinalIgnoreCase) && action.CompletedDate.HasValue;
+            var cancelling = string.Equals(request.Status, "cancelled", StringComparison.OrdinalIgnoreCase);
+            var reopening = string.Equals(request.Status, "open", StringComparison.OrdinalIgnoreCase)
+                && (action.CompletedDate.HasValue || string.Equals(action.StatusKey, "cancelled", StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(request.Status)
+                && !new[] { "open", "complete", "cancelled" }.Contains(request.Status, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new WorkflowValidationException("Actions can be Open, Completed, Extended, or Cancelled. Use Extend to record an extension.");
+            }
+            if (cancelling && string.IsNullOrWhiteSpace(request.CancellationComments))
+            {
+                throw new WorkflowValidationException("Add a reason before cancelling the action.");
+            }
             if (reopening && !canManage)
             {
                 await transaction.RollbackAsync(cancellationToken);
@@ -2500,32 +2718,55 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             var newTitle = canManage && !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : action.Title;
             var newDetail = canManage ? (request.Detail ?? action.Detail) : action.Detail;
             var newDueDate = canManage ? (request.DueDate ?? action.DueDate) : action.DueDate;
+            var newOwnerStaffId = canManage && request.OwnerStaffId.HasValue ? request.OwnerStaffId.Value : action.OwnerStaffId;
+            var newVisibility = canManage && !string.IsNullOrWhiteSpace(request.VisibilitySetting)
+                ? NormalizeActionVisibility(request.VisibilitySetting, publishedToStaff: true)
+                : action.VisibilitySetting;
 
             await using (var command = new SqlCommand(
                 """
                 UPDATE quality.actions
                 SET title = @title,
                     detail = @detail,
+                    owner_staff_id = @ownerStaffId,
                     due_date = @dueDate,
+                    original_due_date = COALESCE(original_due_date, @dueDate),
+                    visibility_setting = @visibilitySetting,
+                    published_to_staff = CASE WHEN @visibilitySetting = 'source_editors' THEN 0 ELSE 1 END,
                     completed_date = CASE
                         WHEN @completing = 1 THEN COALESCE(completed_date, CONVERT(date, sysutcdatetime()))
-                        WHEN @reopening = 1 THEN NULL
+                        WHEN @reopening = 1 OR @cancelling = 1 THEN NULL
                         ELSE completed_date END,
                     completed_by_user_account_id = CASE
                         WHEN @completing = 1 THEN COALESCE(completed_by_user_account_id, @userAccountId)
-                        WHEN @reopening = 1 THEN NULL
+                        WHEN @reopening = 1 OR @cancelling = 1 THEN NULL
                         ELSE completed_by_user_account_id END,
                     completion_note = CASE
                         WHEN @completionNote IS NOT NULL THEN @completionNote
                         WHEN @reopening = 1 THEN NULL
                         ELSE completion_note END,
+                    cancelled_at = CASE
+                        WHEN @cancelling = 1 THEN sysutcdatetime()
+                        WHEN @reopening = 1 THEN NULL
+                        ELSE cancelled_at END,
+                    cancelled_by_user_account_id = CASE
+                        WHEN @cancelling = 1 THEN @userAccountId
+                        WHEN @reopening = 1 THEN NULL
+                        ELSE cancelled_by_user_account_id END,
+                    cancellation_comments = CASE
+                        WHEN @cancelling = 1 THEN @cancellationComments
+                        WHEN @reopening = 1 THEN NULL
+                        ELSE cancellation_comments END,
                     status_lookup_value_id = CASE
-                        WHEN @completing = 1 OR @reopening = 1 THEN
+                        WHEN @completing = 1 OR @reopening = 1 OR @cancelling = 1 THEN
                             (SELECT TOP (1) lv.id
                              FROM core.lookup_values lv
                              JOIN core.lookup_types lt ON lt.id = lv.lookup_type_id
                              WHERE lt.lookup_key = 'action_status'
-                               AND lv.value_key = CASE WHEN @completing = 1 THEN 'complete' ELSE 'open' END)
+                               AND lv.value_key = CASE
+                                   WHEN @completing = 1 THEN 'complete'
+                                   WHEN @cancelling = 1 THEN 'cancelled'
+                                   ELSE 'open' END)
                         ELSE status_lookup_value_id END,
                     updated_by_user_account_id = @userAccountId,
                     updated_at = sysutcdatetime()
@@ -2537,15 +2778,20 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 command.Parameters.AddWithValue("@actionId", actionId);
                 command.Parameters.AddWithValue("@title", newTitle);
                 command.Parameters.AddWithValue("@detail", ToDbValue(newDetail));
+                command.Parameters.AddWithValue("@ownerStaffId", newOwnerStaffId);
                 command.Parameters.AddWithValue("@dueDate", ToDbValue(newDueDate));
+                command.Parameters.AddWithValue("@visibilitySetting", newVisibility);
                 command.Parameters.AddWithValue("@completing", completing);
+                command.Parameters.AddWithValue("@cancelling", cancelling);
                 command.Parameters.AddWithValue("@reopening", reopening);
                 command.Parameters.AddWithValue("@completionNote", ToDbValue(request.CompletionNote));
+                command.Parameters.AddWithValue("@cancellationComments", ToDbValue(request.CancellationComments));
                 command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            var auditAction = completing ? "action.completed" : reopening ? "action.reopened" : "action.updated";
+            var auditAction = completing ? "action.completed" : cancelling ? "action.cancelled" : reopening ? "action.reopened" : "action.updated";
+            var auditVerb = completing ? "completed" : cancelling ? "cancelled" : reopening ? "reopened" : "updated";
             await WriteAuditAsync(
                 connection,
                 transaction,
@@ -2554,7 +2800,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 "action",
                 actionId,
                 auditAction,
-                $"Action '{newTitle}' {(completing ? "completed" : reopening ? "reopened" : "updated")} by {currentUser.DisplayName}.",
+                $"Action '{newTitle}' {auditVerb} by {currentUser.DisplayName}.",
                 JsonSerializer.Serialize(new
                 {
                     title = action.Title,
@@ -2571,7 +2817,10 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     dueDate = newDueDate?.ToString("yyyy-MM-dd"),
                     completedDate = completing ? DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd") : reopening ? null : action.CompletedDate?.ToString("yyyy-MM-dd"),
                     completionNote = request.CompletionNote ?? (reopening ? null : action.CompletionNote),
-                    status = completing ? "complete" : reopening ? "open" : action.StatusKey
+                    ownerStaffId = newOwnerStaffId,
+                    visibilitySetting = newVisibility,
+                    cancellationComments = cancelling ? request.CancellationComments : reopening ? null : action.CancellationComments,
+                    status = completing ? "complete" : cancelling ? "cancelled" : reopening ? "open" : action.StatusKey
                 }),
                 cancellationToken);
 
@@ -2585,6 +2834,315 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         }
     }
 
+    public async Task<FormSubmissionUpdateResult> ExtendActionAsync(
+        Guid actionId,
+        ExtendActionRequest request,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Reason))
+        {
+            throw new WorkflowValidationException("Enter a reason for extending the action.");
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            ActionExtensionEditInfo? action;
+            await using (var command = new SqlCommand(
+                """
+                SELECT action.owner_staff_id, action.due_date, action.completed_date,
+                       action.source_record_id, source_record.owner_staff_id, action.title,
+                       status.value_key
+                FROM quality.actions action WITH (UPDLOCK, HOLDLOCK)
+                LEFT JOIN core.records source_record ON source_record.id = action.source_record_id
+                LEFT JOIN core.lookup_values status ON status.id = action.status_lookup_value_id
+                WHERE action.id = @actionId AND action.archived_at IS NULL;
+                """,
+                connection,
+                transaction))
+            {
+                command.Parameters.AddWithValue("@actionId", actionId);
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                if (!await reader.ReadAsync(cancellationToken))
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return FormSubmissionUpdateResult.NotFound;
+                }
+
+                action = new ActionExtensionEditInfo(
+                    reader.GetGuid(0),
+                    GetDateOnlyOrNull(reader, 1),
+                    GetDateOnlyOrNull(reader, 2),
+                    GetGuidOrNull(reader, 3),
+                    GetGuidOrNull(reader, 4),
+                    reader.GetString(5),
+                    GetStringOrNull(reader, 6));
+            }
+
+            var canEdit = currentUser.HasPermission(PermissionKeys.ActionsManage)
+                || currentUser.StaffId == action.OwnerStaffId
+                || (currentUser.StaffId.HasValue && currentUser.StaffId == action.SourceOwnerStaffId);
+            if (!canEdit)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return FormSubmissionUpdateResult.Forbidden;
+            }
+
+            if (action.CompletedDate.HasValue)
+            {
+                throw new WorkflowValidationException("A completed action cannot be extended.");
+            }
+
+            if (string.Equals(action.StatusKey, "cancelled", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new WorkflowValidationException("A cancelled action cannot be extended. Reopen it first.");
+            }
+
+            if (!action.DueDate.HasValue)
+            {
+                throw new WorkflowValidationException("Set an action due date before recording an extension.");
+            }
+
+            if (request.DueDate <= action.DueDate.Value)
+            {
+                throw new WorkflowValidationException("The extended due date must be later than the current due date.");
+            }
+
+            await using (var command = new SqlCommand(
+                """
+                INSERT INTO quality.action_extensions (
+                    action_id, previous_due_date, extended_due_date, reason, created_by_user_account_id
+                )
+                VALUES (
+                    @actionId, @previousDueDate, @extendedDueDate, @reason, @userAccountId
+                );
+
+                UPDATE quality.actions
+                SET due_date = @extendedDueDate,
+                    original_due_date = COALESCE(original_due_date, @previousDueDate),
+                    revised_due_date = @extendedDueDate,
+                    status_lookup_value_id = (
+                        SELECT TOP (1) value.id
+                        FROM core.lookup_values value
+                        JOIN core.lookup_types type ON type.id = value.lookup_type_id
+                        WHERE type.lookup_key = 'action_status' AND value.value_key = 'extended'
+                    ),
+                    updated_by_user_account_id = @userAccountId,
+                    updated_at = sysutcdatetime()
+                WHERE id = @actionId;
+                """,
+                connection,
+                transaction))
+            {
+                command.Parameters.AddWithValue("@actionId", actionId);
+                command.Parameters.AddWithValue("@previousDueDate", action.DueDate.Value.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@extendedDueDate", request.DueDate.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@reason", request.Reason.Trim());
+                command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await WriteAuditAsync(
+                connection,
+                transaction,
+                currentUser.UserAccountId,
+                action.SourceRecordId,
+                "action",
+                actionId,
+                "action.extended",
+                $"Action '{action.Title}' extended by {currentUser.DisplayName}.",
+                JsonSerializer.Serialize(new { dueDate = action.DueDate.Value.ToString("yyyy-MM-dd") }),
+                JsonSerializer.Serialize(new { dueDate = request.DueDate.ToString("yyyy-MM-dd"), reason = request.Reason.Trim() }),
+                cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+            return FormSubmissionUpdateResult.Saved;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<ActionExtensionSummary>?> GetActionExtensionsAsync(
+        Guid actionId,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        var visibleActions = await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken);
+        if (!visibleActions.Any(action => action.Id == actionId))
+        {
+            return null;
+        }
+
+        return await QueryAsync(
+            """
+            SELECT extension.id, extension.previous_due_date, extension.extended_due_date,
+                   extension.reason, staff.display_name, extension.created_at
+            FROM quality.action_extensions extension
+            LEFT JOIN auth.user_accounts account ON account.id = extension.created_by_user_account_id
+            LEFT JOIN people.staff staff ON staff.id = account.staff_id
+            WHERE extension.action_id = @actionId
+            ORDER BY extension.created_at DESC, extension.id DESC;
+            """,
+            command => command.Parameters.AddWithValue("@actionId", actionId),
+            reader => new ActionExtensionSummary(
+                reader.GetGuid(0),
+                DateOnly.FromDateTime(reader.GetDateTime(1)),
+                DateOnly.FromDateTime(reader.GetDateTime(2)),
+                reader.GetString(3),
+                GetStringOrNull(reader, 4),
+                reader.GetFieldValue<DateTimeOffset>(5)),
+            cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ActionOwnerOptionSummary>> GetActionOwnerOptionsAsync(
+        Guid? sourceRecordId,
+        Guid? subjectStaffId,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        var staff = await GetStaffAsync(currentUser, cancellationToken);
+        var contextRows = await QueryAsync(
+            """
+            SELECT COALESCE(@subjectStaffId, record.subject_staff_id),
+                   record.owner_staff_id,
+                   creator_account.staff_id,
+                   subject.line_manager_staff_id
+            FROM (SELECT 1 AS anchor) anchor
+            LEFT JOIN core.records record ON record.id = @sourceRecordId AND record.archived_at IS NULL
+            LEFT JOIN auth.user_accounts creator_account ON creator_account.id = record.created_by_user_account_id
+            LEFT JOIN people.staff subject ON subject.id = COALESCE(@subjectStaffId, record.subject_staff_id);
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("@sourceRecordId", ToDbValue(sourceRecordId));
+                command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(subjectStaffId));
+            },
+            reader => new ActionOwnerContext(
+                GetGuidOrNull(reader, 0),
+                GetGuidOrNull(reader, 1),
+                GetGuidOrNull(reader, 2),
+                GetGuidOrNull(reader, 3)),
+            cancellationToken);
+        var context = contextRows.FirstOrDefault() ?? new ActionOwnerContext(subjectStaffId, null, null, null);
+
+        return staff
+            .Select(candidate => new ActionOwnerOptionSummary(
+                candidate.Id,
+                candidate.DisplayName,
+                candidate.Id == context.SubjectStaffId ? "Staff member"
+                    : candidate.Id == context.LineManagerStaffId ? "Manager"
+                    : candidate.Id == context.SourceOwnerStaffId ? "Form creator"
+                    : candidate.Id == context.CreatorStaffId ? "Record creator"
+                    : candidate.Id == currentUser.StaffId ? "You"
+                    : "Authorised staff",
+                candidate.PrimaryOrgUnitId,
+                null))
+            .OrderBy(option => option.Relationship == "Authorised staff")
+            .ThenBy(option => option.DisplayName)
+            .ToArray();
+    }
+
+    public async Task<FormSubmissionUpdateResult> DeleteActionAsync(
+        Guid actionId,
+        string reason,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        if (!currentUser.HasPermission(PermissionKeys.ActionsManage))
+        {
+            return FormSubmissionUpdateResult.Forbidden;
+        }
+
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new WorkflowValidationException("Add a reason before deleting the action.");
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = new SqlCommand(
+            """
+            UPDATE quality.actions
+            SET archived_at = sysutcdatetime(),
+                deleted_by_user_account_id = @userAccountId,
+                deletion_reason = @reason,
+                updated_by_user_account_id = @userAccountId,
+                updated_at = sysutcdatetime()
+            OUTPUT inserted.source_record_id, inserted.title
+            WHERE id = @actionId AND archived_at IS NULL;
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@actionId", actionId);
+        command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+        command.Parameters.AddWithValue("@reason", reason.Trim());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return FormSubmissionUpdateResult.NotFound;
+        }
+        var sourceRecordId = GetGuidOrNull(reader, 0);
+        var title = reader.GetString(1);
+        await reader.CloseAsync();
+
+        await WriteAuditAsync(
+            connection, transaction, currentUser.UserAccountId, sourceRecordId, "action", actionId,
+            "action.deleted", $"Action '{title}' deleted by {currentUser.DisplayName}.", null,
+            JsonSerializer.Serialize(new { reason = reason.Trim() }), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return FormSubmissionUpdateResult.Saved;
+    }
+
+    public async Task<FormSubmissionUpdateResult> RestoreActionAsync(
+        Guid actionId,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        if (!currentUser.HasPermission(PermissionKeys.ActionsManage))
+        {
+            return FormSubmissionUpdateResult.Forbidden;
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = new SqlCommand(
+            """
+            UPDATE quality.actions
+            SET archived_at = NULL,
+                deleted_by_user_account_id = NULL,
+                deletion_reason = NULL,
+                updated_by_user_account_id = @userAccountId,
+                updated_at = sysutcdatetime()
+            OUTPUT inserted.source_record_id, inserted.title
+            WHERE id = @actionId AND archived_at IS NOT NULL;
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@actionId", actionId);
+        command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return FormSubmissionUpdateResult.NotFound;
+        }
+        var sourceRecordId = GetGuidOrNull(reader, 0);
+        var title = reader.GetString(1);
+        await reader.CloseAsync();
+
+        await WriteAuditAsync(
+            connection, transaction, currentUser.UserAccountId, sourceRecordId, "action", actionId,
+            "action.restored", $"Action '{title}' restored by {currentUser.DisplayName}.", null, null, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return FormSubmissionUpdateResult.Saved;
+    }
+
     public Task<IReadOnlyList<LivRecordSummary>> GetLivRecordsAsync(CurrentUser currentUser, CancellationToken cancellationToken)
     {
         var canViewAllLiv = currentUser.HasPermission(PermissionKeys.LivManage)
@@ -2594,19 +3152,11 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
         return QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT
                 liv.id,
@@ -2642,10 +3192,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     OR liv.reviewer_staff_id = @currentStaffId
                     OR (
                         @canViewScopedLiv = 1
-                        AND EXISTS (
-                            SELECT 1 FROM scoped_org_units sou
-                            WHERE sou.org_unit_id = liv.org_unit_id
-                               OR sou.org_unit_id = subject_staff.primary_org_unit_id
+                        AND (
+                            EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = liv.org_unit_id)
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = liv.subject_staff_id)
                         )
                     )
               )
@@ -3285,8 +3834,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                         cancellationToken);
                 }
 
-                if (string.Equals(request.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(request.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase))
+                if (request.Actions is { Count: > 0 })
                 {
                     await CreateSubmissionActionsAsync(
                         connection,
@@ -3570,19 +4118,23 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            if (action == SubmissionLifecycle.ActionArchive
-                && string.Equals(submission.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase))
+            if (action == SubmissionLifecycle.ActionArchive)
             {
                 await using var archiveActionsCommand = new SqlCommand(
                     """
                     UPDATE quality.actions
                     SET archived_at = COALESCE(archived_at, sysutcdatetime()),
+                        deleted_by_user_account_id = @userAccountId,
+                        deletion_reason = @deletionReason,
+                        updated_by_user_account_id = @userAccountId,
                         updated_at = sysutcdatetime()
                     WHERE source_record_id = @recordId;
                     """,
                     connection,
                     (SqlTransaction)transaction);
                 archiveActionsCommand.Parameters.AddWithValue("@recordId", submission.RecordId);
+                archiveActionsCommand.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+                archiveActionsCommand.Parameters.AddWithValue("@deletionReason", $"Source {submission.RecordType.Replace('_', ' ')} record archived.");
                 await archiveActionsCommand.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -3611,7 +4163,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
     /// <summary>
     /// True when the staff member sits inside the current user's assigned
-    /// org-unit scopes (including child units) or reports to them directly.
+    /// org-unit scopes (including child units) or reports to them through the
+    /// recursive management hierarchy.
     /// Mirrors the visibility rules used by GetStaffAsync.
     /// </summary>
     public async Task<bool> IsStaffProfileInScopeAsync(
@@ -3621,42 +4174,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     {
         var rows = await QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
-            )
             SELECT 1
-            FROM people.staff s
-            WHERE s.id = @staffId
-              AND s.archived_at IS NULL
-              AND (
-                    s.id = @currentStaffId
-                    OR s.line_manager_staff_id = @currentStaffId
-                    OR EXISTS (SELECT 1 FROM scoped_org_units sou WHERE sou.org_unit_id = s.primary_org_unit_id)
-                    OR EXISTS (
-                        SELECT 1
-                        FROM org.staff_org_memberships som
-                        JOIN scoped_org_units sou ON sou.org_unit_id = som.org_unit_id
-                        WHERE som.staff_id = s.id
-                          AND som.archived_at IS NULL
-                    )
-              );
+            FROM org.fn_visible_staff(@currentUserAccountId) visible
+            WHERE visible.staff_id = @staffId;
             """,
             command =>
             {
                 command.Parameters.AddWithValue("@staffId", staffId);
                 command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
-                command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
             },
             reader => reader.GetInt32(0),
             cancellationToken);
@@ -3669,20 +4194,6 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         CancellationToken cancellationToken) =>
         QueryAsync(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
-            )
             SELECT
                 s.id,
                 s.external_id,
@@ -3711,35 +4222,12 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                    AND a.archived_at IS NULL
                    AND a.completed_date IS NULL) AS open_actions
             FROM people.staff s
+            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = s.id
             LEFT JOIN org.org_units ou ON ou.id = s.primary_org_unit_id
             WHERE s.archived_at IS NULL
-              AND (
-                    @canViewAll = 1
-                    OR s.id = @currentStaffId
-                    OR (
-                        @canViewScoped = 1
-                        AND (
-                            s.line_manager_staff_id = @currentStaffId
-                            OR EXISTS (SELECT 1 FROM scoped_org_units sou WHERE sou.org_unit_id = s.primary_org_unit_id)
-                            OR EXISTS (
-                                SELECT 1
-                                FROM org.staff_org_memberships som
-                                JOIN scoped_org_units sou ON sou.org_unit_id = som.org_unit_id
-                                WHERE som.staff_id = s.id
-                                  AND som.archived_at IS NULL
-                            )
-                        )
-                    )
-              )
             ORDER BY s.display_name;
             """,
-            command =>
-            {
-                command.Parameters.AddWithValue("@canViewAll", CanViewAllStaffProfiles(currentUser));
-                command.Parameters.AddWithValue("@canViewScoped", currentUser.HasPermission(PermissionKeys.ReportsViewScoped));
-                command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
-                command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
-            },
+            command => command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId)),
             reader => new StaffProfileRecordSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -5521,19 +6009,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
         await using (var command = new SqlCommand(
             """
-            WITH scoped_org_units AS (
-                SELECT org_unit_id
-                FROM auth.access_scopes
-                WHERE user_account_id = @currentUserAccountId
-                  AND scope_type = 'assigned_org_units'
-                  AND org_unit_id IS NOT NULL
-                  AND is_active = 1
-                  AND archived_at IS NULL
-                UNION ALL
-                SELECT child.id
-                FROM org.org_units child
-                JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
-                WHERE child.archived_at IS NULL
+            WITH visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT COUNT(*)
             FROM forms.form_templates template
@@ -5555,7 +6032,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
               AND faculty.archived_at IS NULL
               AND (
                     @canViewAll = 1
-                    OR EXISTS (SELECT 1 FROM scoped_org_units scoped WHERE scoped.org_unit_id = team.id)
+                    OR EXISTS (SELECT 1 FROM visible_org_units scoped WHERE scoped.org_unit_id = team.id)
                     OR EXISTS (
                         SELECT 1 FROM auth.access_scopes global_scope
                         WHERE global_scope.user_account_id = @currentUserAccountId
@@ -5564,6 +6041,13 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                           AND global_scope.archived_at IS NULL
                     )
                     OR current_staff.primary_org_unit_id = team.id
+                    OR EXISTS (
+                        SELECT 1
+                        FROM org.staff_org_memberships membership
+                        WHERE membership.staff_id = @currentStaffId
+                          AND membership.org_unit_id = team.id
+                          AND membership.archived_at IS NULL
+                    )
               );
             """,
             connection,
@@ -5752,20 +6236,27 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                    )
                     THROW 51000, 'Learning Walk actions require an implementation date.', 1;
 
+                ;WITH visible_staff AS (
+                    SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+                )
                 INSERT INTO quality.actions (
                     id,
                     source_record_id,
+                    source_form_type,
                     subject_staff_id,
                     owner_staff_id,
                     title,
                     status_lookup_value_id,
                     due_date,
+                    original_due_date,
                     published_to_staff,
+                    visibility_setting,
                     created_by_user_account_id
                 )
                 SELECT
                     @id,
                     @recordId,
+                    @recordType,
                     staff.id,
                     staff.id,
                     @title,
@@ -5777,22 +6268,46 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                           AND value.value_key = 'open'
                     ),
                     @dueDate,
+                    @dueDate,
                     1,
+                    'staff_and_management',
                     @createdByUserAccountId
                 FROM people.staff staff
                 WHERE staff.id = @ownerStaffId
                   AND staff.archived_at IS NULL
-                  AND staff.account_status = 'active';
+                  AND staff.account_status = 'active'
+                  AND (
+                      @canViewAll = 1
+                      OR staff.id = @currentStaffId
+                      OR EXISTS (SELECT 1 FROM visible_staff visible WHERE visible.staff_id = staff.id)
+                      OR EXISTS (
+                          SELECT 1
+                          FROM core.records source_record
+                          LEFT JOIN people.staff subject ON subject.id = source_record.subject_staff_id
+                          LEFT JOIN auth.user_accounts creator_account ON creator_account.id = source_record.created_by_user_account_id
+                          WHERE source_record.id = @recordId
+                            AND staff.id IN (
+                                source_record.subject_staff_id,
+                                source_record.owner_staff_id,
+                                creator_account.staff_id,
+                                subject.line_manager_staff_id
+                            )
+                      )
+                  );
                 """,
                 connection,
                 (SqlTransaction)transaction))
             {
                 command.Parameters.AddWithValue("@id", actionId);
                 command.Parameters.AddWithValue("@recordId", recordId);
+                command.Parameters.AddWithValue("@recordType", recordType);
                 command.Parameters.AddWithValue("@ownerStaffId", action.OwnerStaffId);
                 command.Parameters.AddWithValue("@title", action.Title.Trim());
                 command.Parameters.AddWithValue("@dueDate", action.DueDate.ToDateTime(TimeOnly.MinValue));
                 command.Parameters.AddWithValue("@createdByUserAccountId", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
+                command.Parameters.AddWithValue("@canViewAll", CanViewAllRecords(currentUser));
                 if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
                 {
                     throw new WorkflowValidationException("One of the selected action owners is not an active staff member.");
@@ -5807,7 +6322,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 "action",
                 actionId,
                 "action.created",
-                $"{(string.Equals(recordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase) ? "Work Scrutiny" : "Learning Walk")} action '{action.Title.Trim()}' created by {currentUser.DisplayName}.",
+                $"{recordType.Replace('_', ' ')} action '{action.Title.Trim()}' created by {currentUser.DisplayName}.",
                 null,
                 JsonSerializer.Serialize(new
                 {
@@ -5859,16 +6374,20 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     theme.name,
                     theme_group.name,
                     (theme_group.display_order * 10000) + theme.display_order
-                FROM quality.learning_walk_themes theme
-                JOIN quality.learning_walk_theme_groups theme_group ON theme_group.id = theme.theme_group_id
+                FROM core.themes theme
+                JOIN core.theme_groups theme_group ON theme_group.id = theme.theme_group_id
+                JOIN core.theme_applications application ON application.theme_id = theme.id
+                    AND application.application_key = 'learning_walk'
                 WHERE theme.id = @themeId
                   AND theme.archived_at IS NULL
                   AND theme_group.archived_at IS NULL
                   AND (@requireActiveThemes = 0 OR (theme.is_active = 1 AND theme_group.is_active = 1));
 
                 SELECT theme.is_other
-                FROM quality.learning_walk_themes theme
-                JOIN quality.learning_walk_theme_groups theme_group ON theme_group.id = theme.theme_group_id
+                FROM core.themes theme
+                JOIN core.theme_groups theme_group ON theme_group.id = theme.theme_group_id
+                JOIN core.theme_applications application ON application.theme_id = theme.id
+                    AND application.application_key = 'learning_walk'
                 WHERE theme.id = @themeId
                   AND theme.archived_at IS NULL
                   AND theme_group.archived_at IS NULL
@@ -6149,6 +6668,38 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 throw new WorkflowValidationException("Select a room from the room register.");
             }
 
+            var intendedPurposes = valuesByFieldKey.TryGetValue("intended_purpose", out var purposeValue)
+                ? purposeValue.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+                : [];
+            if (intendedPurposes.Length == 0)
+            {
+                throw new WorkflowValidationException("Select at least one intended purpose.");
+            }
+
+            await using (var command = new SqlCommand(
+                """
+                SELECT COUNT(*)
+                FROM core.lookup_values value
+                JOIN core.lookup_types type ON type.id = value.lookup_type_id
+                WHERE type.lookup_key = 'elevate_environment_purpose'
+                  AND type.is_active = 1
+                  AND type.archived_at IS NULL
+                  AND value.is_active = 1
+                  AND value.archived_at IS NULL
+                  AND value.display_name IN (SELECT value FROM STRING_SPLIT(@purposes, '|'));
+                """,
+                connection,
+                (SqlTransaction)transaction))
+            {
+                command.Parameters.AddWithValue("@purposes", string.Join('|', intendedPurposes));
+                if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != intendedPurposes.Length)
+                {
+                    throw new WorkflowValidationException("Select intended purposes from the active administrator-controlled list.");
+                }
+            }
+
             var valueKeys = new[] { "aspirational", "collaborative", "respectful", "innovative", "inclusion" };
             var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var valueKey in valueKeys)
@@ -6392,6 +6943,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 BEGIN
                     UPDATE quality.actions
                     SET archived_at = sysutcdatetime(),
+                        deleted_by_user_account_id = @currentUserAccountId,
+                        deletion_reason = 'Removed from the Learning Environment record.',
                         updated_by_user_account_id = @currentUserAccountId,
                         updated_at = sysutcdatetime()
                     WHERE id = @actionId;
@@ -6407,7 +6960,15 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     title = @actionTitle,
                     detail = @actionDetail,
                     due_date = @targetDate,
+                    original_due_date = COALESCE(original_due_date, @targetDate),
+                    revised_due_date = CASE WHEN original_due_date IS NOT NULL AND original_due_date <> @targetDate THEN @targetDate ELSE revised_due_date END,
+                    source_form_type = 'elevate_environment',
+                    source_sub_record_type = 'environment_pillar',
+                    source_sub_record_key = @valueKey,
+                    visibility_setting = 'staff_and_management',
                     archived_at = NULL,
+                    deleted_by_user_account_id = NULL,
+                    deletion_reason = NULL,
                     updated_by_user_account_id = @currentUserAccountId,
                     updated_at = sysutcdatetime()
                 WHERE id = @actionId;
@@ -6419,23 +6980,33 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 INSERT INTO quality.actions (
                     id,
                     source_record_id,
+                    source_form_type,
+                    source_sub_record_type,
+                    source_sub_record_key,
                     owner_staff_id,
                     title,
                     detail,
                     status_lookup_value_id,
                     due_date,
+                    original_due_date,
                     published_to_staff,
+                    visibility_setting,
                     created_by_user_account_id
                 )
                 SELECT
                     @actionId,
                     @recordId,
+                    'elevate_environment',
+                    'environment_pillar',
+                    @valueKey,
                     @ownerStaffId,
                     @actionTitle,
                     @actionDetail,
                     lookup_value.id,
                     @targetDate,
+                    @targetDate,
                     1,
+                    'staff_and_management',
                     @currentUserAccountId
                 FROM core.lookup_values lookup_value
                 JOIN core.lookup_types lookup_type ON lookup_type.id = lookup_value.lookup_type_id
@@ -6643,6 +7214,46 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    private static async Task WriteAuditWithReasonAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid? userAccountId,
+        Guid? recordId,
+        string entityName,
+        Guid? entityId,
+        string action,
+        string summary,
+        string? beforeJson,
+        string? afterJson,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            INSERT INTO ops.audit_logs (
+                user_account_id, record_id, entity_name, entity_id, action,
+                summary, before_json, after_json, reason
+            )
+            VALUES (
+                @userAccountId, @recordId, @entityName, @entityId, @action,
+                @summary, @beforeJson, @afterJson, @reason
+            );
+            """,
+            connection,
+            (SqlTransaction)transaction);
+
+        command.Parameters.AddWithValue("@userAccountId", ToDbValue(userAccountId));
+        command.Parameters.AddWithValue("@recordId", ToDbValue(recordId));
+        command.Parameters.AddWithValue("@entityName", entityName);
+        command.Parameters.AddWithValue("@entityId", ToDbValue(entityId));
+        command.Parameters.AddWithValue("@action", action);
+        command.Parameters.AddWithValue("@summary", summary);
+        command.Parameters.AddWithValue("@beforeJson", ToDbValue(beforeJson));
+        command.Parameters.AddWithValue("@afterJson", ToDbValue(afterJson));
+        command.Parameters.AddWithValue("@reason", ToDbValue(reason));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private async Task<IReadOnlyList<T>> QueryAsync<T>(
         string sql,
         Func<SqlDataReader, T> map,
@@ -6697,6 +7308,16 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         || currentUser.HasPermission(PermissionKeys.CoachingSubmit)
         || currentUser.HasPermission(PermissionKeys.CoachingManage)
         || currentUser.HasPermission(PermissionKeys.ActionsManage);
+
+    private static string NormalizeActionVisibility(string? visibilitySetting, bool publishedToStaff)
+    {
+        var normalized = string.IsNullOrWhiteSpace(visibilitySetting)
+            ? (publishedToStaff ? "staff_and_management" : "source_editors")
+            : visibilitySetting.Trim().ToLowerInvariant();
+        return normalized is "owner_only" or "staff_and_management" or "management_only" or "source_editors"
+            ? normalized
+            : throw new WorkflowValidationException("Select a valid action visibility setting.");
+    }
 
     private async Task<SqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
@@ -6765,6 +7386,23 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     }
 
     private sealed record LookupRow(string LookupKey, string Name, string? Value);
+    private sealed record MyTeamMemberRow(
+        Guid StaffId,
+        string ExternalId,
+        string DisplayName,
+        string Email,
+        string AccountStatus,
+        string? ElevateJudgement);
+    private sealed record MyTeamOrgAssignmentRow(
+        Guid StaffId,
+        Guid FacultyId,
+        string FacultyCode,
+        string FacultyName,
+        Guid? TeamId,
+        string? TeamCode,
+        string? TeamName);
+    private sealed record MyTeamRoleRow(Guid StaffId, string RoleName);
+    private sealed record MyTeamActionCountRow(Guid StaffId, int OpenActionCount, int OverdueActionCount);
     private sealed record LearningWalkThemeRow(
         Guid GroupId,
         string GroupKey,
@@ -6868,7 +7506,25 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         DateOnly? CompletedDate,
         string? CompletionNote,
         Guid? SourceRecordId,
+        string? StatusKey,
+        Guid? SourceOwnerStaffId,
+        string VisibilitySetting,
+        string? CancellationComments);
+
+    private sealed record ActionExtensionEditInfo(
+        Guid OwnerStaffId,
+        DateOnly? DueDate,
+        DateOnly? CompletedDate,
+        Guid? SourceRecordId,
+        Guid? SourceOwnerStaffId,
+        string Title,
         string? StatusKey);
+
+    private sealed record ActionOwnerContext(
+        Guid? SubjectStaffId,
+        Guid? SourceOwnerStaffId,
+        Guid? CreatorStaffId,
+        Guid? LineManagerStaffId);
 
     private sealed record LivEditInfo(
         Guid RecordId,

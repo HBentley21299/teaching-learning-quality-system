@@ -1,11 +1,17 @@
 import type {
   ActionSummary,
+  ActionExtensionSummary,
+  ActionOwnerOption,
+  AdminManagedList,
+  AdminOrganisationStaff,
+  AdminRecord,
   AdminWorkScrutinyRecord,
   AdminWorkScrutinyAction,
   AdminSaveElevatePracticeAssessmentRequest,
   AdminRoleSummary,
   AdminUserSummary,
   CoachingContext,
+  CoachingConfiguration,
   CoachingSessionDetail,
   CoachingSessionSaveSummary,
   CoachingSessionSummary,
@@ -15,6 +21,7 @@ import type {
   CreateFormTemplateRequest,
   CurrentUser,
   DashboardSummary,
+  ElevateEnvironmentPillarSummary,
   ElevatePracticeProgress,
   ElevatePracticeAudit,
   ElevatePracticeWorkspace,
@@ -27,6 +34,7 @@ import type {
   LookupSummary,
   LookupValueSummary,
   ModuleSummary,
+  MyTeamMember,
   OrgUnitSummary,
   ProcessDashboardRecordSummary,
   RecordDetail,
@@ -34,6 +42,9 @@ import type {
   RecordSummary,
   RoomSummary,
   SaveLivRecordRequest,
+  SaveManagerRelationshipRequest,
+  SaveOrganisationMembershipRequest,
+  SaveLivVisitRequest,
   SaveLearningWalkThemeRequest,
   SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
@@ -43,8 +54,10 @@ import type {
   StaffProfileSummary,
   StaffReflectionSummary,
   StaffSummary,
+  SharedThemeGroup,
   SubmitFormRequest,
   UpdateActionRequest,
+  ExtendActionRequest,
   UpdateAdminUserRequest,
   UpdateFormSubmissionRequest,
   UpdateFormTemplateStructureRequest,
@@ -121,6 +134,8 @@ export const api = {
   currentUser: () => getJson<CurrentUser>("/api/v1/me"),
   modules: () => getJson<ModuleSummary[]>("/api/v1/modules"),
   lookups: () => getJson<LookupSummary[]>("/api/v1/lookups"),
+  sharedThemes: (applicationKey: string) =>
+    getJson<SharedThemeGroup[]>(`/api/v1/themes/${encodeURIComponent(applicationKey)}`),
   adminLookupValues: (lookupKey: string) =>
     getJson<LookupValueSummary[]>(`/api/v1/admin/lookups/${encodeURIComponent(lookupKey)}/values`),
   addLookupValue: (lookupKey: string, displayName: string) =>
@@ -133,9 +148,12 @@ export const api = {
     sendJson(`/api/v1/admin/lookups/${encodeURIComponent(lookupKey)}/values/${id}/archive`, "POST"),
   orgUnits: () => getJson<OrgUnitSummary[]>("/api/v1/org-units"),
   rooms: () => getJson<RoomSummary[]>("/api/v1/rooms"),
+  elevateEnvironmentPillars: () =>
+    getJson<ElevateEnvironmentPillarSummary[]>("/api/v1/elevate-environment/pillars"),
   courses: (orgUnitId: string) =>
     getJson<CourseSummary[]>(`/api/v1/courses?orgUnitId=${encodeURIComponent(orgUnitId)}`),
   staff: () => getJson<StaffSummary[]>("/api/v1/staff"),
+  myTeam: () => getJson<MyTeamMember[]>("/api/v1/my-team"),
   records: () => getJson<RecordSummary[]>("/api/v1/records"),
   recordDetail: (id: string) => getJson<RecordDetail>(`/api/v1/records/${id}`),
   adminWorkScrutinyRecords: () =>
@@ -150,9 +168,20 @@ export const api = {
     sendJson(`/api/v1/admin/work-scrutiny/records/${id}`, "DELETE"),
   restoreWorkScrutinyRecord: (id: string) =>
     sendJson(`/api/v1/admin/work-scrutiny/records/${id}/restore`, "POST"),
-  actions: () => getJson<ActionSummary[]>("/api/v1/actions"),
+  actions: (includeDeleted = false) => getJson<ActionSummary[]>(`/api/v1/actions${includeDeleted ? "?includeDeleted=true" : ""}`),
+  actionOwnerOptions: (sourceRecordId?: string, subjectStaffId?: string) => {
+    const parameters = new URLSearchParams();
+    if (sourceRecordId) parameters.set("sourceRecordId", sourceRecordId);
+    if (subjectStaffId) parameters.set("subjectStaffId", subjectStaffId);
+    const query = parameters.toString();
+    return getJson<ActionOwnerOption[]>(`/api/v1/actions/owner-options${query ? `?${query}` : ""}`);
+  },
   createAction: (request: CreateActionRequest) => sendJson("/api/v1/actions", "POST", request),
   updateAction: (id: string, request: UpdateActionRequest) => sendJson(`/api/v1/actions/${id}`, "PUT", request),
+  extendAction: (id: string, request: ExtendActionRequest) => sendJson(`/api/v1/actions/${id}/extend`, "POST", request),
+  actionExtensions: (id: string) => getJson<ActionExtensionSummary[]>(`/api/v1/actions/${id}/extensions`),
+  deleteAction: (id: string, reason: string) => sendJson(`/api/v1/actions/${id}`, "DELETE", { reason }),
+  restoreAction: (id: string) => sendJson(`/api/v1/actions/${id}/restore`, "POST"),
   dashboards: () => getJson<DashboardSummary[]>("/api/v1/reports/dashboards"),
   processDashboardRecords: () =>
     getJson<ProcessDashboardRecordSummary[]>("/api/v1/reports/process-records"),
@@ -192,7 +221,11 @@ export const api = {
   createLivRecord: (request: SaveLivRecordRequest) => sendJson("/api/v1/liv-records", "POST", request),
   updateLivRecord: (id: string, request: SaveLivRecordRequest) =>
     sendJson(`/api/v1/liv-records/${id}`, "PUT", request),
-  changeLivStatus: (id: string, action: "submit" | "close" | "reopen" | "archive") =>
+  addLivVisit: (id: string, request: SaveLivVisitRequest) =>
+    sendJson<SaveLivVisitRequest, { id: string; visitNumber: number }>(`/api/v1/liv-records/${id}/visits`, "POST", request),
+  updateLivVisit: (id: string, visitId: string, request: SaveLivVisitRequest) =>
+    sendJson(`/api/v1/liv-records/${id}/visits/${visitId}`, "PUT", request),
+  changeLivStatus: (id: string, action: "close" | "reopen" | "archive") =>
     sendJson(`/api/v1/liv-records/${id}/status`, "POST", { action }),
   staffProfiles: () =>
     getJson<StaffProfileSummary[]>("/api/v1/reports/staff-profile-summaries"),
@@ -216,7 +249,10 @@ export const api = {
     getJson<ElevatePracticeAudit[]>(`/api/v1/elevate-practice/admin/records/${assessmentId}/audit`),
   elevatePracticeResult: (staffId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/latest`),
+  elevatePracticeRecord: (recordId: string) =>
+    getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/records/${recordId}`),
   coachingSessions: () => getJson<CoachingSessionSummary[]>("/api/v1/coaching/sessions"),
+  coachingConfiguration: () => getJson<CoachingConfiguration>("/api/v1/coaching/configuration"),
   coachingSession: (id: string) => getJson<CoachingSessionDetail>(`/api/v1/coaching/sessions/${id}`),
   coachingContext: (staffId: string, cycleId?: string) =>
     getJson<CoachingContext>(
@@ -235,6 +271,40 @@ export const api = {
       request
     ),
   adminUsers: () => getJson<AdminUserSummary[]>("/api/v1/admin/users"),
+  adminOrganisationStaff: () =>
+    getJson<AdminOrganisationStaff[]>("/api/v1/admin/organisation/staff"),
+  saveOrganisationMembership: (staffId: string, request: SaveOrganisationMembershipRequest) =>
+    sendJson<SaveOrganisationMembershipRequest, { id: string }>(
+      `/api/v1/admin/organisation/staff/${staffId}/memberships`,
+      "POST",
+      request
+    ),
+  setPrimaryOrganisationMembership: (staffId: string, membershipId: string) =>
+    sendJson(`/api/v1/admin/organisation/staff/${staffId}/memberships/${membershipId}/primary`, "POST"),
+  archiveOrganisationMembership: (staffId: string, membershipId: string, reason: string) =>
+    sendJson(`/api/v1/admin/organisation/staff/${staffId}/memberships/${membershipId}/archive`, "POST", { reason }),
+  saveManagerRelationship: (staffId: string, request: SaveManagerRelationshipRequest) =>
+    sendJson<SaveManagerRelationshipRequest, { id: string }>(
+      `/api/v1/admin/organisation/staff/${staffId}/managers`,
+      "POST",
+      request
+    ),
+  archiveManagerRelationship: (staffId: string, relationshipId: string, reason: string) =>
+    sendJson(`/api/v1/admin/organisation/staff/${staffId}/managers/${relationshipId}/archive`, "POST", { reason }),
+  adminManagedLists: () => getJson<AdminManagedList[]>("/api/v1/admin/lists"),
+  updateManagedListValue: (lookupKey: string, id: string, displayName: string) =>
+    sendJson(`/api/v1/admin/lists/${encodeURIComponent(lookupKey)}/values/${id}`, "PUT", { displayName }),
+  setManagedListValueStatus: (lookupKey: string, id: string, isActive: boolean) =>
+    sendJson(`/api/v1/admin/lists/${encodeURIComponent(lookupKey)}/values/${id}/status`, "POST", { isActive }),
+  reorderManagedListValues: (lookupKey: string, valueIds: string[]) =>
+    sendJson(`/api/v1/admin/lists/${encodeURIComponent(lookupKey)}/values/reorder`, "PUT", { valueIds }),
+  adminRecords: () => getJson<AdminRecord[]>("/api/v1/admin/records"),
+  adminRecordAudit: (recordId: string) =>
+    getJson<RecordAudit[]>(`/api/v1/admin/records/${recordId}/audit`),
+  archiveAdminRecord: (recordId: string, reason: string) =>
+    sendJson(`/api/v1/admin/records/${recordId}/archive`, "POST", { reason }),
+  restoreAdminRecord: (recordId: string, reason: string) =>
+    sendJson(`/api/v1/admin/records/${recordId}/restore`, "POST", { reason }),
   createAdminUser: (request: CreateAdminUserRequest) => sendJson("/api/v1/admin/users", "POST", request),
   updateAdminUser: (id: string, request: UpdateAdminUserRequest) =>
     sendJson(`/api/v1/admin/users/${id}`, "PUT", request),

@@ -1,9 +1,10 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Database, Edit3, FileText, LayoutDashboard, ListChecks, Plus, RefreshCw, Save, Search, ShieldCheck, SlidersHorizontal, Sparkles, Tags, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
   AdminRoleSummary,
+  AdminRecord,
   AdminUserSummary,
   CurrentUser,
   LearningWalkTheme,
@@ -17,17 +18,22 @@ import type {
 import { FormBuilder } from "./FormBuilder";
 import { AdminElevatePractice } from "./AdminElevatePractice";
 import { AdminWorkScrutiny } from "./AdminWorkScrutiny";
+import { AdminManagedLists } from "./AdminManagedLists";
+import { AdminRecordsPanel } from "./AdminRecordsPanel";
+import { OrganisationStructureAdmin } from "./OrganisationStructureAdmin";
 
 export function AdminCentre({
   user,
   modules,
   profiles,
-  staff
+  staff,
+  onOpenRecord
 }: {
   user: CurrentUser;
   modules: ModuleSummary[];
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
+  onOpenRecord: (record: AdminRecord) => void;
 }) {
   const [activeTab, setActiveTab] = useState<AdminTabKey>("overview");
   const permissionRows = [
@@ -38,7 +44,29 @@ export function AdminCentre({
     ["Programme Leader", "Team records, actions and dashboards", "Assigned team"],
     ["Tutor", "Own profile, records and actions", "Self"]
   ];
-  const canUseAdmin = user.permissions.includes("users.manage") || user.permissions.includes("permissions.manage");
+  const canManagePeople = user.permissions.includes("users.manage") || user.permissions.includes("permissions.manage");
+  const canManageOrganisation = user.permissions.includes("organisation.manage");
+  const canManageLists = user.permissions.includes("lists.manage");
+  const canManageForms = user.permissions.includes("forms.manage");
+  const canManageRecords = user.permissions.includes("records.manage");
+  const canUseAdmin = canManagePeople || canManageOrganisation || canManageLists || canManageForms || canManageRecords;
+  const tabAccess: Record<AdminTabKey, boolean> = {
+    overview: canUseAdmin,
+    "staff-access": canManagePeople,
+    organisation: canManageOrganisation,
+    lists: canManageLists,
+    forms: canManageForms,
+    elevate: canManageRecords || user.permissions.includes("users.manage"),
+    records: canManageRecords,
+    dashboards: canManageRecords
+  };
+  const visibleTabs = adminTabs.filter((tab) => tabAccess[tab.key]);
+
+  useEffect(() => {
+    if (!tabAccess[activeTab]) {
+      setActiveTab(visibleTabs[0]?.key ?? "overview");
+    }
+  }, [activeTab, tabAccess, visibleTabs]);
 
   if (!canUseAdmin) {
     return (
@@ -70,7 +98,7 @@ export function AdminCentre({
       </div>
 
       <div className="admin-tab-bar" role="tablist" aria-label="Admin centre sections">
-        {adminTabs.map((tab) => {
+        {visibleTabs.map((tab) => {
           const Icon = tab.icon;
           return (
             <button
@@ -91,39 +119,32 @@ export function AdminCentre({
       {activeTab === "overview" ? (
         <AdminOverview
           modules={modules}
-          onOpenLookups={() => setActiveTab("lookups")}
+          onOpenLookups={() => setActiveTab("lists")}
           permissionRows={permissionRows}
           user={user}
         />
       ) : null}
-      {activeTab === "staff" ? <StaffAdminPanel user={user} /> : null}
-      {activeTab === "permissions" ? <PermissionAdminPanel user={user} /> : null}
-      {activeTab === "lookups" ? <LookupAdminPanel /> : null}
-      {activeTab === "learning-walk-themes" ? <LearningWalkThemeAdminPanel /> : null}
+      {activeTab === "staff-access" ? <div className="route-stack"><StaffAdminPanel user={user} /><PermissionAdminPanel user={user} /></div> : null}
+      {activeTab === "organisation" ? <OrganisationStructureAdmin /> : null}
+      {activeTab === "lists" ? <div className="route-stack"><AdminManagedLists /><LearningWalkThemeAdminPanel /></div> : null}
       {activeTab === "forms" ? <FormBuilder embedded user={user} /> : null}
       {activeTab === "elevate" ? <AdminElevatePractice /> : null}
-      {activeTab === "records" ? (
-        <div className="route-stack">
-          <AdminWorkScrutiny />
-          <RecordCorrectionPanel profiles={profiles} staff={staff} />
-        </div>
-      ) : null}
+      {activeTab === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
       {activeTab === "dashboards" ? <DashboardAdminPanel /> : null}
     </div>
   );
 }
 
-type AdminTabKey = "overview" | "staff" | "permissions" | "lookups" | "learning-walk-themes" | "forms" | "elevate" | "records" | "dashboards";
+type AdminTabKey = "overview" | "staff-access" | "organisation" | "lists" | "forms" | "elevate" | "records" | "dashboards";
 
 const adminTabs: Array<{ key: AdminTabKey; label: string; icon: typeof SlidersHorizontal }> = [
   { key: "overview", label: "Overview", icon: SlidersHorizontal },
-  { key: "staff", label: "Staff accounts", icon: UserCog },
-  { key: "permissions", label: "Permissions", icon: ShieldCheck },
-  { key: "lookups", label: "Lookups", icon: ListChecks },
-  { key: "learning-walk-themes", label: "Learning Walk themes", icon: Tags },
+  { key: "staff-access", label: "Staff & Access", icon: UserCog },
+  { key: "organisation", label: "Organisation Structure", icon: Building2 },
+  { key: "lists", label: "Admin Lists", icon: ListChecks },
   { key: "forms", label: "Forms", icon: FileText },
-  { key: "elevate", label: "Elevate records", icon: Sparkles },
-  { key: "records", label: "Submitted records", icon: Database },
+  { key: "elevate", label: "Elevate Records", icon: Sparkles },
+  { key: "records", label: "Records", icon: Database },
   { key: "dashboards", label: "Dashboards", icon: LayoutDashboard }
 ];
 
@@ -178,6 +199,10 @@ function AdminOverview({
           </div>
           <div className="lookup-list">
             <button className="lookup-row" onClick={onOpenLookups} type="button">CPD themes</button>
+            <button className="lookup-row" onClick={onOpenLookups} type="button">Learning Environment purposes</button>
+            <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching development stages</button>
+            <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching focus areas</button>
+            <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching support types</button>
           </div>
         </section>
       </div>
@@ -202,92 +227,161 @@ function AdminOverview({
 }
 
 function LookupAdminPanel() {
-  const [themes, setThemes] = useState<Awaited<ReturnType<typeof api.adminLookupValues>>>([]);
-  const [newTheme, setNewTheme] = useState("");
+  return (
+    <div className="route-stack">
+      <LookupValueAdminSection
+        addLabel="Add theme"
+        emptyPrompt="Enter a CPD theme before adding it."
+        inputLabel="New theme"
+        lookupKey="cpd_theme"
+        placeholder="Enter CPD theme"
+        title="CPD themes"
+        valueLabel="CPD theme"
+      />
+      <LookupValueAdminSection
+        addLabel="Add purpose"
+        emptyPrompt="Enter a Learning Environment purpose before adding it."
+        inputLabel="New intended purpose"
+        lookupKey="elevate_environment_purpose"
+        placeholder="Enter intended purpose"
+        title="Learning Environment purposes"
+        valueLabel="intended purpose"
+      />
+      <LookupValueAdminSection
+        addLabel="Add stage"
+        emptyPrompt="Enter a staff development stage before adding it."
+        inputLabel="New development stage"
+        lookupKey="coaching_development_stage"
+        placeholder="Enter development stage"
+        title="Coaching development stages"
+        valueLabel="development stage"
+      />
+      <LookupValueAdminSection
+        addLabel="Add focus area"
+        emptyPrompt="Enter a coaching focus area before adding it."
+        inputLabel="New focus area"
+        lookupKey="coaching_focus_area"
+        placeholder="Enter focus area"
+        title="Coaching focus areas"
+        valueLabel="focus area"
+      />
+      <LookupValueAdminSection
+        addLabel="Add support type"
+        emptyPrompt="Enter a coaching support type before adding it."
+        inputLabel="New support type"
+        lookupKey="coaching_support_type"
+        placeholder="Enter support type"
+        title="Coaching support types"
+        valueLabel="support type"
+      />
+    </div>
+  );
+}
+
+function LookupValueAdminSection({
+  addLabel,
+  emptyPrompt,
+  inputLabel,
+  lookupKey,
+  placeholder,
+  title,
+  valueLabel
+}: {
+  addLabel: string;
+  emptyPrompt: string;
+  inputLabel: string;
+  lookupKey: string;
+  placeholder: string;
+  title: string;
+  valueLabel: string;
+}) {
+  const [values, setValues] = useState<Awaited<ReturnType<typeof api.adminLookupValues>>>([]);
+  const [newValue, setNewValue] = useState("");
   const [status, setStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    void refreshThemes();
-  }, []);
+    void refreshValues();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lookupKey]);
 
-  async function refreshThemes(nextStatus = "") {
+  async function refreshValues(nextStatus = "") {
     try {
-      setThemes(await api.adminLookupValues("cpd_theme"));
+      setValues(await api.adminLookupValues(lookupKey));
       setStatus(nextStatus);
     } catch {
-      setStatus("CPD themes could not be loaded from the API.");
+      setStatus(`${title} could not be loaded from the API.`);
     }
   }
 
-  async function addTheme() {
-    if (!newTheme.trim()) {
-      setStatus("Enter a CPD theme before adding it.");
+  async function addValue() {
+    if (!newValue.trim()) {
+      setStatus(emptyPrompt);
       return;
     }
 
     setIsSaving(true);
-    const result = await api.addLookupValue("cpd_theme", newTheme.trim());
+    const result = await api.addLookupValue(lookupKey, newValue.trim());
     setIsSaving(false);
     if (!result.ok) {
-      setStatus(result.message ?? "The CPD theme could not be added.");
+      setStatus(result.message ?? `The ${valueLabel} could not be added.`);
       return;
     }
 
-    setNewTheme("");
-    await refreshThemes("CPD theme added.");
+    setNewValue("");
+    await refreshValues(`${capitalize(valueLabel)} added.`);
   }
 
-  async function removeTheme(id: string) {
+  async function removeValue(id: string) {
     setIsSaving(true);
-    const result = await api.archiveLookupValue("cpd_theme", id);
+    const result = await api.archiveLookupValue(lookupKey, id);
     setIsSaving(false);
     if (!result.ok) {
-      setStatus(result.message ?? "The CPD theme could not be removed.");
+      setStatus(result.message ?? `The ${valueLabel} could not be removed.`);
       return;
     }
 
-    await refreshThemes("CPD theme removed. Existing CPD records are unchanged.");
+    await refreshValues(`${capitalize(valueLabel)} removed. Existing records are unchanged.`);
   }
 
   return (
     <section className="panel">
       <div className="panel-heading">
-        <h2>CPD themes</h2>
-        <span>{themes.length} active</span>
+        <h2>{title}</h2>
+        <span>{values.length} active</span>
       </div>
 
       <div className="lookup-admin-toolbar">
         <label className="entry-field">
-          <span>New theme</span>
+          <span>{inputLabel}</span>
           <input
-            onChange={(event) => setNewTheme(event.target.value)}
+            onChange={(event) => setNewValue(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                void addTheme();
+                void addValue();
               }
             }}
-            placeholder="Enter CPD theme"
+            placeholder={placeholder}
             type="text"
-            value={newTheme}
+            value={newValue}
           />
         </label>
-        <Button disabled={isSaving || !newTheme.trim()} icon={Plus} onClick={() => void addTheme()} variant="primary">Add theme</Button>
+        <Button disabled={isSaving || !newValue.trim()} icon={Plus} onClick={() => void addValue()} variant="primary">{addLabel}</Button>
       </div>
 
       {status ? <div className="notice-row" role="status">{status}</div> : null}
 
       <div className="lookup-value-list">
-        {themes.map((theme) => (
-          <div className="lookup-value-row" key={theme.id}>
-            <strong>{theme.displayName}</strong>
+        {values.map((value) => (
+          <div className="lookup-value-row" key={value.id}>
+            <strong>{value.displayName}</strong>
             <button
-              aria-label={`Remove ${theme.displayName}`}
+              aria-label={`Remove ${value.displayName}`}
               className="icon-button"
-              disabled={isSaving || themes.length <= 1}
-              onClick={() => void removeTheme(theme.id)}
-              title={`Remove ${theme.displayName}`}
+              disabled={isSaving || values.length <= 1}
+              onClick={() => void removeValue(value.id)}
+              title={`Remove ${value.displayName}`}
               type="button"
             >
               <X aria-hidden="true" size={16} />
@@ -1117,8 +1211,8 @@ function LearningWalkThemeAdminPanel() {
     <section className="panel learning-theme-admin">
       <div className="panel-heading">
         <div>
-          <h2>Learning Walk themes</h2>
-          <span>Grouped focus choices shown on new Learning Walks</span>
+          <h2>Teaching &amp; Learning themes</h2>
+          <span>Shared by Learning Walks, LIV and quality reporting</span>
         </div>
         <strong>{groups.reduce((count, group) => count + group.themes.filter((theme) => theme.isActive).length, 0)} active</strong>
       </div>
@@ -1192,6 +1286,10 @@ function LearningWalkThemeAdminPanel() {
       </div>
     </section>
   );
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toLocaleUpperCase() + value.slice(1);
 }
 
 function formatOrgUnitOption(orgUnit: OrgUnitSummary) {

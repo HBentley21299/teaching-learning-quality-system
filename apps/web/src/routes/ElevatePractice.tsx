@@ -10,7 +10,8 @@ import {
   Search,
   Send,
   Sparkles,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -169,6 +170,8 @@ export function ElevatePracticeAdminEditor({
   const [step, setStep] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [deletionReason, setDeletionReason] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -220,12 +223,14 @@ export function ElevatePracticeAdminEditor({
   }
 
   async function deleteAdminRecord() {
-    if (!window.confirm("Delete this Elevate Your Practice record? It will be removed from profiles and reporting but retained for audit.")) {
+    const recordId = workspace?.recordId;
+    if (!recordId || !deletionReason.trim()) {
+      if (!recordId) setMessage("This historical assessment is not linked to a system record and cannot be archived here.");
       return;
     }
 
     setIsSaving(true);
-    const result = await api.deleteAdminElevatePracticeRecord(assessmentId);
+    const result = await api.archiveAdminRecord(recordId, deletionReason.trim());
     setIsSaving(false);
     if (!result.ok) {
       setMessage(result.message ?? "The record could not be archived.");
@@ -248,8 +253,18 @@ export function ElevatePracticeAdminEditor({
     <div className="route-stack">
       <div className="admin-record-editor-heading">
         <Button icon={ArrowLeft} onClick={onBack}>Back to records</Button>
-        <Button disabled={isSaving} icon={Trash2} onClick={() => void deleteAdminRecord()} variant="danger">Delete record</Button>
+        <Button disabled={isSaving} icon={Trash2} onClick={() => setIsConfirmingDelete(true)} variant="danger">Delete record</Button>
       </div>
+      {isConfirmingDelete ? (
+        <div className="admin-reason-dialog" role="dialog" aria-modal="true" aria-label="Delete Elevate Your Practice record">
+          <div>
+            <div className="panel-heading"><h2>Archive record</h2><button className="icon-button" onClick={() => setIsConfirmingDelete(false)} title="Close" type="button"><X size={16} /></button></div>
+            <p>This removes the record from profiles and reporting while retaining its audit history.</p>
+            <label className="entry-field"><span>Reason <strong>Required</strong></span><textarea autoFocus onChange={(event) => setDeletionReason(event.target.value)} rows={4} value={deletionReason} /></label>
+            <div className="toolbar"><Button icon={X} onClick={() => setIsConfirmingDelete(false)}>Cancel</Button><Button disabled={isSaving || !deletionReason.trim()} icon={Trash2} onClick={() => void deleteAdminRecord()} variant="danger">Archive record</Button></div>
+          </div>
+        </div>
+      ) : null}
       {message ? <div className="notice-row">{message}</div> : null}
       <AssessmentEditor
         adminStatus={status}
@@ -739,17 +754,17 @@ function ElevatePracticeProgressView() {
   );
 }
 
-export function ElevatePracticeResultPage({ staffId, onBack }: { staffId: string; onBack: () => void }) {
+export function ElevatePracticeResultPage({ staffId, recordId, onBack }: { staffId: string; recordId?: string; onBack: () => void }) {
   const [workspace, setWorkspace] = useState<ElevatePracticeWorkspace | null>(null);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    api.elevatePracticeResult(staffId)
+    (recordId ? api.elevatePracticeRecord(recordId) : api.elevatePracticeResult(staffId))
       .then((result) => { if (!cancelled) setWorkspace(result); })
       .catch(() => { if (!cancelled) setMessage("The Elevate Your Practice result could not be loaded."); });
     return () => { cancelled = true; };
-  }, [staffId]);
+  }, [recordId, staffId]);
 
   if (!workspace) {
     return <section className="panel"><Button icon={ArrowLeft} onClick={onBack}>Back to Staff Profile</Button><p className="muted-copy">{message || "Loading assessment result..."}</p></section>;

@@ -1,5 +1,26 @@
 namespace TLQS.Api.V1;
 
+public sealed record CoachingConfigurationSummary(
+    IReadOnlyList<CoachingLookupOptionSummary> DevelopmentStages,
+    IReadOnlyList<CoachingLookupOptionSummary> FocusAreas,
+    IReadOnlyList<CoachingLookupOptionSummary> SupportTypes,
+    IReadOnlyList<CoachingRubricOptionSummary> IntendedImpactRubric);
+
+public sealed record CoachingLookupOptionSummary(
+    Guid Id,
+    string ValueKey,
+    string DisplayName,
+    int DisplayOrder);
+
+public sealed record CoachingRubricOptionSummary(
+    Guid Id,
+    string DescriptorKey,
+    string VisibleWording,
+    string GuidanceText,
+    int DisplayOrder,
+    string? ColourClassification,
+    string? ColorHex);
+
 public sealed record CoachingContextSummary(
     Guid StaffId,
     string StaffName,
@@ -27,7 +48,9 @@ public sealed record CoachingPreviousActionSummary(
     string Title,
     DateOnly? TargetDate,
     string Status,
-    string? LatestUpdate);
+    string? LatestUpdate,
+    int ExtensionCount,
+    string? LastExtensionReason);
 
 public sealed record CoachingSessionSummary(
     Guid Id,
@@ -62,12 +85,18 @@ public sealed record CoachingSessionDetail(
     string? DeliveryMethod,
     int? DurationMinutes,
     string Status,
+    string? DevelopmentStageKey,
+    IReadOnlyList<string> FocusAreas,
+    string? AdditionalFocus,
     string? ProgressReflection,
     string? MainFocus,
     IReadOnlyList<string> AdditionalFocusAreas,
     string? SessionReason,
     string? Goal,
     string? WhyThisMatters,
+    string? IntendedImpact,
+    Guid? IntendedImpactDescriptorId,
+    string? IntendedImpactWording,
     int? ConfidenceBefore,
     string? CurrentSituation,
     string? WhatsWorking,
@@ -75,6 +104,7 @@ public sealed record CoachingSessionDetail(
     string? KeyDiscussionPoints,
     IReadOnlyList<string> SupportTypes,
     string? SupportResources,
+    string? MentorComments,
     IReadOnlyList<string> IntendedImpactAreas,
     string? ImpactStatement,
     int? ConfidenceToComplete,
@@ -116,12 +146,17 @@ public sealed record SaveCoachingSessionRequest(
     string? DeliveryMethod,
     int? DurationMinutes,
     string Status,
+    string? DevelopmentStageKey,
+    IReadOnlyList<string>? FocusAreas,
+    string? AdditionalFocus,
     string? ProgressReflection,
     string? MainFocus,
     IReadOnlyList<string>? AdditionalFocusAreas,
     string? SessionReason,
     string? Goal,
     string? WhyThisMatters,
+    string? IntendedImpact,
+    Guid? IntendedImpactDescriptorId,
     int? ConfidenceBefore,
     string? CurrentSituation,
     string? WhatsWorking,
@@ -129,6 +164,7 @@ public sealed record SaveCoachingSessionRequest(
     string? KeyDiscussionPoints,
     IReadOnlyList<string>? SupportTypes,
     string? SupportResources,
+    string? MentorComments,
     IReadOnlyList<string>? IntendedImpactAreas,
     string? ImpactStatement,
     int? ConfidenceToComplete,

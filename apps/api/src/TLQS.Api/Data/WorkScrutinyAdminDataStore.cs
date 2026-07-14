@@ -75,7 +75,7 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT audit.id, audit.action, audit.summary,
                    COALESCE(actor.display_name, 'System') AS actor_name,
-                   audit.before_json, audit.after_json, audit.created_at
+                   audit.before_json, audit.after_json, audit.reason, audit.created_at
             FROM ops.audit_logs audit
             LEFT JOIN auth.user_accounts account ON account.id = audit.user_account_id
             LEFT JOIN people.staff actor ON actor.id = account.staff_id
@@ -90,7 +90,8 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(3),
                 GetStringOrNull(reader, 4),
                 GetStringOrNull(reader, 5),
-                reader.GetFieldValue<DateTimeOffset>(6)),
+                GetStringOrNull(reader, 6),
+                reader.GetFieldValue<DateTimeOffset>(7)),
             cancellationToken);
 
     public Task<IReadOnlyList<AdminWorkScrutinyActionSummary>> GetAdminWorkScrutinyActionsAsync(
@@ -165,6 +166,9 @@ public sealed partial class SqlFoundationDataStore
                     ? """
                       UPDATE quality.actions
                       SET archived_at = COALESCE(archived_at, sysutcdatetime()),
+                          deleted_by_user_account_id = @userAccountId,
+                          deletion_reason = 'Source Work Scrutiny record deleted.',
+                          updated_by_user_account_id = @userAccountId,
                           updated_at = sysutcdatetime()
                       WHERE source_record_id = @recordId;
 
@@ -177,6 +181,9 @@ public sealed partial class SqlFoundationDataStore
                     : """
                       UPDATE quality.actions
                       SET archived_at = NULL,
+                          deleted_by_user_account_id = NULL,
+                          deletion_reason = NULL,
+                          updated_by_user_account_id = @userAccountId,
                           updated_at = sysutcdatetime()
                       WHERE source_record_id = @recordId;
 

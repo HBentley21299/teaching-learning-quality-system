@@ -50,6 +50,11 @@ public sealed class WorkScrutinyCourseSample
 public sealed class ActionItem : AuditableEntity
 {
     public Guid? SourceRecordId { get; set; }
+    public string SourceFormType { get; set; } = "standalone";
+    public string? SourceSubRecordType { get; set; }
+    public Guid? SourceSubRecordId { get; set; }
+    public string? SourceSubRecordKey { get; set; }
+    public int? SourceDisplayOrder { get; set; }
     public Guid? SubjectStaffId { get; set; }
     public Guid OwnerStaffId { get; set; }
     public string Title { get; set; } = string.Empty;
@@ -57,9 +62,20 @@ public sealed class ActionItem : AuditableEntity
     public Guid? PriorityLookupValueId { get; set; }
     public Guid? StatusLookupValueId { get; set; }
     public DateOnly? DueDate { get; set; }
+    public DateOnly? OriginalDueDate { get; set; }
+    public DateOnly? RevisedDueDate { get; set; }
     public DateOnly? CompletedDate { get; set; }
+    public string? CompletionNote { get; set; }
+    public Guid? CompletedByUserAccountId { get; set; }
+    public DateTimeOffset? CancelledAt { get; set; }
+    public Guid? CancelledByUserAccountId { get; set; }
+    public string? CancellationComments { get; set; }
+    public string VisibilitySetting { get; set; } = "staff_and_management";
     public bool ReminderEnabled { get; set; } = true;
     public DateTimeOffset? LastReminderSentAt { get; set; }
     public bool PublishedToStaff { get; set; }
     public Guid? CreatedByUserAccountId { get; set; }
+    public Guid? UpdatedByUserAccountId { get; set; }
+    public Guid? DeletedByUserAccountId { get; set; }
+    public string? DeletionReason { get; set; }
 }

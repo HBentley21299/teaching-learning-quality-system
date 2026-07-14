@@ -560,16 +560,16 @@ public sealed partial class SqlFoundationDataStore
                     await using (var actionCommand = new SqlCommand(
                         """
                         INSERT INTO quality.actions (
-                            source_record_id, subject_staff_id, owner_staff_id, title, detail,
+                            source_record_id, source_form_type, subject_staff_id, owner_staff_id, title, detail,
                             priority_lookup_value_id, status_lookup_value_id, published_to_staff,
-                            created_by_user_account_id
+                            visibility_setting, created_by_user_account_id
                         )
                         OUTPUT inserted.id
                         VALUES (
-                            @recordId, @staffId, @staffId, @title, @detail,
+                            @recordId, 'elevate_practice', @staffId, @staffId, @title, @detail,
                             (SELECT TOP (1) lv.id FROM core.lookup_values lv JOIN core.lookup_types lt ON lt.id = lv.lookup_type_id WHERE lt.lookup_key = 'priority' AND lv.value_key = 'medium'),
                             (SELECT TOP (1) lv.id FROM core.lookup_values lv JOIN core.lookup_types lt ON lt.id = lv.lookup_type_id WHERE lt.lookup_key = 'action_status' AND lv.value_key = 'open'),
-                            1, @userAccountId
+                            1, 'staff_and_management', @userAccountId
                         );
                         """,
                         connection,

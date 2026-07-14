@@ -9,14 +9,15 @@ import {
   MessagesSquare,
   Sparkles,
   Settings,
-  ShieldCheck,
   UserRound,
-  Users
+  Users,
+  UsersRound
 } from "lucide-react";
 
 export const navigationItems = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "staff", label: "Staff", icon: Users },
+  { key: "team", label: "My Team", icon: UsersRound },
   { key: "admin", label: "Admin Centre", icon: Settings },
   { key: "learning", label: "Learning Walks", icon: Activity },
   { key: "liv", label: "LIV", icon: Lightbulb },
@@ -26,8 +27,7 @@ export const navigationItems = [
   { key: "scrutiny", label: "Work Scrutiny", icon: ClipboardCheck },
   { key: "cpd", label: "CPD", icon: GraduationCap },
   { key: "profile", label: "Staff Profile", icon: UserRound },
-  { key: "actions", label: "Actions", icon: ListChecks },
-  { key: "security", label: "Permissions", icon: ShieldCheck }
+  { key: "actions", label: "Actions", icon: ListChecks }
 ] as const;
 
 export type AppRoute = (typeof navigationItems)[number]["key"];

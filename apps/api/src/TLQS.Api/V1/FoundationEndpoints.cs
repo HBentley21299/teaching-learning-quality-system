@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Mvc;
 using TLQS.Api.Data;
 using TLQS.Application.Security;
 using TLQS.Application.Workflows;
@@ -25,7 +26,8 @@ public static class FoundationEndpoints
         api.MapGet("/admin/lookups/{lookupKey}/values", async (string lookupKey, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return currentUser.HasPermission(PermissionKeys.PermissionsManage)
+            return AdministrationAccessPolicy.CanManageLists(currentUser)
+                || currentUser.HasPermission(PermissionKeys.PermissionsManage)
                 ? Results.Ok(await store.GetLookupValuesAsync(lookupKey, cancellationToken))
                 : Results.Forbid();
         });
@@ -33,7 +35,8 @@ public static class FoundationEndpoints
         api.MapPost("/admin/lookups/{lookupKey}/values", async (string lookupKey, CreateLookupValueRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return currentUser.HasPermission(PermissionKeys.PermissionsManage)
+            return AdministrationAccessPolicy.CanManageLists(currentUser)
+                || currentUser.HasPermission(PermissionKeys.PermissionsManage)
                 ? Results.Ok(await store.SaveLookupValueAsync(lookupKey, request.DisplayName, currentUser, cancellationToken))
                 : Results.Forbid();
         });
@@ -41,7 +44,8 @@ public static class FoundationEndpoints
         api.MapPost("/admin/lookups/{lookupKey}/values/{id:guid}/archive", async (string lookupKey, Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.PermissionsManage))
+            if (!AdministrationAccessPolicy.CanManageLists(currentUser)
+                && !currentUser.HasPermission(PermissionKeys.PermissionsManage))
             {
                 return Results.Forbid();
             }
@@ -53,6 +57,9 @@ public static class FoundationEndpoints
 
         api.MapGet("/org-units", async (SqlFoundationDataStore store, CancellationToken cancellationToken) =>
             Results.Ok(await store.GetOrgUnitsAsync(cancellationToken)));
+
+        api.MapGet("/themes/{applicationKey}", async (string applicationKey, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+            Results.Ok(await store.GetSharedThemeGroupsAsync(applicationKey, includeInactive: true, cancellationToken)));
 
         api.MapGet("/rooms", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
@@ -92,6 +99,14 @@ public static class FoundationEndpoints
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             return currentUser.HasPermission(PermissionKeys.StaffRead)
                 ? Results.Ok(await store.GetStaffAsync(currentUser, cancellationToken))
+                : Results.Forbid();
+        });
+
+        api.MapGet("/my-team", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return MyTeamAccessPolicy.CanView(currentUser)
+                ? Results.Ok(await store.GetMyTeamAsync(currentUser, cancellationToken))
                 : Results.Forbid();
         });
 
@@ -210,7 +225,8 @@ public static class FoundationEndpoints
         api.MapGet("/admin/learning-walk/themes", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.FormsManage))
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage)
+                && !AdministrationAccessPolicy.CanManageLists(currentUser))
             {
                 return Results.Forbid();
             }
@@ -221,7 +237,8 @@ public static class FoundationEndpoints
         api.MapPost("/admin/learning-walk/themes", async (SaveLearningWalkThemeRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.FormsManage))
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage)
+                && !AdministrationAccessPolicy.CanManageLists(currentUser))
             {
                 return Results.Forbid();
             }
@@ -238,7 +255,8 @@ public static class FoundationEndpoints
         api.MapPut("/admin/learning-walk/themes/{id:guid}", async (Guid id, SaveLearningWalkThemeRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.FormsManage))
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage)
+                && !AdministrationAccessPolicy.CanManageLists(currentUser))
             {
                 return Results.Forbid();
             }
@@ -256,7 +274,8 @@ public static class FoundationEndpoints
         api.MapPost("/admin/learning-walk/themes/{id:guid}/status", async (Guid id, SetLearningWalkThemeStatusRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.FormsManage))
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage)
+                && !AdministrationAccessPolicy.CanManageLists(currentUser))
             {
                 return Results.Forbid();
             }
@@ -269,7 +288,8 @@ public static class FoundationEndpoints
         api.MapPut("/admin/learning-walk/themes/reorder", async (ReorderLearningWalkThemesRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.FormsManage))
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage)
+                && !AdministrationAccessPolicy.CanManageLists(currentUser))
             {
                 return Results.Forbid();
             }
@@ -323,15 +343,23 @@ public static class FoundationEndpoints
         api.MapGet("/admin/work-scrutiny/records", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return currentUser.HasPermission(PermissionKeys.UsersManage)
+            return AdministrationAccessPolicy.CanManageRecords(currentUser)
                 ? Results.Ok(await store.GetAdminWorkScrutinyRecordsAsync(cancellationToken))
+                : Results.Forbid();
+        });
+
+        api.MapGet("/elevate-environment/pillars", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return CanUseElevate(currentUser)
+                ? Results.Ok(await store.GetElevateEnvironmentPillarsAsync(cancellationToken))
                 : Results.Forbid();
         });
 
         api.MapGet("/admin/work-scrutiny/records/{id:guid}", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
             {
                 return Results.Forbid();
             }
@@ -361,7 +389,7 @@ public static class FoundationEndpoints
         api.MapDelete("/admin/work-scrutiny/records/{id:guid}", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
             {
                 return Results.Forbid();
             }
@@ -374,7 +402,7 @@ public static class FoundationEndpoints
         api.MapPost("/admin/work-scrutiny/records/{id:guid}/restore", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
             {
                 return Results.Forbid();
             }
@@ -422,10 +450,16 @@ public static class FoundationEndpoints
             };
         });
 
-        api.MapGet("/actions", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/actions", async (bool? includeDeleted, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return Results.Ok(await store.GetActionsAsync(currentUser, cancellationToken));
+            return Results.Ok(await store.GetActionsAsync(currentUser, includeDeleted == true, cancellationToken));
+        });
+
+        api.MapGet("/actions/owner-options", async (Guid? sourceRecordId, Guid? subjectStaffId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return Results.Ok(await store.GetActionOwnerOptionsAsync(sourceRecordId, subjectStaffId, currentUser, cancellationToken));
         });
 
         api.MapPost("/actions", async (CreateActionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -461,10 +495,10 @@ public static class FoundationEndpoints
         api.MapGet("/liv-records", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return Results.Ok(await store.GetLivRecordsAsync(currentUser, cancellationToken));
+            return Results.Ok(await store.GetLivCasesAsync(currentUser, cancellationToken));
         });
 
-        api.MapPost("/liv-records", async (SaveLivRecordRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/liv-records", async (SaveLivCaseRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!CanSubmitLiv(currentUser))
@@ -477,11 +511,11 @@ public static class FoundationEndpoints
                 return Results.BadRequest(new { Message = "A staff member is required for a LIV record." });
             }
 
-            var id = await store.CreateLivRecordAsync(request, currentUser, cancellationToken);
+            var id = await store.CreateLivCaseAsync(request, currentUser, cancellationToken);
             return Results.Created($"/api/v1/liv-records/{id}", new { Id = id });
         });
 
-        api.MapPut("/liv-records/{id:guid}", async (Guid id, SaveLivRecordRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPut("/liv-records/{id:guid}", async (Guid id, SaveLivCaseRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!CanSubmitLiv(currentUser))
@@ -489,7 +523,82 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            var result = await store.UpdateLivRecordAsync(id, request, currentUser, cancellationToken);
+            var result = await store.UpdateLivCaseAsync(id, request, currentUser, cancellationToken);
+            return result switch
+            {
+                FormSubmissionUpdateResult.Saved => Results.NoContent(),
+                FormSubmissionUpdateResult.Forbidden => Results.Forbid(),
+                _ => Results.NotFound()
+            };
+        });
+
+        api.MapPost("/liv-records/{id:guid}/visits", async (Guid id, SaveLivVisitRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!CanSubmitLiv(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            var visit = await store.AddLivVisitAsync(id, request, currentUser, cancellationToken);
+            return visit is null
+                ? Results.NotFound()
+                : Results.Created($"/api/v1/liv-records/{id}/visits/{visit.Id}", visit);
+        });
+
+        api.MapPut("/liv-records/{id:guid}/visits/{visitId:guid}", async (Guid id, Guid visitId, SaveLivVisitRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!CanSubmitLiv(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            var result = await store.UpdateLivVisitAsync(id, visitId, request, currentUser, cancellationToken);
+            return result switch
+            {
+                FormSubmissionUpdateResult.Saved => Results.NoContent(),
+                FormSubmissionUpdateResult.Forbidden => Results.Forbid(),
+                _ => Results.NotFound()
+            };
+        });
+
+        api.MapGet("/actions/{id:guid}/extensions", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var extensions = await store.GetActionExtensionsAsync(id, currentUser, cancellationToken);
+            return extensions is null ? Results.NotFound() : Results.Ok(extensions);
+        });
+
+        api.MapDelete("/actions/{id:guid}", async (Guid id, [FromBody] DeleteActionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var result = await store.DeleteActionAsync(id, request.Reason, currentUser, cancellationToken);
+            return result switch
+            {
+                FormSubmissionUpdateResult.Saved => Results.NoContent(),
+                FormSubmissionUpdateResult.Forbidden => Results.Forbid(),
+                _ => Results.NotFound()
+            };
+        });
+
+        api.MapPost("/actions/{id:guid}/restore", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var result = await store.RestoreActionAsync(id, currentUser, cancellationToken);
+            return result switch
+            {
+                FormSubmissionUpdateResult.Saved => Results.NoContent(),
+                FormSubmissionUpdateResult.Forbidden => Results.Forbid(),
+                _ => Results.NotFound()
+            };
+        });
+
+        api.MapPost("/actions/{id:guid}/extend", async (Guid id, ExtendActionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var result = await store.ExtendActionAsync(id, request, currentUser, cancellationToken);
+
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -501,7 +610,7 @@ public static class FoundationEndpoints
         api.MapPost("/liv-records/{id:guid}/status", async (Guid id, ChangeSubmissionStatusRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            var result = await store.ChangeLivStatusAsync(id, request.Action, currentUser, cancellationToken);
+            var result = await store.ChangeLivCaseStatusAsync(id, request.Action, currentUser, cancellationToken);
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -600,7 +709,7 @@ public static class FoundationEndpoints
         api.MapGet("/elevate-practice/progress", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return currentUser.HasPermission(PermissionKeys.UsersManage)
+            return AdministrationAccessPolicy.CanManageRecords(currentUser)
                 ? Results.Ok(await store.GetElevatePracticeProgressAsync(SqlFoundationDataStore.GetCurrentAcademicYear(), cancellationToken))
                 : Results.Forbid();
         });
@@ -608,7 +717,7 @@ public static class FoundationEndpoints
         api.MapGet("/elevate-practice/admin/records/{assessmentId:guid}", async (Guid assessmentId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
             {
                 return Results.Forbid();
             }
@@ -620,7 +729,7 @@ public static class FoundationEndpoints
         api.MapPut("/elevate-practice/admin/records/{assessmentId:guid}", async (Guid assessmentId, AdminSaveElevatePracticeAssessmentRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
             {
                 return Results.Forbid();
             }
@@ -632,7 +741,7 @@ public static class FoundationEndpoints
         api.MapDelete("/elevate-practice/admin/records/{assessmentId:guid}", async (Guid assessmentId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!currentUser.HasPermission(PermissionKeys.UsersManage))
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
             {
                 return Results.Forbid();
             }
@@ -645,7 +754,7 @@ public static class FoundationEndpoints
         api.MapGet("/elevate-practice/admin/records/{assessmentId:guid}/audit", async (Guid assessmentId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return currentUser.HasPermission(PermissionKeys.UsersManage)
+            return AdministrationAccessPolicy.CanManageRecords(currentUser)
                 ? Results.Ok(await store.GetElevatePracticeAuditHistoryAsync(assessmentId, cancellationToken))
                 : Results.Forbid();
         });
@@ -664,6 +773,24 @@ public static class FoundationEndpoints
             var result = await store.GetLatestElevatePracticeWorkspaceAsync(staffId, cancellationToken);
             return result is null ? Results.NotFound() : Results.Ok(result);
         });
+
+        api.MapGet("/elevate-practice/records/{recordId:guid}", async (Guid recordId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var result = await store.GetElevatePracticeWorkspaceByRecordAsync(recordId, cancellationToken);
+            if (result is null)
+            {
+                return Results.NotFound();
+            }
+
+            var canView = CanViewStaffProfile(currentUser, result.StaffId)
+                || (currentUser.HasPermission(PermissionKeys.ReportsViewScoped)
+                    && await store.IsStaffProfileInScopeAsync(result.StaffId, currentUser, cancellationToken));
+            return canView ? Results.Ok(result) : Results.Forbid();
+        });
+
+        api.MapGet("/coaching/configuration", async (SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+            Results.Ok(await store.GetCoachingConfigurationAsync(cancellationToken)));
 
         api.MapGet("/coaching/sessions", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
@@ -742,6 +869,165 @@ public static class FoundationEndpoints
             return currentUser.HasPermission(PermissionKeys.UsersManage)
                 ? Results.Ok(await store.GetAdminUsersAsync(cancellationToken))
                 : Results.Forbid();
+        });
+
+        api.MapGet("/admin/organisation/staff", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return AdministrationAccessPolicy.CanManageOrganisation(currentUser)
+                ? Results.Ok(await store.GetAdminOrganisationStaffAsync(cancellationToken))
+                : Results.Forbid();
+        });
+
+        api.MapPost("/admin/organisation/staff/{staffId:guid}/memberships", async (Guid staffId, SaveOrganisationMembershipRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageOrganisation(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            var id = await store.SaveOrganisationMembershipAsync(staffId, request, currentUser, cancellationToken);
+            return Results.Created($"/api/v1/admin/organisation/staff/{staffId}/memberships/{id}", new { Id = id });
+        });
+
+        api.MapPost("/admin/organisation/staff/{staffId:guid}/memberships/{membershipId:guid}/primary", async (Guid staffId, Guid membershipId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageOrganisation(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.SetPrimaryOrganisationMembershipAsync(staffId, membershipId, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        api.MapPost("/admin/organisation/staff/{staffId:guid}/memberships/{membershipId:guid}/archive", async (Guid staffId, Guid membershipId, ArchiveReasonRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageOrganisation(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.ArchiveOrganisationMembershipAsync(staffId, membershipId, request.Reason, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        api.MapPost("/admin/organisation/staff/{staffId:guid}/managers", async (Guid staffId, SaveManagerRelationshipRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageOrganisation(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            var id = await store.SaveManagerRelationshipAsync(staffId, request, currentUser, cancellationToken);
+            return Results.Created($"/api/v1/admin/organisation/staff/{staffId}/managers/{id}", new { Id = id });
+        });
+
+        api.MapPost("/admin/organisation/staff/{staffId:guid}/managers/{relationshipId:guid}/archive", async (Guid staffId, Guid relationshipId, ArchiveReasonRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageOrganisation(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.ArchiveManagerRelationshipAsync(staffId, relationshipId, request.Reason, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        api.MapGet("/admin/lists", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return AdministrationAccessPolicy.CanManageLists(currentUser)
+                ? Results.Ok(await store.GetAdminManagedListsAsync(cancellationToken))
+                : Results.Forbid();
+        });
+
+        api.MapPut("/admin/lists/{lookupKey}/values/{id:guid}", async (string lookupKey, Guid id, UpdateManagedListValueRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageLists(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.UpdateManagedListValueAsync(lookupKey, id, request.DisplayName, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        api.MapPost("/admin/lists/{lookupKey}/values/{id:guid}/status", async (string lookupKey, Guid id, SetManagedListValueStatusRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageLists(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.SetManagedListValueStatusAsync(lookupKey, id, request.IsActive, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        api.MapPut("/admin/lists/{lookupKey}/values/reorder", async (string lookupKey, ReorderManagedListValuesRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageLists(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            await store.ReorderManagedListValuesAsync(lookupKey, request.ValueIds, currentUser, cancellationToken);
+            return Results.NoContent();
+        });
+
+        api.MapGet("/admin/records", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return AdministrationAccessPolicy.CanManageRecords(currentUser)
+                ? Results.Ok(await store.GetAdminRecordsAsync(cancellationToken))
+                : Results.Forbid();
+        });
+
+        api.MapGet("/admin/records/{recordId:guid}/audit", async (Guid recordId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return AdministrationAccessPolicy.CanManageRecords(currentUser)
+                ? Results.Ok(await store.GetRecordAuditHistoryAsync(recordId, cancellationToken))
+                : Results.Forbid();
+        });
+
+        api.MapPost("/admin/records/{recordId:guid}/archive", async (Guid recordId, ArchiveReasonRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.SetAdminRecordArchivedStateAsync(recordId, true, request.Reason, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        api.MapPost("/admin/records/{recordId:guid}/restore", async (Guid recordId, ArchiveReasonRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.SetAdminRecordArchivedStateAsync(recordId, false, request.Reason, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
         });
 
         api.MapPost("/admin/users", async (CreateAdminUserRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -907,11 +1193,30 @@ public sealed record StaffSummary(
     Guid? PrimaryOrgUnitId,
     string AccountStatus,
     IReadOnlyList<Guid> OrgUnitIds);
+public sealed record MyTeamOrgUnitSummary(Guid Id, string Code, string Name);
+public sealed record MyTeamMemberSummary(
+    Guid StaffId,
+    string ExternalId,
+    string DisplayName,
+    string Email,
+    string AccountStatus,
+    IReadOnlyList<MyTeamOrgUnitSummary> Faculties,
+    IReadOnlyList<MyTeamOrgUnitSummary> Teams,
+    IReadOnlyList<string> RoleNames,
+    int OpenActionCount,
+    int OverdueActionCount,
+    string? ElevateJudgement,
+    bool CanOpenProfile,
+    bool CanManageActions);
 public sealed record RecordSummary(Guid Id, Guid ModuleId, string RecordType, string Title, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate, DateTimeOffset CreatedAt, string SubmissionStatus);
 public sealed record ActionSummary(
     Guid Id,
     Guid? SourceRecordId,
     string? SourceRecordTitle,
+    string SourceFormType,
+    string? SourceSubRecordType,
+    Guid? SourceSubRecordId,
+    string? SourceSubRecordKey,
     Guid? SubjectStaffId,
     string? SubjectStaffName,
     Guid OwnerStaffId,
@@ -921,9 +1226,35 @@ public sealed record ActionSummary(
     string? StatusKey,
     string? PriorityKey,
     DateOnly? DueDate,
+    DateOnly? OriginalDueDate,
+    DateOnly? RevisedDueDate,
     DateOnly? CompletedDate,
     string? CompletionNote,
-    bool IsOverdue);
+    string? CancellationComments,
+    string VisibilitySetting,
+    bool PublishedToStaff,
+    bool IsOverdue,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? UpdatedAt,
+    DateTimeOffset? DeletedAt,
+    string? CreatedByName,
+    string? UpdatedByName,
+    string? CompletedByName,
+    string? CancelledByName,
+    string? DeletedByName,
+    string? DeletionReason,
+    Guid? FacultyId,
+    string? FacultyCode,
+    string? FacultyName,
+    Guid? TeamId,
+    string? TeamCode,
+    string? TeamName,
+    int ExtensionCount,
+    string? LastExtensionReason,
+    Guid? LivVisitId)
+{
+    public bool IsDeleted => DeletedAt.HasValue;
+}
 public sealed record DashboardSummary(Guid Id, string DashboardKey, string Name, string? Purpose, string PrimaryPermissionKey, bool FacultyScopeRequired);
 public sealed record StaffProfileSummary(Guid StaffId, string ExternalId, string DisplayName, string Email, string? JobTitle, string? PrimaryOrgCode, int CpdSessionsAttended, int EvidenceRecords, int OpenActions, int OverdueActions);
 public sealed record LookupSummary(string LookupKey, string Name, IReadOnlyList<string> Values);
@@ -931,6 +1262,15 @@ public sealed record LookupValueSummary(Guid Id, string ValueKey, string Display
 public sealed record CreateLookupValueRequest(string DisplayName);
 public sealed record OrgUnitSummary(Guid Id, Guid? ParentOrgUnitId, string OrgUnitType, string Code, string Name, bool IsActive);
 public sealed record RoomSummary(Guid Id, string RoomCode, string BuildingName);
+public sealed record ElevateEnvironmentPillarSummary(
+    Guid Id,
+    string PillarKey,
+    string Name,
+    string Description,
+    int DisplayOrder,
+    bool IsActive,
+    string AssetUri,
+    string AssetAltText);
 public sealed record CourseSummary(Guid Id, string CourseCode, string CourseName, Guid OrgUnitId, string? AcademicYear);
 public sealed record RoleSummary(string RoleKey, string Name);
 public sealed record PermissionSummary(string PermissionKey, string Name, string Category);
@@ -1000,7 +1340,22 @@ public sealed record RecordDetailSectionSummary(Guid Id, string SectionKey, stri
 public sealed record RecordDetailFieldSummary(Guid Id, string FieldKey, string Label, string FieldType, bool IsRequired, int DisplayOrder, string? HelpText, IReadOnlyList<string> Options, string? Value);
 
 public sealed record CreateRecordRequest(Guid ModuleId, string RecordType, string Title, string? Summary, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate);
-public sealed record CreateActionRequest(Guid? SourceRecordId, Guid? SubjectStaffId, Guid OwnerStaffId, string Title, string? Detail, Guid? PriorityLookupValueId, Guid? StatusLookupValueId, DateOnly? DueDate, bool PublishedToStaff);
+public sealed record CreateActionRequest(
+    Guid? SourceRecordId,
+    Guid? SubjectStaffId,
+    Guid OwnerStaffId,
+    string Title,
+    string? Detail,
+    Guid? PriorityLookupValueId,
+    Guid? StatusLookupValueId,
+    DateOnly? DueDate,
+    bool PublishedToStaff,
+    Guid? LivVisitId = null,
+    string? SourceFormType = null,
+    string? SourceSubRecordType = null,
+    Guid? SourceSubRecordId = null,
+    string? SourceSubRecordKey = null,
+    string? VisibilitySetting = null);
 public sealed record CreateFormTemplateRequest(string ModuleKey, string Name, string? Description, Guid? OrgUnitId);
 public sealed record FormDefinitionSummary(Guid TemplateId, Guid VersionId, string TemplateKey, string Name, string Version, IReadOnlyList<FormSectionSummary> Sections);
 public sealed record FormSectionSummary(Guid Id, string SectionKey, string Title, int DisplayOrder, IReadOnlyList<FormFieldSummary> Fields);
@@ -1032,7 +1387,25 @@ public sealed record UpdateActionRequest(
     string? Detail,
     DateOnly? DueDate,
     string? Status,
-    string? CompletionNote);
+    string? CompletionNote,
+    Guid? OwnerStaffId = null,
+    string? VisibilitySetting = null,
+    string? CancellationComments = null);
+public sealed record ExtendActionRequest(DateOnly DueDate, string Reason);
+public sealed record DeleteActionRequest(string Reason);
+public sealed record ActionExtensionSummary(
+    Guid Id,
+    DateOnly PreviousDueDate,
+    DateOnly ExtendedDueDate,
+    string Reason,
+    string? CreatedByName,
+    DateTimeOffset CreatedAt);
+public sealed record ActionOwnerOptionSummary(
+    Guid StaffId,
+    string DisplayName,
+    string Relationship,
+    Guid? OrgUnitId,
+    string? OrgUnitCode);
 public sealed record SaveLivRecordRequest(
     Guid SubjectStaffId,
     Guid? OrgUnitId,
@@ -1045,6 +1418,62 @@ public sealed record SaveLivRecordRequest(
     DateOnly? FollowUpProjectedDate,
     string? SecondLivOverview,
     bool SaveAsDraft = false);
+public sealed record SaveLivVisitRequest(
+    DateOnly? VisitDate,
+    string? VisitTime,
+    string? CourseName,
+    string? CourseGroup,
+    string? CourseLevel,
+    string? ReflectionNotes,
+    string? Findings);
+public sealed record SaveLivCaseRequest(
+    Guid SubjectStaffId,
+    Guid? OrgUnitId,
+    string? PreConversation,
+    SaveLivVisitRequest InitialVisit,
+    bool? IsElevatePractitioner,
+    IReadOnlyList<string>? AreaOfPracticeKeys,
+    string? AreaOfPracticeOther,
+    IReadOnlyList<Guid>? AreaOfPracticeThemeIds);
+public sealed record LivVisitCreatedSummary(Guid Id, int VisitNumber);
+public sealed record LivVisitSummary(
+    Guid Id,
+    int VisitNumber,
+    DateOnly? VisitDate,
+    string? VisitTime,
+    string VisitType,
+    string? CourseName,
+    string? CourseGroup,
+    string? CourseLevel,
+    string? ReflectionNotes,
+    string? Findings,
+    string VisitStatus,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? UpdatedAt);
+public sealed record LivCaseSummary(
+    Guid Id,
+    Guid RecordId,
+    Guid SubjectStaffId,
+    string SubjectStaffName,
+    Guid? ReviewerStaffId,
+    string? ReviewerStaffName,
+    Guid? OrgUnitId,
+    string? OrgUnitCode,
+    string? ParentOrgUnitCode,
+    string? PreConversation,
+    string Status,
+    string CurrentStage,
+    string VisibilityStatus,
+    DateOnly? CompletionDate,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? UpdatedAt,
+    bool CanEdit,
+    bool CanViewSensitive,
+    bool? IsElevatePractitioner,
+    IReadOnlyList<string> AreaOfPracticeKeys,
+    string? AreaOfPracticeOther,
+    IReadOnlyList<Guid> AreaOfPracticeThemeIds,
+    IReadOnlyList<LivVisitSummary> Visits);
 public sealed record LivRecordSummary(
     Guid Id,
     Guid RecordId,

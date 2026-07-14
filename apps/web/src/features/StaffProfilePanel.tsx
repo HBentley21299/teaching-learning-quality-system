@@ -23,11 +23,15 @@ type StaffReflectionDraft = SaveStaffReflectionRequest;
 export function StaffProfilePanel({
   staffId,
   user,
-  profiles = []
+  profiles = [],
+  openElevateResult = false,
+  elevateRecordId = ""
 }: {
   staffId: string;
   user: CurrentUser;
   profiles?: StaffProfileSummary[];
+  openElevateResult?: boolean;
+  elevateRecordId?: string;
 }) {
   const [detail, setDetail] = useState<StaffProfileDetail | null>(null);
   const [drafts, setDrafts] = useState<Record<string, StaffReflectionDraft>>({});
@@ -35,10 +39,10 @@ export function StaffProfilePanel({
   const [savingReflectionId, setSavingReflectionId] = useState<string | null>(null);
   const [isCreatingReflection, setIsCreatingReflection] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
-  const [showElevateResult, setShowElevateResult] = useState(false);
+  const [showElevateResult, setShowElevateResult] = useState(openElevateResult);
 
   useEffect(() => {
-    setShowElevateResult(false);
+    setShowElevateResult(openElevateResult);
     if (!staffId) {
       setDetail(null);
       setIsLoading(false);
@@ -73,7 +77,7 @@ export function StaffProfilePanel({
     return () => {
       cancelled = true;
     };
-  }, [staffId]);
+  }, [openElevateResult, staffId]);
 
   const canEditReflections =
     Boolean(detail) && (detail?.staffId === user.staffId || user.permissions.includes("staff.manage"));
@@ -164,7 +168,7 @@ export function StaffProfilePanel({
   }
 
   if (showElevateResult) {
-    return <ElevatePracticeResultPage onBack={() => setShowElevateResult(false)} staffId={detail.staffId} />;
+    return <ElevatePracticeResultPage onBack={() => setShowElevateResult(false)} recordId={elevateRecordId || detail.elevatePractice?.recordId} staffId={detail.staffId} />;
   }
 
   return (

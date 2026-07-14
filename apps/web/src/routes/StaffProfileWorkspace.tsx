@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
 import { StaffProfilePanel } from "../features/StaffProfilePanel";
 import type { CurrentUser, StaffProfileSummary, StaffSummary } from "../services/types";
@@ -6,25 +6,40 @@ import type { CurrentUser, StaffProfileSummary, StaffSummary } from "../services
 export function StaffProfileWorkspace({
   profiles,
   staff,
-  user
+  user,
+  initialStaffId = "",
+  initialElevateRecordId = ""
 }: {
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   user: CurrentUser;
+  initialStaffId?: string;
+  initialElevateRecordId?: string;
 }) {
   const canViewAllProfiles =
     user.permissions.includes("liv.manage") ||
     user.permissions.includes("reports.view_all") ||
     user.permissions.includes("staff.manage") ||
     user.permissions.includes("users.manage");
+  const canViewScopedProfiles = user.permissions.includes("reports.view_scoped");
   const currentUserStaff = staff.find((staffMember) => staffMember.email.toLowerCase() === user.email.toLowerCase());
-  const accessibleStaff = canViewAllProfiles
+  const accessibleStaff = canViewAllProfiles || canViewScopedProfiles
     ? staff
     : staff.filter((staffMember) => staffMember.id === (user.staffId ?? currentUserStaff?.id));
 
   const [selectedStaffId, setSelectedStaffId] = useState(
-    user.staffId ?? currentUserStaff?.id ?? accessibleStaff[0]?.id ?? ""
+    accessibleStaff.some((staffMember) => staffMember.id === initialStaffId)
+      ? initialStaffId
+      : user.staffId ?? currentUserStaff?.id ?? accessibleStaff[0]?.id ?? ""
   );
+
+  useEffect(() => {
+    if (initialStaffId && accessibleStaff.some((staffMember) => staffMember.id === initialStaffId)) {
+      setSelectedStaffId(initialStaffId);
+    } else if (!initialStaffId) {
+      setSelectedStaffId(user.staffId ?? currentUserStaff?.id ?? accessibleStaff[0]?.id ?? "");
+    }
+  }, [initialStaffId, staff]);
 
   return (
     <div className="route-stack">
@@ -33,7 +48,7 @@ export function StaffProfileWorkspace({
           <p className="eyebrow">Staff development record</p>
           <h1>Staff Profile</h1>
         </div>
-        {canViewAllProfiles ? (
+        {canViewAllProfiles || canViewScopedProfiles ? (
           <div className="toolbar">
             <div className="search-box staff-profile-selector">
               <Search size={16} aria-hidden="true" />
@@ -54,7 +69,14 @@ export function StaffProfileWorkspace({
       </div>
 
       {selectedStaffId ? (
-        <StaffProfilePanel profiles={profiles} staffId={selectedStaffId} user={user} />
+        <StaffProfilePanel
+          key={`${selectedStaffId}:${initialElevateRecordId}`}
+          elevateRecordId={initialElevateRecordId}
+          openElevateResult={Boolean(initialElevateRecordId)}
+          profiles={profiles}
+          staffId={selectedStaffId}
+          user={user}
+        />
       ) : (
         <section className="panel">
           <p className="muted-copy">No Staff Profile is available for this account.</p>

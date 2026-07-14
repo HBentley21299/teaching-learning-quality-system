@@ -241,7 +241,12 @@ public sealed partial class SqlFoundationDataStore
                             SET title = @title,
                                 detail = @detail,
                                 due_date = NULL,
+                                source_form_type = 'elevate_practice',
+                                visibility_setting = 'staff_and_management',
                                 archived_at = NULL,
+                                deleted_by_user_account_id = NULL,
+                                deletion_reason = NULL,
+                                updated_by_user_account_id = @userAccountId,
                                 updated_at = sysutcdatetime()
                             WHERE id = @actionId;
                             """,
@@ -250,6 +255,7 @@ public sealed partial class SqlFoundationDataStore
                         updateActionCommand.Parameters.AddWithValue("@actionId", existingActionId.Value);
                         updateActionCommand.Parameters.AddWithValue("@title", $"Elevate Your Practice: {area.Name}");
                         updateActionCommand.Parameters.AddWithValue("@detail", actionDetail);
+                        updateActionCommand.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
                         await updateActionCommand.ExecuteNonQueryAsync(cancellationToken);
                         actionId = existingActionId.Value;
                     }
@@ -300,10 +306,19 @@ public sealed partial class SqlFoundationDataStore
                          .Select(value => value.ActionId!.Value))
             {
                 await using var archiveActionCommand = new SqlCommand(
-                    "UPDATE quality.actions SET archived_at = sysutcdatetime(), updated_at = sysutcdatetime() WHERE id = @actionId;",
+                    """
+                    UPDATE quality.actions
+                    SET archived_at = sysutcdatetime(),
+                        deleted_by_user_account_id = @userAccountId,
+                        deletion_reason = 'Development area removed from Elevate Your Practice.',
+                        updated_by_user_account_id = @userAccountId,
+                        updated_at = sysutcdatetime()
+                    WHERE id = @actionId;
+                    """,
                     connection,
                     (SqlTransaction)transaction);
                 archiveActionCommand.Parameters.AddWithValue("@actionId", actionId);
+                archiveActionCommand.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
                 await archiveActionCommand.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -395,7 +410,11 @@ public sealed partial class SqlFoundationDataStore
             await using (var archiveCommand = new SqlCommand(
                 """
                 UPDATE quality.actions
-                SET archived_at = sysutcdatetime(), updated_at = sysutcdatetime()
+                SET archived_at = sysutcdatetime(),
+                    deleted_by_user_account_id = @userAccountId,
+                    deletion_reason = 'Source Elevate Your Practice record deleted.',
+                    updated_by_user_account_id = @userAccountId,
+                    updated_at = sysutcdatetime()
                 WHERE source_record_id = @recordId AND archived_at IS NULL;
 
                 UPDATE quality.elevate_practice_assessments
@@ -499,16 +518,16 @@ public sealed partial class SqlFoundationDataStore
         await using var command = new SqlCommand(
             """
             INSERT INTO quality.actions (
-                source_record_id, subject_staff_id, owner_staff_id, title, detail,
+                source_record_id, source_form_type, subject_staff_id, owner_staff_id, title, detail,
                 priority_lookup_value_id, status_lookup_value_id, published_to_staff,
-                created_by_user_account_id
+                visibility_setting, created_by_user_account_id
             )
             OUTPUT inserted.id
             VALUES (
-                @recordId, @staffId, @staffId, @title, @detail,
+                @recordId, 'elevate_practice', @staffId, @staffId, @title, @detail,
                 (SELECT TOP (1) value.id FROM core.lookup_values value JOIN core.lookup_types type ON type.id = value.lookup_type_id WHERE type.lookup_key = 'priority' AND value.value_key = 'medium'),
                 (SELECT TOP (1) value.id FROM core.lookup_values value JOIN core.lookup_types type ON type.id = value.lookup_type_id WHERE type.lookup_key = 'action_status' AND value.value_key = 'open'),
-                1, @userAccountId
+                1, 'staff_and_management', @userAccountId
             );
             """,
             connection,

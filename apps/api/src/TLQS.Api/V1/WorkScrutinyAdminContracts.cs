@@ -24,6 +24,7 @@ public sealed record RecordAuditSummary(
     string ActorName,
     string? BeforeJson,
     string? AfterJson,
+    string? Reason,
     DateTimeOffset CreatedAt);
 
 public sealed record AdminWorkScrutinyActionSummary(

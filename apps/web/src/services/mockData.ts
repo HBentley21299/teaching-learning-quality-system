@@ -114,15 +114,27 @@ export const mockActions: ActionSummary[] = [
     subjectStaffId: "40000000-0000-0000-0000-000000000002",
     title: "Upload winter impact evidence",
     detail: "Add implementation notes and at least one supporting file.",
+    sourceFormType: "standalone",
     dueDate: "2026-12-18",
-    isOverdue: false
+    visibilitySetting: "staff_and_management",
+    publishedToStaff: true,
+    isOverdue: false,
+    extensionCount: 0,
+    createdAt: "2026-09-01T09:00:00Z",
+    isDeleted: false
   },
   {
     id: "ACT-002",
     ownerStaffId: "40000000-0000-0000-0000-000000000001",
     title: "Review work scrutiny findings",
+    sourceFormType: "work_scrutiny",
     dueDate: "2026-10-04",
-    isOverdue: false
+    visibilitySetting: "staff_and_management",
+    publishedToStaff: true,
+    isOverdue: false,
+    extensionCount: 0,
+    createdAt: "2026-09-02T09:00:00Z",
+    isDeleted: false
   }
 ];
 

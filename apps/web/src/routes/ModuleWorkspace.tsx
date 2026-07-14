@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Archive, Building2, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { CpdParticipantPicker } from "../components/CpdParticipantPicker";
+import { RoomSearchSelect } from "../components/RoomSearchSelect";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { WorkScrutinyCreateForm } from "../components/WorkScrutinyCreateForm";
 import { api } from "../services/api";
 import type {
   ActionSummary,
   CurrentUser,
+  ElevateEnvironmentPillarSummary,
   FormDefinition,
   FormFieldDefinition,
   LearningWalkTheme,
@@ -36,6 +38,7 @@ type ModuleWorkspaceProps = {
   staff?: StaffSummary[];
   user: CurrentUser;
   onActionsChanged?: () => Promise<void>;
+  initialRecordId?: string;
 };
 
 const workspaceConfig: Record<WorkspaceMode, {
@@ -75,7 +78,7 @@ const workspaceConfig: Record<WorkspaceMode, {
   }
 };
 
-export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActionsChanged }: ModuleWorkspaceProps) {
+export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "" }: ModuleWorkspaceProps) {
   const config = workspaceConfig[mode];
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -84,6 +87,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [definitionError, setDefinitionError] = useState("");
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [environmentPillars, setEnvironmentPillars] = useState<ElevateEnvironmentPillarSummary[]>([]);
+  const [environmentPurposes, setEnvironmentPurposes] = useState<string[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
   const [learningWalkThemeGroups, setLearningWalkThemeGroups] = useState<LearningWalkThemeGroup[]>([]);
   const [learningWalkActions, setLearningWalkActions] = useState<DraftLearningWalkAction[]>([]);
@@ -103,12 +108,14 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [actionTitle, setActionTitle] = useState("");
   const [actionOwnerId, setActionOwnerId] = useState(user.staffId ?? "");
   const [actionDueDate, setActionDueDate] = useState("");
+  const openedInitialRecord = useRef("");
 
   const canManageForms = user.permissions.includes("forms.manage");
   const canManageActions = user.permissions.includes("actions.manage");
   const primaryIcon = mode === "cpd" ? CalendarPlus : mode === "elevate" ? Building2 : FilePlus2;
 
   const createSections = definition?.sections ?? [];
+  const createEntrySections = getEnvironmentEntrySections(mode, createSections, environmentPillars);
   const selectedFacultyId = getResponseValue(createSections, responses, "faculty_area");
   const selectedTeamId = getResponseValue(createSections, responses, "team_level");
   const selectedTeam = useMemo(
@@ -125,6 +132,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   );
 
   const editSections = selectedDetail?.sections ?? [];
+  const editEntrySections = getEnvironmentEntrySections(mode, editSections, environmentPillars);
+  const detailSections = orderEnvironmentSections(mode, editSections, environmentPillars);
   const editFacultyId = getResponseValue(editSections, editResponses, "faculty_area");
   const editTeamId = getResponseValue(editSections, editResponses, "team_level");
   const editTeam = useMemo(() => orgUnits.find((orgUnit) => orgUnit.id === editTeamId), [orgUnits, editTeamId]);
@@ -222,6 +231,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   }, [mode]);
 
   useEffect(() => {
+    if (initialRecordId && openedInitialRecord.current !== initialRecordId) {
+      openedInitialRecord.current = initialRecordId;
+      void openRecord(initialRecordId);
+    }
+    // openRecord is intentionally invoked only when a route supplies a new target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRecordId]);
+
+  useEffect(() => {
     syncThemeResponse(createSections, setResponses, agreedTheme);
   }, [agreedTheme, createSections]);
 
@@ -235,18 +253,21 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
   async function refreshData() {
     try {
-      const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups] = await Promise.all([
+      const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups, nextEnvironmentPillars] = await Promise.all([
         api.records(),
         api.orgUnits(),
         api.actions(),
         mode === "elevate" ? api.rooms() : Promise.resolve([] as RoomSummary[]),
-        mode === "cpd" ? api.lookups() : Promise.resolve([])
+        mode === "cpd" || mode === "elevate" ? api.lookups() : Promise.resolve([]),
+        mode === "elevate" ? api.elevateEnvironmentPillars() : Promise.resolve([] as ElevateEnvironmentPillarSummary[])
       ]);
       setRecords(nextRecords.filter((record) => record.recordType === config.recordType));
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
       setActions(nextActions);
       setRooms(nextRooms);
       setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
+      setEnvironmentPurposes(nextLookups.find((lookup) => lookup.lookupKey === "elevate_environment_purpose")?.values ?? []);
+      setEnvironmentPillars(nextEnvironmentPillars);
 
       if (mode === "learning") {
         const [nextMappings, nextThemeGroups] = await Promise.all([
@@ -301,7 +322,12 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         return "Select a room from the room register before completing the check.";
       }
 
-      for (const valueKey of elevateValueKeys) {
+      const purposes = splitDelimitedValues(getResponseValue(sections, values, "intended_purpose"));
+      if (purposes.length === 0 || purposes.some((purpose) => !environmentPurposes.includes(purpose))) {
+        return "Select at least one intended purpose from the administrator-controlled list.";
+      }
+
+      for (const valueKey of environmentPillars.filter((pillar) => pillar.isActive).map((pillar) => pillar.pillarKey)) {
         const score = getResponseValue(sections, values, `${valueKey}_score`);
         const action = getResponseValue(sections, values, `${valueKey}_action`);
         const owner = getResponseValue(sections, values, `${valueKey}_owner`);
@@ -337,7 +363,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     }
 
     if (!asDraft) {
-      const validationMessage = validateForSubmit(createSections, responses, selectedFacultyId, selectedTeamId, agreedTheme);
+      const validationMessage = validateForSubmit(createEntrySections, responses, selectedFacultyId, selectedTeamId, agreedTheme);
       if (validationMessage) {
         setStatusMessage(validationMessage);
         return;
@@ -371,7 +397,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       subjectStaffId: context.subjectStaffId,
       orgUnitId: context.orgUnitId,
       recordDate: context.dateValue,
-      responses: flattenResponses(createSections, responses, false),
+      responses: flattenResponses(createEntrySections, responses, false),
       saveAsDraft: asDraft,
       actions: mode === "learning" && !asDraft
         ? learningWalkActions.map((action) => ({
@@ -432,7 +458,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     }
 
     if (selectedDetail.submissionStatus === "submitted") {
-      const validationMessage = validateForSubmit(editSections, editResponses, editFacultyId, editTeamId, editAgreedTheme);
+      const validationMessage = validateForSubmit(editEntrySections, editResponses, editFacultyId, editTeamId, editAgreedTheme);
       if (validationMessage) {
         setStatusMessage(validationMessage);
         return;
@@ -512,10 +538,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   }
 
   async function createLinkedAction() {
-    if (!selectedDetail || !actionTitle.trim() || !actionOwnerId || (mode === "learning" && !actionDueDate)) {
-      setStatusMessage(mode === "learning"
-        ? "A Learning Walk action needs an action, owner and implementation date."
-        : "A linked action needs a title and an owner.");
+    const requiresDueDate = mode === "learning" || mode === "elevate";
+    if (!selectedDetail || !actionTitle.trim() || !actionOwnerId || (requiresDueDate && !actionDueDate)) {
+      setStatusMessage(
+        mode === "learning"
+          ? "A Learning Walk action needs an action, owner and implementation date."
+          : mode === "elevate"
+            ? "A Learning Environment action needs an action, owner and date for review."
+            : "A linked action needs a title and an owner."
+      );
       return;
     }
 
@@ -695,9 +726,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   <small>Created by {user.displayName}</small>
                 </div>
               ) : null}
-              {definition.sections.map((section) => (
+              {createEntrySections.map((section) => (
                 <div className="entry-section" key={section.id}>
-                  <h3>{section.title}</h3>
+                  <EnvironmentPillarHeader pillar={getEnvironmentPillar(mode, section.sectionKey, environmentPillars)} title={section.title} />
                   <div className="entry-field-grid">
                     {section.fields
                       .filter((field) => !isLegacyCpdParticipantField(mode, field))
@@ -705,6 +736,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                       .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
+                        environmentPurposes={environmentPurposes}
                         field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
                         learningWalkThemeGroups={learningWalkThemeGroups}
@@ -923,9 +955,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
           {isEditing ? (
             <div className="entry-form">
-              {selectedDetail.sections.map((section) => (
+              {editEntrySections.map((section) => (
                 <div className="entry-section" key={section.id}>
-                  <h3>{section.title}</h3>
+                  <EnvironmentPillarHeader pillar={getEnvironmentPillar(mode, section.sectionKey, environmentPillars)} title={section.title} />
                   <div className="entry-field-grid">
                     {section.fields
                       .filter((field) => !isLegacyCpdParticipantField(mode, field))
@@ -933,6 +965,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                       .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
+                        environmentPurposes={environmentPurposes}
                         field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
                         learningWalkThemeGroups={learningWalkThemeGroups}
@@ -955,9 +988,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
           ) : (
             <>
               <div className="answer-section-list">
-                {selectedDetail.sections.map((section) => (
+                {detailSections.map((section) => (
                   <div className="answer-section" key={section.id}>
-                    <h3>{section.title}</h3>
+                    <EnvironmentPillarHeader pillar={getEnvironmentPillar(mode, section.sectionKey, environmentPillars)} title={section.title} />
                     <div className="answer-grid">
                       {section.fields
                         .filter((field) => !isLegacyCpdParticipantField(mode, field))
@@ -1009,7 +1042,10 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   />
                 </label>
                 <label className="entry-field">
-                  <span>Date to be implemented by {mode === "learning" ? <strong>Required</strong> : null}</span>
+                  <span>
+                    {mode === "elevate" ? "Date for review" : "Date to be implemented by"}
+                    {mode === "learning" || mode === "elevate" ? <strong>Required</strong> : null}
+                  </span>
                   <input onChange={(event) => setActionDueDate(event.target.value)} type="date" value={actionDueDate} />
                 </label>
               </div>
@@ -1059,10 +1095,12 @@ function FieldInput({
   selectedFacultyId,
   staff,
   cpdThemes,
+  environmentPurposes,
   learningWalkThemeGroups,
   value
 }: {
   cpdThemes: string[];
+  environmentPurposes: string[];
   field: FormFieldDefinition;
   onChange: (value: string) => void;
   orgUnits: OrgUnitSummary[];
@@ -1096,6 +1134,19 @@ function FieldInput({
           staff={staff}
           value={value}
         />
+      </div>
+    );
+  }
+
+  if (field.fieldType === "room_lookup") {
+    return (
+      <div className="entry-field">
+        <span>
+          {field.label}
+          {field.isRequired ? <strong>Required</strong> : null}
+        </span>
+        <RoomSearchSelect id={`room-${field.id}`} onChange={onChange} rooms={rooms} value={value} />
+        {field.helpText ? <small>{field.helpText}</small> : null}
       </div>
     );
   }
@@ -1156,24 +1207,6 @@ function FieldInput({
       ) : null}
       {field.fieldType === "number" ? (
         <input min="0" type="number" value={value} onChange={(event) => onChange(event.target.value)} />
-      ) : null}
-      {field.fieldType === "room_lookup" ? (
-        <>
-          <input
-            autoComplete="off"
-            list={`room-options-${field.id}`}
-            onChange={(event) => onChange(event.target.value.toLocaleUpperCase())}
-            placeholder="Start typing a room code"
-            role="combobox"
-            type="text"
-            value={value}
-          />
-          <datalist id={`room-options-${field.id}`}>
-            {rooms.map((room) => (
-              <option key={room.id} value={room.roomCode}>{room.buildingName}</option>
-            ))}
-          </datalist>
-        </>
       ) : null}
       {field.fieldType === "faculty_lookup" ? (
         <select value={value} onChange={(event) => onChange(event.target.value)}>
@@ -1281,7 +1314,7 @@ function FieldInput({
       ) : null}
       {field.fieldType === "checkbox_group" ? (
         <div className="preview-check-list">
-          {(field.options?.length ? field.options : getCheckboxOptions(field.fieldKey, cpdThemes)).map((option) => (
+          {(field.options?.length ? field.options : getCheckboxOptions(field.fieldKey, cpdThemes, environmentPurposes)).map((option) => (
             <label key={option}>
               <input
                 checked={selectedValues.includes(option)}
@@ -1315,11 +1348,87 @@ function FieldInput({
   );
 }
 
+function EnvironmentPillarHeader({
+  pillar,
+  title
+}: {
+  pillar?: ElevateEnvironmentPillarSummary;
+  title: string;
+}) {
+  if (!pillar) {
+    return <h3>{title}</h3>;
+  }
+
+  return (
+    <div className="environment-pillar-heading">
+      <img alt={pillar.assetAltText} loading="lazy" src={pillar.assetUri} />
+      <div>
+        <span>Learning environment pillar{pillar.isActive ? "" : " · Inactive"}</span>
+        <h3>{pillar.name}</h3>
+        <p>{pillar.description}</p>
+      </div>
+    </div>
+  );
+}
+
+type EnvironmentSectionLike = {
+  sectionKey: string;
+  displayOrder: number;
+};
+
+function getEnvironmentPillar(
+  mode: WorkspaceMode,
+  sectionKey: string,
+  pillars: ElevateEnvironmentPillarSummary[]
+) {
+  return mode === "elevate" ? pillars.find((pillar) => pillar.pillarKey === sectionKey) : undefined;
+}
+
+function getEnvironmentEntrySections<T extends EnvironmentSectionLike>(
+  mode: WorkspaceMode,
+  sections: T[],
+  pillars: ElevateEnvironmentPillarSummary[]
+) {
+  if (mode !== "elevate" || pillars.length === 0) {
+    return sections;
+  }
+
+  const byKey = new Map(pillars.map((pillar) => [pillar.pillarKey, pillar]));
+  return orderEnvironmentSections(
+    mode,
+    sections.filter((section) => !byKey.has(section.sectionKey) || byKey.get(section.sectionKey)?.isActive),
+    pillars
+  );
+}
+
+function orderEnvironmentSections<T extends EnvironmentSectionLike>(
+  mode: WorkspaceMode,
+  sections: T[],
+  pillars: ElevateEnvironmentPillarSummary[]
+) {
+  if (mode !== "elevate" || pillars.length === 0) {
+    return sections;
+  }
+
+  const byKey = new Map(pillars.map((pillar) => [pillar.pillarKey, pillar]));
+  return [...sections].sort((left, right) => {
+    const leftPillar = byKey.get(left.sectionKey);
+    const rightPillar = byKey.get(right.sectionKey);
+    const leftOrder = leftPillar ? 1000 + leftPillar.displayOrder : left.displayOrder;
+    const rightOrder = rightPillar ? 1000 + rightPillar.displayOrder : right.displayOrder;
+    return leftOrder - rightOrder;
+  });
+}
+
 const workScrutinyTagOptions = ["Good Practice", "Development", "Compliance", "Assessment", "Feedback"];
 
-function getCheckboxOptions(fieldKey: string, cpdThemes: string[]) {
+function getCheckboxOptions(fieldKey: string, cpdThemes: string[], environmentPurposes: string[]) {
   if (fieldKey === "cpd_themes") {
     return cpdThemes;
+  }
+
+  if (fieldKey === "intended_purpose") {
+    return environmentPurposes;
   }
 
   return [];
@@ -1595,8 +1704,6 @@ function formatAnswer(
 
   return value;
 }
-
-const elevateValueKeys = ["aspirational", "collaborative", "respectful", "innovative", "inclusion"] as const;
 
 const elevateScoreLabels: Record<string, string> = {
   "0": "0 - Barrier",
