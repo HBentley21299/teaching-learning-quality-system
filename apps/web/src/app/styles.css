@@ -5174,6 +5174,116 @@ td {
   overflow: hidden;
 }
 
+.onboarding-shell {
+  background: #eef2ef;
+  min-height: 100vh;
+}
+
+.onboarding-header {
+  align-items: center;
+  background: var(--nav);
+  color: #eef7f2;
+  display: flex;
+  justify-content: space-between;
+  min-height: 68px;
+  padding: 10px 24px;
+}
+
+.onboarding-brand {
+  padding: 0;
+}
+
+.onboarding-header .icon-button {
+  color: #eef7f2;
+}
+
+.onboarding-workspace {
+  margin: 0 auto;
+  max-width: 860px;
+  padding: 64px 24px;
+}
+
+.onboarding-heading {
+  border-bottom: 1px solid var(--line-strong);
+  padding-bottom: 22px;
+}
+
+.onboarding-heading h1 {
+  font-size: 2rem;
+  margin: 6px 0 8px;
+}
+
+.onboarding-heading p {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.onboarding-form {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 22px;
+  margin-top: 24px;
+  padding: 28px;
+}
+
+.onboarding-form .entry-field > span {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.onboarding-category-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.onboarding-category-fieldset legend {
+  font-size: 0.84rem;
+  font-weight: 700;
+  margin-bottom: 9px;
+}
+
+.onboarding-category-fieldset strong,
+.onboarding-form .entry-field strong {
+  color: var(--red);
+  font-size: 0.7rem;
+  margin-left: auto;
+}
+
+.onboarding-category-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.onboarding-category-options label {
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  min-height: 46px;
+  padding: 10px 12px;
+}
+
+.onboarding-category-options label:hover,
+.onboarding-category-options label.is-selected {
+  background: #eaf5ef;
+  border-color: #70a992;
+}
+
+.onboarding-actions {
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 20px;
+}
+
 .organisation-unit-layout {
   display: grid;
   grid-template-columns: minmax(310px, 380px) minmax(0, 1fr);
@@ -5350,8 +5460,90 @@ td {
 }
 
 .organisation-manager-section,
-.organisation-manager-assignment {
+.organisation-manager-assignment,
+.organisation-team-members {
   margin-top: 20px;
+}
+
+.organisation-leader-queue {
+  align-items: start;
+  background: #fff8ec;
+  border-bottom: 1px solid #e5cfa7;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(0, 1.3fr);
+  margin: 0 -18px;
+  padding: 14px 18px;
+}
+
+.organisation-leader-queue > div:first-child,
+.organisation-leader-list button span,
+.organisation-member-list > div > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.organisation-leader-queue span,
+.organisation-leader-list small,
+.organisation-member-list small {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.organisation-leader-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.organisation-leader-list button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d9bc87;
+  border-radius: 5px;
+  color: #3e3528;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.organisation-member-assignment {
+  background: #f6f8f7;
+  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding: 14px;
+}
+
+.organisation-primary-toggle {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.organisation-member-list {
+  display: grid;
+  margin-top: 8px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.organisation-member-list > div {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 9px 2px;
+}
+
+.organisation-member-list > div > span:last-child {
+  color: #315c4e;
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 .organisation-current-manager,
@@ -5605,6 +5797,10 @@ td {
 }
 
 @media (max-width: 900px) {
+  .organisation-leader-queue {
+    grid-template-columns: 1fr;
+  }
+
   .organisation-unit-layout {
     grid-template-columns: 1fr;
   }
@@ -5624,6 +5820,18 @@ td {
 }
 
 @media (max-width: 680px) {
+  .onboarding-workspace {
+    padding: 32px 14px;
+  }
+
+  .onboarding-form {
+    padding: 20px;
+  }
+
+  .onboarding-category-options {
+    grid-template-columns: 1fr;
+  }
+
   .admin-record-filters {
     grid-template-columns: 1fr;
   }

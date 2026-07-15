@@ -4,6 +4,7 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  UserPlus,
   UserRoundCog,
   Users,
   X
@@ -13,6 +14,7 @@ import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
   AdminOrganisationStaffOption,
+  AdminOrganisationStaff,
   AdminOrganisationStructure,
   AdminOrganisationUnit
 } from "../services/types";
@@ -24,6 +26,7 @@ type PendingManagerChange = {
 
 export function OrganisationStructureAdmin() {
   const [workspace, setWorkspace] = useState<AdminOrganisationStructure | null>(null);
+  const [staffDetails, setStaffDetails] = useState<AdminOrganisationStaff[]>([]);
   const [selectedUnitId, setSelectedUnitId] = useState("");
   const [unitSearch, setUnitSearch] = useState("");
   const [managerSearch, setManagerSearch] = useState("");
@@ -32,6 +35,10 @@ export function OrganisationStructureAdmin() {
   const [changeReason, setChangeReason] = useState("");
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isAddingStaff, setIsAddingStaff] = useState(false);
+  const [staffSearch, setStaffSearch] = useState("");
+  const [selectedStaffId, setSelectedStaffId] = useState("");
+  const [makePrimary, setMakePrimary] = useState(false);
 
   useEffect(() => {
     void refresh();
@@ -39,8 +46,12 @@ export function OrganisationStructureAdmin() {
 
   async function refresh(nextMessage = "") {
     try {
-      const nextWorkspace = await api.adminOrganisationStructure();
+      const [nextWorkspace, nextStaffDetails] = await Promise.all([
+        api.adminOrganisationStructure(),
+        api.adminOrganisationStaff()
+      ]);
       setWorkspace(nextWorkspace);
+      setStaffDetails(nextStaffDetails);
       setSelectedUnitId((current) => nextWorkspace.units.some((unit) => unit.id === current)
         ? current
         : nextWorkspace.units.find((unit) => unit.orgUnitType === "faculty")?.id ?? nextWorkspace.units[0]?.id ?? "");
@@ -90,12 +101,75 @@ export function OrganisationStructureAdmin() {
 
   const selectedManager = staff.find((person) => person.staffId === selectedManagerId) ?? null;
   const managedUnitCount = units.filter((unit) => unit.manager).length;
+  const selectedUnitMembers = useMemo(() => {
+    if (!selectedUnit) return [];
+    return staffDetails
+      .filter((person) => person.memberships.some((membership) => membership.orgUnitId === selectedUnit.id && membership.isActive))
+      .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  }, [selectedUnit, staffDetails]);
+  const staffCandidates = useMemo(() => {
+    if (!selectedUnit || selectedUnit.orgUnitType !== "team" || selectedStaffId) return [];
+    const query = staffSearch.trim().toLocaleLowerCase();
+    if (!query) return [];
+    const allocatedIds = new Set(selectedUnitMembers.map((person) => person.staffId));
+    return staffDetails
+      .filter((person) => !allocatedIds.has(person.staffId) && person.accountStatus === "active")
+      .filter((person) => [person.displayName, person.externalId, person.email]
+        .some((value) => value.toLocaleLowerCase().includes(query)))
+      .slice(0, 8);
+  }, [selectedStaffId, selectedUnit, selectedUnitMembers, staffDetails, staffSearch]);
+  const selectedStaff = staffDetails.find((person) => person.staffId === selectedStaffId) ?? null;
+  const awaitingLeaders = useMemo(() => {
+    const facultyManagers = new Set(units.filter((unit) => unit.orgUnitType === "faculty" && unit.manager).map((unit) => unit.manager!.staffId));
+    const teamManagers = new Set(units.filter((unit) => unit.orgUnitType === "team" && unit.manager).map((unit) => unit.manager!.staffId));
+    return staffDetails.flatMap((person) => {
+      if ((person.staffCategory === "head_of_faculty_sector_manager" || person.roleNames.includes("Head of Faculty"))
+          && !facultyManagers.has(person.staffId)) {
+        return [{ person, roleName: "Head of Faculty / Sector Manager" }];
+      }
+      if ((person.staffCategory === "programme_leader" || person.roleNames.includes("Programme Leader"))
+          && !teamManagers.has(person.staffId)) {
+        return [{ person, roleName: "Programme Leader" }];
+      }
+      return [];
+    });
+  }, [staffDetails, units]);
 
   function selectUnit(unitId: string) {
     setSelectedUnitId(unitId);
     setManagerSearch("");
     setSelectedManagerId("");
+    setIsAddingStaff(false);
+    setStaffSearch("");
+    setSelectedStaffId("");
+    setMakePrimary(false);
     setMessage("");
+  }
+
+  async function addStaffToTeam() {
+    if (!selectedUnit || selectedUnit.orgUnitType !== "team" || !selectedStaff) return;
+    setIsSaving(true);
+    const result = await api.saveOrganisationMembership(selectedStaff.staffId, {
+      orgUnitId: selectedUnit.id,
+      membershipType: "member",
+      isPrimary: makePrimary
+    });
+    setIsSaving(false);
+    if (!result.ok) {
+      setMessage(result.message ?? "The staff allocation could not be saved.");
+      return;
+    }
+    setIsAddingStaff(false);
+    setStaffSearch("");
+    setSelectedStaffId("");
+    setMakePrimary(false);
+    await refresh(`${selectedStaff.displayName} added to ${selectedUnit.code}.`);
+  }
+
+  function prepareLeaderAssignment(person: AdminOrganisationStaff) {
+    setManagerSearch(person.displayName);
+    setSelectedManagerId(person.staffId);
+    setMessage("Select the correct faculty or team, then confirm the manager assignment.");
   }
 
   async function assignInitialManager() {
@@ -158,6 +232,23 @@ export function OrganisationStructureAdmin() {
       </div>
 
       {message ? <div className="notice-row" role="status">{message}</div> : null}
+
+      {awaitingLeaders.length > 0 ? (
+        <div className="organisation-leader-queue">
+          <div>
+            <strong>Leaders awaiting managed unit</strong>
+            <span>{awaitingLeaders.length} self-declared {awaitingLeaders.length === 1 ? "leader needs" : "leaders need"} an Admin allocation.</span>
+          </div>
+          <div className="organisation-leader-list">
+            {awaitingLeaders.map(({ person, roleName }) => (
+              <button key={`${person.staffId}-${roleName}`} onClick={() => prepareLeaderAssignment(person)} type="button">
+                <UserRoundCog aria-hidden="true" size={16} />
+                <span><strong>{person.displayName}</strong><small>{roleName}</small></span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="organisation-unit-layout">
         <aside className="organisation-unit-directory" aria-label="Faculties and teams">
@@ -301,6 +392,73 @@ export function OrganisationStructureAdmin() {
                 </div>
               ) : null}
             </div>
+
+            {selectedUnit.orgUnitType === "team" ? (
+              <div className="organisation-team-members">
+                <div className="admin-detail-heading">
+                  <div><h3>Team members</h3><span>{selectedUnitMembers.length} direct allocations</span></div>
+                  <Button icon={UserPlus} onClick={() => setIsAddingStaff((current) => !current)}>
+                    {isAddingStaff ? "Close" : "Add staff"}
+                  </Button>
+                </div>
+
+                {isAddingStaff ? (
+                  <div className="organisation-member-assignment">
+                    <label className="entry-field">
+                      <span>Staff search</span>
+                      <div className="staff-combobox">
+                        <Search aria-hidden="true" size={17} />
+                        <input
+                          aria-autocomplete="list"
+                          aria-controls="organisation-member-candidates"
+                          aria-expanded={staffCandidates.length > 0}
+                          onChange={(event) => { setStaffSearch(event.target.value); setSelectedStaffId(""); }}
+                          placeholder="Type a name, AD number or email"
+                          role="combobox"
+                          value={staffSearch}
+                        />
+                      </div>
+                    </label>
+                    {staffCandidates.length > 0 ? (
+                      <div className="staff-search-results organisation-manager-candidates" id="organisation-member-candidates" role="listbox">
+                        {staffCandidates.map((person) => (
+                          <button
+                            key={person.staffId}
+                            onClick={() => { setSelectedStaffId(person.staffId); setStaffSearch(person.displayName); }}
+                            role="option"
+                            type="button"
+                          >
+                            <span><strong>{person.displayName}</strong><small>{person.externalId} / {person.email}</small></span>
+                            <span>{person.effectivePermissionLevel}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {selectedStaff ? (
+                      <div className="organisation-selected-manager">
+                        <UserPlus aria-hidden="true" size={18} />
+                        <div><strong>{selectedStaff.displayName}</strong><span>{selectedStaff.externalId} / {selectedStaff.email}</span></div>
+                        <label className="organisation-primary-toggle">
+                          <input checked={makePrimary} onChange={(event) => setMakePrimary(event.target.checked)} type="checkbox" />
+                          <span>Primary team</span>
+                        </label>
+                        <Button disabled={isSaving} icon={UserPlus} onClick={() => void addStaffToTeam()} variant="primary">Add to team</Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <div className="organisation-member-list">
+                  {selectedUnitMembers.map((person) => (
+                    <div key={person.staffId}>
+                      <span><strong>{person.displayName}</strong><small>{person.externalId} / {person.email}</small></span>
+                      <span>{person.memberships.find((membership) => membership.orgUnitId === selectedUnit.id)?.isPrimary ? "Primary" : "Additional"}</span>
+                    </div>
+                  ))}
+                  {selectedUnitMembers.length === 0 ? <div className="empty-row">No staff are directly allocated to this team.</div> : null}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : <div className="empty-row">Select a faculty or team.</div>}
       </div>

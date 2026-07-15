@@ -16,6 +16,7 @@ import type {
   CoachingSessionDetail,
   CoachingSessionSaveSummary,
   CoachingSessionSummary,
+  CompleteStaffOnboardingRequest,
   CourseSummary,
   CreateActionRequest,
   CreateAdminUserRequest,
@@ -56,6 +57,7 @@ import type {
   StaffProfileSummary,
   StaffReflectionSummary,
   StaffSummary,
+  StaffOnboardingOptions,
   SharedThemeGroup,
   SubmitFormRequest,
   UpdateActionRequest,
@@ -157,6 +159,9 @@ async function requestApi(url: string, init: RequestInit): Promise<Response> {
 
 export const api = {
   currentUser: () => getJson<CurrentUser>("/api/v1/me"),
+  staffOnboardingOptions: () => getJson<StaffOnboardingOptions>("/api/v1/onboarding/options"),
+  completeStaffOnboarding: (request: CompleteStaffOnboardingRequest) =>
+    sendJson<CompleteStaffOnboardingRequest, CurrentUser>("/api/v1/onboarding", "POST", request),
   modules: () => getJson<ModuleSummary[]>("/api/v1/modules"),
   lookups: () => getJson<LookupSummary[]>("/api/v1/lookups"),
   sharedThemes: (applicationKey: string) =>

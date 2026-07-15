@@ -3,6 +3,7 @@ import { AlertTriangle, LogOut, PanelLeftClose, Search } from "lucide-react";
 import { navigationItems, type AppRoute } from "./navigation";
 import { api } from "../services/api";
 import { isAuthEnabled, signOut } from "../services/auth";
+import { FirstTimeOnboarding } from "../components/FirstTimeOnboarding";
 import type {
   ActionSummary,
   AdminRecord,
@@ -171,6 +172,19 @@ export function App() {
       work_scrutiny: "scrutiny"
     };
     setRoute(recordRoutes[record.recordType] ?? "dashboard");
+  }
+
+  if (!isLoading && !loadError && !user.userAccountId) {
+    return (
+      <FirstTimeOnboarding
+        email={user.email}
+        onComplete={async (onboardedUser) => {
+          setUser(onboardedUser);
+          setIsLoading(true);
+          await loadCoreData();
+        }}
+      />
+    );
   }
 
   return (

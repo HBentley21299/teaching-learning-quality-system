@@ -31,7 +31,7 @@ public sealed partial class SqlFoundationDataStore
 
         var staff = await QueryAsync(
             """
-            SELECT staff.id, staff.external_id, staff.display_name, staff.email,
+            SELECT staff.id, staff.external_id, staff.display_name, staff.email, staff.staff_category,
                    COALESCE(effective_role.name, N'Tutor'), primary_unit.code
             FROM people.staff staff
             JOIN auth.user_accounts account ON account.staff_id = staff.id
@@ -59,8 +59,9 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
-                reader.GetString(4),
-                GetStringOrNull(reader, 5)),
+                GetStringOrNull(reader, 4),
+                reader.GetString(5),
+                GetStringOrNull(reader, 6)),
             cancellationToken);
 
         var leaderships = await QueryAsync(
@@ -160,6 +161,7 @@ public sealed partial class SqlFoundationDataStore
                 person.ExternalId,
                 person.DisplayName,
                 person.Email,
+                person.StaffCategory,
                 person.EffectivePermissionLevel,
                 person.PrimaryOrgCode)).ToArray());
     }
@@ -437,6 +439,7 @@ public sealed partial class SqlFoundationDataStore
         string ExternalId,
         string DisplayName,
         string Email,
+        string? StaffCategory,
         string EffectivePermissionLevel,
         string? PrimaryOrgCode);
 

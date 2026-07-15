@@ -6,6 +6,7 @@ public sealed record AdminOrganisationStaffSummary(
     string DisplayName,
     string Email,
     string AccountStatus,
+    string? StaffCategory,
     string EffectivePermissionLevel,
     IReadOnlyList<string> RoleNames,
     IReadOnlyList<AdminOrganisationMembershipSummary> Memberships,
@@ -88,6 +89,7 @@ public sealed record AdminOrganisationStaffOption(
     string ExternalId,
     string DisplayName,
     string Email,
+    string? StaffCategory,
     string EffectivePermissionLevel,
     string? PrimaryOrgCode);
 

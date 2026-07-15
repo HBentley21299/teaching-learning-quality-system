@@ -124,7 +124,8 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\022_organisation_admin_and_shared_governance.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\004_seed_elevate_rooms.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\005_seed_official_curriculum_staff.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\023_org_unit_management.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\023_org_unit_management.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\024_trusted_self_onboarding.sql")
 )
 
 if ($ExcludeOfficialStaffData) {
@@ -162,13 +163,25 @@ if ($BaselineExistingDatabase) {
         throw "Cannot baseline because the database does not contain the final V1 organisation schema."
     }
 
+    $baselineCutoff = "023_org_unit_management.sql"
+    $baselineScripts = @()
     foreach ($script in $scripts) {
+        $baselineScripts += $script
+        if ([System.IO.Path]::GetFileName($script) -eq $baselineCutoff) {
+            break
+        }
+    }
+    if ($baselineScripts.Count -eq 0 -or [System.IO.Path]::GetFileName($baselineScripts[-1]) -ne $baselineCutoff) {
+        throw "The baseline cutoff migration '$baselineCutoff' was not found."
+    }
+
+    foreach ($script in $baselineScripts) {
         $migrationKey = $script.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
         $checksum = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
         $escapedKey = $migrationKey.Replace("'", "''")
         Invoke-DatabaseQuery -Query "INSERT dbo.schema_migrations (migration_key, checksum_sha256) VALUES (N'$escapedKey', '$checksum');" | Out-Null
     }
-    Write-Host "Existing database baselined with $($scripts.Count) migration entries."
+    Write-Host "Existing V1 database baselined through $baselineCutoff with $($baselineScripts.Count) migration entries."
 }
 
 foreach ($script in $scripts) {

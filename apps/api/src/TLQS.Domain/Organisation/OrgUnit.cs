@@ -17,6 +17,7 @@ public sealed class StaffOrgMembership : AuditableEntity
     public Guid StaffId { get; set; }
     public Guid OrgUnitId { get; set; }
     public string MembershipType { get; set; } = "member";
+    public string AssignmentSource { get; set; } = "manual";
     public bool IsPrimary { get; set; }
     public DateOnly? ActiveFrom { get; set; }
     public DateOnly? ActiveTo { get; set; }

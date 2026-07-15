@@ -903,6 +903,24 @@ export type CurrentUser = {
   scopes: Array<{ scopeType: string; orgUnitId?: string; staffId?: string }>;
 };
 
+export type StaffOnboardingCategory = {
+  key: string;
+  name: string;
+  displayOrder: number;
+};
+
+export type StaffOnboardingOptions = {
+  faculties: OrgUnitSummary[];
+  teams: OrgUnitSummary[];
+  categories: StaffOnboardingCategory[];
+};
+
+export type CompleteStaffOnboardingRequest = {
+  facultyOrgUnitId: string;
+  teamOrgUnitId: string;
+  staffCategory: string;
+};
+
 export type OrgUnitSummary = {
   id: string;
   parentOrgUnitId?: string;
@@ -958,6 +976,7 @@ export type AdminOrganisationStaff = {
   displayName: string;
   email: string;
   accountStatus: string;
+  staffCategory?: string;
   effectivePermissionLevel: string;
   roleNames: string[];
   memberships: AdminOrganisationMembership[];
@@ -994,6 +1013,7 @@ export type AdminOrganisationStaffOption = {
   externalId: string;
   displayName: string;
   email: string;
+  staffCategory?: string;
   effectivePermissionLevel: string;
   primaryOrgCode?: string;
 };

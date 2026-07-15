@@ -17,6 +17,42 @@ public static class FoundationEndpoints
             return Results.Ok(await GetCurrentUserAsync(principal, store, cancellationToken));
         });
 
+        api.MapGet("/onboarding/options", async (SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+            Results.Ok(await store.GetStaffOnboardingOptionsAsync(cancellationToken)));
+
+        api.MapPost("/onboarding", async (CompleteStaffOnboardingRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (currentUser.UserAccountId.HasValue)
+            {
+                return Results.Conflict(new { Message = "This Microsoft account has already completed onboarding." });
+            }
+
+            var email = principal.FindFirstValue("preferred_username")
+                ?? principal.FindFirstValue("email")
+                ?? principal.FindFirstValue(ClaimTypes.Email);
+            var objectId = principal.FindFirstValue("oid");
+            var displayName = principal.FindFirstValue("name")
+                ?? principal.Identity?.Name
+                ?? email?.Split('@')[0];
+            if (string.IsNullOrWhiteSpace(email)
+                || string.IsNullOrWhiteSpace(objectId)
+                || string.IsNullOrWhiteSpace(displayName)
+                || !Guid.TryParse(principal.FindFirstValue("tid"), out var tenantId))
+            {
+                return Results.BadRequest(new { Message = "Your Microsoft sign-in is missing the Entra identity details required to create an account." });
+            }
+
+            var onboardedUser = await store.CompleteStaffOnboardingAsync(
+                request,
+                email,
+                displayName,
+                objectId,
+                tenantId,
+                cancellationToken);
+            return Results.Ok(onboardedUser);
+        });
+
         api.MapGet("/modules", async (SqlFoundationDataStore store, CancellationToken cancellationToken) =>
             Results.Ok(await store.GetModulesAsync(cancellationToken)));
 

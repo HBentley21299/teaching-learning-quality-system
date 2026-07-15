@@ -13,7 +13,7 @@ public sealed partial class SqlFoundationDataStore
     {
         var staff = await QueryAsync(
             """
-            SELECT id, external_id, display_name, email, account_status
+            SELECT id, external_id, display_name, email, account_status, staff_category
             FROM people.staff
             WHERE archived_at IS NULL
             ORDER BY display_name;
@@ -23,7 +23,8 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
-                reader.GetString(4)),
+                reader.GetString(4),
+                GetStringOrNull(reader, 5)),
             cancellationToken);
 
         var memberships = await QueryAsync(
@@ -119,6 +120,7 @@ public sealed partial class SqlFoundationDataStore
                 person.DisplayName,
                 person.Email,
                 person.AccountStatus,
+                person.StaffCategory,
                 personRoles.FirstOrDefault()?.RoleName ?? "Tutor",
                 personRoles.Select(role => role.RoleName).ToArray(),
                 memberships
@@ -842,7 +844,7 @@ public sealed partial class SqlFoundationDataStore
         }
     }
 
-    private sealed record OrganisationStaffRow(Guid StaffId, string ExternalId, string DisplayName, string Email, string AccountStatus);
+    private sealed record OrganisationStaffRow(Guid StaffId, string ExternalId, string DisplayName, string Email, string AccountStatus, string? StaffCategory);
     private sealed record OrganisationMembershipRow(
         Guid Id,
         Guid StaffId,
