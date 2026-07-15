@@ -1,0 +1,120 @@
+# Azure V1 Deployment
+
+This runbook creates the first deployable Teaching & Learning Quality System
+environment. Use a non-production subscription first, then repeat for production
+after acceptance testing.
+
+## 1. Required Access And Tools
+
+The deployment operator needs:
+
+- Contributor and User Access Administrator on the target resource group or subscription.
+- Permission to create an Azure SQL Microsoft Entra administrator.
+- Azure CLI, .NET 10 SDK, Node.js 24 and `sqlcmd` 18 or later.
+- An Entra SQL administrator account that can use MFA when `sqlcmd -G` opens authentication.
+
+Verify the local build before touching Azure:
+
+```powershell
+.\scripts\check-prerequisites.ps1
+.\scripts\verify-v1.ps1
+az login --tenant <college-tenant-id>
+az account set --subscription <subscription-id>
+```
+
+## 2. Entra Applications
+
+Create separate Entra app registrations for the API and SPA.
+
+For the API registration:
+
+- Record its application/client ID.
+- Expose delegated scope `access_as_user`.
+- Use `api://<api-client-id>` as the Application ID URI.
+
+For the SPA registration:
+
+- Add permission `api://<api-client-id>/access_as_user` and grant college consent.
+- Record its application/client ID.
+- After Azure provisioning, add the exact HTTPS application URL as a SPA redirect URI and logout URL.
+- Do not add wildcard or localhost redirect URIs to the production registration.
+
+Authentication and MFA stay in Entra. The application stores no staff passwords.
+
+## 3. First Deployment
+
+Run from the repository root with a clean, committed working tree:
+
+```powershell
+.\scripts\deploy-azure.ps1 `
+  -ResourceGroup "rg-tlqs-prod" `
+  -Location "uksouth" `
+  -EnvironmentName prod `
+  -SqlAdministratorLogin "TLQS SQL Administrators" `
+  -SqlAdministratorObjectId "<entra-group-object-id>" `
+  -SqlAdministratorPrincipalType Group `
+  -EntraApiAudience "<api-client-id>" `
+  -EntraSpaClientId "<spa-client-id>" `
+  -EntraApiScope "api://<api-client-id>/access_as_user" `
+  -IncludeOfficialStaffData
+```
+
+For a development deployment in a personal or trial subscription, use
+`-EnvironmentName dev` and do not pass `-IncludeOfficialStaffData`. Development
+is the default and excludes the official curriculum staff seed. Never import
+real staff or quality records into a personally owned subscription.
+
+The script performs these operations in order:
+
+1. Runs Release builds, tests and dependency audits.
+2. Provisions or updates `infra/azure/main.bicep`.
+3. Temporarily allows only the operator's public IPv4 address to reach Azure SQL.
+4. Applies ordered, forward-only SQL migrations and seeds.
+5. Grants the App Service managed identity `db_datareader`, `db_datawriter` and `EXECUTE`.
+6. Deploys the hashed same-origin UI/API release package.
+7. Removes the SQL firewall rule, disables SQL public access and verifies `/health/ready`.
+
+The SQL lockdown is in a `finally` block and runs after failed deployments too.
+Never use `fix-localdb.ps1`, `-Reset`, `.mdf` files or local connection strings
+against Azure SQL.
+
+## 4. GitHub Production Environment
+
+After the first deployment succeeds, create a protected GitHub environment named
+`production` with required reviewers. Add these environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Client ID of the GitHub OIDC deployment identity |
+| `AZURE_TENANT_ID` | College tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Production subscription ID |
+| `AZURE_RESOURCE_GROUP` | Deployed resource group |
+| `AZURE_APP_SERVICE_NAME` | Bicep output `appServiceName` |
+| `PRODUCTION_URL` | Bicep output `appUrl` |
+| `ENTRA_SPA_CLIENT_ID` | SPA registration client ID |
+| `ENTRA_API_SCOPE` | `api://<api-client-id>/access_as_user` |
+
+Configure a federated credential on the deployment identity for the repository's
+`production` environment. Grant it only the App Service deployment permissions
+needed in the production resource group. The workflow uses OIDC; do not create a
+long-lived Azure client secret.
+
+The `Deploy production` workflow is intentionally manual and protected. Its
+`database_ready` approval must be checked before it will deploy. Run the full
+local deployment script whenever a release includes database migrations; the
+GitHub workflow deploys application releases only after the target schema is ready.
+
+## 5. Go-Live Checks
+
+Before importing live activity data:
+
+- Add the exact production URL to the SPA registration and test sign-in/sign-out.
+- Confirm Admin, T&L, Director, Head of Faculty, Programme Leader and Tutor accounts.
+- Test faculty and team scope across dashboards, records, actions and staff profiles.
+- Complete one staging workflow for every V1 module and inspect its audit history.
+- Verify an Azure SQL point-in-time restore and a Blob soft-delete restore.
+- Configure alerts for readiness failure, HTTP 5xx, failed sign-ins, SQL capacity and storage errors.
+- Record the deployed Git commit and `.artifacts/v1/manifest.json` with release approval.
+
+Custom DNS can be added after the default App Service URL is accepted. Register
+the final DNS URL in Entra before switching users to it.

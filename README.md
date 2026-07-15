@@ -96,3 +96,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-v1.ps1
 
 Deployment requirements and rollback checks are maintained in
 [`docs/deployment/v1-readiness.md`](docs/deployment/v1-readiness.md).
+
+For the first Azure deployment, follow
+[`docs/deployment/azure-v1.md`](docs/deployment/azure-v1.md). The guarded
+`scripts/deploy-azure.ps1` command provisions infrastructure, applies database
+migrations, grants the App Service managed identity database access, deploys the
+same-origin UI/API package, closes temporary SQL access and checks readiness.

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using TLQS.Api.Data;
 using TLQS.Api.Security;
 using TLQS.Api.V1;
@@ -86,6 +87,12 @@ else
 }
 
 builder.Services.AddAuthorization();
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 var app = builder.Build();
 var requestLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("TLQS.Api.Requests");
@@ -119,6 +126,7 @@ app.Use(async (context, next) =>
 });
 
 app.UseExceptionHandler();
+app.UseForwardedHeaders();
 
 if (!app.Environment.IsDevelopment())
 {
@@ -126,6 +134,19 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 app.UseResponseCompression();
+app.UseDefaultFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        var cacheDuration = context.File.Name.Equals("index.html", StringComparison.OrdinalIgnoreCase)
+            ? TimeSpan.Zero
+            : TimeSpan.FromDays(30);
+        context.Context.Response.Headers.CacheControl = cacheDuration == TimeSpan.Zero
+            ? "no-cache"
+            : $"public,max-age={(int)cacheDuration.TotalSeconds},immutable";
+    }
+});
 app.UseCors("web");
 app.UseAuthentication();
 app.UseAuthorization();
@@ -169,5 +190,12 @@ app.MapGet("/health/ready", ReadinessAsync);
 app.MapGet("/health", ReadinessAsync);
 
 app.MapFoundationEndpoints();
+
+// Production packages the React application into wwwroot. Client-side routes
+// resolve to index.html while API and health endpoints retain their own 404s.
+if (File.Exists(Path.Combine(app.Environment.WebRootPath ?? "wwwroot", "index.html")))
+{
+    app.MapFallbackToFile("{*path:nonfile}", "index.html");
+}
 
 app.Run();

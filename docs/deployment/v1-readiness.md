@@ -4,17 +4,18 @@ This is the release gate for the first production deployment of the Teaching &
 Learning Quality System. A successful build is necessary, but it is not the
 same as approval to use live staff data.
 
-## Recommended V1 Topology
+## V1 Topology
 
-- React production artifact on an approved Azure static web host.
-- ASP.NET Core API on Azure App Service.
+- React production artifact and ASP.NET Core API on one Azure App Service origin.
 - Azure SQL Database using managed identity at runtime.
 - Azure Blob Storage for evidence, with public access disabled.
 - Microsoft Entra ID for staff sign-in and Conditional Access.
 - Application Insights and Azure Monitor for logs, metrics and alerts.
 
-The web and API artifacts are intentionally independent. This allows the web
-host to cache immutable assets while the API scales and deploys separately.
+The release still emits independent web and API artifacts, but V1 copies the web
+artifact into the API `wwwroot`. This avoids CORS and split-release failures for
+the initial 500-user deployment. The frontend can move to a static host later
+without changing the API or data model.
 
 ## Current Release Command
 
@@ -85,16 +86,16 @@ wildcard redirect URIs.
 
 ## Infrastructure Gate
 
-`infra/azure/main.bicep` is currently a foundation template. Do not deploy it
-unchanged for V1. Before deployment automation is enabled it must gain:
+`infra/azure/main.bicep` provisions the executable V1 environment: App Service,
+Azure SQL, private endpoints and DNS, VNet integration, Blob Storage, Key Vault,
+Application Insights and Log Analytics. Runtime database and Blob access use the
+App Service managed identity. SQL public access is disabled except for the exact
+operator IP while the guarded deployment script applies migrations.
 
-- An approved frontend host and DNS/TLS configuration.
-- A working private route from App Service to Azure SQL.
-- Private DNS and private endpoints where required.
-- Managed-identity role assignments for Blob Storage and Key Vault.
-- App Service settings listed above.
-- Staging and production environments with separate databases and storage.
-- Backup retention, storage soft delete/versioning and restore testing.
+Production approval still requires college IT to confirm the chosen Azure
+subscription, region, DNS name, Entra registrations, budget alerts, backup
+restore test and Conditional Access policy. Infrastructure readiness does not
+replace information-governance approval for live staff data.
 
 ## Pre-Production Test Gate
 

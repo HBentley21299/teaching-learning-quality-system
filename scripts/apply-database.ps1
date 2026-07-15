@@ -7,7 +7,11 @@ param(
 
     [string] $SqlCmd = "sqlcmd",
 
-    [string[]] $SqlCmdOptions = @()
+    [string[]] $SqlCmdOptions = @(),
+
+    [switch] $UseAzureAuthentication,
+
+    [switch] $ExcludeOfficialStaffData
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,13 +66,21 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\023_org_unit_management.sql")
 )
 
+if ($ExcludeOfficialStaffData) {
+    $scripts = @($scripts | Where-Object {
+        [System.IO.Path]::GetFileName($_) -ne "005_seed_official_curriculum_staff.sql"
+    })
+    Write-Host "Official curriculum staff seed excluded from this deployment."
+}
+
 foreach ($script in $scripts) {
     if (!(Test-Path $script)) {
         throw "Missing SQL script: $script"
     }
 
     Write-Host "Applying $script"
-    $arguments = @("-S", $Server, "-d", $Database, "-E", "-b") + $SqlCmdOptions + @("-i", $script)
+    $authenticationArguments = if ($UseAzureAuthentication) { @("-G") } else { @("-E") }
+    $arguments = @("-S", $Server, "-d", $Database) + $authenticationArguments + @("-b") + $SqlCmdOptions + @("-i", $script)
     Invoke-Native -FilePath $SqlCmd -Arguments $arguments
 }
 

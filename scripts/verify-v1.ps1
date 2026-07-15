@@ -19,7 +19,10 @@ $gitCommit = (& git -C $root rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitCommit)) {
     throw "The current Git commit could not be determined."
 }
-$gitBranch = (& git -C $root branch --show-current).Trim()
+$gitBranch = ((@(& git -C $root branch --show-current) -join "").Trim())
+if ([string]::IsNullOrWhiteSpace($gitBranch)) {
+    $gitBranch = "detached"
+}
 $gitChanges = @(& git -C $root status --porcelain)
 $isDirty = $gitChanges.Count -gt 0
 if ($isDirty -and !$AllowDirty) {
@@ -107,6 +110,13 @@ Invoke-Step "Publish API artifact" {
 
 Get-ChildItem -LiteralPath (Join-Path $webRoot "dist") -Force |
     Copy-Item -Destination $webOutput -Recurse -Force
+
+# V1 is deployed as one same-origin App Service package. Keep the standalone web
+# artifact as well so the frontend can move to a static host without a rebuild.
+$apiWebRoot = Join-Path $apiOutput "wwwroot"
+New-Item -ItemType Directory -Force -Path $apiWebRoot | Out-Null
+Get-ChildItem -LiteralPath $webOutput -Force |
+    Copy-Item -Destination $apiWebRoot -Recurse -Force
 
 [ordered]@{
     generatedAtUtc = [DateTimeOffset]::UtcNow.ToString("o")
