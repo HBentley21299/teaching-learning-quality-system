@@ -13,6 +13,7 @@ node_modules/
 .nuget-feed/
 .tmp/
 .localappdata/
+.artifacts/
 dist/
 coverage/
 .env

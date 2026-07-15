@@ -13,8 +13,13 @@ public static class PermissionKeys
     public const string EvidenceSubmit = "evidence.submit";
     public const string EvidenceReview = "evidence.review";
     public const string ActionsManage = "actions.manage";
+    public const string MyTeamView = "my_team.view";
+    public const string OrganisationManage = "organisation.manage";
+    public const string ListsManage = "lists.manage";
+    public const string RecordsManage = "records.manage";
     public const string LivSubmit = "liv.submit";
     public const string LivManage = "liv.manage";
+    public const string LivSensitiveRead = "liv.sensitive.read";
     public const string ElevateSubmit = "elevate.submit";
     public const string ElevateManage = "elevate.manage";
     public const string ElevatePracticeSubmit = "elevate_practice.submit";
@@ -36,8 +41,13 @@ public static class PermissionKeys
         EvidenceSubmit,
         EvidenceReview,
         ActionsManage,
+        MyTeamView,
+        OrganisationManage,
+        ListsManage,
+        RecordsManage,
         LivSubmit,
         LivManage,
+        LivSensitiveRead,
         ElevateSubmit,
         ElevateManage,
         ElevatePracticeSubmit,

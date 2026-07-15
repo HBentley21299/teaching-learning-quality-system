@@ -68,4 +68,27 @@ public class SubmissionLifecycleTests
         Assert.True(SubmissionLifecycle.CanPerform(SubmissionLifecycle.ActionSubmit, isOwner: true, canManageForms: false));
         Assert.False(SubmissionLifecycle.CanPerform(SubmissionLifecycle.ActionSubmit, isOwner: false, canManageForms: false));
     }
+
+    [Fact]
+    public void WorkScrutinyCreatorCanCorrectSubmittedRecord()
+    {
+        Assert.True(SubmissionLifecycle.CanEditRecord(
+            "work_scrutiny",
+            SubmissionLifecycle.Submitted,
+            isOwner: true,
+            canManageForms: false));
+        Assert.False(SubmissionLifecycle.CanEditRecord(
+            "learning_walk",
+            SubmissionLifecycle.Submitted,
+            isOwner: true,
+            canManageForms: false));
+    }
+
+    [Fact]
+    public void WorkScrutinyDeletionRequiresAdminPermission()
+    {
+        Assert.False(SubmissionLifecycle.CanArchiveRecord("work_scrutiny", canManageForms: true, canManageUsers: false));
+        Assert.True(SubmissionLifecycle.CanArchiveRecord("work_scrutiny", canManageForms: true, canManageUsers: true));
+        Assert.True(SubmissionLifecycle.CanArchiveRecord("learning_walk", canManageForms: true, canManageUsers: false));
+    }
 }

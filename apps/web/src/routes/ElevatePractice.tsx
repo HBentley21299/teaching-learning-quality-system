@@ -9,12 +9,16 @@ import {
   Save,
   Search,
   Send,
-  Sparkles
+  Sparkles,
+  Trash2,
+  X
 } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
+  AdminSaveElevatePracticeAssessmentRequest,
   CurrentUser,
+  ElevatePracticeAudit,
   ElevatePracticePlan,
   ElevatePracticeProgress,
   ElevatePracticeWorkspace,
@@ -22,7 +26,7 @@ import type {
 } from "../services/types";
 
 type PracticeDraft = {
-  ratings: Record<string, number>;
+  ratings: Record<string, string>;
   reflections: Record<string, string>;
   strengths: string[];
   developments: string[];
@@ -150,6 +154,152 @@ export function ElevatePractice({
   );
 }
 
+export function ElevatePracticeAdminEditor({
+  assessmentId,
+  onBack,
+  onDeleted
+}: {
+  assessmentId: string;
+  onBack: () => void;
+  onDeleted: () => void;
+}) {
+  const [workspace, setWorkspace] = useState<ElevatePracticeWorkspace | null>(null);
+  const [draft, setDraft] = useState<PracticeDraft | null>(null);
+  const [audit, setAudit] = useState<ElevatePracticeAudit[]>([]);
+  const [status, setStatus] = useState<"draft" | "submitted">("draft");
+  const [step, setStep] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [deletionReason, setDeletionReason] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api.adminElevatePracticeRecord(assessmentId),
+      api.elevatePracticeAudit(assessmentId)
+    ])
+      .then(([record, history]) => {
+        if (cancelled) {
+          return;
+        }
+        setWorkspace(record);
+        setDraft(createDraft(record));
+        setStatus(record.status === "submitted" ? "submitted" : "draft");
+        setAudit(history);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMessage("The Elevate Your Practice record could not be loaded.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [assessmentId]);
+
+  async function saveAdminRecord() {
+    if (!workspace || !draft) {
+      return;
+    }
+
+    setIsSaving(true);
+    setMessage("");
+    const result = await api.saveAdminElevatePracticeRecord(
+      assessmentId,
+      toAdminSaveRequest(workspace, draft, status)
+    );
+    setIsSaving(false);
+    if (!result.ok || !result.data) {
+      setMessage(result.message ?? "The record could not be updated.");
+      return;
+    }
+
+    setWorkspace(result.data);
+    setDraft(createDraft(result.data));
+    setStatus(result.data.status === "submitted" ? "submitted" : "draft");
+    setAudit(await api.elevatePracticeAudit(assessmentId));
+    setMessage("Elevate Your Practice record updated and audit history recorded.");
+  }
+
+  async function deleteAdminRecord() {
+    const recordId = workspace?.recordId;
+    if (!recordId || !deletionReason.trim()) {
+      if (!recordId) setMessage("This historical assessment is not linked to a system record and cannot be archived here.");
+      return;
+    }
+
+    setIsSaving(true);
+    const result = await api.archiveAdminRecord(recordId, deletionReason.trim());
+    setIsSaving(false);
+    if (!result.ok) {
+      setMessage(result.message ?? "The record could not be archived.");
+      return;
+    }
+
+    onDeleted();
+  }
+
+  if (!workspace || !draft) {
+    return (
+      <section className="panel">
+        <Button icon={ArrowLeft} onClick={onBack}>Back to records</Button>
+        <p className="muted-copy">{message || "Loading Elevate Your Practice record..."}</p>
+      </section>
+    );
+  }
+
+  return (
+    <div className="route-stack">
+      <div className="admin-record-editor-heading">
+        <Button icon={ArrowLeft} onClick={onBack}>Back to records</Button>
+        <Button disabled={isSaving} icon={Trash2} onClick={() => setIsConfirmingDelete(true)} variant="danger">Delete record</Button>
+      </div>
+      {isConfirmingDelete ? (
+        <div className="admin-reason-dialog" role="dialog" aria-modal="true" aria-label="Delete Elevate Your Practice record">
+          <div>
+            <div className="panel-heading"><h2>Archive record</h2><button className="icon-button" onClick={() => setIsConfirmingDelete(false)} title="Close" type="button"><X size={16} /></button></div>
+            <p>This removes the record from profiles and reporting while retaining its audit history.</p>
+            <label className="entry-field"><span>Reason <strong>Required</strong></span><textarea autoFocus onChange={(event) => setDeletionReason(event.target.value)} rows={4} value={deletionReason} /></label>
+            <div className="toolbar"><Button icon={X} onClick={() => setIsConfirmingDelete(false)}>Cancel</Button><Button disabled={isSaving || !deletionReason.trim()} icon={Trash2} onClick={() => void deleteAdminRecord()} variant="danger">Archive record</Button></div>
+          </div>
+        </div>
+      ) : null}
+      {message ? <div className="notice-row">{message}</div> : null}
+      <AssessmentEditor
+        adminStatus={status}
+        draft={draft}
+        isSaving={isSaving}
+        onAdminStatusChange={setStatus}
+        onChange={setDraft}
+        onMessage={setMessage}
+        onSave={() => void saveAdminRecord()}
+        onStepChange={setStep}
+        onSubmit={() => void saveAdminRecord()}
+        step={step}
+        workspace={workspace}
+      />
+      <section className="panel">
+        <div className="panel-heading"><h2>Full audit history</h2><span>{audit.length} events</span></div>
+        <div className="audit-history-list">
+          {audit.length === 0 ? <p className="muted-copy">No audit events have been recorded.</p> : audit.map((entry) => (
+            <details key={entry.id}>
+              <summary>
+                <span><strong>{formatAuditAction(entry.action)}</strong><small>{entry.summary ?? "No summary"}</small></span>
+                <span>{entry.actorName}<small>{formatDate(entry.createdAt)}</small></span>
+              </summary>
+              <div className="audit-change-grid">
+                <div><strong>Before</strong><pre>{formatAuditJson(entry.beforeJson)}</pre></div>
+                <div><strong>After</strong><pre>{formatAuditJson(entry.afterJson)}</pre></div>
+              </div>
+            </details>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AssessmentEditor({
   workspace,
   draft,
@@ -159,7 +309,9 @@ function AssessmentEditor({
   onStepChange,
   onMessage,
   onSave,
-  onSubmit
+  onSubmit,
+  adminStatus,
+  onAdminStatusChange
 }: {
   workspace: ElevatePracticeWorkspace;
   draft: PracticeDraft;
@@ -170,6 +322,8 @@ function AssessmentEditor({
   onMessage: (message: string) => void;
   onSave: () => void;
   onSubmit: () => void;
+  adminStatus?: "draft" | "submitted";
+  onAdminStatusChange?: (status: "draft" | "submitted") => void;
 }) {
   const profileStep = workspace.areas.length;
   const planStep = workspace.areas.length + 1;
@@ -177,8 +331,8 @@ function AssessmentEditor({
   const completedStatements = Object.keys(draft.ratings).length;
   const activeArea = step < workspace.areas.length ? workspace.areas[step] : null;
 
-  function updateRating(statementId: string, score: number) {
-    onChange({ ...draft, ratings: { ...draft.ratings, [statementId]: score } });
+  function updateRating(statementId: string, descriptorId: string) {
+    onChange({ ...draft, ratings: { ...draft.ratings, [statementId]: descriptorId } });
   }
 
   function updateReflection(areaKey: string, value: string) {
@@ -216,7 +370,7 @@ function AssessmentEditor({
 
   function useSuggestions(type: "strengths" | "developments") {
     const ranked = workspace.areas
-      .map((area) => ({ area, average: areaAverage(area, draft) }))
+      .map((area) => ({ area, average: areaAveragePosition(area, draft, workspace) }))
       .filter((value): value is { area: ElevatePracticeWorkspace["areas"][number]; average: number } => value.average !== undefined);
     const excluded = type === "strengths" ? draft.developments : draft.strengths;
     const values = ranked
@@ -267,7 +421,7 @@ function AssessmentEditor({
         </div>
         <div>
           <span>Status</span>
-          <strong>{workspace.status === "draft" ? "Draft" : "Not started"}</strong>
+          <strong>{adminStatus ? (adminStatus === "submitted" ? "Submitted" : "Draft") : workspace.status === "submitted" ? "Submitted" : workspace.status === "draft" ? "Draft" : "Not started"}</strong>
         </div>
       </section>
 
@@ -283,8 +437,7 @@ function AssessmentEditor({
       <div className="practice-editor-layout">
         <aside className="practice-step-list" aria-label="Assessment sections">
           {workspace.areas.map((area, index) => {
-            const complete = area.statements.every((statement) => draft.ratings[statement.id])
-              && Boolean(draft.reflections[area.areaKey]?.trim());
+            const complete = area.statements.every((statement) => draft.ratings[statement.id]);
             return (
               <button className={step === index ? "is-active" : ""} key={area.areaKey} onClick={() => onStepChange(index)} type="button">
                 <span>{index + 1}</span>
@@ -312,9 +465,9 @@ function AssessmentEditor({
                 <span>{activeArea.statements.filter((statement) => draft.ratings[statement.id]).length}/{activeArea.statements.length} rated</span>
               </div>
               <div className="rating-scale-key">
-                {workspace.ratingScale.map((rating) => (
-                  <div key={rating.score} title={rating.meaning}>
-                    <span style={{ background: rating.colorHex }}>{rating.score}</span>
+                {workspace.ratingScale.filter((rating) => rating.isActive).map((rating) => (
+                  <div key={rating.id} title={rating.meaning}>
+                    <span aria-hidden="true" style={{ background: rating.colorHex ?? "#60736b" }} />
                     <strong>{rating.descriptor}</strong>
                   </div>
                 ))}
@@ -324,18 +477,18 @@ function AssessmentEditor({
                   <div className="practice-statement" key={statement.id}>
                     <p><span>{index + 1}</span>{statement.text}</p>
                     <div className="likert-control" aria-label={`Rating for ${statement.text}`}>
-                      {workspace.ratingScale.map((rating) => (
+                      {workspace.ratingScale.filter((rating) => rating.isActive).map((rating) => (
                         <button
-                          aria-label={`${rating.score} - ${rating.descriptor}`}
-                          className={draft.ratings[statement.id] === rating.score ? "is-selected" : ""}
-                          key={rating.score}
-                          onClick={() => updateRating(statement.id, rating.score)}
-                          style={{ "--rating-color": rating.colorHex } as CSSProperties}
-                          title={`${rating.score} - ${rating.descriptor}: ${rating.meaning}`}
+                          aria-label={rating.descriptor}
+                          className={draft.ratings[statement.id] === rating.id ? "is-selected" : ""}
+                          key={rating.id}
+                          onClick={() => updateRating(statement.id, rating.id)}
+                          style={{ "--rating-color": rating.colorHex ?? "#60736b" } as CSSProperties}
+                          title={`${rating.descriptor}: ${rating.meaning}`}
                           type="button"
                         >
-                          <strong>{rating.score}</strong>
-                          <span>{rating.descriptor}</span>
+                          <i aria-hidden="true" />
+                          <span><strong>{rating.descriptor}</strong><small>{rating.meaning}</small></span>
                         </button>
                       ))}
                     </div>
@@ -343,7 +496,7 @@ function AssessmentEditor({
                 ))}
               </div>
               <label className="entry-field practice-reflection">
-                <span>Evidence or reflection</span>
+                <span>Evidence or reflection <small>Optional</small></span>
                 <small>{activeArea.reflectionPrompt}</small>
                 <textarea
                   onChange={(event) => updateReflection(activeArea.areaKey, event.target.value)}
@@ -361,11 +514,27 @@ function AssessmentEditor({
           <div className="practice-editor-actions">
             <Button disabled={step === 0} icon={ArrowLeft} onClick={() => onStepChange(Math.max(0, step - 1))}>Previous</Button>
             <div className="toolbar">
-              <Button disabled={isSaving} icon={Save} onClick={onSave}>Save draft</Button>
-              {step < planStep ? (
-                <Button icon={ArrowRight} onClick={() => onStepChange(Math.min(planStep, step + 1))} variant="primary">Next</Button>
+              {adminStatus && onAdminStatusChange ? (
+                <>
+                  <label className="admin-elevate-status">
+                    <span>Record status</span>
+                    <select onChange={(event) => onAdminStatusChange(event.target.value as "draft" | "submitted")} value={adminStatus}>
+                      <option value="draft">Draft</option>
+                      <option value="submitted">Submitted</option>
+                    </select>
+                  </label>
+                  {step < planStep ? <Button icon={ArrowRight} onClick={() => onStepChange(Math.min(planStep, step + 1))}>Next</Button> : null}
+                  <Button disabled={isSaving} icon={Save} onClick={onSave} variant="primary">{isSaving ? "Saving..." : "Save changes"}</Button>
+                </>
               ) : (
-                <Button disabled={isSaving} icon={Send} onClick={onSubmit} variant="primary">Submit and lock</Button>
+                <>
+                  <Button disabled={isSaving} icon={Save} onClick={onSave}>Save draft</Button>
+                  {step < planStep ? (
+                    <Button icon={ArrowRight} onClick={() => onStepChange(Math.min(planStep, step + 1))} variant="primary">Next</Button>
+                  ) : (
+                    <Button disabled={isSaving} icon={Send} onClick={onSubmit} variant="primary">Submit and lock</Button>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -387,7 +556,7 @@ function PracticeProfile({
   onUseSuggestions: (type: "strengths" | "developments") => void;
 }) {
   const rankedAreas = workspace.areas
-    .map((area) => ({ area, average: areaAverage(area, draft) }))
+    .map((area) => ({ area, average: areaAveragePosition(area, draft, workspace) }))
     .filter((value): value is { area: ElevatePracticeWorkspace["areas"][number]; average: number } => value.average !== undefined);
   const suggestedStrengths = rankedAreas
     .slice()
@@ -411,8 +580,7 @@ function PracticeProfile({
         {workspace.areas.map((area) => (
           <div key={area.areaKey}>
             <span>{area.name}</span>
-            <div><i style={{ width: `${((areaAverage(area, draft) ?? 0) / 5) * 100}%` }} /></div>
-            <strong>{areaAverage(area, draft)?.toFixed(2) ?? "-"}</strong>
+            <strong>{rubricWordingForPosition(workspace, areaAveragePosition(area, draft, workspace))}</strong>
           </div>
         ))}
       </div>
@@ -518,10 +686,6 @@ function DevelopmentPlanEditor({
                 <textarea onChange={(event) => onUpdate(areaKey, { intendedImpact: event.target.value })} rows={4} value={plan.intendedImpact} />
               </label>
             </div>
-            <label className="entry-field practice-review-date">
-              <span>Review date</span>
-              <input min={new Date().toISOString().slice(0, 10)} onChange={(event) => onUpdate(areaKey, { reviewDate: event.target.value })} type="date" value={plan.reviewDate ?? ""} />
-            </label>
           </section>
         );
       })}
@@ -590,17 +754,17 @@ function ElevatePracticeProgressView() {
   );
 }
 
-export function ElevatePracticeResultPage({ staffId, onBack }: { staffId: string; onBack: () => void }) {
+export function ElevatePracticeResultPage({ staffId, recordId, onBack }: { staffId: string; recordId?: string; onBack: () => void }) {
   const [workspace, setWorkspace] = useState<ElevatePracticeWorkspace | null>(null);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    api.elevatePracticeResult(staffId)
+    (recordId ? api.elevatePracticeRecord(recordId) : api.elevatePracticeResult(staffId))
       .then((result) => { if (!cancelled) setWorkspace(result); })
       .catch(() => { if (!cancelled) setMessage("The Elevate Your Practice result could not be loaded."); });
     return () => { cancelled = true; };
-  }, [staffId]);
+  }, [recordId, staffId]);
 
   if (!workspace) {
     return <section className="panel"><Button icon={ArrowLeft} onClick={onBack}>Back to Staff Profile</Button><p className="muted-copy">{message || "Loading assessment result..."}</p></section>;
@@ -611,22 +775,20 @@ export function ElevatePracticeResultPage({ staffId, onBack }: { staffId: string
 
 function ElevatePracticeResult({ workspace, onBack }: { workspace: ElevatePracticeWorkspace; onBack?: () => void }) {
   const areaName = (key: string) => workspace.areas.find((area) => area.areaKey === key)?.name ?? key;
-  const overall = workspace.areas.map((area) => area.averageScore).filter((value): value is number => value !== undefined);
-  const overallAverage = overall.length ? overall.reduce((total, value) => total + value, 0) / overall.length : 0;
 
   return (
     <div className="practice-result">
       {onBack ? <div><Button icon={ArrowLeft} onClick={onBack}>Back to Staff Profile</Button></div> : null}
       <section className="practice-result-header">
         <div><p className="eyebrow">Submitted self-assessment</p><h2>{workspace.staffName}</h2><p>{workspace.facultyName ?? "No faculty"} · {workspace.teamName ?? "No team"}</p></div>
-        <div className="practice-result-score"><span>Overall profile</span><strong>{overallAverage.toFixed(2)}</strong><small>out of 5</small></div>
+        <div className="practice-result-score"><span>Overall profile</span><strong>{workspace.overallJudgement ?? "Not yet rated"}</strong><small>Rubric judgement</small></div>
         <div className="practice-result-lock"><LockKeyhole size={18} aria-hidden="true" /><span>Locked</span><small>{workspace.academicYear}{workspace.submittedAt ? ` · ${formatDate(workspace.submittedAt)}` : ""}</small></div>
       </section>
       <section className="panel">
-        <div className="panel-heading"><h2>Area profile</h2><span>Average rating</span></div>
+        <div className="panel-heading"><h2>Area profile</h2><span>Rubric judgements</span></div>
         <div className="practice-result-areas">
           {workspace.areas.map((area) => (
-            <div key={area.areaKey}><span>{area.name}</span><div><i style={{ width: `${((area.averageScore ?? 0) / 5) * 100}%` }} /></div><strong>{area.averageScore?.toFixed(2) ?? "-"}</strong></div>
+            <div key={area.areaKey}><span>{area.name}</span><strong>{area.judgement ?? "Not yet rated"}</strong></div>
           ))}
         </div>
       </section>
@@ -640,7 +802,7 @@ function ElevatePracticeResult({ workspace, onBack }: { workspace: ElevatePracti
           {workspace.developmentPlans.map((plan) => (
             <article key={plan.areaKey}>
               <div><h3>{areaName(plan.areaKey)}</h3><span className="status-pill status-open">Action created</span></div>
-              <dl><dt>Development approach</dt><dd>{plan.developmentApproach}</dd><dt>Success evidence</dt><dd>{plan.successEvidence}</dd><dt>Intended impact</dt><dd>{plan.intendedImpact}</dd><dt>Review date</dt><dd>{plan.reviewDate ?? "Not recorded"}</dd></dl>
+              <dl><dt>Development approach</dt><dd>{plan.developmentApproach}</dd><dt>Success evidence</dt><dd>{plan.successEvidence}</dd><dt>Intended impact</dt><dd>{plan.intendedImpact}</dd></dl>
             </article>
           ))}
         </div>
@@ -651,7 +813,7 @@ function ElevatePracticeResult({ workspace, onBack }: { workspace: ElevatePracti
 
 function createDraft(workspace: ElevatePracticeWorkspace): PracticeDraft {
   return {
-    ratings: Object.fromEntries(workspace.areas.flatMap((area) => area.statements.filter((statement) => statement.score).map((statement) => [statement.id, statement.score!]))),
+    ratings: Object.fromEntries(workspace.areas.flatMap((area) => area.statements.filter((statement) => statement.descriptorId).map((statement) => [statement.id, statement.descriptorId!]))),
     reflections: Object.fromEntries(workspace.areas.map((area) => [area.areaKey, area.reflection ?? ""])),
     strengths: workspace.strengthAreaKeys,
     developments: workspace.developmentAreaKeys,
@@ -661,7 +823,7 @@ function createDraft(workspace: ElevatePracticeWorkspace): PracticeDraft {
 
 function toSaveRequest(workspace: ElevatePracticeWorkspace, draft: PracticeDraft, submit: boolean): SaveElevatePracticeAssessmentRequest {
   return {
-    ratings: Object.entries(draft.ratings).map(([statementId, score]) => ({ statementId, score })),
+    ratings: Object.entries(draft.ratings).map(([statementId, descriptorId]) => ({ statementId, descriptorId })),
     reflections: workspace.areas.map((area) => ({ areaKey: area.areaKey, text: draft.reflections[area.areaKey] ?? "" })),
     strengthAreaKeys: draft.strengths,
     developmentAreaKeys: draft.developments,
@@ -670,13 +832,44 @@ function toSaveRequest(workspace: ElevatePracticeWorkspace, draft: PracticeDraft
   };
 }
 
+function toAdminSaveRequest(
+  workspace: ElevatePracticeWorkspace,
+  draft: PracticeDraft,
+  status: "draft" | "submitted"
+): AdminSaveElevatePracticeAssessmentRequest {
+  const request = toSaveRequest(workspace, draft, false);
+  return {
+    ratings: request.ratings,
+    reflections: request.reflections,
+    strengthAreaKeys: request.strengthAreaKeys,
+    developmentAreaKeys: request.developmentAreaKeys,
+    developmentPlans: request.developmentPlans,
+    status
+  };
+}
+
 function emptyPlan(areaKey: string): ElevatePracticePlan {
   return { areaKey, developmentApproach: "", supportKeys: [], supportDetails: "", successEvidence: "", intendedImpact: "" };
 }
 
-function areaAverage(area: ElevatePracticeWorkspace["areas"][number], draft: PracticeDraft) {
-  const scores = area.statements.map((statement) => draft.ratings[statement.id]).filter((score): score is number => Boolean(score));
-  return scores.length === area.statements.length ? scores.reduce((total, score) => total + score, 0) / scores.length : undefined;
+function areaAveragePosition(area: ElevatePracticeWorkspace["areas"][number], draft: PracticeDraft, workspace: ElevatePracticeWorkspace) {
+  const values = area.statements
+    .map((statement) => workspace.ratingScale.find((descriptor) => descriptor.id === draft.ratings[statement.id])?.displayOrder)
+    .filter((value): value is number => value !== undefined);
+  return values.length === area.statements.length ? values.reduce((total, value) => total + value, 0) / values.length : undefined;
+}
+
+function rubricWordingForPosition(workspace: ElevatePracticeWorkspace, position?: number) {
+  if (position === undefined) {
+    return "Not yet rated";
+  }
+
+  return workspace.ratingScale
+    .slice()
+    .sort((left, right) =>
+      Math.abs(left.displayOrder - position) - Math.abs(right.displayOrder - position)
+      || left.displayOrder - right.displayOrder
+    )[0]?.descriptor ?? "Not yet rated";
 }
 
 function practiceStatusLabel(status: ElevatePracticeProgress["status"]) {
@@ -685,6 +878,26 @@ function practiceStatusLabel(status: ElevatePracticeProgress["status"]) {
 
 function practiceStatusClass(status: ElevatePracticeProgress["status"]) {
   return status === "not_started" ? "status-overdue" : status === "draft" ? "status-draft" : "status-complete";
+}
+
+function formatAuditAction(action: string) {
+  return action
+    .split(/[._]/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function formatAuditJson(value?: string) {
+  if (!value) {
+    return "No record snapshot";
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
 }
 
 function formatDate(value: string) {

@@ -95,10 +95,10 @@ The API should show:
 Now listening on: http://127.0.0.1:5001
 ```
 
-You can check the API at:
+You can check API readiness at:
 
 ```text
-http://127.0.0.1:5001/health
+http://127.0.0.1:5001/health/ready
 ```
 
 ## 5. Start the Web App
@@ -200,7 +200,8 @@ dotnet test .\apps\api\TLQS.sln
 | Web app development server | `http://127.0.0.1:5173` |
 | Web app preview server | `http://127.0.0.1:4173` |
 | API | `http://127.0.0.1:5001` |
-| API health check | `http://127.0.0.1:5001/health` |
+| API liveness check | `http://127.0.0.1:5001/health/live` |
+| API readiness check | `http://127.0.0.1:5001/health/ready` |
 
 ## 10. Common Problems
 
@@ -282,6 +283,18 @@ Restart the API after changing the user.
 
 - Local development authentication is not production authentication.
 - Microsoft Entra ID must be used before real deployment.
-- Some current UI actions are still design-mode until the API and SQL save bridges are connected.
 - Keep `scripts\apply-database.ps1` in sync with every SQL file in `database\migrations`, `database\seed`, and `database\views`.
 - Do not rely only on frontend permissions. Final permission and scope checks must run server-side.
+
+## 13. Run the V1 Release Gate
+
+This restores locked dependencies, runs Release builds and tests, audits
+production dependencies and creates hashed deployment artifacts:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-v1.ps1
+```
+
+Outputs are written under `.artifacts\v1` and are intentionally excluded from Git.
+The release command requires committed source; use `-AllowDirty` only for a
+development-only verification package.

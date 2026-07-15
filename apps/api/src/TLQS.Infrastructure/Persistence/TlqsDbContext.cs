@@ -19,6 +19,7 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
     public DbSet<Staff> Staff => Set<Staff>();
     public DbSet<OrgUnit> OrgUnits => Set<OrgUnit>();
     public DbSet<StaffOrgMembership> StaffOrgMemberships => Set<StaffOrgMembership>();
+    public DbSet<OrgUnitLeadership> OrgUnitLeaderships => Set<OrgUnitLeadership>();
     public DbSet<UserAccount> UserAccounts => Set<UserAccount>();
     public DbSet<AuthIdentity> AuthIdentities => Set<AuthIdentity>();
     public DbSet<Role> Roles => Set<Role>();
@@ -59,6 +60,7 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
         modelBuilder.Entity<Staff>().ToTable("staff", "people");
         modelBuilder.Entity<OrgUnit>().ToTable("org_units", "org");
         modelBuilder.Entity<StaffOrgMembership>().ToTable("staff_org_memberships", "org");
+        modelBuilder.Entity<OrgUnitLeadership>().ToTable("org_unit_leaderships", "org");
         modelBuilder.Entity<UserAccount>().ToTable("user_accounts", "auth");
         modelBuilder.Entity<AuthIdentity>().ToTable("auth_identities", "auth");
         modelBuilder.Entity<Role>().ToTable("roles", "auth");

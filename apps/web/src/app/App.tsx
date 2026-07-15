@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, LogOut, PanelLeftClose, Search } from "lucide-react";
 import { navigationItems, type AppRoute } from "./navigation";
 import { api } from "../services/api";
 import { isAuthEnabled, signOut } from "../services/auth";
 import type {
   ActionSummary,
+  AdminRecord,
   CurrentUser,
   ModuleSummary,
   OrgUnitSummary,
@@ -12,16 +13,17 @@ import type {
   StaffProfileSummary,
   StaffSummary
 } from "../services/types";
-import { Dashboard } from "../routes/Dashboard";
-import { StaffProfiles } from "../routes/StaffProfiles";
-import { AdminCentre } from "../routes/AdminCentre";
-import { LivVisits } from "../routes/LivVisits";
-import { ModuleWorkspace } from "../routes/ModuleWorkspace";
-import { ActionsView } from "../routes/ActionsView";
-import { PermissionsView } from "../routes/PermissionsView";
-import { StaffProfileWorkspace } from "../routes/StaffProfileWorkspace";
-import { ElevatePractice } from "../routes/ElevatePractice";
-import { CoachingMentoring } from "../routes/CoachingMentoring";
+
+const Dashboard = lazy(() => import("../routes/Dashboard").then((module) => ({ default: module.Dashboard })));
+const StaffProfiles = lazy(() => import("../routes/StaffProfiles").then((module) => ({ default: module.StaffProfiles })));
+const AdminCentre = lazy(() => import("../routes/AdminCentre").then((module) => ({ default: module.AdminCentre })));
+const LivVisits = lazy(() => import("../routes/LivVisits").then((module) => ({ default: module.LivVisits })));
+const ModuleWorkspace = lazy(() => import("../routes/ModuleWorkspace").then((module) => ({ default: module.ModuleWorkspace })));
+const ActionsView = lazy(() => import("../routes/ActionsView").then((module) => ({ default: module.ActionsView })));
+const StaffProfileWorkspace = lazy(() => import("../routes/StaffProfileWorkspace").then((module) => ({ default: module.StaffProfileWorkspace })));
+const ElevatePractice = lazy(() => import("../routes/ElevatePractice").then((module) => ({ default: module.ElevatePractice })));
+const CoachingMentoring = lazy(() => import("../routes/CoachingMentoring").then((module) => ({ default: module.CoachingMentoring })));
+const MyTeam = lazy(() => import("../routes/MyTeam").then((module) => ({ default: module.MyTeam })));
 
 const emptyUser: CurrentUser = {
   displayName: "Loading...",
@@ -41,6 +43,9 @@ export function App() {
   const [profiles, setProfiles] = useState<StaffProfileSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [profileStaffId, setProfileStaffId] = useState("");
+  const [actionStaffId, setActionStaffId] = useState("");
+  const [sourceRecordId, setSourceRecordId] = useState("");
 
   const loadCoreData = useCallback(async () => {
     setLoadError("");
@@ -57,20 +62,22 @@ export function App() {
         return;
       }
 
-      const [nextModules, nextOrgUnits, nextStaff, nextActions, nextProcessRecords, nextProfiles] = await Promise.all([
+      const [nextModules, nextOrgUnits, nextStaff, nextActions, nextProfiles] = await Promise.all([
         api.modules(),
         api.orgUnits(),
         api.staff().catch(() => [] as StaffSummary[]),
         api.actions(),
-        api.processDashboardRecords().catch(() => [] as ProcessDashboardRecordSummary[]),
         api.staffProfiles()
       ]);
       setModules(nextModules);
       setOrgUnits(nextOrgUnits);
       setStaff(nextStaff);
       setActions(nextActions);
-      setProcessRecords(nextProcessRecords);
       setProfiles(nextProfiles);
+      void api
+        .processDashboardRecords()
+        .then(setProcessRecords)
+        .catch(() => setProcessRecords([]));
     } catch {
       setLoadError(
         "The Teaching & Learning API could not be reached. Start the API (scripts\\run-api.ps1) and check the database, then refresh."
@@ -92,7 +99,79 @@ export function App() {
     }
   }, []);
 
-  const activeItem = useMemo(() => navigationItems.find((item) => item.key === route), [route]);
+  const visibleNavigationItems = useMemo(
+    () => navigationItems.filter((item) => {
+      if (item.key === "team") return user.permissions.includes("my_team.view");
+      if (item.key === "admin") {
+        return ["users.manage", "permissions.manage", "organisation.manage", "lists.manage", "forms.manage", "records.manage"]
+          .some((permission) => user.permissions.includes(permission));
+      }
+      return true;
+    }),
+    [user.permissions]
+  );
+  const activeItem = useMemo(() => visibleNavigationItems.find((item) => item.key === route), [route, visibleNavigationItems]);
+
+  function navigate(nextRoute: AppRoute) {
+    setProfileStaffId("");
+    setActionStaffId("");
+    setSourceRecordId("");
+    setRoute(nextRoute);
+  }
+
+  function openTeamProfile(staffId: string) {
+    setProfileStaffId(staffId);
+    setActionStaffId("");
+    setSourceRecordId("");
+    setRoute("profile");
+  }
+
+  function openTeamActions(staffId: string) {
+    setActionStaffId(staffId);
+    setProfileStaffId("");
+    setSourceRecordId("");
+    setRoute("actions");
+  }
+
+  function openActionSource(action: ActionSummary) {
+    if (!action.sourceRecordId) return;
+    setSourceRecordId(action.sourceRecordId);
+    setActionStaffId("");
+    if (action.sourceFormType === "elevate_practice" && action.subjectStaffId) {
+      setProfileStaffId(action.subjectStaffId);
+      setRoute("profile");
+      return;
+    }
+    setProfileStaffId("");
+    const sourceRoutes: Partial<Record<string, AppRoute>> = {
+      coaching_mentoring: "coaching",
+      elevate_environment: "elevate",
+      learning_walk: "learning",
+      liv: "liv",
+      work_scrutiny: "scrutiny"
+    };
+    setRoute(sourceRoutes[action.sourceFormType] ?? "actions");
+  }
+
+  function openAdminRecord(record: AdminRecord) {
+    setSourceRecordId(record.recordId);
+    setActionStaffId("");
+    if (["elevate_practice", "elevate_practice_assessment"].includes(record.recordType) && record.subjectStaffId) {
+      setProfileStaffId(record.subjectStaffId);
+      setRoute("profile");
+      return;
+    }
+    setProfileStaffId("");
+    const recordRoutes: Partial<Record<string, AppRoute>> = {
+      coaching_session: "coaching",
+      cpd_event: "cpd",
+      elevate_environment: "elevate",
+      learning_walk: "learning",
+      liv: "liv",
+      work_scrutiny: "scrutiny"
+    };
+    setRoute(recordRoutes[record.recordType] ?? "dashboard");
+  }
 
   return (
     <div className="app-shell">
@@ -105,13 +184,13 @@ export function App() {
           </div>
         </div>
         <nav>
-          {navigationItems.map((item) => {
+          {visibleNavigationItems.map((item) => {
             const Icon = item.icon;
             return (
               <button
                 className={item.key === route ? "nav-item nav-item-active" : "nav-item"}
                 key={item.key}
-                onClick={() => setRoute(item.key)}
+                onClick={() => navigate(item.key)}
                 title={item.label}
                 type="button"
               >
@@ -172,7 +251,7 @@ export function App() {
               ) : null}
             </section>
           ) : (
-            <>
+            <Suspense fallback={<div className="route-stack"><p className="muted-copy">Loading this workspace...</p></div>}>
               {route === "dashboard" ? (
                 <Dashboard
                   actions={actions}
@@ -183,15 +262,17 @@ export function App() {
                 />
               ) : null}
               {route === "staff" ? <StaffProfiles staff={staff} profiles={profiles} user={user} /> : null}
-              {route === "admin" ? <AdminCentre user={user} modules={modules} profiles={profiles} staff={staff} /> : null}
+              {route === "team" ? <MyTeam onOpenActions={openTeamActions} onOpenProfile={openTeamProfile} /> : null}
+              {route === "admin" ? <AdminCentre user={user} modules={modules} profiles={profiles} staff={staff} onOpenRecord={openAdminRecord} /> : null}
               {route === "learning" ? (
-                <ModuleWorkspace title="Learning Walks" eyebrow="Quality activity" mode="learning" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace title="Learning Walks" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="learning" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "liv" ? <LivVisits staff={staff} user={user} onActionsChanged={refreshActions} /> : null}
+              {route === "liv" ? <LivVisits initialSourceRecordId={sourceRecordId} staff={staff} user={user} onActionsChanged={refreshActions} /> : null}
               {route === "elevate" ? (
                 <ModuleWorkspace
                   title="Elevate Learning Environments"
                   eyebrow="Learning environment quality"
+                  initialRecordId={sourceRecordId}
                   mode="elevate"
                   staff={staff}
                   user={user}
@@ -200,20 +281,19 @@ export function App() {
               ) : null}
               {route === "practice" ? <ElevatePractice user={user} onActionsChanged={refreshActions} /> : null}
               {route === "coaching" ? (
-                <CoachingMentoring staff={staff} user={user} onActionsChanged={refreshActions} />
+                <CoachingMentoring initialRecordId={sourceRecordId} staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
               {route === "scrutiny" ? (
-                <ModuleWorkspace title="Work Scrutiny" eyebrow="Quality activity" mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace title="Work Scrutiny" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
               {route === "cpd" ? (
                 <ModuleWorkspace title="CPD Management" eyebrow="Professional learning" mode="cpd" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "profile" ? <StaffProfileWorkspace profiles={profiles} staff={staff} user={user} /> : null}
+              {route === "profile" ? <StaffProfileWorkspace initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} profiles={profiles} staff={staff} user={user} /> : null}
               {route === "actions" ? (
-                <ActionsView actions={actions} staff={staff} user={user} onChanged={refreshActions} />
+                <ActionsView actions={actions} initialStaffId={actionStaffId} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} onChanged={refreshActions} />
               ) : null}
-              {route === "security" ? <PermissionsView /> : null}
-            </>
+            </Suspense>
           )}
         </div>
       </main>

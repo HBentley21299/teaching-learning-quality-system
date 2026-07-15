@@ -1,5 +1,6 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using TLQS.Api.Data;
 using TLQS.Api.Security;
 using TLQS.Api.V1;
@@ -9,29 +10,34 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
+builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
-var dataProtectionKeysPath = Path.GetFullPath(Path.Combine(
-    builder.Environment.ContentRootPath,
-    "..",
-    "..",
-    "..",
-    "..",
-    ".localappdata",
-    "data-protection-keys"));
-Directory.CreateDirectory(dataProtectionKeysPath);
-
-builder.Services
-    .AddDataProtection()
-    .SetApplicationName("TLQS")
-    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
+if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("TlqsDatabase")))
+{
+    throw new InvalidOperationException("Connection string 'TlqsDatabase' must be configured.");
+}
 
 builder.Services.AddSingleton<SqlFoundationDataStore>();
+builder.Services.AddProblemDetails(options =>
+{
+    options.CustomizeProblemDetails = context =>
+    {
+        context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier;
+    };
+});
+builder.Services.AddResponseCompression(options => options.EnableForHttps = true);
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("web", policy =>
     {
-        var origins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
-        policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
+        var origins = (builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [])
+            .Where(origin => !string.IsNullOrWhiteSpace(origin))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (origins.Length > 0)
+        {
+            policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
+        }
     });
 });
 
@@ -81,13 +87,66 @@ else
 }
 
 builder.Services.AddAuthorization();
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 var app = builder.Build();
+var requestLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("TLQS.Api.Requests");
+
+app.Use(async (context, next) =>
+{
+    var startedAt = Stopwatch.GetTimestamp();
+    context.Response.Headers.TryAdd("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.TryAdd("X-Frame-Options", "DENY");
+    context.Response.Headers.TryAdd("Referrer-Policy", "strict-origin-when-cross-origin");
+    context.Response.Headers.TryAdd("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    context.Response.Headers.TryAdd("Content-Security-Policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
+    context.Response.Headers.TryAdd("X-Trace-Id", context.TraceIdentifier);
+    if (context.Request.Path.StartsWithSegments("/api") || context.Request.Path.StartsWithSegments("/health"))
+    {
+        context.Response.Headers.CacheControl = "no-store";
+    }
+
+    await next(context);
+
+    if (!context.Request.Path.StartsWithSegments("/health"))
+    {
+        requestLogger.LogInformation(
+            "HTTP {Method} {Path} responded {StatusCode} in {ElapsedMilliseconds:F1} ms (TraceId: {TraceId})",
+            context.Request.Method,
+            context.Request.Path,
+            context.Response.StatusCode,
+            Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+            context.TraceIdentifier);
+    }
+});
+
+app.UseExceptionHandler();
+app.UseForwardedHeaders();
 
 if (!app.Environment.IsDevelopment())
 {
+    app.UseHsts();
     app.UseHttpsRedirection();
 }
+app.UseResponseCompression();
+app.UseDefaultFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        var cacheDuration = context.File.Name.Equals("index.html", StringComparison.OrdinalIgnoreCase)
+            ? TimeSpan.Zero
+            : TimeSpan.FromDays(30);
+        context.Context.Response.Headers.CacheControl = cacheDuration == TimeSpan.Zero
+            ? "no-cache"
+            : $"public,max-age={(int)cacheDuration.TotalSeconds},immutable";
+    }
+});
 app.UseCors("web");
 app.UseAuthentication();
 app.UseAuthorization();
@@ -107,18 +166,36 @@ app.Use(async (context, next) =>
     }
 });
 
-app.MapGet("/health", async (SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+app.MapGet("/health/live", () => Results.Ok(new
+{
+    status = "healthy",
+    timestamp = DateTimeOffset.UtcNow
+}));
+
+async Task<IResult> ReadinessAsync(SqlFoundationDataStore store, CancellationToken cancellationToken)
 {
     var canConnect = await store.CanConnectAsync(cancellationToken);
-
-    return Results.Ok(new
+    var payload = new
     {
-        status = canConnect ? "healthy" : "degraded",
+        status = canConnect ? "healthy" : "unhealthy",
         database = canConnect ? "connected" : "unavailable",
         timestamp = DateTimeOffset.UtcNow
-    });
-});
+    };
+    return Results.Json(payload, statusCode: canConnect
+        ? StatusCodes.Status200OK
+        : StatusCodes.Status503ServiceUnavailable);
+}
+
+app.MapGet("/health/ready", ReadinessAsync);
+app.MapGet("/health", ReadinessAsync);
 
 app.MapFoundationEndpoints();
+
+// Production packages the React application into wwwroot. Client-side routes
+// resolve to index.html while API and health endpoints retain their own 404s.
+if (File.Exists(Path.Combine(app.Environment.WebRootPath ?? "wwwroot", "index.html")))
+{
+    app.MapFallbackToFile("{*path:nonfile}", "index.html");
+}
 
 app.Run();

@@ -22,3 +22,14 @@ public sealed class StaffOrgMembership : AuditableEntity
     public DateOnly? ActiveTo { get; set; }
 }
 
+public sealed class OrgUnitLeadership : AuditableEntity
+{
+    public Guid OrgUnitId { get; set; }
+    public Guid LeaderStaffId { get; set; }
+    public string LeadershipRole { get; set; } = "manager";
+    public DateOnly ActiveFrom { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    public DateOnly? ActiveTo { get; set; }
+    public Guid? CreatedByUserAccountId { get; set; }
+    public Guid? UpdatedByUserAccountId { get; set; }
+}
+

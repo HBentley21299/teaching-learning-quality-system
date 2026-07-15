@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Plus, Search, X } from "lucide-react";
+import { CheckCircle2, Plus, X } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -11,6 +11,7 @@ import type {
   StaffSummary
 } from "../services/types";
 import { StaffSearchSelect } from "./StaffSearchSelect";
+import { CourseMultiSelect } from "./CourseMultiSelect";
 
 type DraftAction = {
   id: string;
@@ -34,8 +35,6 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
   const [definition, setDefinition] = useState<FormDefinition | null>(null);
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [selectedCourseIds, setSelectedCourseIds] = useState<string[]>([]);
-  const [courseQuery, setCourseQuery] = useState("");
-  const [isCourseResultsOpen, setIsCourseResultsOpen] = useState(false);
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [actions, setActions] = useState<DraftAction[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
@@ -53,23 +52,11 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
     [facultyId, orgUnits]
   );
   const selectedTeam = orgUnits.find((orgUnit) => orgUnit.id === teamId);
-  const selectedCourses = selectedCourseIds
-    .map((courseId) => courses.find((course) => course.id === courseId))
-    .filter((course): course is CourseSummary => Boolean(course));
-  const filteredCourses = useMemo(() => {
-    const query = courseQuery.trim().toLocaleLowerCase();
-    return courses
-      .filter((course) => !selectedCourseIds.includes(course.id))
-      .filter((course) => !query || [course.courseCode, course.courseName, course.academicYear ?? ""]
-        .some((value) => value.toLocaleLowerCase().includes(query)))
-      .slice(0, 10);
-  }, [courseQuery, courses, selectedCourseIds]);
 
   useEffect(() => {
     setDefinition(null);
     setCourses([]);
     setSelectedCourseIds([]);
-    setCourseQuery("");
     setResponses({});
     setStatusMessage("");
 
@@ -104,12 +91,6 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
       cancelled = true;
     };
   }, [teamId]);
-
-  function addCourse(course: CourseSummary) {
-    setSelectedCourseIds((current) => [...current, course.id]);
-    setCourseQuery("");
-    setIsCourseResultsOpen(true);
-  }
 
   function addAction() {
     setActions((current) => [
@@ -230,80 +211,13 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
           <h3>Sample</h3>
           <label className="entry-field entry-field-wide">
             <span>Courses sampled <strong>Required</strong></span>
-            <div className="course-multi-select">
-              {selectedCourses.length > 0 ? (
-                <div className="course-chip-list" aria-label="Selected courses">
-                  {selectedCourses.map((course) => (
-                    <span className="course-chip" key={course.id}>
-                      <strong>{course.courseCode}</strong>
-                      {course.courseName}
-                      <button
-                        aria-label={`Remove ${course.courseCode}`}
-                        onClick={() => setSelectedCourseIds((current) => current.filter((id) => id !== course.id))}
-                        type="button"
-                      >
-                        <X size={13} aria-hidden="true" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-              <div className="staff-search course-search">
-                <div className="search-box staff-search-input">
-                  <Search size={16} aria-hidden="true" />
-                  <input
-                    aria-autocomplete="list"
-                    aria-controls="work-scrutiny-course-options"
-                    aria-expanded={isCourseResultsOpen}
-                    autoComplete="off"
-                    disabled={!teamId || courses.length === 0}
-                    onBlur={() => setIsCourseResultsOpen(false)}
-                    onChange={(event) => {
-                      setCourseQuery(event.target.value);
-                      setIsCourseResultsOpen(true);
-                    }}
-                    onFocus={() => setIsCourseResultsOpen(true)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && filteredCourses.length > 0) {
-                        event.preventDefault();
-                        addCourse(filteredCourses[0]);
-                      }
-                      if (event.key === "Escape") {
-                        setIsCourseResultsOpen(false);
-                      }
-                    }}
-                    placeholder={courses.length ? "Type a course code or title" : "Course data not loaded"}
-                    role="combobox"
-                    type="text"
-                    value={courseQuery}
-                  />
-                </div>
-                {isCourseResultsOpen && courses.length > 0 ? (
-                  <div
-                    className="staff-search-results"
-                    id="work-scrutiny-course-options"
-                    onMouseDown={(event) => event.preventDefault()}
-                    role="listbox"
-                  >
-                    {filteredCourses.length === 0 ? (
-                      <div className="staff-search-empty">No remaining courses match "{courseQuery.trim()}".</div>
-                    ) : filteredCourses.map((course) => (
-                      <button
-                        className="staff-search-result"
-                        key={course.id}
-                        onClick={() => addCourse(course)}
-                        role="option"
-                        type="button"
-                      >
-                        <strong>{course.courseCode}</strong>
-                        <span>{course.courseName}</span>
-                        {course.academicYear ? <small>{course.academicYear}</small> : null}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
+            <CourseMultiSelect
+              courses={courses}
+              disabled={!teamId}
+              id="work-scrutiny-course"
+              onChange={setSelectedCourseIds}
+              selectedIds={selectedCourseIds}
+            />
             <small>Select a result, then keep typing to add further courses from the same sub-team.</small>
           </label>
         </div>
@@ -358,7 +272,7 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
                     />
                   </label>
                   <label className="entry-field">
-                    <span>Date due <strong>Required</strong></span>
+                    <span>Date to be implemented by <strong>Required</strong></span>
                     <input
                       min={scrutinyDate}
                       onChange={(event) => updateAction(action.id, { dueDate: event.target.value })}
@@ -391,7 +305,7 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
   );
 }
 
-function WorkScrutinyResponseField({
+export function WorkScrutinyResponseField({
   field,
   onChange,
   value

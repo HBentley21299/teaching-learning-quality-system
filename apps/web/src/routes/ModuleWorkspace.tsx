@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Archive, Building2, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { CpdParticipantPicker } from "../components/CpdParticipantPicker";
+import { RoomSearchSelect } from "../components/RoomSearchSelect";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { WorkScrutinyCreateForm } from "../components/WorkScrutinyCreateForm";
 import { api } from "../services/api";
 import type {
   ActionSummary,
   CurrentUser,
+  ElevateEnvironmentPillarSummary,
   FormDefinition,
   FormFieldDefinition,
+  LearningWalkTheme,
+  LearningWalkThemeGroup,
   LearningWalkThemeMappingSummary,
   OrgUnitSummary,
   RecordDetail,
@@ -20,6 +24,13 @@ import type {
 
 type WorkspaceMode = "learning" | "scrutiny" | "cpd" | "elevate";
 
+type DraftLearningWalkAction = {
+  id: string;
+  title: string;
+  ownerStaffId: string;
+  dueDate: string;
+};
+
 type ModuleWorkspaceProps = {
   title: string;
   eyebrow: string;
@@ -27,6 +38,7 @@ type ModuleWorkspaceProps = {
   staff?: StaffSummary[];
   user: CurrentUser;
   onActionsChanged?: () => Promise<void>;
+  initialRecordId?: string;
 };
 
 const workspaceConfig: Record<WorkspaceMode, {
@@ -66,7 +78,7 @@ const workspaceConfig: Record<WorkspaceMode, {
   }
 };
 
-export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActionsChanged }: ModuleWorkspaceProps) {
+export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "" }: ModuleWorkspaceProps) {
   const config = workspaceConfig[mode];
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -75,7 +87,11 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [definitionError, setDefinitionError] = useState("");
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [environmentPillars, setEnvironmentPillars] = useState<ElevateEnvironmentPillarSummary[]>([]);
+  const [environmentPurposes, setEnvironmentPurposes] = useState<string[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
+  const [learningWalkThemeGroups, setLearningWalkThemeGroups] = useState<LearningWalkThemeGroup[]>([]);
+  const [learningWalkActions, setLearningWalkActions] = useState<DraftLearningWalkAction[]>([]);
   const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(true);
@@ -92,12 +108,14 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [actionTitle, setActionTitle] = useState("");
   const [actionOwnerId, setActionOwnerId] = useState(user.staffId ?? "");
   const [actionDueDate, setActionDueDate] = useState("");
+  const openedInitialRecord = useRef("");
 
   const canManageForms = user.permissions.includes("forms.manage");
   const canManageActions = user.permissions.includes("actions.manage");
   const primaryIcon = mode === "cpd" ? CalendarPlus : mode === "elevate" ? Building2 : FilePlus2;
 
   const createSections = definition?.sections ?? [];
+  const createEntrySections = getEnvironmentEntrySections(mode, createSections, environmentPillars);
   const selectedFacultyId = getResponseValue(createSections, responses, "faculty_area");
   const selectedTeamId = getResponseValue(createSections, responses, "team_level");
   const selectedTeam = useMemo(
@@ -114,6 +132,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   );
 
   const editSections = selectedDetail?.sections ?? [];
+  const editEntrySections = getEnvironmentEntrySections(mode, editSections, environmentPillars);
+  const detailSections = orderEnvironmentSections(mode, editSections, environmentPillars);
   const editFacultyId = getResponseValue(editSections, editResponses, "faculty_area");
   const editTeamId = getResponseValue(editSections, editResponses, "team_level");
   const editTeam = useMemo(() => orgUnits.find((orgUnit) => orgUnit.id === editTeamId), [orgUnits, editTeamId]);
@@ -211,6 +231,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   }, [mode]);
 
   useEffect(() => {
+    if (initialRecordId && openedInitialRecord.current !== initialRecordId) {
+      openedInitialRecord.current = initialRecordId;
+      void openRecord(initialRecordId);
+    }
+    // openRecord is intentionally invoked only when a route supplies a new target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRecordId]);
+
+  useEffect(() => {
     syncThemeResponse(createSections, setResponses, agreedTheme);
   }, [agreedTheme, createSections]);
 
@@ -224,22 +253,29 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
   async function refreshData() {
     try {
-      const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups] = await Promise.all([
+      const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups, nextEnvironmentPillars] = await Promise.all([
         api.records(),
         api.orgUnits(),
         api.actions(),
         mode === "elevate" ? api.rooms() : Promise.resolve([] as RoomSummary[]),
-        mode === "cpd" ? api.lookups() : Promise.resolve([])
+        mode === "cpd" || mode === "elevate" ? api.lookups() : Promise.resolve([]),
+        mode === "elevate" ? api.elevateEnvironmentPillars() : Promise.resolve([] as ElevateEnvironmentPillarSummary[])
       ]);
       setRecords(nextRecords.filter((record) => record.recordType === config.recordType));
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
       setActions(nextActions);
       setRooms(nextRooms);
       setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
+      setEnvironmentPurposes(nextLookups.find((lookup) => lookup.lookupKey === "elevate_environment_purpose")?.values ?? []);
+      setEnvironmentPillars(nextEnvironmentPillars);
 
       if (mode === "learning") {
-        const nextMappings = await api.learningWalkThemeMappings();
+        const [nextMappings, nextThemeGroups] = await Promise.all([
+          api.learningWalkThemeMappings(),
+          api.learningWalkThemes()
+        ]);
         setThemeMappings(nextMappings);
+        setLearningWalkThemeGroups(nextThemeGroups);
       }
     } catch {
       setStatusMessage("Data could not be loaded from the API.");
@@ -286,7 +322,12 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         return "Select a room from the room register before completing the check.";
       }
 
-      for (const valueKey of elevateValueKeys) {
+      const purposes = splitDelimitedValues(getResponseValue(sections, values, "intended_purpose"));
+      if (purposes.length === 0 || purposes.some((purpose) => !environmentPurposes.includes(purpose))) {
+        return "Select at least one intended purpose from the administrator-controlled list.";
+      }
+
+      for (const valueKey of environmentPillars.filter((pillar) => pillar.isActive).map((pillar) => pillar.pillarKey)) {
         const score = getResponseValue(sections, values, `${valueKey}_score`);
         const action = getResponseValue(sections, values, `${valueKey}_action`);
         const owner = getResponseValue(sections, values, `${valueKey}_owner`);
@@ -316,11 +357,33 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       return;
     }
 
+    if (mode === "learning" && asDraft && learningWalkActions.length > 0) {
+      setStatusMessage("Submit the Learning Walk to assign its actions, or remove the actions before saving a draft.");
+      return;
+    }
+
     if (!asDraft) {
-      const validationMessage = validateForSubmit(createSections, responses, selectedFacultyId, selectedTeamId, agreedTheme);
+      const validationMessage = validateForSubmit(createEntrySections, responses, selectedFacultyId, selectedTeamId, agreedTheme);
       if (validationMessage) {
         setStatusMessage(validationMessage);
         return;
+      }
+
+      if (mode === "learning") {
+        const otherValidation = validateLearningWalkOtherContext(
+          createSections,
+          responses,
+          learningWalkThemeGroups
+        );
+        if (otherValidation) {
+          setStatusMessage(otherValidation);
+          return;
+        }
+
+        if (learningWalkActions.some((action) => !action.title.trim() || !action.ownerStaffId || !action.dueDate)) {
+          setStatusMessage("Every added action needs an action, owner and implementation date.");
+          return;
+        }
       }
     }
 
@@ -334,13 +397,21 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       subjectStaffId: context.subjectStaffId,
       orgUnitId: context.orgUnitId,
       recordDate: context.dateValue,
-      responses: flattenResponses(createSections, responses, false),
-      saveAsDraft: asDraft
+      responses: flattenResponses(createEntrySections, responses, false),
+      saveAsDraft: asDraft,
+      actions: mode === "learning" && !asDraft
+        ? learningWalkActions.map((action) => ({
+            title: action.title.trim(),
+            ownerStaffId: action.ownerStaffId,
+            dueDate: action.dueDate
+          }))
+        : undefined
     });
     setIsSaving(false);
 
     if (result.ok) {
       setResponses({});
+      setLearningWalkActions([]);
       setIsCreating(false);
       setStatusMessage(asDraft ? `${config.recordLabel} saved as draft.` : `${config.recordLabel} submitted.`);
       await refreshData();
@@ -387,10 +458,22 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     }
 
     if (selectedDetail.submissionStatus === "submitted") {
-      const validationMessage = validateForSubmit(editSections, editResponses, editFacultyId, editTeamId, editAgreedTheme);
+      const validationMessage = validateForSubmit(editEntrySections, editResponses, editFacultyId, editTeamId, editAgreedTheme);
       if (validationMessage) {
         setStatusMessage(validationMessage);
         return;
+      }
+
+      if (mode === "learning") {
+        const otherValidation = validateLearningWalkOtherContext(
+          editSections,
+          editResponses,
+          learningWalkThemeGroups
+        );
+        if (otherValidation) {
+          setStatusMessage(otherValidation);
+          return;
+        }
       }
     }
 
@@ -455,8 +538,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   }
 
   async function createLinkedAction() {
-    if (!selectedDetail || !actionTitle.trim() || !actionOwnerId) {
-      setStatusMessage("A linked action needs a title and an owner.");
+    const requiresDueDate = mode === "learning" || mode === "elevate";
+    if (!selectedDetail || !actionTitle.trim() || !actionOwnerId || (requiresDueDate && !actionDueDate)) {
+      setStatusMessage(
+        mode === "learning"
+          ? "A Learning Walk action needs an action, owner and implementation date."
+          : mode === "elevate"
+            ? "A Learning Environment action needs an action, owner and date for review."
+            : "A linked action needs a title and an owner."
+      );
       return;
     }
 
@@ -499,10 +589,24 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         const dateField = findField(createSections, "assessment_date");
         setResponses(dateField ? { [dateField.id]: getTodayDate() } : {});
       }
+      if (!current && mode === "learning") {
+        setLearningWalkActions([]);
+      }
       return !current;
     });
     setIsEditing(false);
     setStatusMessage("");
+  }
+
+  function addLearningWalkAction() {
+    setLearningWalkActions((current) => [
+      ...current,
+      { id: crypto.randomUUID(), title: "", ownerStaffId: "", dueDate: "" }
+    ]);
+  }
+
+  function updateLearningWalkAction(id: string, changes: Partial<DraftLearningWalkAction>) {
+    setLearningWalkActions((current) => current.map((action) => action.id === id ? { ...action, ...changes } : action));
   }
 
   function clearRecordFilters() {
@@ -622,15 +726,20 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   <small>Created by {user.displayName}</small>
                 </div>
               ) : null}
-              {definition.sections.map((section) => (
+              {createEntrySections.map((section) => (
                 <div className="entry-section" key={section.id}>
-                  <h3>{section.title}</h3>
+                  <EnvironmentPillarHeader pillar={getEnvironmentPillar(mode, section.sectionKey, environmentPillars)} title={section.title} />
                   <div className="entry-field-grid">
-                    {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
+                    {section.fields
+                      .filter((field) => !isLegacyCpdParticipantField(mode, field))
+                      .filter((field) => shouldShowLearningWalkField(mode, field, createSections, responses, learningWalkThemeGroups))
+                      .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
-                        field={field}
+                        environmentPurposes={environmentPurposes}
+                        field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
+                        learningWalkThemeGroups={learningWalkThemeGroups}
                         onChange={(value) => setResponses((current) => updateResponseMap(createSections, current, field, value, rooms))}
                         orgUnits={orgUnits}
                         rooms={rooms}
@@ -642,6 +751,63 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   </div>
                 </div>
               ))}
+              {mode === "learning" ? (
+                <div className="entry-section">
+                  <div className="section-heading-row">
+                    <div>
+                      <h3>Actions</h3>
+                      <small>Actions are assigned through the central action engine when the walk is submitted.</small>
+                    </div>
+                    <Button icon={Plus} onClick={addLearningWalkAction}>Action</Button>
+                  </div>
+                  {learningWalkActions.length === 0 ? (
+                    <div className="empty-row">No actions added.</div>
+                  ) : (
+                    <div className="scrutiny-action-list">
+                      {learningWalkActions.map((action, index) => (
+                        <div className="scrutiny-action-row" key={action.id}>
+                          <label className="entry-field scrutiny-action-text">
+                            <span>Action {index + 1} <strong>Required</strong></span>
+                            <textarea
+                              maxLength={300}
+                              onChange={(event) => updateLearningWalkAction(action.id, { title: event.target.value })}
+                              rows={3}
+                              value={action.title}
+                            />
+                          </label>
+                          <label className="entry-field">
+                            <span>Owner <strong>Required</strong></span>
+                            <StaffSearchSelect
+                              id={`learning-walk-action-owner-${action.id}`}
+                              onChange={(ownerStaffId) => updateLearningWalkAction(action.id, { ownerStaffId })}
+                              staff={staff}
+                              value={action.ownerStaffId}
+                            />
+                          </label>
+                          <label className="entry-field">
+                            <span>Date to be implemented by <strong>Required</strong></span>
+                            <input
+                              min={getResponseValue(createSections, responses, "visit_date")}
+                              onChange={(event) => updateLearningWalkAction(action.id, { dueDate: event.target.value })}
+                              type="date"
+                              value={action.dueDate}
+                            />
+                          </label>
+                          <button
+                            aria-label={`Remove action ${index + 1}`}
+                            className="icon-button scrutiny-action-remove"
+                            onClick={() => setLearningWalkActions((current) => current.filter((candidate) => candidate.id !== action.id))}
+                            title="Remove action"
+                            type="button"
+                          >
+                            <X size={16} aria-hidden="true" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
               <div className="toolbar">
                 {mode !== "elevate" ? (
                   <Button disabled={isSaving} icon={Save} onClick={() => void saveRecord(true)}>Save draft</Button>
@@ -789,15 +955,20 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
           {isEditing ? (
             <div className="entry-form">
-              {selectedDetail.sections.map((section) => (
+              {editEntrySections.map((section) => (
                 <div className="entry-section" key={section.id}>
-                  <h3>{section.title}</h3>
+                  <EnvironmentPillarHeader pillar={getEnvironmentPillar(mode, section.sectionKey, environmentPillars)} title={section.title} />
                   <div className="entry-field-grid">
-                    {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
+                    {section.fields
+                      .filter((field) => !isLegacyCpdParticipantField(mode, field))
+                      .filter((field) => shouldShowLearningWalkField(mode, field, editSections, editResponses, learningWalkThemeGroups))
+                      .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
-                        field={field}
+                        environmentPurposes={environmentPurposes}
+                        field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
+                        learningWalkThemeGroups={learningWalkThemeGroups}
                         onChange={(value) => setEditResponses((current) => updateResponseMap(editSections, current, field, value, rooms))}
                         orgUnits={orgUnits}
                         rooms={rooms}
@@ -817,11 +988,14 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
           ) : (
             <>
               <div className="answer-section-list">
-                {selectedDetail.sections.map((section) => (
+                {detailSections.map((section) => (
                   <div className="answer-section" key={section.id}>
-                    <h3>{section.title}</h3>
+                    <EnvironmentPillarHeader pillar={getEnvironmentPillar(mode, section.sectionKey, environmentPillars)} title={section.title} />
                     <div className="answer-grid">
-                      {section.fields.filter((field) => !isLegacyCpdParticipantField(mode, field)).map((field) => (
+                      {section.fields
+                        .filter((field) => !isLegacyCpdParticipantField(mode, field))
+                        .filter((field) => field.fieldKey !== "additional_focus_other" || Boolean(field.value))
+                        .map((field) => (
                         <div className={isWideEntryField(field.fieldType) ? "answer-item answer-item-wide" : "answer-item"} key={field.id}>
                           <span>{field.label}</span>
                           <strong>{formatAnswer(field.value, field.fieldType, orgUnits, staff)}</strong>
@@ -841,7 +1015,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 {detailStatus === "submitted" && canManageForms ? (
                   <Button disabled={isSaving} icon={RotateCcw} onClick={() => void changeStatus("reopen")}>Reopen</Button>
                 ) : null}
-                {canManageForms ? (
+                {canManageForms && (mode !== "scrutiny" || user.permissions.includes("users.manage")) ? (
                   <Button disabled={isSaving} icon={Archive} onClick={() => void changeStatus("archive")} variant="quiet">Archive</Button>
                 ) : null}
                 {canManageActions ? (
@@ -860,15 +1034,18 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 </label>
                 <label className="entry-field">
                   <span>Owner <strong>Required</strong></span>
-                  <select onChange={(event) => setActionOwnerId(event.target.value)} value={actionOwnerId}>
-                    <option value="">Select owner</option>
-                    {staff.map((staffMember) => (
-                      <option key={staffMember.id} value={staffMember.id}>{staffMember.displayName}</option>
-                    ))}
-                  </select>
+                  <StaffSearchSelect
+                    id={`linked-action-owner-${selectedDetail.id}`}
+                    onChange={setActionOwnerId}
+                    staff={staff}
+                    value={actionOwnerId}
+                  />
                 </label>
                 <label className="entry-field">
-                  <span>Due date</span>
+                  <span>
+                    {mode === "elevate" ? "Date for review" : "Date to be implemented by"}
+                    {mode === "learning" || mode === "elevate" ? <strong>Required</strong> : null}
+                  </span>
                   <input onChange={(event) => setActionDueDate(event.target.value)} type="date" value={actionDueDate} />
                 </label>
               </div>
@@ -918,15 +1095,19 @@ function FieldInput({
   selectedFacultyId,
   staff,
   cpdThemes,
+  environmentPurposes,
+  learningWalkThemeGroups,
   value
 }: {
   cpdThemes: string[];
+  environmentPurposes: string[];
   field: FormFieldDefinition;
   onChange: (value: string) => void;
   orgUnits: OrgUnitSummary[];
   rooms: RoomSummary[];
   selectedFacultyId?: string;
   staff: StaffSummary[];
+  learningWalkThemeGroups: LearningWalkThemeGroup[];
   value: string;
 }) {
   const faculties = orgUnits.filter((orgUnit) => orgUnit.orgUnitType === "faculty");
@@ -957,6 +1138,58 @@ function FieldInput({
     );
   }
 
+  if (field.fieldType === "room_lookup") {
+    return (
+      <div className="entry-field">
+        <span>
+          {field.label}
+          {field.isRequired ? <strong>Required</strong> : null}
+        </span>
+        <RoomSearchSelect id={`room-${field.id}`} onChange={onChange} rooms={rooms} value={value} />
+        {field.helpText ? <small>{field.helpText}</small> : null}
+      </div>
+    );
+  }
+
+  if (field.fieldType === "learning_walk_theme_group") {
+    const selected = parseLearningWalkThemeSelections(value);
+    const selectedIds = selected.map((theme) => theme.id);
+    return (
+      <div className="entry-field entry-field-wide learning-walk-theme-picker">
+        <span>
+          {field.label}
+          {field.isRequired ? <strong>Required</strong> : null}
+        </span>
+        <div className="learning-walk-theme-picker-groups">
+          {learningWalkThemeGroups.map((group) => {
+            const visibleThemes = group.themes.filter((theme) => theme.isActive || selectedIds.includes(theme.id));
+            if (visibleThemes.length === 0) {
+              return null;
+            }
+
+            return (
+              <fieldset key={group.id}>
+                <legend>{group.name}</legend>
+                {visibleThemes.map((theme) => (
+                  <label key={theme.id}>
+                    <input
+                      checked={selectedIds.includes(theme.id)}
+                      disabled={!theme.isActive && !selectedIds.includes(theme.id)}
+                      onChange={() => onChange(toggleLearningWalkTheme(value, theme, group))}
+                      type="checkbox"
+                    />
+                    <span>{theme.name}{theme.isActive ? "" : " (inactive)"}</span>
+                  </label>
+                ))}
+              </fieldset>
+            );
+          })}
+        </div>
+        {field.helpText ? <small>{field.helpText}</small> : null}
+      </div>
+    );
+  }
+
   return (
     <label className={isWideEntryField(field.fieldType) ? "entry-field entry-field-wide" : "entry-field"}>
       <span>
@@ -974,24 +1207,6 @@ function FieldInput({
       ) : null}
       {field.fieldType === "number" ? (
         <input min="0" type="number" value={value} onChange={(event) => onChange(event.target.value)} />
-      ) : null}
-      {field.fieldType === "room_lookup" ? (
-        <>
-          <input
-            autoComplete="off"
-            list={`room-options-${field.id}`}
-            onChange={(event) => onChange(event.target.value.toLocaleUpperCase())}
-            placeholder="Start typing a room code"
-            role="combobox"
-            type="text"
-            value={value}
-          />
-          <datalist id={`room-options-${field.id}`}>
-            {rooms.map((room) => (
-              <option key={room.id} value={room.roomCode}>{room.buildingName}</option>
-            ))}
-          </datalist>
-        </>
       ) : null}
       {field.fieldType === "faculty_lookup" ? (
         <select value={value} onChange={(event) => onChange(event.target.value)}>
@@ -1099,7 +1314,7 @@ function FieldInput({
       ) : null}
       {field.fieldType === "checkbox_group" ? (
         <div className="preview-check-list">
-          {(field.options?.length ? field.options : getCheckboxOptions(field.fieldKey, cpdThemes)).map((option) => (
+          {(field.options?.length ? field.options : getCheckboxOptions(field.fieldKey, cpdThemes, environmentPurposes)).map((option) => (
             <label key={option}>
               <input
                 checked={selectedValues.includes(option)}
@@ -1133,11 +1348,87 @@ function FieldInput({
   );
 }
 
+function EnvironmentPillarHeader({
+  pillar,
+  title
+}: {
+  pillar?: ElevateEnvironmentPillarSummary;
+  title: string;
+}) {
+  if (!pillar) {
+    return <h3>{title}</h3>;
+  }
+
+  return (
+    <div className="environment-pillar-heading">
+      <img alt={pillar.assetAltText} loading="lazy" src={pillar.assetUri} />
+      <div>
+        <span>Learning environment pillar{pillar.isActive ? "" : " · Inactive"}</span>
+        <h3>{pillar.name}</h3>
+        <p>{pillar.description}</p>
+      </div>
+    </div>
+  );
+}
+
+type EnvironmentSectionLike = {
+  sectionKey: string;
+  displayOrder: number;
+};
+
+function getEnvironmentPillar(
+  mode: WorkspaceMode,
+  sectionKey: string,
+  pillars: ElevateEnvironmentPillarSummary[]
+) {
+  return mode === "elevate" ? pillars.find((pillar) => pillar.pillarKey === sectionKey) : undefined;
+}
+
+function getEnvironmentEntrySections<T extends EnvironmentSectionLike>(
+  mode: WorkspaceMode,
+  sections: T[],
+  pillars: ElevateEnvironmentPillarSummary[]
+) {
+  if (mode !== "elevate" || pillars.length === 0) {
+    return sections;
+  }
+
+  const byKey = new Map(pillars.map((pillar) => [pillar.pillarKey, pillar]));
+  return orderEnvironmentSections(
+    mode,
+    sections.filter((section) => !byKey.has(section.sectionKey) || byKey.get(section.sectionKey)?.isActive),
+    pillars
+  );
+}
+
+function orderEnvironmentSections<T extends EnvironmentSectionLike>(
+  mode: WorkspaceMode,
+  sections: T[],
+  pillars: ElevateEnvironmentPillarSummary[]
+) {
+  if (mode !== "elevate" || pillars.length === 0) {
+    return sections;
+  }
+
+  const byKey = new Map(pillars.map((pillar) => [pillar.pillarKey, pillar]));
+  return [...sections].sort((left, right) => {
+    const leftPillar = byKey.get(left.sectionKey);
+    const rightPillar = byKey.get(right.sectionKey);
+    const leftOrder = leftPillar ? 1000 + leftPillar.displayOrder : left.displayOrder;
+    const rightOrder = rightPillar ? 1000 + rightPillar.displayOrder : right.displayOrder;
+    return leftOrder - rightOrder;
+  });
+}
+
 const workScrutinyTagOptions = ["Good Practice", "Development", "Compliance", "Assessment", "Feedback"];
 
-function getCheckboxOptions(fieldKey: string, cpdThemes: string[]) {
+function getCheckboxOptions(fieldKey: string, cpdThemes: string[], environmentPurposes: string[]) {
   if (fieldKey === "cpd_themes") {
     return cpdThemes;
+  }
+
+  if (fieldKey === "intended_purpose") {
+    return environmentPurposes;
   }
 
   return [];
@@ -1180,7 +1471,7 @@ function getRecordTimestamp(record: RecordSummary) {
 }
 
 function isWideEntryField(fieldType: string) {
-  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add"].includes(
+  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add", "learning_walk_theme_group"].includes(
     fieldType
   );
 }
@@ -1191,6 +1482,73 @@ function isLegacyCpdParticipantField(mode: WorkspaceMode, field: FormFieldDefini
 
 function splitDelimitedValues(value?: string) {
   return value ? value.split("|").filter(Boolean) : [];
+}
+
+type LearningWalkThemeSelection = {
+  id: string;
+  name: string;
+  groupName: string;
+  isOther: boolean;
+};
+
+function parseLearningWalkThemeSelections(value?: string): LearningWalkThemeSelection[] {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as LearningWalkThemeSelection[];
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item?.id === "string" && typeof item?.name === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function toggleLearningWalkTheme(
+  currentValue: string,
+  theme: LearningWalkTheme,
+  group: LearningWalkThemeGroup
+) {
+  const selected = parseLearningWalkThemeSelections(currentValue);
+  const next = selected.some((item) => item.id === theme.id)
+    ? selected.filter((item) => item.id !== theme.id)
+    : [...selected, { id: theme.id, name: theme.name, groupName: group.name, isOther: theme.isOther }];
+  return JSON.stringify(next);
+}
+
+function shouldShowLearningWalkField(
+  mode: WorkspaceMode,
+  field: FormFieldDefinition,
+  sections: Array<{ fields: FormFieldDefinition[] }>,
+  responses: Record<string, string>,
+  groups: LearningWalkThemeGroup[]
+) {
+  if (mode !== "learning" || field.fieldKey !== "additional_focus_other") {
+    return true;
+  }
+
+  const themeValue = getResponseValue(sections, responses, "additional_focus_context");
+  const otherThemeIds = groups.flatMap((group) => group.themes).filter((theme) => theme.isOther).map((theme) => theme.id);
+  return parseLearningWalkThemeSelections(themeValue).some((selection) =>
+    selection.isOther || otherThemeIds.includes(selection.id));
+}
+
+function validateLearningWalkOtherContext(
+  sections: Array<{ fields: FormFieldDefinition[] }>,
+  responses: Record<string, string>,
+  groups: LearningWalkThemeGroup[]
+) {
+  const otherField = findField(sections, "additional_focus_other");
+  if (!otherField || shouldShowLearningWalkField("learning", otherField, sections, responses, groups)
+      && responses[otherField.id]?.trim()) {
+    return "";
+  }
+
+  return shouldShowLearningWalkField("learning", otherField, sections, responses, groups)
+    ? "Describe the other focus or context before submitting the Learning Walk."
+    : "";
 }
 
 function toggleDelimitedValue(currentValue: string, option: string) {
@@ -1329,14 +1687,23 @@ function formatAnswer(
     return splitDelimitedValues(value).join("\n");
   }
 
+  if (fieldType === "learning_walk_theme_group") {
+    const selections = parseLearningWalkThemeSelections(value);
+    if (selections.length === 0) {
+      return "Not recorded";
+    }
+
+    return selections
+      .map((selection) => `${selection.groupName}: ${selection.name}`)
+      .join("\n");
+  }
+
   if (fieldType === "datetime") {
     return value.replace("T", " ");
   }
 
   return value;
 }
-
-const elevateValueKeys = ["aspirational", "collaborative", "respectful", "innovative", "inclusion"] as const;
 
 const elevateScoreLabels: Record<string, string> = {
   "0": "0 - Barrier",

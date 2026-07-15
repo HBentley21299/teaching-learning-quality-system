@@ -52,6 +52,7 @@ public sealed class UserRole
     public Guid RoleId { get; set; }
     public DateTimeOffset ActiveFrom { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ActiveTo { get; set; }
+    public string AssignmentSource { get; set; } = "manual";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -62,5 +63,6 @@ public sealed class AccessScope : AuditableEntity
     public Guid? OrgUnitId { get; set; }
     public Guid? StaffId { get; set; }
     public bool IsActive { get; set; } = true;
+    public string AssignmentSource { get; set; } = "manual";
 }
 

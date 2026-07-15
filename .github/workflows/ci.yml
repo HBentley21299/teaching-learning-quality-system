@@ -15,6 +15,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  infrastructure:
+    name: Azure infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compile and lint Bicep
+        run: |
+          az bicep build --file infra/azure/main.bicep --outfile /tmp/tlqs-main.json
+          az bicep lint --file infra/azure/main.bicep
+
   api:
     name: API
     runs-on: windows-latest
@@ -26,10 +37,30 @@ jobs:
           dotnet-version: 10.0.x
       - name: Restore
         run: dotnet restore apps/api/TLQS.sln --source https://api.nuget.org/v3/index.json
+      - name: Validate deployment scripts
+        shell: pwsh
+        run: |
+          $files = @('scripts/apply-database.ps1', 'scripts/deploy-azure.ps1', 'scripts/verify-v1.ps1')
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { throw "$file has PowerShell parse errors: $($errors -join '; ')" }
+          }
+      - name: Audit dependencies
+        run: dotnet list apps/api/TLQS.sln package --vulnerable --include-transitive --source https://api.nuget.org/v3/index.json
       - name: Build
         run: dotnet build apps/api/TLQS.sln --configuration Release --no-restore
       - name: Test
         run: dotnet test apps/api/TLQS.sln --configuration Release --no-build
+      - name: Publish
+        run: dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj --configuration Release --no-build --output artifacts/api
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tlqs-api
+          path: artifacts/api
+          if-no-files-found: error
+          retention-days: 14
 
   web:
     name: Web
@@ -45,6 +76,15 @@ jobs:
       - name: Install dependencies
         working-directory: apps/web
         run: npm ci
+      - name: Audit production dependencies
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high
       - name: Build
         working-directory: apps/web
         run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tlqs-web
+          path: apps/web/dist
+          if-no-files-found: error
+          retention-days: 14
