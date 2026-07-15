@@ -1,28 +1,33 @@
-name: Deploy production
+name: Deploy development
 
 on:
-  workflow_dispatch:
-    inputs:
-      database_ready:
-        description: Production database migrations for this release have been applied
-        required: true
-        type: boolean
-        default: false
+  workflow_run:
+    workflows:
+      - TLQS CI
+    types:
+      - completed
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: tlqs-production
-  cancel-in-progress: false
+  group: tlqs-development
+  cancel-in-progress: true
 
 jobs:
   deploy:
     name: Deploy verified package
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: windows-latest
     timeout-minutes: 30
-    environment: production
+    environment:
+      name: development
+      url: ${{ vars.DEVELOPMENT_URL }}
     env:
       VITE_API_BASE_URL: ""
       VITE_ENTRA_CLIENT_ID: ${{ vars.ENTRA_SPA_CLIENT_ID }}
@@ -30,24 +35,38 @@ jobs:
       VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_API_SCOPE }}
     steps:
       - uses: actions/checkout@v6
-      - name: Validate deployment gate and configuration
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+      - name: Validate deployment scope and configuration
         shell: pwsh
         run: |
-          if ('${{ inputs.database_ready }}' -ne 'true') {
-            throw 'Database readiness must be confirmed before production deployment.'
-          }
           $required = @{
             AZURE_CLIENT_ID = '${{ vars.AZURE_CLIENT_ID }}'
             AZURE_TENANT_ID = '${{ vars.AZURE_TENANT_ID }}'
             AZURE_SUBSCRIPTION_ID = '${{ vars.AZURE_SUBSCRIPTION_ID }}'
             AZURE_RESOURCE_GROUP = '${{ vars.AZURE_RESOURCE_GROUP }}'
             AZURE_APP_SERVICE_NAME = '${{ vars.AZURE_APP_SERVICE_NAME }}'
-            PRODUCTION_URL = '${{ vars.PRODUCTION_URL }}'
+            DEVELOPMENT_URL = '${{ vars.DEVELOPMENT_URL }}'
             ENTRA_SPA_CLIENT_ID = '${{ vars.ENTRA_SPA_CLIENT_ID }}'
             ENTRA_API_SCOPE = '${{ vars.ENTRA_API_SCOPE }}'
           }
           $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Key)
-          if ($missing.Count -gt 0) { throw "Missing production environment variables: $($missing -join ', ')" }
+          if ($missing.Count -gt 0) { throw "Missing development environment variables: $($missing -join ', ')" }
+
+          $expectedCommit = '${{ github.event.workflow_run.head_sha }}'
+          $actualCommit = (git rev-parse HEAD).Trim()
+          if ($actualCommit -ne $expectedCommit) {
+            throw "Checked out $actualCommit instead of the verified commit $expectedCommit."
+          }
+
+          git diff --quiet HEAD^1 HEAD -- database infra/azure
+          if ($LASTEXITCODE -eq 1) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '## Manual deployment required'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value 'This release changes database or Azure infrastructure files. Run the guarded Azure deployment process before deploying the application package.'
+            throw 'Automatic development deployment is blocked for database or infrastructure changes.'
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect the verified commit; git diff exited with $LASTEXITCODE." }
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
@@ -56,10 +75,10 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
-      - name: Verify release
+      - name: Verify development release
         shell: pwsh
         run: .\scripts\verify-v1.ps1
-      - name: Create deployment package
+      - name: Create portable deployment package
         shell: pwsh
         run: >-
           .\scripts\new-deployment-package.ps1
@@ -82,10 +101,10 @@ jobs:
           --clean true
           --restart true
           --output none
-      - name: Verify production health
+      - name: Verify development health
         shell: pwsh
         run: |
-          $url = "${{ vars.PRODUCTION_URL }}".TrimEnd('/')
+          $url = "${{ vars.DEVELOPMENT_URL }}".TrimEnd('/')
           $deadline = (Get-Date).AddMinutes(3)
           do {
             try {
@@ -93,4 +112,4 @@ jobs:
               if ($health.status -eq 'healthy' -and $health.database -eq 'connected') { exit 0 }
             } catch { Start-Sleep -Seconds 5 }
           } while ((Get-Date) -lt $deadline)
-          throw "Production did not become healthy after deployment."
+          throw "Development did not become healthy after deployment."
