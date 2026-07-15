@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $Location,
 
+    [string] $SqlLocation,
+
     [Parameter(Mandatory = $true)]
     [string] $SqlAdministratorLogin,
 
@@ -101,6 +103,10 @@ if ([string]::IsNullOrWhiteSpace($EntraTenantId)) {
     }
 }
 
+if ([string]::IsNullOrWhiteSpace($SqlLocation)) {
+    $SqlLocation = $Location
+}
+
 if ([string]::IsNullOrWhiteSpace($SqlAdministratorUserName)) {
     $SqlAdministratorUserName = ((@(& az account show --query user.name --output tsv) -join "").Trim())
 }
@@ -156,6 +162,7 @@ try {
         --parameters `
             environmentName=$EnvironmentName `
             location=$Location `
+            sqlLocation=$SqlLocation `
             appName=$AppName `
             sqlAdministratorLogin=$SqlAdministratorLogin `
             sqlAdministratorObjectId=$SqlAdministratorObjectId `

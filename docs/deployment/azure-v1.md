@@ -68,7 +68,8 @@ Service does not support VNet integration, dev uses managed identity over Azure
 public service endpoints; production retains private endpoints and VNet routing.
 Never import real staff or quality records into a personally owned subscription.
 The current personal free-trial subscription has validated Free App Service
-capacity in `ukwest`; use that region for this development environment.
+capacity in `ukwest`. New SQL server creation is currently restricted there, so
+use `-Location ukwest -SqlLocation uksouth` for this development environment.
 
 The script performs these operations in order:
 

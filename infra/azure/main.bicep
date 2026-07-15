@@ -9,6 +9,9 @@ param environmentName string = 'dev'
 @description('Azure region for all resources.')
 param location string = resourceGroup().location
 
+@description('Azure region for SQL. Defaults to the application region but may differ where regional SQL creation is restricted.')
+param sqlLocation string = location
+
 @description('Application name prefix. Use lowercase letters, numbers and hyphens.')
 @minLength(2)
 @maxLength(5)
@@ -156,7 +159,7 @@ resource evidenceContainer 'Microsoft.Storage/storageAccounts/blobServices/conta
 
 resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
   name: sqlServerName
-  location: location
+  location: sqlLocation
   tags: {
     application: appName
     environment: environmentName
@@ -196,7 +199,7 @@ resource developmentAzureServicesFirewallRule 'Microsoft.Sql/servers/firewallRul
 resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
   name: sqlDatabaseName
   parent: sqlServer
-  location: location
+  location: sqlLocation
   sku: {
     name: 'GP_S_Gen5'
     tier: 'GeneralPurpose'
