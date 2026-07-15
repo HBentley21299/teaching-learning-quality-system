@@ -127,8 +127,19 @@ Invoke-Native "Build and verify the V1 release" {
     & powershell.exe @verifyArguments
 }
 
-Invoke-Native "Create or update the Azure resource group" {
-    az group create --name $ResourceGroup --location $Location --output none
+$existingResourceGroupLocation = ((@(& az group show `
+    --name $ResourceGroup `
+    --query location `
+    --output tsv 2>$null) -join "").Trim())
+
+if ([string]::IsNullOrWhiteSpace($existingResourceGroupLocation)) {
+    Invoke-Native "Create the Azure resource group" {
+        az group create --name $ResourceGroup --location $Location --output none
+    }
+}
+else {
+    Write-Host ""
+    Write-Host "==> Reuse Azure resource group $ResourceGroup ($existingResourceGroupLocation)" -ForegroundColor Cyan
 }
 
 try {
