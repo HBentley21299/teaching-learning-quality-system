@@ -7,7 +7,9 @@ using TLQS.Application.Workflows;
 
 namespace TLQS.Api.Data;
 
-public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
+public sealed partial class SqlFoundationDataStore(
+    IConfiguration configuration,
+    ILogger<SqlFoundationDataStore> logger)
 {
     private readonly string _connectionString = configuration.GetConnectionString("TlqsDatabase")
         ?? throw new InvalidOperationException("Connection string 'TlqsDatabase' is not configured.");
@@ -21,12 +23,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             var result = await command.ExecuteScalarAsync(cancellationToken);
             return Convert.ToInt32(result) == 1;
         }
-        catch (SqlException)
+        catch (SqlException exception)
         {
+            logger.LogWarning(exception, "Database readiness failed with SQL error {SqlErrorNumber}.", exception.Number);
             return false;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception)
         {
+            logger.LogWarning(exception, "Database readiness failed because the SQL client configuration is invalid.");
             return false;
         }
     }

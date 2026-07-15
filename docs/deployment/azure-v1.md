@@ -10,8 +10,15 @@ The deployment operator needs:
 
 - Contributor and User Access Administrator on the target resource group or subscription.
 - Permission to create an Azure SQL Microsoft Entra administrator.
-- Azure CLI, .NET 10 SDK, Node.js 24 and `sqlcmd` 18 or later.
-- An Entra SQL administrator account that can use MFA when `sqlcmd -G` opens authentication.
+- Azure CLI, .NET 10 SDK, Node.js 24, `sqlcmd` for LocalDB and the PowerShell
+  `SqlServer` module for Azure SQL migrations.
+- An Entra SQL administrator account available through the active Azure CLI session.
+
+Install the token-capable SQL PowerShell module once for the current user:
+
+```powershell
+Install-Module SqlServer -Scope CurrentUser
+```
 
 Verify the local build before touching Azure:
 
@@ -53,10 +60,11 @@ Run from the repository root with a clean, committed working tree:
   -SqlAdministratorLogin "TLQS SQL Administrators" `
   -SqlAdministratorObjectId "<entra-group-object-id>" `
   -SqlAdministratorPrincipalType Group `
-  -SqlAdministratorUserName "<administrator-upn>" `
   -EntraApiAudience "<api-client-id>" `
   -EntraSpaClientId "<spa-client-id>" `
   -EntraApiScope "api://<api-client-id>/access_as_user" `
+  -BootstrapAdminObjectId "<initial-admin-entra-object-id>" `
+  -BootstrapAdminEmail "<existing-staff-email>" `
   -IncludeOfficialStaffData
 ```
 
@@ -77,14 +85,19 @@ The script performs these operations in order:
 1. Runs Release builds, tests and dependency audits.
 2. Provisions or updates `infra/azure/main.bicep`.
 3. Temporarily allows only the operator's public IPv4 address to reach Azure SQL.
-4. Applies ordered, forward-only SQL migrations and seeds.
-5. Grants the App Service managed identity `db_datareader`, `db_datawriter` and `EXECUTE`.
-6. Deploys the hashed same-origin UI/API release package.
-7. Removes the temporary client firewall rule and verifies `/health/ready`.
+4. Applies checksum-tracked, forward-only SQL migrations and seeds.
+5. When explicitly supplied, links the bootstrap administrator by Entra object
+   ID to an existing active staff account and grants Super Admin with global scope.
+6. Resolves the App Service managed identity client ID and grants its Azure SQL
+   contained user `db_datareader`, `db_datawriter` and `EXECUTE`.
+7. Deploys the hashed same-origin UI/API release package using portable ZIP paths.
+8. Removes the temporary client firewall rule and verifies `/health/ready`.
    Production disables SQL public access; development retains the Azure-service
    endpoint required by the Free App Service tier.
 
 The SQL lockdown is in a `finally` block and runs after failed deployments too.
+Applied database scripts are recorded in `dbo.schema_migrations`; a changed
+checksum is rejected instead of silently rewriting migration history.
 Never use `fix-localdb.ps1`, `-Reset`, `.mdf` files or local connection strings
 against Azure SQL.
 

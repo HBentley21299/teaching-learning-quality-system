@@ -11,9 +11,9 @@ param(
 
     [switch] $UseAzureAuthentication,
 
-    [string] $AzureUserName,
+    [switch] $ExcludeOfficialStaffData,
 
-    [switch] $ExcludeOfficialStaffData
+    [switch] $BaselineExistingDatabase
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,8 +33,67 @@ function Invoke-Native {
     }
 }
 
-if ($null -eq (Get-Command $SqlCmd -ErrorAction SilentlyContinue)) {
+$azureAccessToken = $null
+if ($UseAzureAuthentication) {
+    if ($null -eq (Get-Command "az" -ErrorAction SilentlyContinue)) {
+        throw "Azure CLI was not found. Install it and run 'az login' before applying an Azure database."
+    }
+    if ($null -eq (Get-Command "Invoke-Sqlcmd" -ErrorAction SilentlyContinue)) {
+        try {
+            Import-Module SqlServer -ErrorAction Stop
+        }
+        catch {
+            throw "The SqlServer PowerShell module is required for token-based Azure SQL migrations. Install it with 'Install-Module SqlServer -Scope CurrentUser'."
+        }
+    }
+    $azureAccessToken = ((@(& az account get-access-token `
+        --resource "https://database.windows.net/" `
+        --query accessToken `
+        --output tsv) -join "").Trim())
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($azureAccessToken)) {
+        throw "Azure CLI could not acquire an Azure SQL access token. Run 'az login' and try again."
+    }
+}
+elseif ($null -eq (Get-Command $SqlCmd -ErrorAction SilentlyContinue)) {
     throw "sqlcmd was not found. Install SQL Server command line tools or pass -SqlCmd with the full path."
+}
+
+function Invoke-DatabaseQuery {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Query
+    )
+
+    if ($UseAzureAuthentication) {
+        return @(Invoke-Sqlcmd `
+            -ServerInstance $Server `
+            -Database $Database `
+            -AccessToken $azureAccessToken `
+            -Query $Query `
+            -AbortOnError `
+            -ErrorAction Stop)
+    }
+
+    $arguments = @("-S", $Server, "-d", $Database, "-E", "-b", "-h", "-1", "-W") +
+        $SqlCmdOptions + @("-Q", $Query)
+    $output = @(& $SqlCmd @arguments)
+    if ($LASTEXITCODE -ne 0) {
+        throw "$SqlCmd failed with exit code $LASTEXITCODE."
+    }
+    return $output
+}
+
+function Get-ScalarValue {
+    param([object[]] $Rows)
+
+    if ($null -eq $Rows -or $Rows.Count -eq 0) {
+        return $null
+    }
+    $first = $Rows[0]
+    if ($first -is [System.Data.DataRow]) {
+        return [string]$first[0]
+    }
+    return ([string]$first).Trim()
 }
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -79,16 +138,67 @@ foreach ($script in $scripts) {
     if (!(Test-Path $script)) {
         throw "Missing SQL script: $script"
     }
+}
 
-    Write-Host "Applying $script"
-    $authenticationArguments = if ($UseAzureAuthentication) {
-        if ([string]::IsNullOrWhiteSpace($AzureUserName)) { @("-G") } else { @("-G", "-U", $AzureUserName) }
+$ledgerSql = @"
+IF OBJECT_ID(N'dbo.schema_migrations', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.schema_migrations (
+        migration_key nvarchar(260) NOT NULL CONSTRAINT pk_schema_migrations PRIMARY KEY,
+        checksum_sha256 char(64) NOT NULL,
+        applied_at datetimeoffset(0) NOT NULL CONSTRAINT df_schema_migrations_applied_at DEFAULT sysutcdatetime()
+    );
+END;
+"@
+Invoke-DatabaseQuery -Query $ledgerSql | Out-Null
+
+if ($BaselineExistingDatabase) {
+    $ledgerCount = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT COUNT_BIG(*) FROM dbo.schema_migrations;")
+    $hasFinalSchema = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT CASE WHEN OBJECT_ID(N'org.org_unit_leaderships', N'U') IS NULL THEN 0 ELSE 1 END;")
+    if ([long]$ledgerCount -ne 0) {
+        throw "Cannot baseline a database that already contains migration history."
+    }
+    if ([int]$hasFinalSchema -ne 1) {
+        throw "Cannot baseline because the database does not contain the final V1 organisation schema."
+    }
+
+    foreach ($script in $scripts) {
+        $migrationKey = $script.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
+        $checksum = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
+        $escapedKey = $migrationKey.Replace("'", "''")
+        Invoke-DatabaseQuery -Query "INSERT dbo.schema_migrations (migration_key, checksum_sha256) VALUES (N'$escapedKey', '$checksum');" | Out-Null
+    }
+    Write-Host "Existing database baselined with $($scripts.Count) migration entries."
+}
+
+foreach ($script in $scripts) {
+    $migrationKey = $script.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
+    $checksum = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
+    $escapedKey = $migrationKey.Replace("'", "''")
+    $appliedChecksum = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT checksum_sha256 FROM dbo.schema_migrations WHERE migration_key = N'$escapedKey';")
+    if (![string]::IsNullOrWhiteSpace($appliedChecksum)) {
+        if ($appliedChecksum -ne $checksum) {
+            throw "Applied migration '$migrationKey' has changed. Add a new forward-only migration instead of editing migration history."
+        }
+        Write-Host "Skipping already applied $migrationKey"
+        continue
+    }
+
+    Write-Host "Applying $migrationKey"
+    if ($UseAzureAuthentication) {
+        Invoke-Sqlcmd `
+            -ServerInstance $Server `
+            -Database $Database `
+            -AccessToken $azureAccessToken `
+            -InputFile $script `
+            -AbortOnError `
+            -ErrorAction Stop
     }
     else {
-        @("-E")
+        $arguments = @("-S", $Server, "-d", $Database, "-E", "-b") + $SqlCmdOptions + @("-i", $script)
+        Invoke-Native -FilePath $SqlCmd -Arguments $arguments
     }
-    $arguments = @("-S", $Server, "-d", $Database) + $authenticationArguments + @("-b") + $SqlCmdOptions + @("-i", $script)
-    Invoke-Native -FilePath $SqlCmd -Arguments $arguments
+    Invoke-DatabaseQuery -Query "INSERT dbo.schema_migrations (migration_key, checksum_sha256) VALUES (N'$escapedKey', '$checksum');" | Out-Null
 }
 
 Write-Host "Database scripts applied."
