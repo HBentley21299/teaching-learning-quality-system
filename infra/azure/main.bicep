@@ -43,9 +43,10 @@ param enableSqlMigrationAccess bool = false
 param migrationClientIp string = '0.0.0.0'
 
 var nameHash = uniqueString(subscription().id, resourceGroup().id, appName, environmentName)
+var sqlNameHash = uniqueString(subscription().id, resourceGroup().id, appName, environmentName, sqlLocation)
 var isProduction = environmentName == 'prod'
 var suffix = '${appName}-${environmentName}'
-var sqlServerName = take('${suffix}-sql-${nameHash}', 63)
+var sqlServerName = take('${suffix}-sql-${sqlNameHash}', 63)
 var sqlDatabaseName = '${suffix}-db'
 var storageName = toLower(replace('${appName}${environmentName}${nameHash}', '-', ''))
 var appInsightsName = '${suffix}-appi'
