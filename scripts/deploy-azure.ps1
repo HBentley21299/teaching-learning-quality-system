@@ -234,10 +234,11 @@ finally {
             --server $sqlServerName `
             --name "temporary-migration-client" `
             --output none 2>$null
+        $publicNetworkEnabled = if ($EnvironmentName -eq "prod") { "false" } else { "true" }
         & az sql server update `
             --resource-group $ResourceGroup `
             --name $sqlServerName `
-            --enable-public-network false `
+            --enable-public-network $publicNetworkEnabled `
             --output none
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Automatic SQL network lockdown failed. Disable public network access on $sqlServerName immediately."

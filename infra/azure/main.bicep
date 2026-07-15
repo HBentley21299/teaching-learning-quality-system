@@ -40,6 +40,7 @@ param enableSqlMigrationAccess bool = false
 param migrationClientIp string = '0.0.0.0'
 
 var nameHash = uniqueString(subscription().id, resourceGroup().id, appName, environmentName)
+var isProduction = environmentName == 'prod'
 var suffix = '${appName}-${environmentName}'
 var sqlServerName = take('${suffix}-sql-${nameHash}', 63)
 var sqlDatabaseName = '${suffix}-db'
@@ -76,7 +77,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-resource network 'Microsoft.Network/virtualNetworks@2023-11-01' = {
+resource network 'Microsoft.Network/virtualNetworks@2023-11-01' = if (isProduction) {
   name: '${suffix}-vnet'
   location: location
   properties: {
@@ -88,7 +89,7 @@ resource network 'Microsoft.Network/virtualNetworks@2023-11-01' = {
   }
 }
 
-resource appSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' = {
+resource appSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' = if (isProduction) {
   name: 'app-service-integration'
   parent: network
   properties: {
@@ -104,7 +105,7 @@ resource appSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' = {
   }
 }
 
-resource privateEndpointSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' = {
+resource privateEndpointSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' = if (isProduction) {
   name: 'private-endpoints'
   parent: network
   properties: {
@@ -117,14 +118,14 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
   location: location
   sku: {
-    name: environmentName == 'prod' ? 'Standard_GRS' : 'Standard_LRS'
+    name: isProduction ? 'Standard_GRS' : 'Standard_LRS'
   }
   kind: 'StorageV2'
   properties: {
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
     minimumTlsVersion: 'TLS1_2'
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: isProduction ? 'Disabled' : 'Enabled'
     supportsHttpsTrafficOnly: true
   }
 }
@@ -169,7 +170,7 @@ resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
       tenantId: entraTenantId
     }
     minimalTlsVersion: '1.2'
-    publicNetworkAccess: enableSqlMigrationAccess ? 'Enabled' : 'Disabled'
+    publicNetworkAccess: !isProduction || enableSqlMigrationAccess ? 'Enabled' : 'Disabled'
     restrictOutboundNetworkAccess: 'Enabled'
   }
 }
@@ -180,6 +181,15 @@ resource migrationFirewallRule 'Microsoft.Sql/servers/firewallRules@2023-08-01-p
   properties: {
     startIpAddress: migrationClientIp
     endIpAddress: migrationClientIp
+  }
+}
+
+resource developmentAzureServicesFirewallRule 'Microsoft.Sql/servers/firewallRules@2023-08-01-preview' = if (!isProduction) {
+  name: 'AllowAzureServices'
+  parent: sqlServer
+  properties: {
+    startIpAddress: '0.0.0.0'
+    endIpAddress: '0.0.0.0'
   }
 }
 
@@ -194,9 +204,9 @@ resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
     capacity: 1
   }
   properties: {
-    autoPauseDelay: environmentName == 'prod' ? -1 : 60
-    useFreeLimit: environmentName != 'prod'
-    freeLimitExhaustionBehavior: environmentName == 'prod' ? 'BillOverUsage' : 'AutoPause'
+    autoPauseDelay: isProduction ? -1 : 60
+    useFreeLimit: !isProduction
+    freeLimitExhaustionBehavior: isProduction ? 'BillOverUsage' : 'AutoPause'
     minCapacity: json('0.5')
     zoneRedundant: false
   }
@@ -211,17 +221,17 @@ resource shortTermRetention 'Microsoft.Sql/servers/databases/backupShortTermRete
   }
 }
 
-resource sqlPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+resource sqlPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (isProduction) {
   name: sqlPrivateDnsZoneName
   location: 'global'
 }
 
-resource blobPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+resource blobPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (isProduction) {
   name: blobPrivateDnsZoneName
   location: 'global'
 }
 
-resource sqlDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+resource sqlDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (isProduction) {
   name: '${suffix}-sql-vnet-link'
   parent: sqlPrivateDnsZone
   location: 'global'
@@ -233,7 +243,7 @@ resource sqlDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-
   }
 }
 
-resource blobDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+resource blobDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (isProduction) {
   name: '${suffix}-blob-vnet-link'
   parent: blobPrivateDnsZone
   location: 'global'
@@ -245,7 +255,7 @@ resource blobDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020
   }
 }
 
-resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
+resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = if (isProduction) {
   name: '${suffix}-sql-pe'
   location: location
   properties: {
@@ -266,7 +276,7 @@ resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
   }
 }
 
-resource sqlPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = {
+resource sqlPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = if (isProduction) {
   name: 'default'
   parent: sqlPrivateEndpoint
   properties: {
@@ -281,7 +291,7 @@ resource sqlPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZo
   }
 }
 
-resource blobPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
+resource blobPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = if (isProduction) {
   name: '${suffix}-blob-pe'
   location: location
   properties: {
@@ -302,7 +312,7 @@ resource blobPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
   }
 }
 
-resource blobPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = {
+resource blobPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = if (isProduction) {
   name: 'default'
   parent: blobPrivateEndpoint
   properties: {
@@ -337,8 +347,8 @@ resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
   sku: {
-    name: environmentName == 'prod' ? 'P0v3' : 'B1'
-    tier: environmentName == 'prod' ? 'PremiumV3' : 'Basic'
+    name: isProduction ? 'P0v3' : 'F1'
+    tier: isProduction ? 'PremiumV3' : 'Free'
   }
   kind: 'linux'
   properties: {
@@ -357,15 +367,15 @@ resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
     serverFarmId: plan.id
     httpsOnly: true
     clientAffinityEnabled: false
-    virtualNetworkSubnetId: appSubnet.id
+    virtualNetworkSubnetId: isProduction ? appSubnet.id : null
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|10.0'
-      alwaysOn: environmentName == 'prod'
+      alwaysOn: isProduction
       ftpsState: 'Disabled'
       http20Enabled: true
       healthCheckPath: '/health/ready'
       minTlsVersion: '1.2'
-      vnetRouteAllEnabled: true
+      vnetRouteAllEnabled: isProduction
       appSettings: [
         {
           name: 'ASPNETCORE_ENVIRONMENT'

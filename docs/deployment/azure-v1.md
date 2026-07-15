@@ -61,8 +61,13 @@ Run from the repository root with a clean, committed working tree:
 
 For a development deployment in a personal or trial subscription, use
 `-EnvironmentName dev` and do not pass `-IncludeOfficialStaffData`. Development
-is the default and excludes the official curriculum staff seed. Never import
-real staff or quality records into a personally owned subscription.
+is the default and excludes the official curriculum staff seed. It uses the Free
+App Service tier and Azure SQL's free-limit auto-pause policy. Because Free App
+Service does not support VNet integration, dev uses managed identity over Azure
+public service endpoints; production retains private endpoints and VNet routing.
+Never import real staff or quality records into a personally owned subscription.
+The current personal free-trial subscription has validated Free App Service
+capacity in `ukwest`; use that region for this development environment.
 
 The script performs these operations in order:
 
