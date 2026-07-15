@@ -40,7 +40,7 @@ jobs:
       - name: Validate deployment scripts
         shell: pwsh
         run: |
-          $files = @('scripts/apply-database.ps1', 'scripts/deploy-azure.ps1', 'scripts/verify-v1.ps1')
+          $files = @('scripts/apply-database.ps1', 'scripts/deploy-azure.ps1', 'scripts/new-deployment-package.ps1', 'scripts/verify-v1.ps1')
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null
@@ -55,7 +55,7 @@ jobs:
         run: dotnet test apps/api/TLQS.sln --configuration Release --no-build
       - name: Publish
         run: dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj --configuration Release --no-build --output artifacts/api
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: tlqs-api
           path: artifacts/api
@@ -82,7 +82,7 @@ jobs:
       - name: Build
         working-directory: apps/web
         run: npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: tlqs-web
           path: apps/web/dist

@@ -101,7 +101,43 @@ checksum is rejected instead of silently rewriting migration history.
 Never use `fix-localdb.ps1`, `-Reset`, `.mdf` files or local connection strings
 against Azure SQL.
 
-## 4. GitHub Production Environment
+## 4. GitHub Development Environment
+
+Create a GitHub environment named `development`. Automatic deployment does not
+need a required reviewer, but environment variables must be limited to the
+development Azure resources. Set its deployment branch policy to selected
+branches and add only the `main` branch:
+
+| Variable | Value |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Client ID of the GitHub OIDC development deployment identity |
+| `AZURE_TENANT_ID` | Development tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Development subscription ID |
+| `AZURE_RESOURCE_GROUP` | Development resource group |
+| `AZURE_APP_SERVICE_NAME` | Development App Service name |
+| `DEVELOPMENT_URL` | Exact HTTPS URL for the development app |
+| `ENTRA_SPA_CLIENT_ID` | Development SPA registration client ID |
+| `ENTRA_API_SCOPE` | `api://<development-api-client-id>/access_as_user` |
+
+Create a separate Entra application or user-assigned identity for GitHub Actions.
+Add a federated credential with this subject:
+
+```text
+repo:<github-owner>/<github-repository>:environment:development
+```
+
+Grant the deployment identity `Website Contributor` only on the development App
+Service resource. Do not grant it SQL, Key Vault, storage or subscription-wide
+roles, and do not create a client secret.
+
+After `TLQS CI` succeeds for a push to `main`, `Deploy development` checks out
+that exact commit, rebuilds it with the development Entra values, deploys the
+same-origin package and verifies `/health/ready`. If the commit changes
+`database/` or `infra/azure/`, automatic deployment stops. Apply those changes
+with `scripts/deploy-azure.ps1`, then rerun the application deployment after the
+target environment is ready.
+
+## 5. GitHub Production Environment
 
 After the first deployment succeeds, create a protected GitHub environment named
 `production` with required reviewers. Add these environment variables:
@@ -127,7 +163,7 @@ The `Deploy production` workflow is intentionally manual and protected. Its
 local deployment script whenever a release includes database migrations; the
 GitHub workflow deploys application releases only after the target schema is ready.
 
-## 5. Go-Live Checks
+## 6. Go-Live Checks
 
 Before importing live activity data:
 

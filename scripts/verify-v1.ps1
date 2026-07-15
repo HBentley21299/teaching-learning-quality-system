@@ -14,6 +14,20 @@ $artifactRoot = [System.IO.Path]::GetFullPath((Join-Path $root ".artifacts\v1"))
 $apiOutput = Join-Path $artifactRoot "api"
 $webOutput = Join-Path $artifactRoot "web"
 $nugetSource = "https://api.nuget.org/v3/index.json"
+$entraBuildSettings = [ordered]@{
+    VITE_ENTRA_CLIENT_ID = $env:VITE_ENTRA_CLIENT_ID
+    VITE_ENTRA_TENANT_ID = $env:VITE_ENTRA_TENANT_ID
+    VITE_ENTRA_API_SCOPE = $env:VITE_ENTRA_API_SCOPE
+}
+$configuredEntraSettings = @($entraBuildSettings.GetEnumerator() | Where-Object {
+    ![string]::IsNullOrWhiteSpace($_.Value)
+})
+if ($configuredEntraSettings.Count -gt 0 -and $configuredEntraSettings.Count -ne $entraBuildSettings.Count) {
+    $missingSettings = @($entraBuildSettings.GetEnumerator() | Where-Object {
+        [string]::IsNullOrWhiteSpace($_.Value)
+    } | ForEach-Object Key)
+    throw "Entra web configuration is incomplete. Missing: $($missingSettings -join ', ')."
+}
 
 $gitCommit = (& git -C $root rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitCommit)) {
@@ -110,6 +124,23 @@ Invoke-Step "Publish API artifact" {
 
 Get-ChildItem -LiteralPath (Join-Path $webRoot "dist") -Force |
     Copy-Item -Destination $webOutput -Recurse -Force
+
+if ($configuredEntraSettings.Count -eq $entraBuildSettings.Count) {
+    $webFiles = @(Get-ChildItem -LiteralPath $webOutput -Recurse -File -Filter "*.js")
+    foreach ($setting in $entraBuildSettings.GetEnumerator()) {
+        $found = $false
+        foreach ($file in $webFiles) {
+            $content = [System.IO.File]::ReadAllText($file.FullName)
+            if ($content.IndexOf([string] $setting.Value, [System.StringComparison]::Ordinal) -ge 0) {
+                $found = $true
+                break
+            }
+        }
+        if (!$found) {
+            throw "$($setting.Key) was not embedded in the production web artifact."
+        }
+    }
+}
 
 # V1 is deployed as one same-origin App Service package. Keep the standalone web
 # artifact as well so the frontend can move to a static host without a rebuild.
