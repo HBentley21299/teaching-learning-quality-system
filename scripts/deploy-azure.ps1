@@ -21,6 +21,7 @@ param(
     [string] $EntraApiScope,
 
     [string] $EntraTenantId,
+    [string] $SqlAdministratorUserName,
     [ValidateSet("Group", "User")]
     [string] $SqlAdministratorPrincipalType = "Group",
     [ValidateSet("dev", "test", "prod")]
@@ -100,6 +101,10 @@ if ([string]::IsNullOrWhiteSpace($EntraTenantId)) {
     }
 }
 
+if ([string]::IsNullOrWhiteSpace($SqlAdministratorUserName)) {
+    $SqlAdministratorUserName = ((@(& az account show --query user.name --output tsv) -join "").Trim())
+}
+
 $migrationClientIp = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
 if ($migrationClientIp -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
     throw "Could not determine a valid public IPv4 address for temporary SQL migration access."
@@ -167,6 +172,7 @@ try {
             Database = $sqlDatabaseName
             SqlCmd = $SqlCmd
             UseAzureAuthentication = $true
+            AzureUserName = $SqlAdministratorUserName
             ExcludeOfficialStaffData = !$IncludeOfficialStaffData
         }
         & (Join-Path $PSScriptRoot "apply-database.ps1") @databaseArguments
@@ -200,7 +206,13 @@ GRANT EXECUTE TO [$escapedIdentityName];
 "@
 
     Invoke-Native "Grant the App Service managed identity least-privilege database access" {
-        & $SqlCmd -S $sqlServerFqdn -d $sqlDatabaseName -G -b -Q $grantSql
+        $grantAuthenticationArguments = if ([string]::IsNullOrWhiteSpace($SqlAdministratorUserName)) {
+            @("-G")
+        }
+        else {
+            @("-G", "-U", $SqlAdministratorUserName)
+        }
+        & $SqlCmd -S $sqlServerFqdn -d $sqlDatabaseName @grantAuthenticationArguments -b -Q $grantSql
     }
 
     if (Test-Path -LiteralPath $zipArtifact) {

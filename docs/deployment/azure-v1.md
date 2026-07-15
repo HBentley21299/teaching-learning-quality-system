@@ -53,6 +53,7 @@ Run from the repository root with a clean, committed working tree:
   -SqlAdministratorLogin "TLQS SQL Administrators" `
   -SqlAdministratorObjectId "<entra-group-object-id>" `
   -SqlAdministratorPrincipalType Group `
+  -SqlAdministratorUserName "<administrator-upn>" `
   -EntraApiAudience "<api-client-id>" `
   -EntraSpaClientId "<spa-client-id>" `
   -EntraApiScope "api://<api-client-id>/access_as_user" `

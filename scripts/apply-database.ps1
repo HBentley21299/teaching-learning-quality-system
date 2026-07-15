@@ -11,6 +11,8 @@ param(
 
     [switch] $UseAzureAuthentication,
 
+    [string] $AzureUserName,
+
     [switch] $ExcludeOfficialStaffData
 )
 
@@ -79,7 +81,12 @@ foreach ($script in $scripts) {
     }
 
     Write-Host "Applying $script"
-    $authenticationArguments = if ($UseAzureAuthentication) { @("-G") } else { @("-E") }
+    $authenticationArguments = if ($UseAzureAuthentication) {
+        if ([string]::IsNullOrWhiteSpace($AzureUserName)) { @("-G") } else { @("-G", "-U", $AzureUserName) }
+    }
+    else {
+        @("-E")
+    }
     $arguments = @("-S", $Server, "-d", $Database) + $authenticationArguments + @("-b") + $SqlCmdOptions + @("-i", $script)
     Invoke-Native -FilePath $SqlCmd -Arguments $arguments
 }
