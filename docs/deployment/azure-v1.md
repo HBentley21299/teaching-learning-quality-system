@@ -68,8 +68,9 @@ Service does not support VNet integration, dev uses managed identity over Azure
 public service endpoints; production retains private endpoints and VNet routing.
 Never import real staff or quality records into a personally owned subscription.
 The current personal free-trial subscription has validated Free App Service
-capacity in `ukwest`. New SQL server creation is currently restricted there, so
-use `-Location ukwest -SqlLocation uksouth` for this development environment.
+capacity in `ukwest`. New SQL server creation is restricted in the UK regions
+for this subscription, so use `-Location ukwest -SqlLocation francecentral` for
+this development environment.
 
 The script performs these operations in order:
 
@@ -79,7 +80,9 @@ The script performs these operations in order:
 4. Applies ordered, forward-only SQL migrations and seeds.
 5. Grants the App Service managed identity `db_datareader`, `db_datawriter` and `EXECUTE`.
 6. Deploys the hashed same-origin UI/API release package.
-7. Removes the SQL firewall rule, disables SQL public access and verifies `/health/ready`.
+7. Removes the temporary client firewall rule and verifies `/health/ready`.
+   Production disables SQL public access; development retains the Azure-service
+   endpoint required by the Free App Service tier.
 
 The SQL lockdown is in a `finally` block and runs after failed deployments too.
 Never use `fix-localdb.ps1`, `-Reset`, `.mdf` files or local connection strings
