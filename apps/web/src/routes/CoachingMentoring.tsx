@@ -420,7 +420,7 @@ function CoachingSessionEditor({
         <CoachingSection number={4} title="Intended outcome">
           <TextAreaField label="Goal" onChange={(value) => update("goal", value)} prompt="What do you want to achieve?" value={form.goal} />
           <TextAreaField label="Intended impact" onChange={(value) => update("intendedImpact", value)} value={form.intendedImpact} />
-          <WordingRubric label="Intended impact judgement" onChange={(id) => update("intendedImpactDescriptorId", id)} options={configuration?.intendedImpactRubric ?? []} value={form.intendedImpactDescriptorId} />
+          <WordingRubric label="Intended impact outcome" onChange={(id) => update("intendedImpactDescriptorId", id)} options={configuration?.intendedImpactRubric ?? []} value={form.intendedImpactDescriptorId} />
         </CoachingSection>
 
         <CoachingSection number={5} title="Discussion">

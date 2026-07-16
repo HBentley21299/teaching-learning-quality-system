@@ -165,6 +165,8 @@ public sealed partial class SqlFoundationDataStore
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var initialVisit = request.InitialVisit ?? new SaveLivVisitRequest(
+            null, null, null, null, null, null, null);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
@@ -193,7 +195,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@subjectStaffId", request.SubjectStaffId);
                 command.Parameters.AddWithValue("@ownerStaffId", ToDbValue(currentUser.StaffId));
                 command.Parameters.AddWithValue("@orgUnitId", ToDbValue(request.OrgUnitId));
-                command.Parameters.AddWithValue("@recordDate", ToDbValue(request.InitialVisit.VisitDate));
+                command.Parameters.AddWithValue("@recordDate", ToDbValue(initialVisit.VisitDate));
                 command.Parameters.AddWithValue("@createdBy", ToDbValue(currentUser.UserAccountId));
                 if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
                 {
@@ -225,7 +227,7 @@ public sealed partial class SqlFoundationDataStore
             }
 
             await SaveLivThemeSelectionsAsync(connection, transaction, livId, request, cancellationToken);
-            await InsertLivVisitAsync(connection, transaction, visitId, livId, 1, "initial", request.InitialVisit, currentUser, cancellationToken);
+            await InsertLivVisitAsync(connection, transaction, visitId, livId, 1, "initial", initialVisit, currentUser, cancellationToken);
 
             await WriteAuditAsync(
                 connection, transaction, currentUser.UserAccountId, recordId,
@@ -249,6 +251,8 @@ public sealed partial class SqlFoundationDataStore
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var initialVisit = request.InitialVisit ?? new SaveLivVisitRequest(
+            null, null, null, null, null, null, null);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
@@ -303,7 +307,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@areaKeysJson", ToDbValue(SerializeLivStringList(request.AreaOfPracticeKeys)));
                 command.Parameters.AddWithValue("@areaOther", ToDbValue(request.AreaOfPracticeOther));
                 command.Parameters.AddWithValue("@updatedBy", ToDbValue(currentUser.UserAccountId));
-                AddLivVisitParameters(command, request.InitialVisit);
+                AddLivVisitParameters(command, initialVisit);
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -734,7 +738,9 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@areaKeysJson", ToDbValue(SerializeLivStringList(request.AreaOfPracticeKeys)));
         command.Parameters.AddWithValue("@areaOther", ToDbValue(request.AreaOfPracticeOther));
         command.Parameters.AddWithValue("@createdBy", ToDbValue(currentUser.UserAccountId));
-        AddLivVisitParameters(command, request.InitialVisit);
+        AddLivVisitParameters(
+            command,
+            request.InitialVisit ?? new SaveLivVisitRequest(null, null, null, null, null, null, null));
     }
 
     private static void AddLivVisitParameters(SqlCommand command, SaveLivVisitRequest request)

@@ -40,6 +40,7 @@ export function StaffProfilePanel({
   const [isCreatingReflection, setIsCreatingReflection] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [showElevateResult, setShowElevateResult] = useState(openElevateResult);
+  const [activeProfileTab, setActiveProfileTab] = useState<"overview" | "cpd">("overview");
 
   useEffect(() => {
     setShowElevateResult(openElevateResult);
@@ -52,6 +53,7 @@ export function StaffProfilePanel({
     let cancelled = false;
     setIsLoading(true);
     setStatusMessage("");
+    setActiveProfileTab("overview");
     api
       .staffProfile(staffId)
       .then((nextDetail) => {
@@ -86,6 +88,10 @@ export function StaffProfilePanel({
     detail?.reflections.filter((reflection) => reflection.status === "submitted").length ?? 0;
   const openActionCount = detail?.actions.filter((action) => !action.completedDate).length ?? 0;
   const completedActionCount = detail?.actions.filter((action) => Boolean(action.completedDate)).length ?? 0;
+  const totalCpdMinutes = detail?.cpdRecords.reduce(
+    (total, record) => total + (record.durationMinutes ?? 0),
+    0
+  ) ?? 0;
 
   async function reloadDetail() {
     try {
@@ -111,7 +117,7 @@ export function StaffProfilePanel({
       return;
     }
 
-    setStatusMessage("Reflection draft created from the current Elevate Your Practice assessment.");
+    setStatusMessage("Reflection draft created from the current Elevate Learning and Innovation assessment.");
     await reloadDetail();
   }
 
@@ -175,7 +181,28 @@ export function StaffProfilePanel({
     <>
       {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
 
-      <section className="kpi-strip" aria-label="Staff Profile summary">
+      <div className="segmented-control" aria-label="Staff Profile section" role="tablist">
+        <button
+          aria-selected={activeProfileTab === "overview"}
+          className={activeProfileTab === "overview" ? "is-active" : ""}
+          onClick={() => setActiveProfileTab("overview")}
+          role="tab"
+          type="button"
+        >
+          Overview
+        </button>
+        <button
+          aria-selected={activeProfileTab === "cpd"}
+          className={activeProfileTab === "cpd" ? "is-active" : ""}
+          onClick={() => setActiveProfileTab("cpd")}
+          role="tab"
+          type="button"
+        >
+          CPD
+        </button>
+      </div>
+
+      <section className="kpi-strip" aria-label="Staff Profile summary" hidden={activeProfileTab !== "overview"}>
         <div className="kpi kpi-blue">
           <span>CPD sessions</span>
           <strong>{detail.cpdRecords.length}</strong>
@@ -200,7 +227,7 @@ export function StaffProfilePanel({
         </div>
       </section>
 
-      <div className="staff-profile-layout">
+      <div className="staff-profile-layout" hidden={activeProfileTab !== "overview"}>
         <section className="panel">
           <div className="panel-heading">
             <h2>{detail.displayName}</h2>
@@ -218,7 +245,7 @@ export function StaffProfilePanel({
 
         <section className="panel">
           <div className="panel-heading">
-            <h2>Elevate Your Practice</h2>
+            <h2>Elevate Learning and Innovation</h2>
             <span>{detail.elevatePractice?.academicYear ?? "Current year"}</span>
           </div>
           <div className="profile-practice-tile">
@@ -227,9 +254,11 @@ export function StaffProfilePanel({
                 {detail.elevatePractice?.status === "submitted" ? "Submitted" : detail.elevatePractice?.status === "draft" ? "Draft" : "Not started"}
               </span>
               <strong className="profile-practice-judgement">
-                {detail.elevatePractice?.judgement ?? "No current judgement"}
+                {detail.elevatePractice?.status === "submitted"
+                  ? detail.elevatePractice.judgement ?? "Submitted"
+                  : "Not yet submitted"}
               </strong>
-              <span>Current rubric judgement</span>
+              <span>Current Elevate Learning and Innovation outcome</span>
             </div>
             {detail.elevatePractice?.status === "submitted" ? (
               <Button icon={ExternalLink} onClick={() => setShowElevateResult(true)} variant="primary">View report</Button>
@@ -261,9 +290,9 @@ export function StaffProfilePanel({
         </section>
       </div>
 
-      <section className="panel">
+      <section className="panel" hidden={activeProfileTab !== "overview"}>
         <div className="panel-heading">
-          <h2>Elevate Your Practice reflections</h2>
+          <h2>Elevate Learning and Innovation reflections</h2>
           <span>{detail.elevatePractice?.reflections.length ?? 0} recorded</span>
         </div>
         {detail.elevatePractice?.reflections.length ? (
@@ -276,14 +305,28 @@ export function StaffProfilePanel({
             ))}
           </div>
         ) : (
-          <p className="muted-copy">No Elevate Your Practice reflections are available for the current assessment.</p>
+          <p className="muted-copy">No Elevate Learning and Innovation reflections are available for the current assessment.</p>
         )}
       </section>
 
-      <section className="panel">
+      <section className="panel" hidden={activeProfileTab !== "cpd"} role="tabpanel">
         <div className="panel-heading">
           <h2>CPD engagement</h2>
-          <span>{detail.cpdRecords.length} attended</span>
+          <span>{formatDuration(totalCpdMinutes)} recorded</span>
+        </div>
+        <div className="profile-cpd-summary">
+          <div>
+            <span>Total CPD time</span>
+            <strong>{formatDuration(totalCpdMinutes)}</strong>
+          </div>
+          <div>
+            <span>CPD records</span>
+            <strong>{detail.cpdRecords.length}</strong>
+          </div>
+          <div>
+            <span>Records with duration</span>
+            <strong>{detail.cpdRecords.filter((record) => record.durationMinutes).length}</strong>
+          </div>
         </div>
         <div className="table-shell">
           <table>
@@ -292,12 +335,13 @@ export function StaffProfilePanel({
                 <th>Session</th>
                 <th>Date</th>
                 <th>Themes</th>
+                <th>Duration</th>
               </tr>
             </thead>
             <tbody>
               {detail.cpdRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={3}>No CPD attendance has been recorded yet.</td>
+                  <td colSpan={4}>No CPD attendance has been recorded yet.</td>
                 </tr>
               ) : (
                 detail.cpdRecords.map((record) => (
@@ -305,6 +349,7 @@ export function StaffProfilePanel({
                     <td>{record.title}</td>
                     <td>{record.eventDate}</td>
                     <td>{formatThemes(record.themes)}</td>
+                    <td>{record.durationMinutes ? formatDuration(record.durationMinutes) : "Not recorded"}</td>
                   </tr>
                 ))
               )}
@@ -313,7 +358,7 @@ export function StaffProfilePanel({
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" hidden={activeProfileTab !== "overview"}>
         <div className="panel-heading">
           <h2>Coaching and mentoring</h2>
           <span>{detail.coachingRecords.length} sessions</span>
@@ -360,7 +405,7 @@ export function StaffProfilePanel({
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" hidden={activeProfileTab !== "overview"}>
         <div className="panel-heading">
           <div>
             <h2>Staff reflections</h2>
@@ -391,7 +436,7 @@ export function StaffProfilePanel({
                 <div className="staff-reflection-heading">
                   <div>
                     <h3>Reflection from {formatDate(reflection.reflectionDate)}</h3>
-                    <span>Elevate Your Practice {reflection.elevatePracticeAcademicYear}</span>
+                    <span>Elevate Learning and Innovation {reflection.elevatePracticeAcademicYear}</span>
                   </div>
                   <span className={`status-pill ${reflection.status === "submitted" ? "status-complete" : "status-draft"}`}>
                     {reflection.status === "submitted" ? "Submitted" : "Draft"}
@@ -491,7 +536,7 @@ export function StaffProfilePanel({
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" hidden={activeProfileTab !== "overview"}>
         <div className="panel-heading">
           <h2>Actions</h2>
           <span>{openActionCount} open / {completedActionCount} completed</span>
@@ -553,6 +598,14 @@ function formatThemes(themes?: string) {
     .map((theme) => theme.trim())
     .filter(Boolean)
     .join(", ");
+}
+
+function formatDuration(totalMinutes: number) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes} minutes`;
+  if (minutes === 0) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  return `${hours}h ${minutes}m`;
 }
 
 function buildReflectionDrafts(reflections: StaffReflectionSummary[]) {

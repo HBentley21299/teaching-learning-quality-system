@@ -15,6 +15,7 @@ public sealed class CpdEvent : AuditableEntity
     public string? Location { get; set; }
     public string? TargetAudience { get; set; }
     public int? Capacity { get; set; }
+    public int? DurationMinutes { get; set; }
     public string? Notes { get; set; }
 }
 

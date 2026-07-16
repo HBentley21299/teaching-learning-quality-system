@@ -22,7 +22,7 @@ export const navigationItems = [
   { key: "learning", label: "Learning Walks", icon: Activity },
   { key: "liv", label: "LIV", icon: Lightbulb },
   { key: "elevate", label: "Elevate Environments", icon: Building2 },
-  { key: "practice", label: "Elevate Your Practice", icon: Sparkles },
+  { key: "practice", label: "Elevate Learning and Innovation", icon: Sparkles },
   { key: "coaching", label: "Coaching & Mentoring", icon: MessagesSquare },
   { key: "scrutiny", label: "Work Scrutiny", icon: ClipboardCheck },
   { key: "cpd", label: "CPD", icon: GraduationCap },

@@ -24,7 +24,7 @@ import type {
 
 type WorkspaceMode = "learning" | "scrutiny" | "cpd" | "elevate";
 
-type DraftLearningWalkAction = {
+type DraftLinkedAction = {
   id: string;
   title: string;
   ownerStaffId: string;
@@ -78,8 +78,21 @@ const workspaceConfig: Record<WorkspaceMode, {
   }
 };
 
+const externalCpdConfig = {
+  templateKey: "cpd_external_self_log",
+  recordType: "cpd_event",
+  recordLabel: "external CPD record",
+  createLabel: "Log external CPD",
+  submitLabel: "Submit CPD"
+};
+
+type CpdWorkspaceView = "managed" | "external";
+
 export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "" }: ModuleWorkspaceProps) {
-  const config = workspaceConfig[mode];
+  const canManageCpd = user.permissions.includes("cpd.manage");
+  const [cpdWorkspaceView, setCpdWorkspaceView] = useState<CpdWorkspaceView>(canManageCpd ? "managed" : "external");
+  const isExternalCpd = mode === "cpd" && (!canManageCpd || cpdWorkspaceView === "external");
+  const config = isExternalCpd ? externalCpdConfig : workspaceConfig[mode];
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -88,10 +101,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [environmentPillars, setEnvironmentPillars] = useState<ElevateEnvironmentPillarSummary[]>([]);
-  const [environmentPurposes, setEnvironmentPurposes] = useState<string[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
   const [learningWalkThemeGroups, setLearningWalkThemeGroups] = useState<LearningWalkThemeGroup[]>([]);
-  const [learningWalkActions, setLearningWalkActions] = useState<DraftLearningWalkAction[]>([]);
+  const [draftActions, setDraftActions] = useState<DraftLinkedAction[]>([]);
   const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(true);
@@ -133,7 +145,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
   const editSections = selectedDetail?.sections ?? [];
   const editEntrySections = getEnvironmentEntrySections(mode, editSections, environmentPillars);
-  const detailSections = orderEnvironmentSections(mode, editSections, environmentPillars);
+  const detailSections = getEnvironmentEntrySections(mode, editSections, environmentPillars);
   const editFacultyId = getResponseValue(editSections, editResponses, "faculty_area");
   const editTeamId = getResponseValue(editSections, editResponses, "team_level");
   const editTeam = useMemo(() => orgUnits.find((orgUnit) => orgUnit.id === editTeamId), [orgUnits, editTeamId]);
@@ -201,9 +213,12 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     recordSearch.trim().length > 0 || recordStatusFilter !== "all" || recordAreaFilter !== "all" || recordSort !== "newest";
 
   useEffect(() => {
+    let cancelled = false;
     setSelectedDetail(null);
     setIsCreating(false);
     setIsEditing(false);
+    setDefinition(null);
+    setDefinitionError("");
     setIsActiveRecordsOpen(true);
     setRecordSearch("");
     setRecordStatusFilter("all");
@@ -212,23 +227,26 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     setStatusMessage("");
     void refreshData();
     if (mode === "scrutiny") {
-      setDefinition(null);
-      setDefinitionError("");
       return;
     }
     api.formDefinition(config.templateKey)
       .then((nextDefinition) => {
+        if (cancelled) return;
         setDefinition(nextDefinition);
         setDefinitionError("");
       })
       .catch(() => {
+        if (cancelled) return;
         setDefinition(null);
         setDefinitionError(
           `The ${config.recordLabel} form template could not be loaded. Check the database migrations have been applied.`
         );
       });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+  }, [config.templateKey, mode]);
 
   useEffect(() => {
     if (initialRecordId && openedInitialRecord.current !== initialRecordId) {
@@ -258,7 +276,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         api.orgUnits(),
         api.actions(),
         mode === "elevate" ? api.rooms() : Promise.resolve([] as RoomSummary[]),
-        mode === "cpd" || mode === "elevate" ? api.lookups() : Promise.resolve([]),
+        mode === "cpd" ? api.lookups() : Promise.resolve([]),
         mode === "elevate" ? api.elevateEnvironmentPillars() : Promise.resolve([] as ElevateEnvironmentPillarSummary[])
       ]);
       setRecords(nextRecords.filter((record) => record.recordType === config.recordType));
@@ -266,7 +284,6 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       setActions(nextActions);
       setRooms(nextRooms);
       setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
-      setEnvironmentPurposes(nextLookups.find((lookup) => lookup.lookupKey === "elevate_environment_purpose")?.values ?? []);
       setEnvironmentPillars(nextEnvironmentPillars);
 
       if (mode === "learning") {
@@ -282,7 +299,14 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     }
   }
 
-  function buildRecordContext(sections: Array<{ fields: FormFieldDefinition[] }>, values: Record<string, string>, theme: string, team?: OrgUnitSummary, faculty?: OrgUnitSummary) {
+  function buildRecordContext(
+    sections: Array<{ fields: FormFieldDefinition[] }>,
+    values: Record<string, string>,
+    theme: string,
+    team?: OrgUnitSummary,
+    faculty?: OrgUnitSummary,
+    externalCpdRecord = isExternalCpd
+  ) {
     const dateValue =
       getResponseValue(sections, values, "visit_date") ??
       getResponseValue(sections, values, "scrutiny_date") ??
@@ -294,7 +318,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     const subjectStaffId = getResponseValue(sections, values, "staff_id");
     let recordTitle: string;
     if (mode === "cpd") {
-      recordTitle = getResponseValue(sections, values, "cpd_title") || "Untitled CPD event";
+      const cpdTitle = getResponseValue(sections, values, "cpd_title") || "Untitled CPD event";
+      recordTitle = externalCpdRecord ? `External CPD - ${cpdTitle}` : cpdTitle;
     } else if (mode === "elevate") {
       recordTitle = `Elevate check - ${getResponseValue(sections, values, "room_code") || "Room"}`;
     } else {
@@ -308,10 +333,23 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       getResponseValue(sections, values, "development_areas") ??
       getResponseValue(sections, values, "cpd_themes");
 
-    return { dateValue, orgUnitId, subjectStaffId, recordTitle, summary };
+    return {
+      dateValue,
+      orgUnitId,
+      subjectStaffId: externalCpdRecord ? user.staffId : subjectStaffId,
+      recordTitle,
+      summary
+    };
   }
 
-  function validateForSubmit(sections: Array<{ fields: FormFieldDefinition[] }>, values: Record<string, string>, facultyId?: string, teamId?: string, theme?: string) {
+  function validateForSubmit(
+    sections: Array<{ fields: FormFieldDefinition[] }>,
+    values: Record<string, string>,
+    facultyId?: string,
+    teamId?: string,
+    theme?: string,
+    externalCpdRecord = isExternalCpd
+  ) {
     if (mode === "learning" && facultyId && teamId && !theme) {
       return "No agreed Learning Walk theme is configured for that faculty and team.";
     }
@@ -322,27 +360,23 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         return "Select a room from the room register before completing the check.";
       }
 
-      const purposes = splitDelimitedValues(getResponseValue(sections, values, "intended_purpose"));
-      if (purposes.length === 0 || purposes.some((purpose) => !environmentPurposes.includes(purpose))) {
-        return "Select at least one intended purpose from the administrator-controlled list.";
-      }
-
-      for (const valueKey of environmentPillars.filter((pillar) => pillar.isActive).map((pillar) => pillar.pillarKey)) {
-        const score = getResponseValue(sections, values, `${valueKey}_score`);
-        const action = getResponseValue(sections, values, `${valueKey}_action`);
-        const owner = getResponseValue(sections, values, `${valueKey}_owner`);
-        const target = getResponseValue(sections, values, `${valueKey}_target`);
-        if (score === "0" && !action) {
-          return `A Barrier score for ${formatElevateValue(valueKey)} requires an immediate action.`;
-        }
-        if (action && (!owner || !target)) {
-          return `The ${formatElevateValue(valueKey)} action needs an owner and target date.`;
-        }
-      }
     }
 
-    if (mode === "cpd" && !getResponseValue(sections, values, "staff_search")) {
-      return "Select at least one participant before submitting the CPD event.";
+    if (mode === "cpd") {
+      const hoursValue = getResponseValue(sections, values, "duration_hours");
+      const minutesValue = getResponseValue(sections, values, "duration_minutes");
+      const hours = Number(hoursValue);
+      const minutes = Number(minutesValue);
+      if (!hoursValue || !minutesValue || !Number.isInteger(hours) || hours < 0 || hours > 24
+          || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) {
+        return "Enter CPD duration using hours from 0 to 24 and minutes from 0 to 59.";
+      }
+      if ((hours * 60) + minutes === 0) {
+        return "CPD duration must be at least one minute.";
+      }
+      if (!externalCpdRecord && !getResponseValue(sections, values, "staff_search")) {
+        return "Select at least one participant before submitting the CPD event.";
+      }
     }
 
     if (hasMissingRequired(sections, values)) {
@@ -357,8 +391,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       return;
     }
 
-    if (mode === "learning" && asDraft && learningWalkActions.length > 0) {
-      setStatusMessage("Submit the Learning Walk to assign its actions, or remove the actions before saving a draft.");
+    if ((mode === "learning" || mode === "elevate") && asDraft && draftActions.length > 0) {
+      setStatusMessage(`Submit the ${config.recordLabel} to assign its actions, or remove the actions before saving a draft.`);
       return;
     }
 
@@ -380,10 +414,16 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
           return;
         }
 
-        if (learningWalkActions.some((action) => !action.title.trim() || !action.ownerStaffId || !action.dueDate)) {
-          setStatusMessage("Every added action needs an action, owner and implementation date.");
-          return;
-        }
+      }
+
+      if ((mode === "learning" || mode === "elevate")
+          && draftActions.some((action) => !action.title.trim() || !action.ownerStaffId || !action.dueDate)) {
+        setStatusMessage(
+          mode === "elevate"
+            ? "Every added action needs an action, owner and review date."
+            : "Every added action needs an action, owner and implementation date."
+        );
+        return;
       }
     }
 
@@ -399,8 +439,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       recordDate: context.dateValue,
       responses: flattenResponses(createEntrySections, responses, false),
       saveAsDraft: asDraft,
-      actions: mode === "learning" && !asDraft
-        ? learningWalkActions.map((action) => ({
+      actions: (mode === "learning" || mode === "elevate") && !asDraft
+        ? draftActions.map((action) => ({
             title: action.title.trim(),
             ownerStaffId: action.ownerStaffId,
             dueDate: action.dueDate
@@ -411,7 +451,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
 
     if (result.ok) {
       setResponses({});
-      setLearningWalkActions([]);
+      setDraftActions([]);
       setIsCreating(false);
       setStatusMessage(asDraft ? `${config.recordLabel} saved as draft.` : `${config.recordLabel} submitted.`);
       await refreshData();
@@ -458,7 +498,14 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     }
 
     if (selectedDetail.submissionStatus === "submitted") {
-      const validationMessage = validateForSubmit(editEntrySections, editResponses, editFacultyId, editTeamId, editAgreedTheme);
+      const validationMessage = validateForSubmit(
+        editEntrySections,
+        editResponses,
+        editFacultyId,
+        editTeamId,
+        editAgreedTheme,
+        selectedDetail.templateKey === externalCpdConfig.templateKey
+      );
       if (validationMessage) {
         setStatusMessage(validationMessage);
         return;
@@ -485,7 +532,14 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
           recordTitle: selectedDetail.title,
           summary: selectedDetail.summary
         }
-      : buildRecordContext(editSections, editResponses, editAgreedTheme, editTeam, editFaculty);
+      : buildRecordContext(
+          editSections,
+          editResponses,
+          editAgreedTheme,
+          editTeam,
+          editFaculty,
+          selectedDetail.templateKey === externalCpdConfig.templateKey
+        );
     setIsSaving(true);
     const result = await api.updateFormSubmission(selectedDetail.submissionId, {
       title: context.recordTitle,
@@ -589,8 +643,8 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         const dateField = findField(createSections, "assessment_date");
         setResponses(dateField ? { [dateField.id]: getTodayDate() } : {});
       }
-      if (!current && mode === "learning") {
-        setLearningWalkActions([]);
+      if (!current && (mode === "learning" || mode === "elevate")) {
+        setDraftActions([]);
       }
       return !current;
     });
@@ -598,15 +652,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     setStatusMessage("");
   }
 
-  function addLearningWalkAction() {
-    setLearningWalkActions((current) => [
+  function addDraftAction() {
+    setDraftActions((current) => [
       ...current,
       { id: crypto.randomUUID(), title: "", ownerStaffId: "", dueDate: "" }
     ]);
   }
 
-  function updateLearningWalkAction(id: string, changes: Partial<DraftLearningWalkAction>) {
-    setLearningWalkActions((current) => current.map((action) => action.id === id ? { ...action, ...changes } : action));
+  function updateDraftAction(id: string, changes: Partial<DraftLinkedAction>) {
+    setDraftActions((current) => current.map((action) => action.id === id ? { ...action, ...changes } : action));
   }
 
   function clearRecordFilters() {
@@ -614,6 +668,15 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     setRecordStatusFilter("all");
     setRecordAreaFilter("all");
     setRecordSort("newest");
+  }
+
+  function changeCpdWorkspaceView(nextView: CpdWorkspaceView) {
+    setCpdWorkspaceView(nextView);
+    setIsCreating(false);
+    setIsEditing(false);
+    setSelectedDetail(null);
+    setResponses({});
+    setStatusMessage("");
   }
 
   const linkedActions = selectedDetail
@@ -670,6 +733,24 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         </div>
         {mode !== "learning" ? (
           <div className="toolbar">
+            {mode === "cpd" && canManageCpd ? (
+              <div className="segmented-control" aria-label="CPD form">
+                <button
+                  className={cpdWorkspaceView === "managed" ? "is-active" : ""}
+                  onClick={() => changeCpdWorkspaceView("managed")}
+                  type="button"
+                >
+                  Manage CPD events
+                </button>
+                <button
+                  className={cpdWorkspaceView === "external" ? "is-active" : ""}
+                  onClick={() => changeCpdWorkspaceView("external")}
+                  type="button"
+                >
+                  Log external CPD
+                </button>
+              </div>
+            ) : null}
             <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
               {config.createLabel}
             </Button>
@@ -712,6 +793,12 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
           </div>
           {definition ? (
             <div className="entry-form">
+              {isExternalCpd ? (
+                <div className="record-context-note">
+                  <strong>Staff member</strong>
+                  <span>{user.displayName}</span>
+                </div>
+              ) : null}
               {mode === "elevate" ? (
                 <div className="elevate-rubric-guide">
                   <strong>Fit for purpose is the core test</strong>
@@ -736,7 +823,6 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                       .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
-                        environmentPurposes={environmentPurposes}
                         field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
                         learningWalkThemeGroups={learningWalkThemeGroups}
@@ -751,26 +837,30 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   </div>
                 </div>
               ))}
-              {mode === "learning" ? (
+              {mode === "learning" || mode === "elevate" ? (
                 <div className="entry-section">
                   <div className="section-heading-row">
                     <div>
                       <h3>Actions</h3>
-                      <small>Actions are assigned through the central action engine when the walk is submitted.</small>
+                      <small>
+                        {mode === "elevate"
+                          ? "Actions are assigned through the central action engine when the check is completed."
+                          : "Actions are assigned through the central action engine when the walk is submitted."}
+                      </small>
                     </div>
-                    <Button icon={Plus} onClick={addLearningWalkAction}>Action</Button>
+                    <Button icon={Plus} onClick={addDraftAction}>Action</Button>
                   </div>
-                  {learningWalkActions.length === 0 ? (
+                  {draftActions.length === 0 ? (
                     <div className="empty-row">No actions added.</div>
                   ) : (
                     <div className="scrutiny-action-list">
-                      {learningWalkActions.map((action, index) => (
+                      {draftActions.map((action, index) => (
                         <div className="scrutiny-action-row" key={action.id}>
                           <label className="entry-field scrutiny-action-text">
                             <span>Action {index + 1} <strong>Required</strong></span>
                             <textarea
                               maxLength={300}
-                              onChange={(event) => updateLearningWalkAction(action.id, { title: event.target.value })}
+                              onChange={(event) => updateDraftAction(action.id, { title: event.target.value })}
                               rows={3}
                               value={action.title}
                             />
@@ -778,17 +868,17 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                           <label className="entry-field">
                             <span>Owner <strong>Required</strong></span>
                             <StaffSearchSelect
-                              id={`learning-walk-action-owner-${action.id}`}
-                              onChange={(ownerStaffId) => updateLearningWalkAction(action.id, { ownerStaffId })}
+                              id={`submission-action-owner-${action.id}`}
+                              onChange={(ownerStaffId) => updateDraftAction(action.id, { ownerStaffId })}
                               staff={staff}
                               value={action.ownerStaffId}
                             />
                           </label>
                           <label className="entry-field">
-                            <span>Date to be implemented by <strong>Required</strong></span>
+                            <span>{mode === "elevate" ? "Date for review" : "Date to be implemented by"} <strong>Required</strong></span>
                             <input
-                              min={getResponseValue(createSections, responses, "visit_date")}
-                              onChange={(event) => updateLearningWalkAction(action.id, { dueDate: event.target.value })}
+                              min={getResponseValue(createSections, responses, mode === "elevate" ? "assessment_date" : "visit_date")}
+                              onChange={(event) => updateDraftAction(action.id, { dueDate: event.target.value })}
                               type="date"
                               value={action.dueDate}
                             />
@@ -796,7 +886,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                           <button
                             aria-label={`Remove action ${index + 1}`}
                             className="icon-button scrutiny-action-remove"
-                            onClick={() => setLearningWalkActions((current) => current.filter((candidate) => candidate.id !== action.id))}
+                            onClick={() => setDraftActions((current) => current.filter((candidate) => candidate.id !== action.id))}
                             title="Remove action"
                             type="button"
                           >
@@ -839,7 +929,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
               </button>
             </h2>
           ) : (
-            <h2>Active records</h2>
+            <h2>{mode === "cpd" && !canManageCpd ? "My CPD records" : "Active records"}</h2>
           )}
           <span>
             {mode === "learning" && displayedRecords.length !== records.length
@@ -965,7 +1055,6 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                       .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
-                        environmentPurposes={environmentPurposes}
                         field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
                         learningWalkThemeGroups={learningWalkThemeGroups}
@@ -1095,12 +1184,10 @@ function FieldInput({
   selectedFacultyId,
   staff,
   cpdThemes,
-  environmentPurposes,
   learningWalkThemeGroups,
   value
 }: {
   cpdThemes: string[];
-  environmentPurposes: string[];
   field: FormFieldDefinition;
   onChange: (value: string) => void;
   orgUnits: OrgUnitSummary[];
@@ -1206,7 +1293,15 @@ function FieldInput({
         <input type="text" value={value} onChange={(event) => onChange(event.target.value)} />
       ) : null}
       {field.fieldType === "number" ? (
-        <input min="0" type="number" value={value} onChange={(event) => onChange(event.target.value)} />
+        <input
+          inputMode="numeric"
+          max={field.fieldKey === "duration_hours" ? 24 : field.fieldKey === "duration_minutes" ? 59 : undefined}
+          min="0"
+          onChange={(event) => onChange(event.target.value)}
+          step="1"
+          type="number"
+          value={value}
+        />
       ) : null}
       {field.fieldType === "faculty_lookup" ? (
         <select value={value} onChange={(event) => onChange(event.target.value)}>
@@ -1314,7 +1409,7 @@ function FieldInput({
       ) : null}
       {field.fieldType === "checkbox_group" ? (
         <div className="preview-check-list">
-          {(field.options?.length ? field.options : getCheckboxOptions(field.fieldKey, cpdThemes, environmentPurposes)).map((option) => (
+          {(field.options?.length ? field.options : getCheckboxOptions(field.fieldKey, cpdThemes)).map((option) => (
             <label key={option}>
               <input
                 checked={selectedValues.includes(option)}
@@ -1373,8 +1468,18 @@ function EnvironmentPillarHeader({
 
 type EnvironmentSectionLike = {
   sectionKey: string;
+  title: string;
   displayOrder: number;
+  fields: Array<{ fieldKey: string }>;
 };
+
+const environmentPillarKeys = ["aspirational", "collaborative", "respectful", "innovative", "inclusion"];
+
+function isRetiredEnvironmentField(fieldKey: string) {
+  return fieldKey === "intended_purpose"
+    || environmentPillarKeys.some((pillarKey) =>
+      [`${pillarKey}_action`, `${pillarKey}_owner`, `${pillarKey}_target`].includes(fieldKey));
+}
 
 function getEnvironmentPillar(
   mode: WorkspaceMode,
@@ -1389,16 +1494,22 @@ function getEnvironmentEntrySections<T extends EnvironmentSectionLike>(
   sections: T[],
   pillars: ElevateEnvironmentPillarSummary[]
 ) {
-  if (mode !== "elevate" || pillars.length === 0) {
+  if (mode !== "elevate") {
     return sections;
   }
 
   const byKey = new Map(pillars.map((pillar) => [pillar.pillarKey, pillar]));
   return orderEnvironmentSections(
     mode,
-    sections.filter((section) => !byKey.has(section.sectionKey) || byKey.get(section.sectionKey)?.isActive),
+    pillars.length === 0
+      ? sections
+      : sections.filter((section) => !byKey.has(section.sectionKey) || byKey.get(section.sectionKey)?.isActive),
     pillars
-  );
+  ).map((section) => ({
+    ...section,
+    title: section.sectionKey === "room_context" ? "Room" : section.title,
+    fields: section.fields.filter((field) => !isRetiredEnvironmentField(field.fieldKey))
+  })) as T[];
 }
 
 function orderEnvironmentSections<T extends EnvironmentSectionLike>(
@@ -1422,13 +1533,9 @@ function orderEnvironmentSections<T extends EnvironmentSectionLike>(
 
 const workScrutinyTagOptions = ["Good Practice", "Development", "Compliance", "Assessment", "Feedback"];
 
-function getCheckboxOptions(fieldKey: string, cpdThemes: string[], environmentPurposes: string[]) {
+function getCheckboxOptions(fieldKey: string, cpdThemes: string[]) {
   if (fieldKey === "cpd_themes") {
     return cpdThemes;
-  }
-
-  if (fieldKey === "intended_purpose") {
-    return environmentPurposes;
   }
 
   return [];
@@ -1711,10 +1818,6 @@ const elevateScoreLabels: Record<string, string> = {
   "2": "2 - Secure",
   "3": "3 - Elevate"
 };
-
-function formatElevateValue(valueKey: string) {
-  return valueKey.charAt(0).toLocaleUpperCase() + valueKey.slice(1);
-}
 
 function getTodayDate() {
   const now = new Date();

@@ -1,6 +1,6 @@
 # Teaching & Learning Quality System
 
-Web application for managing a college's Teaching & Learning workflows: Learning Walks, Work Scrutiny, CPD events and attendance, LIV (Learning Improvement Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
+Web application for managing a college's Teaching & Learning workflows: Learning Walks, Work Scrutiny, managed and self-logged CPD, LIV (Learning Improvement Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
 
 - React + TypeScript frontend in `apps/web`
 - ASP.NET Core (.NET 10) API in `apps/api` (ADO.NET data access, no EF runtime dependency)
@@ -41,6 +41,9 @@ development and the current origin in a production build.
 - Every workflow registers a row in `core.records`; module detail lives in
   `quality.activities` (+ learning walk / work scrutiny detail tables),
   `cpd.cpd_events` + `cpd.cpd_attendance`, and `quality.liv_records`.
+- Managed CPD and staff self-logged external CPD use separate versioned templates but
+  converge on `cpd.cpd_events` and `cpd.cpd_attendance`. Duration is normalized to
+  total minutes for profile accumulation and reporting.
 - Form layouts are versioned templates (`forms.*`); submissions carry a lifecycle:
   **draft -> submitted -> reopened -> submitted**, with archive available to forms managers.
   Required fields are enforced server-side at submit time.

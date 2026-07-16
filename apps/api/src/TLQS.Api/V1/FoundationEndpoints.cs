@@ -208,7 +208,7 @@ public static class FoundationEndpoints
         api.MapGet("/form-templates/{templateKey}/definition", async (string templateKey, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanUseForms(currentUser))
+            if (!CanUseFormTemplate(currentUser, templateKey))
             {
                 return Results.Forbid();
             }
@@ -337,7 +337,7 @@ public static class FoundationEndpoints
         api.MapPost("/form-submissions", async (SubmitFormRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanCreateRecord(currentUser, request.RecordType))
+            if (!CanSubmitForm(currentUser, request))
             {
                 return Results.Forbid();
             }
@@ -531,7 +531,23 @@ public static class FoundationEndpoints
         api.MapGet("/liv-records", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return Results.Ok(await store.GetLivCasesAsync(currentUser, cancellationToken));
+            return Results.Ok(await store.GetLivCasesV2Async(currentUser, cancellationToken));
+        });
+
+        api.MapGet("/liv-records/configuration", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            return CanSubmitLiv(currentUser)
+                ? Results.Ok(await store.GetLivConfigurationAsync(cancellationToken))
+                : Results.Forbid();
+        });
+
+        api.MapGet("/liv-records/staff/{staffId:guid}/context", async (Guid staffId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!CanSubmitLiv(currentUser)) return Results.Forbid();
+            var context = await store.GetLivStaffContextAsync(staffId, currentUser, cancellationToken);
+            return context is null ? Results.NotFound() : Results.Ok(context);
         });
 
         api.MapPost("/liv-records", async (SaveLivCaseRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -547,7 +563,7 @@ public static class FoundationEndpoints
                 return Results.BadRequest(new { Message = "A staff member is required for a LIV record." });
             }
 
-            var id = await store.CreateLivCaseAsync(request, currentUser, cancellationToken);
+            var id = await store.CreateLivCaseV2Async(request, currentUser, cancellationToken);
             return Results.Created($"/api/v1/liv-records/{id}", new { Id = id });
         });
 
@@ -559,7 +575,7 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            var result = await store.UpdateLivCaseAsync(id, request, currentUser, cancellationToken);
+            var result = await store.UpdateLivCaseV2Async(id, request, currentUser, cancellationToken);
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -590,13 +606,43 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            var result = await store.UpdateLivVisitAsync(id, visitId, request, currentUser, cancellationToken);
+            var result = await store.UpdateLivVisitV2Async(id, visitId, request, currentUser, cancellationToken);
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
                 FormSubmissionUpdateResult.Forbidden => Results.Forbid(),
                 _ => Results.NotFound()
             };
+        });
+
+        api.MapPost("/liv-records/{id:guid}/stages", async (Guid id, SaveLivStageRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!CanSubmitLiv(currentUser)) return Results.Forbid();
+            var stage = await store.AddLivStageAsync(id, request, currentUser, cancellationToken);
+            return stage is null
+                ? Results.NotFound()
+                : Results.Created($"/api/v1/liv-records/{id}/stages/{stage.Id}", stage);
+        });
+
+        api.MapPut("/liv-records/{id:guid}/stages/{stageId:guid}", async (Guid id, Guid stageId, SaveLivStageRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var result = await store.UpdateLivStageAsync(id, stageId, request, currentUser, cancellationToken);
+            return result switch
+            {
+                FormSubmissionUpdateResult.Saved => Results.NoContent(),
+                FormSubmissionUpdateResult.Forbidden => Results.Forbid(),
+                _ => Results.NotFound()
+            };
+        });
+
+        api.MapPost("/liv-records/{id:guid}/cycles/current/complete", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!CanSubmitLiv(currentUser)) return Results.Forbid();
+            var cycle = await store.CompleteLivCycleAsync(id, currentUser, cancellationToken);
+            return cycle is null ? Results.NotFound() : Results.Ok(cycle);
         });
 
         api.MapGet("/actions/{id:guid}/extensions", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -1229,6 +1275,39 @@ public static class FoundationEndpoints
         };
     }
 
+    private static bool CanSubmitForm(CurrentUser currentUser, SubmitFormRequest request)
+    {
+        if (string.Equals(request.TemplateKey, "cpd_external_self_log", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Equals(request.RecordType, "cpd_event", StringComparison.OrdinalIgnoreCase)
+                && currentUser.StaffId.HasValue
+                && currentUser.HasPermission(PermissionKeys.CpdSelfLog);
+        }
+
+        if (string.Equals(request.RecordType, "cpd_event", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Equals(request.TemplateKey, "cpd_core", StringComparison.OrdinalIgnoreCase)
+                && currentUser.HasPermission(PermissionKeys.CpdManage);
+        }
+
+        return CanCreateRecord(currentUser, request.RecordType);
+    }
+
+    private static bool CanUseFormTemplate(CurrentUser currentUser, string templateKey)
+    {
+        if (string.Equals(templateKey, "cpd_external_self_log", StringComparison.OrdinalIgnoreCase))
+        {
+            return currentUser.StaffId.HasValue && currentUser.HasPermission(PermissionKeys.CpdSelfLog);
+        }
+
+        if (string.Equals(templateKey, "cpd_core", StringComparison.OrdinalIgnoreCase))
+        {
+            return currentUser.HasPermission(PermissionKeys.CpdManage);
+        }
+
+        return CanUseForms(currentUser);
+    }
+
     private static bool CanUseForms(CurrentUser currentUser) =>
         currentUser.HasPermission(PermissionKeys.FormsManage)
         || currentUser.HasPermission(PermissionKeys.LearningWalkSubmit)
@@ -1320,7 +1399,8 @@ public sealed record ActionSummary(
     string? TeamName,
     int ExtensionCount,
     string? LastExtensionReason,
-    Guid? LivVisitId)
+    Guid? LivVisitId,
+    Guid? LivCycleId)
 {
     public bool IsDeleted => DeletedAt.HasValue;
 }
@@ -1376,6 +1456,7 @@ public sealed record ProcessDashboardRecordSummary(
     string? ParticipantAreaBreakdown,
     int ParticipantCount,
     int AttendanceCredits,
+    int LearningMinutes,
     int SampleSize,
     int ScoreTotal,
     int ScoreCount,
@@ -1420,6 +1501,7 @@ public sealed record CreateActionRequest(
     DateOnly? DueDate,
     bool PublishedToStaff,
     Guid? LivVisitId = null,
+    Guid? LivCycleId = null,
     string? SourceFormType = null,
     string? SourceSubRecordType = null,
     Guid? SourceSubRecordId = null,
@@ -1494,12 +1576,14 @@ public sealed record SaveLivVisitRequest(
     string? CourseGroup,
     string? CourseLevel,
     string? ReflectionNotes,
-    string? Findings);
+    string? Findings,
+    IReadOnlyList<LivVisitRatingRequest>? Ratings = null);
 public sealed record SaveLivCaseRequest(
     Guid SubjectStaffId,
     Guid? OrgUnitId,
+    string? DeliveryAreaKey,
     string? PreConversation,
-    SaveLivVisitRequest InitialVisit,
+    SaveLivVisitRequest? InitialVisit,
     bool? IsElevatePractitioner,
     IReadOnlyList<string>? AreaOfPracticeKeys,
     string? AreaOfPracticeOther,
@@ -1518,7 +1602,9 @@ public sealed record LivVisitSummary(
     string? Findings,
     string VisitStatus,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? UpdatedAt);
+    DateTimeOffset? UpdatedAt,
+    Guid? CycleId = null,
+    IReadOnlyList<LivVisitRatingSummary>? Ratings = null);
 public sealed record LivCaseSummary(
     Guid Id,
     Guid RecordId,
@@ -1542,7 +1628,65 @@ public sealed record LivCaseSummary(
     IReadOnlyList<string> AreaOfPracticeKeys,
     string? AreaOfPracticeOther,
     IReadOnlyList<Guid> AreaOfPracticeThemeIds,
-    IReadOnlyList<LivVisitSummary> Visits);
+    IReadOnlyList<LivVisitSummary> Visits,
+    string? DeliveryAreaKey = null,
+    string? DeliveryAreaName = null,
+    Guid? SourceElevateAssessmentId = null,
+    string? EliPrimaryFocusKey = null,
+    string? EliPrimaryFocus = null,
+    string? EliDesiredOutcome = null,
+    IReadOnlyList<LivCycleSummary>? Cycles = null);
+public sealed record LivLookupOptionSummary(string Key, string Name, int DisplayOrder, bool IsOther = false);
+public sealed record LivConfigurationSummary(
+    IReadOnlyList<LivLookupOptionSummary> DeliveryAreas,
+    IReadOnlyList<LivLookupOptionSummary> FocusAreas,
+    IReadOnlyList<LivLookupOptionSummary> DevelopmentOpportunities,
+    IReadOnlyList<ElevatePracticeRatingScaleSummary> Rubric);
+public sealed record LivStaffContextSummary(
+    Guid StaffId,
+    string StaffName,
+    Guid? AssessmentId,
+    string? AcademicYear,
+    string? PrimaryFocusKey,
+    string? PrimaryFocus,
+    string? DesiredOutcome,
+    Guid? ExistingLivRecordId,
+    Guid? ExistingLivSourceRecordId);
+public sealed record LivVisitRatingRequest(string FocusKey, Guid? DescriptorId, bool IsNotApplicable = false);
+public sealed record LivVisitRatingSummary(string FocusKey, string FocusName, Guid? DescriptorId, string? Descriptor, bool IsNotApplicable);
+public sealed record SaveLivStageRequest(
+    string StageType,
+    string? ContextText,
+    string? AimsText,
+    string? LearnerActivityText,
+    string? ReflectionText,
+    DateOnly? IntendedFollowUpDate,
+    string? DistanceImpactText,
+    IReadOnlyList<string>? DevelopmentOpportunityKeys,
+    string? StageStatus = null);
+public sealed record LivStageCreatedSummary(Guid Id, string StageType, int StageOrder, Guid? VisitId);
+public sealed record LivStageSummary(
+    Guid Id,
+    string StageType,
+    int StageOrder,
+    string StageStatus,
+    string? ContextText,
+    string? AimsText,
+    string? LearnerActivityText,
+    string? ReflectionText,
+    DateOnly? IntendedFollowUpDate,
+    string? DistanceImpactText,
+    IReadOnlyList<string> DevelopmentOpportunityKeys,
+    Guid? VisitId,
+    bool CanEdit);
+public sealed record LivCycleSummary(
+    Guid Id,
+    int CycleNumber,
+    string Status,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? CompletedAt,
+    bool IsFollowUp,
+    IReadOnlyList<LivStageSummary> Stages);
 public sealed record LivRecordSummary(
     Guid Id,
     Guid RecordId,
@@ -1654,7 +1798,7 @@ public sealed record StaffReflectionMutationResult(
     StaffReflectionSummary? Reflection,
     string? Message);
 
-public sealed record StaffCpdRecordSummary(Guid Id, string Title, DateOnly EventDate, string? Themes);
+public sealed record StaffCpdRecordSummary(Guid Id, string Title, DateOnly EventDate, string? Themes, int? DurationMinutes);
 
 public sealed record StaffProfileActionSummary(
     Guid Id,

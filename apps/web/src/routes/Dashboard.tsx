@@ -40,6 +40,7 @@ type CpdAreaMetric = {
   areaCode: string;
   participants: number;
   credits: number;
+  learningMinutes: number;
 };
 
 const processDefinitions: ProcessDefinition[] = [
@@ -187,7 +188,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
       <div className="route-stack">
         <div className="route-header">
           <div>
-            <p className="eyebrow">Teaching &amp; Learning Quality</p>
+            <p className="eyebrow">i-Elevate</p>
             <h1>Dashboard</h1>
           </div>
         </div>
@@ -206,7 +207,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     <div className="route-stack dashboard-route">
       <div className="route-header">
         <div>
-          <p className="eyebrow">Teaching &amp; Learning Quality</p>
+          <p className="eyebrow">i-Elevate</p>
           <h1>{canViewAll ? "Whole organisation dashboard" : "Quality dashboard"}</h1>
           <span className="dashboard-scope-label">
             {canViewAll ? "Whole organisation" : formatScopeLabel(user)}
@@ -368,7 +369,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
               { key: "area", header: "Area", render: (record) => formatArea(record) },
               {
                 key: "focus",
-                header: selectedProcess === "work_scrutiny" ? "Courses sampled" : selectedProcess === "elevate_environment" ? "Standard / purpose" : selectedProcess === "coaching_session" ? "Focus / session" : "Theme / detail",
+                header: selectedProcess === "work_scrutiny" ? "Courses sampled" : selectedProcess === "elevate_environment" ? "Overall standard" : selectedProcess === "coaching_session" ? "Focus / session" : "Theme / detail",
                 render: (record) => formatRecordFocus(record)
               },
               {
@@ -450,14 +451,15 @@ function buildKpis(
         const metrics = getCpdMetrics(record, areaFilter);
         totals.participants += metrics.participants;
         totals.credits += metrics.credits;
+        totals.learningMinutes += metrics.learningMinutes;
         return totals;
       },
-      { participants: 0, credits: 0 }
+      { participants: 0, credits: 0, learningMinutes: 0 }
     );
     return [
       { label: "CPD events", value: records.length, tone: "blue" as const },
       { label: "Participants", value: cpdTotals.participants, tone: "green" as const },
-      { label: "Attendance credits", value: cpdTotals.credits, tone: "blue" as const },
+      { label: "Learning time", value: formatDurationMinutes(cpdTotals.learningMinutes), tone: "blue" as const },
       { label: "Open actions", value: openActions.length, tone: "amber" as const },
       { label: "Overdue actions", value: overdueActions.length, tone: overdueActions.length ? "red" as const : "green" as const }
     ];
@@ -617,13 +619,21 @@ function recordMatchesArea(record: ProcessDashboardRecordSummary, areaFilter: st
 
 function getCpdMetrics(record: ProcessDashboardRecordSummary, areaFilter: string) {
   if (areaFilter === "all") {
-    return { participants: record.participantCount, credits: record.attendanceCredits };
+    return {
+      participants: record.participantCount,
+      credits: record.attendanceCredits,
+      learningMinutes: record.learningMinutes
+    };
   }
   return parseCpdAreaMetrics(record.participantAreaBreakdown)
     .filter((metric) => metric.areaCode === areaFilter || metric.parentCode === areaFilter)
     .reduce(
-      (totals, metric) => ({ participants: totals.participants + metric.participants, credits: totals.credits + metric.credits }),
-      { participants: 0, credits: 0 }
+      (totals, metric) => ({
+        participants: totals.participants + metric.participants,
+        credits: totals.credits + metric.credits,
+        learningMinutes: totals.learningMinutes + metric.learningMinutes
+      }),
+      { participants: 0, credits: 0, learningMinutes: 0 }
     );
 }
 
@@ -632,12 +642,13 @@ function parseCpdAreaMetrics(value?: string): CpdAreaMetric[] {
     return [];
   }
   return value.split("|").map((item) => {
-    const [parentCode, areaCode, participants, credits] = item.split("~");
+    const [parentCode, areaCode, participants, credits, learningMinutes] = item.split("~");
     return {
       parentCode: parentCode ?? "",
       areaCode: areaCode || "Unassigned",
       participants: Number(participants) || 0,
-      credits: Number(credits) || 0
+      credits: Number(credits) || 0,
+      learningMinutes: Number(learningMinutes) || 0
     };
   });
 }
@@ -747,6 +758,15 @@ function formatRecordFocus(record: ProcessDashboardRecordSummary) {
     return `${theme} · ${record.detail}`;
   }
   return theme || record.detail || record.summary || "Not recorded";
+}
+
+function formatDurationMinutes(value: number) {
+  const totalMinutes = Math.max(0, Math.round(value));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
 }
 
 function formatArea(record: ProcessDashboardRecordSummary) {

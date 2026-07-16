@@ -54,8 +54,8 @@ export function FirstTimeOnboarding({ email, onComplete }: FirstTimeOnboardingPr
     <main className="onboarding-shell">
       <header className="onboarding-header">
         <div className="brand-block onboarding-brand">
-          <div className="brand-mark">TL</div>
-          <div><strong>Quality System</strong><span>Teaching &amp; Learning</span></div>
+          <div className="brand-mark">iE</div>
+          <div><strong>i-Elevate</strong><span>Teaching &amp; Learning</span></div>
         </div>
         {isAuthEnabled ? (
           <button className="icon-button" onClick={signOut} title="Sign out" type="button">
@@ -123,7 +123,7 @@ export function FirstTimeOnboarding({ email, onComplete }: FirstTimeOnboardingPr
               onClick={() => void completeOnboarding()}
               variant="primary"
             >
-              {isSaving ? "Creating account..." : "Enter Quality System"}
+              {isSaving ? "Creating account..." : "Enter i-Elevate"}
             </Button>
           </div>
         </div>
@@ -131,4 +131,3 @@ export function FirstTimeOnboarding({ email, onComplete }: FirstTimeOnboardingPr
     </main>
   );
 }
-

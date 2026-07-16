@@ -117,7 +117,7 @@ export function MyTeam({ onOpenActions, onOpenProfile }: MyTeamProps) {
           <label><span>Faculty</span><select onChange={(event) => { setFacultyId(event.target.value); setTeamId(""); }} value={facultyId}><option value="">All faculties</option>{faculties.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label>
           <label><span>Team</span><select onChange={(event) => setTeamId(event.target.value)} value={teamId}><option value="">All teams</option>{teams.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label>
           <label><span>Actions</span><select onChange={(event) => setActionFilter(event.target.value as "all" | "open" | "overdue")} value={actionFilter}><option value="all">Any status</option><option value="open">Has open actions</option><option value="overdue">Has overdue actions</option></select></label>
-          <label><span><ArrowUpDown size={14} aria-hidden="true" />Sort by</span><select onChange={(event) => setSort(event.target.value as TeamSort)} value={sort}><option value="name">Staff name</option><option value="open_desc">Most open actions</option><option value="overdue_desc">Most overdue</option><option value="judgement">Elevate judgement</option></select></label>
+          <label><span><ArrowUpDown size={14} aria-hidden="true" />Sort by</span><select onChange={(event) => setSort(event.target.value as TeamSort)} value={sort}><option value="name">Staff name</option><option value="open_desc">Most open actions</option><option value="overdue_desc">Most overdue</option><option value="judgement">Elevate outcome</option></select></label>
         </div>
 
         {loadError ? <div className="empty-row"><AlertTriangle size={18} aria-hidden="true" />{loadError}</div> : isLoading ? (
@@ -131,7 +131,7 @@ export function MyTeam({ onOpenActions, onOpenProfile }: MyTeamProps) {
             { key: "team", header: "Team", render: (member) => <UnitList units={member.teams} empty="No sub-team" /> },
             { key: "role", header: "Role", render: (member) => member.roleNames.join(", ") || "Not allocated" },
             { key: "actions", header: "Actions", render: (member) => <span className="team-action-count"><strong>{member.openActionCount}</strong> open{member.overdueActionCount ? <small>{member.overdueActionCount} overdue</small> : null}</span> },
-            { key: "elevate", header: "Elevate Your Practice", render: (member) => member.canOpenProfile ? <span className="team-judgement">{member.elevateJudgement ?? "Not submitted"}</span> : <span className="muted-copy">Restricted</span> },
+            { key: "elevate", header: "Elevate Learning and Innovation", render: (member) => member.canOpenProfile ? <span className="team-judgement">{member.elevateJudgement ?? "Not yet submitted"}</span> : <span className="muted-copy">Restricted</span> },
             { key: "commands", header: "", render: (member) => <div className="team-row-commands"><Button disabled={!member.canOpenProfile} icon={UserRound} onClick={() => onOpenProfile(member.staffId)} variant="quiet">Personal Profile</Button><Button icon={ListChecks} onClick={() => onOpenActions(member.staffId)} variant="quiet">Actions</Button></div> }
           ]} />
         )}

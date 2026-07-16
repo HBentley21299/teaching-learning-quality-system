@@ -32,7 +32,10 @@ import type {
   LearningWalkThemeMappingSummary,
   LearningWalkThemeGroup,
   LearningWalkRollupSummary,
+  LivConfiguration,
+  LivCycle,
   LivRecordSummary,
+  LivStaffContext,
   LookupSummary,
   LookupValueSummary,
   ModuleSummary,
@@ -44,6 +47,7 @@ import type {
   RecordSummary,
   RoomSummary,
   SaveLivRecordRequest,
+  SaveLivStageRequest,
   SaveManagerRelationshipRequest,
   SaveOrgUnitManagerRequest,
   SaveOrganisationMembershipRequest,
@@ -248,6 +252,9 @@ export const api = {
   changeSubmissionStatus: (id: string, action: "submit" | "reopen" | "archive") =>
     sendJson(`/api/v1/form-submissions/${id}/status`, "POST", { action }),
   livRecords: () => getJson<LivRecordSummary[]>("/api/v1/liv-records"),
+  livConfiguration: () => getJson<LivConfiguration>("/api/v1/liv-records/configuration"),
+  livStaffContext: (staffId: string) =>
+    getJson<LivStaffContext>(`/api/v1/liv-records/staff/${staffId}/context`),
   createLivRecord: (request: SaveLivRecordRequest) => sendJson("/api/v1/liv-records", "POST", request),
   updateLivRecord: (id: string, request: SaveLivRecordRequest) =>
     sendJson(`/api/v1/liv-records/${id}`, "PUT", request),
@@ -255,6 +262,14 @@ export const api = {
     sendJson<SaveLivVisitRequest, { id: string; visitNumber: number }>(`/api/v1/liv-records/${id}/visits`, "POST", request),
   updateLivVisit: (id: string, visitId: string, request: SaveLivVisitRequest) =>
     sendJson(`/api/v1/liv-records/${id}/visits/${visitId}`, "PUT", request),
+  addLivStage: (id: string, request: SaveLivStageRequest) =>
+    sendJson<SaveLivStageRequest, { id: string; stageType: string; stageOrder: number; visitId?: string }>(
+      `/api/v1/liv-records/${id}/stages`, "POST", request
+    ),
+  updateLivStage: (id: string, stageId: string, request: SaveLivStageRequest) =>
+    sendJson(`/api/v1/liv-records/${id}/stages/${stageId}`, "PUT", request),
+  completeLivCycle: (id: string) =>
+    sendJson<never, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete`, "POST"),
   changeLivStatus: (id: string, action: "close" | "reopen" | "archive") =>
     sendJson(`/api/v1/liv-records/${id}/status`, "POST", { action }),
   staffProfiles: () =>

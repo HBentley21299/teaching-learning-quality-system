@@ -191,9 +191,9 @@ export function App() {
     <div className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
         <div className="brand-block">
-          <div className="brand-mark">TL</div>
+          <div className="brand-mark">iE</div>
           <div>
-            <strong>Quality System</strong>
+            <strong>i-Elevate</strong>
             <span>Teaching & Learning</span>
           </div>
         </div>
@@ -223,7 +223,7 @@ export function App() {
           </button>
           <div className="topbar-search">
             <Search size={16} aria-hidden="true" />
-            <input aria-label="Search quality system" placeholder="Search staff, actions, records" />
+            <input aria-label="Search i-Elevate" placeholder="Search staff, actions, records" />
           </div>
           <div className="user-chip">
             <span>{user.displayName}</span>
@@ -248,7 +248,7 @@ export function App() {
         <div className="content-frame" aria-label={activeItem?.label ?? "Dashboard"}>
           {isLoading ? (
             <div className="route-stack">
-              <p className="muted-copy">Loading the Teaching &amp; Learning system...</p>
+              <p className="muted-copy">Loading i-Elevate...</p>
             </div>
           ) : !user.userAccountId ? (
             <section className="access-denied-panel">
@@ -256,7 +256,7 @@ export function App() {
               <div>
                 <h1>Account not provisioned</h1>
                 <p>
-                  Your Microsoft sign-in was successful, but this email address is not linked to an active Quality System account.
+                  Your Microsoft sign-in was successful, but this email address is not linked to an active i-Elevate account.
                 </p>
                 <p className="muted-copy">Signed in as {user.email || "unknown account"}</p>
               </div>
@@ -281,7 +281,16 @@ export function App() {
               {route === "learning" ? (
                 <ModuleWorkspace title="Learning Walks" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="learning" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "liv" ? <LivVisits initialSourceRecordId={sourceRecordId} staff={staff} user={user} onActionsChanged={refreshActions} /> : null}
+              {route === "liv" ? (
+                <LivVisits
+                  initialSourceRecordId={sourceRecordId}
+                  onActionsChanged={refreshActions}
+                  onOpenStaffProfile={openTeamProfile}
+                  orgUnits={orgUnits}
+                  staff={staff}
+                  user={user}
+                />
+              ) : null}
               {route === "elevate" ? (
                 <ModuleWorkspace
                   title="Elevate Learning Environments"

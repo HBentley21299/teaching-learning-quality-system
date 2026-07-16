@@ -43,7 +43,7 @@ type SortMode = "due" | "newest" | "owner" | "source" | "title";
 const sourceLabels: Record<string, string> = {
   coaching_mentoring: "Coaching and Mentoring",
   elevate_environment: "Learning Environment",
-  elevate_practice: "Elevate Your Practice",
+  elevate_practice: "Elevate Learning and Innovation",
   learning_walk: "Learning Walk",
   liv: "LIV",
   standalone: "Standalone",

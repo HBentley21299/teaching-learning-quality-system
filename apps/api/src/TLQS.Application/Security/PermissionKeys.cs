@@ -10,6 +10,7 @@ public static class PermissionKeys
     public const string LearningWalkSubmit = "learning_walk.submit";
     public const string WorkScrutinySubmit = "work_scrutiny.submit";
     public const string CpdManage = "cpd.manage";
+    public const string CpdSelfLog = "cpd.self_log";
     public const string EvidenceSubmit = "evidence.submit";
     public const string EvidenceReview = "evidence.review";
     public const string ActionsManage = "actions.manage";
@@ -38,6 +39,7 @@ public static class PermissionKeys
         LearningWalkSubmit,
         WorkScrutinySubmit,
         CpdManage,
+        CpdSelfLog,
         EvidenceSubmit,
         EvidenceReview,
         ActionsManage,

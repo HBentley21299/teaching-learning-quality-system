@@ -55,7 +55,8 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetFieldValue<DateTimeOffset>(6)),
             cancellationToken);
 
-    public async Task<ElevatePracticeWorkspaceSummary?> AdminSaveElevatePracticeAssessmentAsync(
+    [Obsolete("V1 statement-level admin save retained for migration compatibility only.")]
+    public async Task<ElevatePracticeWorkspaceSummary?> AdminSaveLegacyElevatePracticeAssessmentAsync(
         Guid assessmentId,
         AdminSaveElevatePracticeAssessmentRequest request,
         CurrentUser currentUser,
@@ -70,7 +71,7 @@ public sealed partial class SqlFoundationDataStore
         var status = request.Status.Trim().ToLowerInvariant();
         if (status is not ("draft" or "submitted"))
         {
-            throw new WorkflowValidationException("Elevate Your Practice status must be Draft or Submitted.");
+            throw new WorkflowValidationException("Elevate Learning and Innovation status must be Draft or Submitted.");
         }
 
         var ratings = (request.Ratings ?? [])
@@ -253,7 +254,7 @@ public sealed partial class SqlFoundationDataStore
                             connection,
                             (SqlTransaction)transaction);
                         updateActionCommand.Parameters.AddWithValue("@actionId", existingActionId.Value);
-                        updateActionCommand.Parameters.AddWithValue("@title", $"Elevate Your Practice: {area.Name}");
+                        updateActionCommand.Parameters.AddWithValue("@title", $"Elevate Learning and Innovation: {area.Name}");
                         updateActionCommand.Parameters.AddWithValue("@detail", actionDetail);
                         updateActionCommand.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
                         await updateActionCommand.ExecuteNonQueryAsync(cancellationToken);
@@ -310,7 +311,7 @@ public sealed partial class SqlFoundationDataStore
                     UPDATE quality.actions
                     SET archived_at = sysutcdatetime(),
                         deleted_by_user_account_id = @userAccountId,
-                        deletion_reason = 'Development area removed from Elevate Your Practice.',
+                        deletion_reason = 'Development area removed from Elevate Learning and Innovation.',
                         updated_by_user_account_id = @userAccountId,
                         updated_at = sysutcdatetime()
                     WHERE id = @actionId;
@@ -358,7 +359,7 @@ public sealed partial class SqlFoundationDataStore
                 "elevate_practice_assessment",
                 assessment.Id,
                 "elevate_practice.admin_updated",
-                $"Elevate Your Practice {assessment.AcademicYear} amended by {currentUser.DisplayName}; status set to {status}.",
+                $"Elevate Learning and Innovation {assessment.AcademicYear} amended by {currentUser.DisplayName}; status set to {status}.",
                 beforeJson,
                 JsonSerializer.Serialize(request),
                 cancellationToken);
@@ -412,7 +413,7 @@ public sealed partial class SqlFoundationDataStore
                 UPDATE quality.actions
                 SET archived_at = sysutcdatetime(),
                     deleted_by_user_account_id = @userAccountId,
-                    deletion_reason = 'Source Elevate Your Practice record deleted.',
+                    deletion_reason = 'Source Elevate Learning and Innovation record deleted.',
                     updated_by_user_account_id = @userAccountId,
                     updated_at = sysutcdatetime()
                 WHERE source_record_id = @recordId AND archived_at IS NULL;
@@ -442,7 +443,7 @@ public sealed partial class SqlFoundationDataStore
                 "elevate_practice_assessment",
                 assessmentId,
                 "elevate_practice.archived",
-                $"Elevate Your Practice {academicYear} archived by {currentUser.DisplayName}.",
+                $"Elevate Learning and Innovation {academicYear} archived by {currentUser.DisplayName}.",
                 JsonSerializer.Serialize(new { assessmentId, academicYear, archived = false }),
                 JsonSerializer.Serialize(new { assessmentId, academicYear, archived = true }),
                 cancellationToken);
@@ -534,7 +535,7 @@ public sealed partial class SqlFoundationDataStore
             (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@recordId", recordId);
         command.Parameters.AddWithValue("@staffId", staffId);
-        command.Parameters.AddWithValue("@title", $"Elevate Your Practice: {areaName}");
+        command.Parameters.AddWithValue("@title", $"Elevate Learning and Innovation: {areaName}");
         command.Parameters.AddWithValue("@detail", detail);
         command.Parameters.AddWithValue("@userAccountId", ToDbValue(userAccountId));
         return (Guid)(await command.ExecuteScalarAsync(cancellationToken)

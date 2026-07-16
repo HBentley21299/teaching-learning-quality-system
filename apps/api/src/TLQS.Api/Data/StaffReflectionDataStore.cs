@@ -167,7 +167,7 @@ public sealed partial class SqlFoundationDataStore
                 return new StaffReflectionMutationResult(
                     StaffReflectionMutationStatus.NoSubmittedElevateAssessment,
                     null,
-                    "A submitted Elevate Your Practice assessment is required before a reflection can be created.");
+                    "A submitted Elevate Learning and Innovation assessment is required before a reflection can be created.");
             }
 
             var reflectionId = Guid.NewGuid();

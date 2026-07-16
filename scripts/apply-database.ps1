@@ -125,7 +125,10 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\seed\004_seed_elevate_rooms.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\005_seed_official_curriculum_staff.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\023_org_unit_management.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\024_trusted_self_onboarding.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\024_trusted_self_onboarding.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\025_learning_environment_central_actions.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\026_cpd_self_log_and_duration.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\027_elevate_learning_innovation_and_liv_cycles.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

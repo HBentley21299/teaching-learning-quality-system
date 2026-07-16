@@ -199,7 +199,6 @@ function AdminOverview({
           </div>
           <div className="lookup-list">
             <button className="lookup-row" onClick={onOpenLookups} type="button">CPD themes</button>
-            <button className="lookup-row" onClick={onOpenLookups} type="button">Learning Environment purposes</button>
             <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching development stages</button>
             <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching focus areas</button>
             <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching support types</button>
@@ -237,15 +236,6 @@ function LookupAdminPanel() {
         placeholder="Enter CPD theme"
         title="CPD themes"
         valueLabel="CPD theme"
-      />
-      <LookupValueAdminSection
-        addLabel="Add purpose"
-        emptyPrompt="Enter a Learning Environment purpose before adding it."
-        inputLabel="New intended purpose"
-        lookupKey="elevate_environment_purpose"
-        placeholder="Enter intended purpose"
-        title="Learning Environment purposes"
-        valueLabel="intended purpose"
       />
       <LookupValueAdminSection
         addLabel="Add stage"

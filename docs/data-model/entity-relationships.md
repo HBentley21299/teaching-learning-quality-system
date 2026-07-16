@@ -61,4 +61,8 @@ erDiagram
 - Organisation is generic so the same table supports faculty, department, team, and future structures.
 - `core.records` is the universal attachment point for forms, evidence, actions, audit, and reports.
 - Module-specific detail tables exist only for stable fields that need filtering or reporting.
+- CPD uses separate managed-event and external self-log form templates. Both create a
+  `CPD_EVENT`; self-logs create attendance only for the authenticated staff member.
+- `CPD_EVENT.duration_minutes` stores normalized duration while the form submission
+  preserves the entered hour and minute components.
 

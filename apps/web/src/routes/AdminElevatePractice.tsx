@@ -21,7 +21,7 @@ export function AdminElevatePractice() {
       setRecords(await api.elevatePracticeProgress());
       setMessage(nextMessage);
     } catch {
-      setMessage("Elevate Your Practice records could not be loaded from the API.");
+      setMessage("Elevate Learning and Innovation records could not be loaded from the API.");
     } finally {
       setIsLoading(false);
     }
@@ -56,7 +56,7 @@ export function AdminElevatePractice() {
         onBack={() => setSelectedAssessmentId("")}
         onDeleted={() => {
           setSelectedAssessmentId("");
-          void refresh("Elevate Your Practice record deleted. Its audit history has been retained.");
+          void refresh("Elevate Learning and Innovation record deleted. Its audit history has been retained.");
         }}
       />
     );
@@ -64,7 +64,7 @@ export function AdminElevatePractice() {
 
   return (
     <div className="route-stack">
-      <section className="kpi-strip" aria-label="Elevate Your Practice completion summary">
+      <section className="kpi-strip" aria-label="Elevate Learning and Innovation completion summary">
         <div className="kpi"><span>Active staff</span><strong>{records.length}</strong></div>
         <div className="kpi kpi-amber"><span>Not started</span><strong>{records.filter((record) => record.status === "not_started").length}</strong></div>
         <div className="kpi kpi-blue"><span>Draft</span><strong>{records.filter((record) => record.status === "draft").length}</strong></div>
@@ -73,7 +73,7 @@ export function AdminElevatePractice() {
 
       <section className="panel">
         <div className="panel-heading">
-          <div><p className="eyebrow">Annual self-assessment administration</p><h2>Elevate Your Practice records</h2></div>
+          <div><p className="eyebrow">Annual self-assessment administration</p><h2>Elevate Learning and Innovation records</h2></div>
           <span>{filtered.length} shown</span>
         </div>
 

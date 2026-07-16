@@ -97,6 +97,7 @@ export type ActionSummary = {
   extensionCount: number;
   lastExtensionReason?: string;
   livVisitId?: string;
+  livCycleId?: string;
   isDeleted: boolean;
 };
 
@@ -113,6 +114,7 @@ export type CreateActionRequest = {
   dueDate?: string;
   publishedToStaff: boolean;
   livVisitId?: string;
+  livCycleId?: string;
   sourceFormType?: string;
   sourceSubRecordType?: string;
   sourceSubRecordId?: string;
@@ -180,6 +182,52 @@ export type LivVisitSummary = {
   visitStatus: "in_progress" | "completed";
   createdAt: string;
   updatedAt?: string;
+  cycleId?: string;
+  ratings: LivVisitRating[];
+};
+
+export type LivLookupOption = { key: string; name: string; displayOrder: number; isOther?: boolean };
+export type LivVisitRating = { focusKey: string; focusName: string; descriptorId?: string; descriptor?: string; isNotApplicable: boolean };
+export type LivStage = {
+  id: string;
+  stageType: "pre_discussion" | "distance_impact" | "visit" | "post_reflection" | "actions" | "follow_up_review";
+  stageOrder: number;
+  stageStatus: "in_progress" | "completed";
+  contextText?: string;
+  aimsText?: string;
+  learnerActivityText?: string;
+  reflectionText?: string;
+  intendedFollowUpDate?: string;
+  distanceImpactText?: string;
+  developmentOpportunityKeys: string[];
+  visitId?: string;
+  canEdit: boolean;
+};
+export type LivCycle = {
+  id: string;
+  cycleNumber: number;
+  status: "in_progress" | "completed";
+  startedAt: string;
+  completedAt?: string;
+  isFollowUp: boolean;
+  stages: LivStage[];
+};
+export type LivConfiguration = {
+  deliveryAreas: LivLookupOption[];
+  focusAreas: LivLookupOption[];
+  developmentOpportunities: LivLookupOption[];
+  rubric: ElevatePracticeRatingScale[];
+};
+export type LivStaffContext = {
+  staffId: string;
+  staffName: string;
+  assessmentId?: string;
+  academicYear?: string;
+  primaryFocusKey?: string;
+  primaryFocus?: string;
+  desiredOutcome?: string;
+  existingLivRecordId?: string;
+  existingLivSourceRecordId?: string;
 };
 
 export type LivRecordSummary = {
@@ -206,6 +254,13 @@ export type LivRecordSummary = {
   areaOfPracticeThemeIds: string[];
   areaOfPracticeOther?: string;
   visits: LivVisitSummary[];
+  deliveryAreaKey?: string;
+  deliveryAreaName?: string;
+  sourceElevateAssessmentId?: string;
+  eliPrimaryFocusKey?: string;
+  eliPrimaryFocus?: string;
+  eliDesiredOutcome?: string;
+  cycles: LivCycle[];
 };
 
 export type SaveLivVisitRequest = {
@@ -216,17 +271,31 @@ export type SaveLivVisitRequest = {
   courseLevel?: string;
   reflectionNotes?: string;
   findings?: string;
+  ratings?: Array<{ focusKey: string; descriptorId?: string; isNotApplicable: boolean }>;
 };
 
 export type SaveLivRecordRequest = {
   subjectStaffId: string;
   orgUnitId?: string;
+  deliveryAreaKey?: string;
   preConversation?: string;
-  initialVisit: SaveLivVisitRequest;
+  initialVisit?: SaveLivVisitRequest;
   isElevatePractitioner?: boolean;
   areaOfPracticeKeys: string[];
   areaOfPracticeThemeIds: string[];
   areaOfPracticeOther?: string;
+};
+
+export type SaveLivStageRequest = {
+  stageType: LivStage["stageType"];
+  contextText?: string;
+  aimsText?: string;
+  learnerActivityText?: string;
+  reflectionText?: string;
+  intendedFollowUpDate?: string;
+  distanceImpactText?: string;
+  developmentOpportunityKeys: string[];
+  stageStatus?: LivStage["stageStatus"];
 };
 
 export type RecordDetail = {
@@ -345,6 +414,7 @@ export type ProcessDashboardRecordSummary = {
   participantAreaBreakdown?: string;
   participantCount: number;
   attendanceCredits: number;
+  learningMinutes: number;
   sampleSize: number;
   scoreTotal: number;
   scoreCount: number;
@@ -417,6 +487,7 @@ export type StaffCpdRecordSummary = {
   title: string;
   eventDate: string;
   themes?: string;
+  durationMinutes?: number;
 };
 
 export type StaffProfileActionSummary = {
@@ -479,6 +550,7 @@ export type ElevatePracticeArea = {
   name: string;
   reflectionPrompt: string;
   displayOrder: number;
+  descriptorId?: string;
   judgement?: string;
   reflection?: string;
   statements: ElevatePracticeStatement[];
@@ -514,21 +586,25 @@ export type ElevatePracticeWorkspace = {
   suggestedStrengthAreaKeys: string[];
   suggestedDevelopmentAreaKeys: string[];
   developmentPlans: ElevatePracticePlan[];
+  livInformation: ElevateLivInformation;
+};
+
+export type ElevateLookupOption = { key: string; name: string; displayOrder: number; isOther?: boolean };
+export type ElevateLivInformation = {
+  noticePreferenceKey?: string;
+  preferredVisitMonth?: string;
+  primaryFocusKey?: string;
+  secondaryFocusKey?: string;
+  secondaryFocusOther?: string;
+  desiredOutcome?: string;
+  noticeOptions: ElevateLookupOption[];
+  focusOptions: ElevateLookupOption[];
 };
 
 export type SaveElevatePracticeAssessmentRequest = {
-  ratings: Array<{ statementId: string; descriptorId: string }>;
+  ratings: Array<{ areaId: string; descriptorId: string }>;
   reflections: Array<{ areaKey: string; text: string }>;
-  strengthAreaKeys: string[];
-  developmentAreaKeys: string[];
-  developmentPlans: Array<{
-    areaKey: string;
-    developmentApproach: string;
-    supportKeys: string[];
-    supportDetails: string;
-    successEvidence: string;
-    intendedImpact: string;
-  }>;
+  livInformation: Omit<ElevateLivInformation, "noticeOptions" | "focusOptions">;
   submit: boolean;
 };
 

@@ -55,7 +55,7 @@ public sealed partial class SqlFoundationDataStore
             cancellationToken);
         if (frameworkRows.Count == 0)
         {
-            throw new WorkflowValidationException("The Elevate Your Practice framework has not been configured.");
+            throw new WorkflowValidationException("The Elevate Learning and Innovation framework has not been configured.");
         }
 
         var frameworkId = frameworkRows[0];
@@ -105,7 +105,7 @@ public sealed partial class SqlFoundationDataStore
             cancellationToken);
         if (rubricDescriptors.Count == 0)
         {
-            throw new WorkflowValidationException("The Elevate Your Practice rubric descriptors have not been configured.");
+            throw new WorkflowValidationException("The Elevate Learning and Innovation rubric descriptors have not been configured.");
         }
         var ratingScale = rubricDescriptors.Select(descriptor => new ElevatePracticeRatingScaleSummary(
             descriptor.Id,
@@ -121,9 +121,12 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT a.id, a.area_key, a.category, a.name, a.reflection_prompt, a.display_order,
                    s.id, s.statement_key, s.statement_text, s.display_order,
+                   area_rating.hidden_numeric_value, area_rating.descriptor_id,
                    rating.score, rating.descriptor_id, reflection.reflection_text
             FROM quality.elevate_practice_areas a
             JOIN quality.elevate_practice_statements s ON s.area_id = a.id
+            LEFT JOIN quality.elevate_practice_area_ratings area_rating
+                ON area_rating.area_id = a.id AND area_rating.assessment_id = @assessmentId
             LEFT JOIN quality.elevate_practice_ratings rating
                 ON rating.statement_id = s.id AND rating.assessment_id = @assessmentId
             LEFT JOIN quality.elevate_practice_reflections reflection
@@ -149,7 +152,9 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetInt32(9),
                 reader.IsDBNull(10) ? null : reader.GetByte(10),
                 GetGuidOrNull(reader, 11),
-                GetStringOrNull(reader, 12)),
+                reader.IsDBNull(12) ? null : reader.GetByte(12),
+                GetGuidOrNull(reader, 13),
+                GetStringOrNull(reader, 14)),
             cancellationToken);
 
         var areaAverageScores = definitionRows
@@ -158,7 +163,12 @@ public sealed partial class SqlFoundationDataStore
                 group => group.Key,
                 group =>
                 {
-                    var scores = group.Where(row => row.Score.HasValue).Select(row => (decimal)row.Score!.Value).ToArray();
+                    var areaScore = group.Select(row => row.AreaScore).FirstOrDefault(value => value.HasValue);
+                    if (areaScore.HasValue)
+                    {
+                        return (decimal?)areaScore.Value;
+                    }
+                    var scores = group.Where(row => row.LegacyStatementScore.HasValue).Select(row => (decimal)row.LegacyStatementScore!.Value).ToArray();
                     return scores.Length == 0 ? (decimal?)null : Math.Round(scores.Average(), 2);
                 },
                 StringComparer.OrdinalIgnoreCase);
@@ -174,6 +184,7 @@ public sealed partial class SqlFoundationDataStore
                     group.Key.AreaName,
                     group.Key.ReflectionPrompt,
                     group.Key.AreaOrder,
+                    group.Select(row => row.AreaDescriptorId).FirstOrDefault(value => value.HasValue),
                     RubricWordingForAverage(rubricDescriptors, averageScore),
                     group.First().Reflection,
                     group.Select(row => new ElevatePracticeStatementSummary(
@@ -181,7 +192,7 @@ public sealed partial class SqlFoundationDataStore
                         row.StatementKey,
                         row.StatementText,
                         row.StatementOrder,
-                        row.DescriptorId)).ToArray());
+                        row.LegacyDescriptorId)).ToArray());
             })
             .OrderBy(area => area.DisplayOrder)
             .ToArray();
@@ -235,6 +246,32 @@ public sealed partial class SqlFoundationDataStore
             reader => new ElevatePracticeSupportOptionSummary(reader.GetString(0), reader.GetString(1)),
             cancellationToken);
 
+        var noticeOptions = await GetElevateLookupOptionsAsync("liv_notice_preference", cancellationToken);
+        var focusOptions = await GetElevateLookupOptionsAsync("liv_focus_area", cancellationToken);
+        IReadOnlyList<ElevateLivInformationSummary> livInformationRows = assessment is null
+            ? []
+            : await QueryAsync(
+                """
+                SELECT notice.value_key,
+                       CONVERT(nvarchar(7), information.preferred_visit_month, 126),
+                       primary_focus.value_key, secondary_focus.value_key,
+                       information.secondary_focus_other, information.desired_outcome
+                FROM quality.elevate_practice_liv_information information
+                LEFT JOIN core.lookup_values notice ON notice.id = information.notice_preference_lookup_value_id
+                LEFT JOIN core.lookup_values primary_focus ON primary_focus.id = information.primary_focus_lookup_value_id
+                LEFT JOIN core.lookup_values secondary_focus ON secondary_focus.id = information.secondary_focus_lookup_value_id
+                WHERE information.assessment_id = @assessmentId;
+                """,
+                command => command.Parameters.AddWithValue("@assessmentId", assessment.Id),
+                reader => new ElevateLivInformationSummary(
+                    GetStringOrNull(reader, 0), GetStringOrNull(reader, 1),
+                    GetStringOrNull(reader, 2), GetStringOrNull(reader, 3),
+                    GetStringOrNull(reader, 4), GetStringOrNull(reader, 5),
+                    noticeOptions, focusOptions),
+                cancellationToken);
+        var livInformation = livInformationRows.FirstOrDefault()
+            ?? new ElevateLivInformationSummary(null, null, null, null, null, null, noticeOptions, focusOptions);
+
         var scoredAreas = areas
             .Select(area => new { Area = area, AverageScore = areaAverageScores[area.AreaKey] })
             .Where(value => value.AverageScore.HasValue)
@@ -251,7 +288,7 @@ public sealed partial class SqlFoundationDataStore
             .Take(2)
             .Select(value => value.Area.AreaKey)
             .ToArray();
-        var allScores = definitionRows.Where(row => row.Score.HasValue).Select(row => (decimal)row.Score!.Value).ToArray();
+        var allScores = areaAverageScores.Values.Where(value => value.HasValue).Select(value => value!.Value).ToArray();
         var overallJudgement = RubricWordingForAverage(
             rubricDescriptors,
             allScores.Length == 0 ? null : Math.Round(allScores.Average(), 2));
@@ -276,7 +313,8 @@ public sealed partial class SqlFoundationDataStore
             selections.Where(value => value.SelectionType == "development").Select(value => value.AreaKey).ToArray(),
             suggestedStrengths,
             suggestedDevelopments,
-            plans);
+            plans,
+            livInformation);
     }
 
     public async Task<ElevatePracticeWorkspaceSummary?> GetLatestElevatePracticeWorkspaceAsync(
@@ -299,14 +337,15 @@ public sealed partial class SqlFoundationDataStore
             : await GetElevatePracticeWorkspaceAsync(staffId, years[0], false, cancellationToken);
     }
 
-    public async Task<ElevatePracticeWorkspaceSummary> SaveElevatePracticeAssessmentAsync(
+    [Obsolete("V1 statement-level assessment save retained for migration compatibility only.")]
+    public async Task<ElevatePracticeWorkspaceSummary> SaveLegacyElevatePracticeAssessmentAsync(
         SaveElevatePracticeAssessmentRequest request,
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
         if (!currentUser.StaffId.HasValue)
         {
-            throw new WorkflowValidationException("A staff profile is required to complete Elevate Your Practice.");
+            throw new WorkflowValidationException("A staff profile is required to complete Elevate Learning and Innovation.");
         }
 
         var staffId = currentUser.StaffId.Value;
@@ -380,7 +419,7 @@ public sealed partial class SqlFoundationDataStore
                 (SqlTransaction)transaction))
             {
                 frameworkId = (Guid)(await frameworkCommand.ExecuteScalarAsync(cancellationToken)
-                    ?? throw new WorkflowValidationException("The Elevate Your Practice framework has not been configured."));
+                    ?? throw new WorkflowValidationException("The Elevate Learning and Innovation framework has not been configured."));
             }
 
             Guid assessmentId;
@@ -443,7 +482,7 @@ public sealed partial class SqlFoundationDataStore
                 insertCommand.Parameters.AddWithValue("@frameworkId", frameworkId);
                 insertCommand.Parameters.AddWithValue("@staffId", staffId);
                 insertCommand.Parameters.AddWithValue("@academicYear", academicYear);
-                insertCommand.Parameters.AddWithValue("@title", $"Elevate Your Practice - {academicYear}");
+                insertCommand.Parameters.AddWithValue("@title", $"Elevate Learning and Innovation - {academicYear}");
                 insertCommand.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
                 await insertCommand.ExecuteNonQueryAsync(cancellationToken);
             }
@@ -577,7 +616,7 @@ public sealed partial class SqlFoundationDataStore
                     {
                         actionCommand.Parameters.AddWithValue("@recordId", recordId);
                         actionCommand.Parameters.AddWithValue("@staffId", staffId);
-                        actionCommand.Parameters.AddWithValue("@title", $"Elevate Your Practice: {area.Name}");
+                        actionCommand.Parameters.AddWithValue("@title", $"Elevate Learning and Innovation: {area.Name}");
                         actionCommand.Parameters.AddWithValue("@detail", detail);
                         actionCommand.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
                         actionId = (Guid)(await actionCommand.ExecuteScalarAsync(cancellationToken)
@@ -592,11 +631,11 @@ public sealed partial class SqlFoundationDataStore
                         "action",
                         actionId,
                         "action.created",
-                        $"Elevate Your Practice development action for {area.Name} created by {currentUser.DisplayName}.",
+                        $"Elevate Learning and Innovation development action for {area.Name} created by {currentUser.DisplayName}.",
                         null,
                         JsonSerializer.Serialize(new
                         {
-                            title = $"Elevate Your Practice: {area.Name}",
+                            title = $"Elevate Learning and Innovation: {area.Name}",
                             ownerStaffId = staffId,
                             status = "open"
                         }),
@@ -653,8 +692,8 @@ public sealed partial class SqlFoundationDataStore
                 assessmentId,
                 request.Submit ? "elevate_practice.submitted" : "elevate_practice.draft_saved",
                 request.Submit
-                    ? $"Elevate Your Practice {academicYear} submitted and locked by {currentUser.DisplayName}."
-                    : $"Elevate Your Practice {academicYear} draft saved by {currentUser.DisplayName}.",
+                    ? $"Elevate Learning and Innovation {academicYear} submitted and locked by {currentUser.DisplayName}."
+                    : $"Elevate Learning and Innovation {academicYear} draft saved by {currentUser.DisplayName}.",
                 null,
                 JsonSerializer.Serialize(new { academicYear, status = request.Submit ? "submitted" : "draft", ratingCount = ratings.Length }),
                 cancellationToken);
@@ -869,6 +908,25 @@ public sealed partial class SqlFoundationDataStore
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+    private Task<IReadOnlyList<ElevateLookupOptionSummary>> GetElevateLookupOptionsAsync(
+        string lookupKey,
+        CancellationToken cancellationToken) =>
+        QueryAsync(
+            """
+            SELECT value.value_key, value.display_name, value.display_order,
+                   CASE WHEN value.value_key = N'other' THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+            FROM core.lookup_values value
+            JOIN core.lookup_types type ON type.id = value.lookup_type_id
+            WHERE type.lookup_key = @lookupKey
+              AND value.is_active = 1
+              AND value.archived_at IS NULL
+            ORDER BY value.display_order, value.display_name;
+            """,
+            command => command.Parameters.AddWithValue("@lookupKey", lookupKey),
+            reader => new ElevateLookupOptionSummary(
+                reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetBoolean(3)),
+            cancellationToken);
+
     private static string? RubricWordingForAverage(
         IReadOnlyList<ElevatePracticeRubricDescriptorRow> descriptors,
         decimal? average) =>
@@ -929,7 +987,9 @@ public sealed partial class SqlFoundationDataStore
         string StatementKey,
         string StatementText,
         int StatementOrder,
-        int? Score,
-        Guid? DescriptorId,
+        int? AreaScore,
+        Guid? AreaDescriptorId,
+        int? LegacyStatementScore,
+        Guid? LegacyDescriptorId,
         string? Reflection);
 }
