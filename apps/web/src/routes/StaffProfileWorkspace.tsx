@@ -4,12 +4,14 @@ import { StaffProfilePanel } from "../features/StaffProfilePanel";
 import type { CurrentUser, StaffProfileSummary, StaffSummary } from "../services/types";
 
 export function StaffProfileWorkspace({
+  academicYear,
   profiles,
   staff,
   user,
   initialStaffId = "",
   initialElevateRecordId = ""
 }: {
+  academicYear: string;
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   user: CurrentUser;
@@ -72,6 +74,7 @@ export function StaffProfileWorkspace({
         <StaffProfilePanel
           key={`${selectedStaffId}:${initialElevateRecordId}`}
           elevateRecordId={initialElevateRecordId}
+          academicYear={academicYear}
           openElevateResult={Boolean(initialElevateRecordId)}
           profiles={profiles}
           staffId={selectedStaffId}

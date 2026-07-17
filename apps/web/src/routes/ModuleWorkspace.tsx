@@ -32,6 +32,7 @@ type DraftLinkedAction = {
 };
 
 type ModuleWorkspaceProps = {
+  academicYear: string;
   title: string;
   eyebrow: string;
   mode: WorkspaceMode;
@@ -88,7 +89,7 @@ const externalCpdConfig = {
 
 type CpdWorkspaceView = "managed" | "external";
 
-export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "" }: ModuleWorkspaceProps) {
+export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "" }: ModuleWorkspaceProps) {
   const canManageCpd = user.permissions.includes("cpd.manage");
   const [cpdWorkspaceView, setCpdWorkspaceView] = useState<CpdWorkspaceView>(canManageCpd ? "managed" : "external");
   const isExternalCpd = mode === "cpd" && (!canManageCpd || cpdWorkspaceView === "external");
@@ -246,7 +247,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.templateKey, mode]);
+  }, [academicYear, config.templateKey, mode]);
 
   useEffect(() => {
     if (initialRecordId && openedInitialRecord.current !== initialRecordId) {
@@ -272,7 +273,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   async function refreshData() {
     try {
       const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups, nextEnvironmentPillars] = await Promise.all([
-        api.records(),
+        api.records(academicYear),
         api.orgUnits(),
         api.actions(),
         mode === "elevate" ? api.rooms() : Promise.resolve([] as RoomSummary[]),
@@ -281,7 +282,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       ]);
       setRecords(nextRecords.filter((record) => record.recordType === config.recordType));
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
-      setActions(nextActions);
+      setActions(nextActions.filter((action) => action.academicYear === academicYear));
       setRooms(nextRooms);
       setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
       setEnvironmentPillars(nextEnvironmentPillars);
@@ -619,7 +620,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       setIsCreatingAction(false);
       setActionTitle("");
       setActionDueDate("");
-      setActions(await api.actions().catch(() => actions));
+      setActions((await api.actions().catch(() => actions)).filter((action) => action.academicYear === academicYear));
       await onActionsChanged?.();
     } else {
       setStatusMessage(result.message ?? "The linked action could not be created.");
@@ -630,7 +631,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     const result = await api.updateAction(actionId, { status: "complete" });
     if (result.ok) {
       setStatusMessage("Linked action completed.");
-      setActions(await api.actions().catch(() => actions));
+      setActions((await api.actions().catch(() => actions)).filter((action) => action.academicYear === academicYear));
       await onActionsChanged?.();
     } else {
       setStatusMessage(result.message ?? "The action could not be completed.");

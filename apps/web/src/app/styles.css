@@ -1437,6 +1437,36 @@ td {
   padding: 22px;
 }
 
+.sr-only {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.academic-year-selector {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #284038;
+  display: flex;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 9px;
+}
+
+.academic-year-selector select {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-weight: 700;
+  outline: none;
+}
+
 .practice-rubric-reference {
   border-block: 1px solid var(--line);
   margin: 18px 0 4px;
@@ -2548,6 +2578,209 @@ td {
   display: grid;
   gap: 18px;
   grid-template-columns: minmax(260px, 0.6fr) minmax(0, 1.4fr);
+}
+
+.elevate-status-banner {
+  align-items: stretch;
+  background: #061735;
+  border: 1px solid #17376b;
+  border-radius: 6px;
+  color: #ffffff;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(150px, 0.24fr) minmax(0, 1fr);
+  padding: 14px;
+}
+
+.elevate-status-banner-heading {
+  align-content: center;
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+  display: grid;
+  gap: 8px;
+  padding: 8px 16px 8px 4px;
+}
+
+.elevate-status-banner-heading div {
+  display: grid;
+  gap: 3px;
+}
+
+.elevate-status-banner-heading span,
+.elevate-status-banner-heading small {
+  color: #7ee7e1;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.elevate-status-banner-heading strong {
+  font-size: 1.1rem;
+}
+
+.elevate-status-badges {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  min-width: 0;
+}
+
+.elevate-status-badges img {
+  aspect-ratio: 1.45 / 1;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  display: block;
+  object-fit: cover;
+  width: 100%;
+}
+
+.elevate-status-panel {
+  padding: 0;
+}
+
+.elevate-status-summary {
+  align-items: center;
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 38px minmax(0, 1fr) auto 20px;
+  list-style: none;
+  min-height: 72px;
+  padding: 12px 16px;
+}
+
+.elevate-status-summary::-webkit-details-marker {
+  display: none;
+}
+
+.elevate-status-summary-icon {
+  align-items: center;
+  background: #e9f8f6;
+  border-radius: 6px;
+  color: #087d72;
+  display: flex;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.elevate-status-summary h2,
+.elevate-status-summary span {
+  margin: 0;
+}
+
+.elevate-status-summary > div:nth-child(2) {
+  display: grid;
+  gap: 3px;
+}
+
+.elevate-status-summary > div:nth-child(2) span,
+.elevate-status-summary > span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.elevate-status-panel[open] .elevate-status-summary > svg {
+  transform: rotate(180deg);
+}
+
+.elevate-status-body {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 18px;
+  padding: 16px;
+}
+
+.elevate-level-track {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.elevate-level-track > div {
+  border-left: 4px solid #c9d2cf;
+  display: grid;
+  gap: 3px;
+  min-height: 72px;
+  padding: 9px 10px;
+}
+
+.elevate-level-track > div.is-eligible {
+  border-left-color: #d28a12;
+}
+
+.elevate-level-track > div.is-awarded {
+  background: #eff9f6;
+  border-left-color: #078678;
+}
+
+.elevate-level-track span,
+.elevate-level-track small,
+.elevate-level-editor-heading span,
+.elevate-controlled-row > div > span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.elevate-level-editor,
+.elevate-controlled-levels {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+  padding-top: 16px;
+}
+
+.elevate-level-editor-heading,
+.elevate-controlled-heading,
+.elevate-level-editor-footer {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.elevate-level-editor-heading h3,
+.elevate-controlled-heading h3,
+.elevate-controlled-row p {
+  margin: 0;
+}
+
+.elevate-explorer-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(230px, 0.75fr) minmax(0, 1.25fr);
+}
+
+.elevate-controlled-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding-top: 13px;
+}
+
+.elevate-controlled-row > div {
+  display: grid;
+  gap: 3px;
+}
+
+.elevate-controlled-row p {
+  color: #40524c;
+  font-size: 0.84rem;
+}
+
+.elevate-confirmation-check {
+  align-items: center;
+  display: flex;
+  font-size: 0.82rem;
+  font-weight: 700;
+  gap: 7px;
+}
+
+.elevate-confirmation-check input {
+  height: 18px;
+  width: 18px;
 }
 
 .profile-cpd-summary {
@@ -7157,5 +7390,37 @@ td {
 
   .probation-stage-panel > summary .status-pill {
     display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .academic-year-selector {
+    order: 3;
+  }
+
+  .elevate-status-banner {
+    grid-template-columns: 1fr;
+  }
+
+  .elevate-status-banner-heading {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    border-right: 0;
+    grid-template-columns: 1fr auto;
+    padding: 4px 0 12px;
+  }
+
+  .elevate-status-summary {
+    grid-template-columns: 38px minmax(0, 1fr) 20px;
+  }
+
+  .elevate-status-summary > span {
+    display: none;
+  }
+
+  .elevate-level-track,
+  .elevate-explorer-fields,
+  .elevate-controlled-row {
+    align-items: stretch;
+    grid-template-columns: 1fr;
   }
 }

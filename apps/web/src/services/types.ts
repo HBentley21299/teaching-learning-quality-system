@@ -8,6 +8,14 @@ export type ModuleSummary = {
   isEnabled: boolean;
 };
 
+export type AcademicYearSummary = {
+  academicYear: string;
+  startDate: string;
+  endDate: string;
+  isCurrent: boolean;
+  isFuture: boolean;
+};
+
 export type StaffSummary = {
   id: string;
   externalId: string;
@@ -103,6 +111,7 @@ export type ActionSummary = {
   intendedImpact?: string;
   progressStatus?: CoachingActionStatus;
   parentActionId?: string;
+  academicYear: string;
   isDeleted: boolean;
 };
 
@@ -171,6 +180,7 @@ export type RecordSummary = {
   recordDate?: string;
   createdAt: string;
   submissionStatus: string;
+  academicYear: string;
 };
 
 export type LivVisitSummary = {
@@ -639,6 +649,45 @@ export type StaffCpdRecordSummary = {
   eventDate: string;
   themes?: string;
   durationMinutes?: number;
+  isInternal: boolean;
+};
+
+export type ElevateStatusCpdSummary = {
+  cpdEventId: string;
+  title: string;
+  eventDate: string;
+};
+
+export type ElevateStatusLevelSummary = {
+  levelNumber: number;
+  levelKey: "explorer" | "storyteller" | "champion" | "trailblazer" | "changemaker";
+  name: string;
+  requiredSessions: number;
+  requirementLabel?: string;
+  isEligible: boolean;
+  isAwarded: boolean;
+  evidenceCpdEventId?: string;
+  implementationImpact?: string;
+  attendanceCountAtAward?: number;
+  awardedAt?: string;
+  awardedByName?: string;
+};
+
+export type ElevateStatusSummary = {
+  staffId: string;
+  academicYear: string;
+  internalCpdSessionsAttended: number;
+  canSubmitExplorerEvidence: boolean;
+  canManageControlledLevels: boolean;
+  eligibleInternalCpd: ElevateStatusCpdSummary[];
+  levels: ElevateStatusLevelSummary[];
+};
+
+export type SaveElevateStatusLevelRequest = {
+  academicYear: string;
+  confirmed: boolean;
+  evidenceCpdEventId?: string;
+  implementationImpact?: string;
 };
 
 export type StaffProfileActionSummary = {
@@ -990,6 +1039,7 @@ export type StaffProfileDetail = {
   email: string;
   primaryOrgCode?: string;
   accountStatus: string;
+  academicYear: string;
   evidenceSubmitted: number;
   milestonesCompleted: number;
   reflections: StaffReflectionSummary[];
@@ -997,6 +1047,7 @@ export type StaffProfileDetail = {
   actions: StaffProfileActionSummary[];
   coachingRecords: StaffProfileCoachingSummary[];
   elevatePractice?: StaffElevatePracticeSummary;
+  elevateStatus: ElevateStatusSummary;
 };
 
 export type AdminUserScopeSummary = {

@@ -11,10 +11,12 @@ const MAX_RESULTS = 8;
  * profile endpoint re-checks scope server-side.
  */
 export function StaffProfiles({
+  academicYear,
   profiles,
   staff,
   user
 }: {
+  academicYear: string;
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   user: CurrentUser;
@@ -160,7 +162,7 @@ export function StaffProfiles({
       </section>
 
       {selectedStaff ? (
-        <StaffProfilePanel profiles={profiles} staffId={selectedStaff.id} user={user} />
+        <StaffProfilePanel academicYear={academicYear} profiles={profiles} staffId={selectedStaff.id} user={user} />
       ) : (
         <section className="panel">
           <div className="panel-heading">

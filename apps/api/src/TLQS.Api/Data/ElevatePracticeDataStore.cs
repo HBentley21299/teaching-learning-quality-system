@@ -9,11 +9,7 @@ namespace TLQS.Api.Data;
 public sealed partial class SqlFoundationDataStore
 {
     public static string GetCurrentAcademicYear(DateTimeOffset? current = null)
-    {
-        var date = current ?? DateTimeOffset.UtcNow;
-        var startYear = date.Month >= 9 ? date.Year : date.Year - 1;
-        return $"{startYear}/{(startYear + 1) % 100:00}";
-    }
+        => AcademicYearPolicy.GetCurrentKey(current);
 
     public async Task<ElevatePracticeWorkspaceSummary> GetElevatePracticeWorkspaceAsync(
         Guid staffId,
@@ -751,6 +747,7 @@ public sealed partial class SqlFoundationDataStore
 
     private async Task<StaffElevatePracticeSummary?> GetElevatePracticeProfileSummaryAsync(
         Guid staffId,
+        string academicYear,
         CancellationToken cancellationToken)
     {
         var rows = await QueryAsync(
@@ -761,11 +758,16 @@ public sealed partial class SqlFoundationDataStore
             FROM quality.elevate_practice_assessments assessment
             LEFT JOIN quality.elevate_practice_ratings rating ON rating.assessment_id = assessment.id
             WHERE assessment.staff_id = @staffId
+              AND assessment.academic_year = @academicYear
               AND assessment.archived_at IS NULL
             GROUP BY assessment.id, assessment.record_id, assessment.framework_id, assessment.academic_year, assessment.status, assessment.submitted_at
             ORDER BY assessment.academic_year DESC;
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYear", academicYear);
+            },
             reader => new ElevatePracticeProfileRow(
                 reader.GetGuid(0),
                 reader.GetGuid(1),

@@ -1,6 +1,6 @@
 # Teaching & Learning Quality System
 
-Web application for managing a college's Teaching & Learning workflows: Learning Walks, Work Scrutiny, managed and self-logged CPD, LIV (Learning Improvement Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
+Web application for managing a college's Teaching & Learning workflows: Learning Walks, Work Scrutiny, managed and self-logged CPD, LIV (Learning and Innovation Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
 
 - React + TypeScript frontend in `apps/web`
 - ASP.NET Core (.NET 10) API in `apps/api` (ADO.NET data access, no EF runtime dependency)

@@ -1297,7 +1297,7 @@ public sealed partial class SqlFoundationDataStore(
         }
     }
 
-    public Task<IReadOnlyList<RecordSummary>> GetRecordsAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
+    public Task<IReadOnlyList<RecordSummary>> GetRecordsAsync(CurrentUser currentUser, string? academicYear, CancellationToken cancellationToken) =>
         QueryAsync(
             """
             WITH visible_staff AS (
@@ -1307,7 +1307,8 @@ public sealed partial class SqlFoundationDataStore(
                 SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT r.id, r.module_id, r.record_type, r.title, r.subject_staff_id, r.owner_staff_id, r.org_unit_id, r.record_date, r.created_at,
-                   COALESCE(latest_submission.status, 'submitted') AS submission_status
+                   COALESCE(latest_submission.status, 'submitted') AS submission_status,
+                   r.academic_year_key
             FROM core.records r
             OUTER APPLY (
                 SELECT TOP (1) fsub.status
@@ -1317,6 +1318,7 @@ public sealed partial class SqlFoundationDataStore(
                 ORDER BY fsub.created_at DESC
             ) latest_submission
             WHERE r.archived_at IS NULL
+              AND (@academicYear IS NULL OR r.academic_year_key = @academicYear)
               AND (
                     COALESCE(latest_submission.status, 'submitted') <> 'draft'
                     OR r.owner_staff_id = @currentStaffId
@@ -1350,7 +1352,11 @@ public sealed partial class SqlFoundationDataStore(
               )
             ORDER BY created_at DESC;
             """,
-            command => AddScopeParameters(command, currentUser),
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@academicYear", ToDbValue(academicYear));
+            },
             reader => new RecordSummary(
                 reader.GetGuid(0),
                 reader.GetGuid(1),
@@ -1361,7 +1367,8 @@ public sealed partial class SqlFoundationDataStore(
                 GetGuidOrNull(reader, 6),
                 GetDateOnlyOrNull(reader, 7),
                 reader.GetFieldValue<DateTimeOffset>(8),
-                reader.GetString(9)),
+                reader.GetString(9),
+                reader.GetString(10)),
             cancellationToken);
 
     public async Task<RecordDetailSummary?> GetRecordDetailAsync(
@@ -1644,7 +1651,23 @@ public sealed partial class SqlFoundationDataStore(
                    a.intended_evidence,
                    a.intended_impact,
                    a.progress_status,
-                   a.parent_action_id
+                   a.parent_action_id,
+                   COALESCE(
+                       r.academic_year_key,
+                       CONCAT(
+                           CASE WHEN MONTH(CONVERT(date, a.created_at)) >= 8
+                               THEN YEAR(CONVERT(date, a.created_at))
+                               ELSE YEAR(CONVERT(date, a.created_at)) - 1
+                           END,
+                           N'/',
+                           RIGHT(CONCAT(N'0', (
+                               CASE WHEN MONTH(CONVERT(date, a.created_at)) >= 8
+                                   THEN YEAR(CONVERT(date, a.created_at)) + 1
+                                   ELSE YEAR(CONVERT(date, a.created_at))
+                               END
+                           ) % 100), 2)
+                       )
+                   ) AS academic_year_key
             FROM quality.actions a
             LEFT JOIN core.records r ON r.id = a.source_record_id
             LEFT JOIN people.staff subject_staff ON subject_staff.id = a.subject_staff_id
@@ -1694,7 +1717,8 @@ public sealed partial class SqlFoundationDataStore(
                         OR r.owner_staff_id = @currentStaffId
                     ))
                     OR (a.visibility_setting = 'management_only' AND @canViewScopedActivities = 1)
-              );
+              )
+            OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);
             """;
 
         var actions = await QueryAsync(
@@ -1756,7 +1780,8 @@ public sealed partial class SqlFoundationDataStore(
                     GetStringOrNull(reader, 43),
                     GetStringOrNull(reader, 44),
                     GetStringOrNull(reader, 45),
-                    GetGuidOrNull(reader, 46));
+                    GetGuidOrNull(reader, 46),
+                    reader.GetString(47));
             },
             cancellationToken);
 
@@ -2193,7 +2218,8 @@ public sealed partial class SqlFoundationDataStore(
                 profile.overdue_actions
             FROM reporting.v_staff_profile_summary profile
             JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = profile.staff_id
-            ORDER BY profile.display_name;
+            ORDER BY profile.display_name
+            OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);
             """;
 
         return QueryAsync(
@@ -4550,8 +4576,11 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<StaffProfileDetail?> GetStaffProfileDetailAsync(
         Guid staffId,
+        string academicYear,
+        CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var (academicYearStart, academicYearEnd) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
         var headers = await QueryAsync(
             """
             SELECT
@@ -4565,18 +4594,27 @@ public sealed partial class SqlFoundationDataStore(
                  FROM evidence.evidence_items ev
                  WHERE ev.staff_id = s.id
                    AND ev.archived_at IS NULL
+                   AND ev.evidence_date >= @academicYearStart
+                   AND ev.evidence_date <= @academicYearEnd
                    AND (ev.pillar_or_theme IS NULL OR ev.pillar_or_theme <> 'reflection')) AS evidence_submitted,
                 (SELECT COUNT(DISTINCT ev.milestone_lookup_value_id)
                  FROM evidence.evidence_items ev
                  WHERE ev.staff_id = s.id
                    AND ev.archived_at IS NULL
+                   AND ev.evidence_date >= @academicYearStart
+                   AND ev.evidence_date <= @academicYearEnd
                    AND ev.milestone_lookup_value_id IS NOT NULL) AS milestones_completed
             FROM people.staff s
             LEFT JOIN org.org_units ou ON ou.id = s.primary_org_unit_id
             WHERE s.id = @staffId
               AND s.archived_at IS NULL;
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYearStart", academicYearStart.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.ToDateTime(TimeOnly.MinValue));
+            },
             reader => new StaffProfileHeaderRow(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -4594,11 +4632,13 @@ public sealed partial class SqlFoundationDataStore(
         }
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var reflections = await GetStaffReflectionsAsync(staffId, cancellationToken);
-
+        var reflections = (await GetStaffReflectionsAsync(staffId, cancellationToken))
+            .Where(reflection => string.Equals(reflection.ElevatePracticeAcademicYear, academicYear, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         var cpdRecords = await QueryAsync(
             """
-            SELECT ce.id, ce.event_title, ce.event_date, themes.response_text, ce.duration_minutes
+            SELECT ce.id, ce.event_title, ce.event_date, themes.response_text, ce.duration_minutes,
+                   CASE WHEN template_info.template_key = N'cpd_core' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END
             FROM cpd.cpd_attendance ca
             JOIN cpd.cpd_events ce ON ce.id = ca.cpd_event_id
                 AND ce.archived_at IS NULL
@@ -4612,18 +4652,35 @@ public sealed partial class SqlFoundationDataStore(
                 WHERE fsub.record_id = ce.record_id
                   AND fsub.archived_at IS NULL
             ) themes
+            OUTER APPLY (
+                SELECT TOP (1) template.template_key
+                FROM forms.form_submissions submission
+                JOIN forms.form_template_versions version ON version.id = submission.form_template_version_id
+                JOIN forms.form_templates template ON template.id = version.form_template_id
+                WHERE submission.record_id = ce.record_id
+                  AND submission.archived_at IS NULL
+                ORDER BY submission.created_at DESC
+            ) template_info
             WHERE ca.staff_id = @staffId
               AND ca.archived_at IS NULL
               AND ca.attendance_status = 'Attended'
+              AND ce.event_date >= @academicYearStart
+              AND ce.event_date <= @academicYearEnd
             ORDER BY ce.event_date DESC;
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYearStart", academicYearStart.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.ToDateTime(TimeOnly.MinValue));
+            },
             reader => new StaffCpdRecordSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
                 DateOnly.FromDateTime(reader.GetDateTime(2)),
                 GetStringOrNull(reader, 3),
-                GetIntOrNull(reader, 4)),
+                GetIntOrNull(reader, 4),
+                reader.GetBoolean(5)),
             cancellationToken);
 
         var actions = await QueryAsync(
@@ -4648,12 +4705,24 @@ public sealed partial class SqlFoundationDataStore(
             LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
             WHERE (a.subject_staff_id = @staffId OR a.owner_staff_id = @staffId)
               AND a.archived_at IS NULL
+              AND (
+                    (r.id IS NOT NULL AND r.academic_year_key = @academicYear)
+                    OR
+                    (r.id IS NULL AND CONVERT(date, a.created_at) >= @academicYearStart AND CONVERT(date, a.created_at) <= @academicYearEnd)
+                  )
             ORDER BY
                 CASE WHEN a.completed_date IS NULL THEN 0 ELSE 1 END,
                 a.due_date,
-                a.created_at DESC;
+                a.created_at DESC
+            OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYear", academicYear);
+                command.Parameters.AddWithValue("@academicYearStart", academicYearStart.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.ToDateTime(TimeOnly.MinValue));
+            },
             reader =>
             {
                 var dueDate = GetDateOnlyOrNull(reader, 10);
@@ -4695,9 +4764,16 @@ public sealed partial class SqlFoundationDataStore(
             WHERE session.staff_id = @staffId
               AND session.archived_at IS NULL
               AND cycle.archived_at IS NULL
+              AND session.session_date >= @academicYearStart
+              AND session.session_date <= @academicYearEnd
             ORDER BY session.session_date DESC, cycle.cycle_number DESC, session.session_number DESC;
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYearStart", academicYearStart.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.ToDateTime(TimeOnly.MinValue));
+            },
             reader => new StaffProfileCoachingSummary(
                 reader.GetGuid(0),
                 reader.GetGuid(1),
@@ -4712,7 +4788,8 @@ public sealed partial class SqlFoundationDataStore(
             cancellationToken);
 
         var header = headers[0];
-        var elevatePractice = await GetElevatePracticeProfileSummaryAsync(staffId, cancellationToken);
+        var elevatePractice = await GetElevatePracticeProfileSummaryAsync(staffId, academicYear, cancellationToken);
+        var elevateStatus = await GetElevateStatusAsync(staffId, academicYear, currentUser, cancellationToken);
         return new StaffProfileDetail(
             header.StaffId,
             header.ExternalId,
@@ -4720,13 +4797,15 @@ public sealed partial class SqlFoundationDataStore(
             header.Email,
             header.PrimaryOrgCode,
             header.AccountStatus,
+            academicYear,
             header.EvidenceSubmitted,
             header.MilestonesCompleted,
             reflections,
             cpdRecords,
             actions,
             coachingRecords,
-            elevatePractice);
+            elevatePractice,
+            elevateStatus);
     }
 
     public async Task<FormSubmissionUpdateResult> SaveStaffReflectionAsync(

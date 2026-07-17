@@ -363,10 +363,10 @@ public static class FoundationEndpoints
                 new { Id = result.SubmissionId, result.RecordId });
         });
 
-        api.MapGet("/records", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/records", async (string? academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return Results.Ok(await store.GetRecordsAsync(currentUser, cancellationToken));
+            return Results.Ok(await store.GetRecordsAsync(currentUser, academicYear, cancellationToken));
         });
 
         api.MapGet("/records/{id:guid}", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -825,7 +825,10 @@ public static class FoundationEndpoints
             return Results.Ok(await store.GetStaffProfileRecordsAsync(currentUser, cancellationToken));
         });
 
-        api.MapGet("/staff-profiles/{staffId:guid}", async (Guid staffId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/academic-years", async (SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+            Results.Ok(await store.GetAcademicYearsAsync(cancellationToken)));
+
+        api.MapGet("/staff-profiles/{staffId:guid}", async (Guid staffId, string? academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
 
@@ -839,8 +842,49 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            var detail = await store.GetStaffProfileDetailAsync(staffId, cancellationToken);
+            var detail = await store.GetStaffProfileDetailAsync(
+                staffId,
+                academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(),
+                currentUser,
+                cancellationToken);
             return detail is null ? Results.NotFound() : Results.Ok(detail);
+        });
+
+        api.MapGet("/staff-profiles/{staffId:guid}/elevate-status", async (Guid staffId, string? academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var canView = CanViewStaffProfile(currentUser, staffId)
+                || (currentUser.HasPermission(PermissionKeys.ReportsViewScoped)
+                    && await store.IsStaffProfileInScopeAsync(staffId, currentUser, cancellationToken));
+            if (!canView)
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetElevateStatusAsync(
+                staffId,
+                academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(),
+                currentUser,
+                cancellationToken));
+        });
+
+        api.MapPut("/staff-profiles/{staffId:guid}/elevate-status/{levelNumber:int}", async (Guid staffId, int levelNumber, SaveElevateStatusLevelRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var canView = CanViewStaffProfile(currentUser, staffId)
+                || (currentUser.HasPermission(PermissionKeys.ReportsViewScoped)
+                    && await store.IsStaffProfileInScopeAsync(staffId, currentUser, cancellationToken));
+            if (!canView || !ElevateStatusAccessPolicy.CanUpdateLevel(currentUser, staffId, levelNumber))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.SaveElevateStatusLevelAsync(
+                staffId,
+                levelNumber,
+                request,
+                currentUser,
+                cancellationToken));
         });
 
         api.MapGet("/elevate-practice/me", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -1459,7 +1503,7 @@ public sealed record MyTeamMemberSummary(
     string? ElevateJudgement,
     bool CanOpenProfile,
     bool CanManageActions);
-public sealed record RecordSummary(Guid Id, Guid ModuleId, string RecordType, string Title, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate, DateTimeOffset CreatedAt, string SubmissionStatus);
+public sealed record RecordSummary(Guid Id, Guid ModuleId, string RecordType, string Title, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate, DateTimeOffset CreatedAt, string SubmissionStatus, string AcademicYear);
 public sealed record ActionSummary(
     Guid Id,
     Guid? SourceRecordId,
@@ -1508,7 +1552,8 @@ public sealed record ActionSummary(
     string? IntendedEvidence,
     string? IntendedImpact,
     string? ProgressStatus,
-    Guid? ParentActionId)
+    Guid? ParentActionId,
+    string AcademicYear)
 {
     public bool IsDeleted => DeletedAt.HasValue;
 }
@@ -1871,13 +1916,15 @@ public sealed record StaffProfileDetail(
     string Email,
     string? PrimaryOrgCode,
     string AccountStatus,
+    string AcademicYear,
     int EvidenceSubmitted,
     int MilestonesCompleted,
     IReadOnlyList<StaffReflectionSummary> Reflections,
     IReadOnlyList<StaffCpdRecordSummary> CpdRecords,
     IReadOnlyList<StaffProfileActionSummary> Actions,
     IReadOnlyList<StaffProfileCoachingSummary> CoachingRecords,
-    StaffElevatePracticeSummary? ElevatePractice);
+    StaffElevatePracticeSummary? ElevatePractice,
+    ElevateStatusSummary ElevateStatus);
 
 public sealed record StaffReflectionSummary(
     Guid Id,
@@ -1926,7 +1973,7 @@ public sealed record StaffReflectionMutationResult(
     StaffReflectionSummary? Reflection,
     string? Message);
 
-public sealed record StaffCpdRecordSummary(Guid Id, string Title, DateOnly EventDate, string? Themes, int? DurationMinutes);
+public sealed record StaffCpdRecordSummary(Guid Id, string Title, DateOnly EventDate, string? Themes, int? DurationMinutes, bool IsInternal);
 
 public sealed record StaffProfileActionSummary(
     Guid Id,

@@ -1,5 +1,6 @@
 import type {
   ActionSummary,
+  AcademicYearSummary,
   ActionExtensionSummary,
   ActionOwnerOption,
   AdminManagedList,
@@ -61,6 +62,7 @@ import type {
   SaveLearningWalkThemeRequest,
   SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
+  SaveElevateStatusLevelRequest,
   SaveStaffReflectionRequest,
   StaffProfileDetail,
   StaffProfileRecordSummary,
@@ -194,7 +196,8 @@ export const api = {
     getJson<CourseSummary[]>(`/api/v1/courses?orgUnitId=${encodeURIComponent(orgUnitId)}`),
   staff: () => getJson<StaffSummary[]>("/api/v1/staff"),
   myTeam: () => getJson<MyTeamMember[]>("/api/v1/my-team"),
-  records: () => getJson<RecordSummary[]>("/api/v1/records"),
+  records: (academicYear?: string) =>
+    getJson<RecordSummary[]>(`/api/v1/records${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
   recordDetail: (id: string) => getJson<RecordDetail>(`/api/v1/records/${id}`),
   adminWorkScrutinyRecords: () =>
     getJson<AdminWorkScrutinyRecord[]>("/api/v1/admin/work-scrutiny/records"),
@@ -295,7 +298,17 @@ export const api = {
   staffProfiles: () =>
     getJson<StaffProfileSummary[]>("/api/v1/reports/staff-profile-summaries"),
   staffProfileRecords: () => getJson<StaffProfileRecordSummary[]>("/api/v1/staff-profiles"),
-  staffProfile: (staffId: string) => getJson<StaffProfileDetail>(`/api/v1/staff-profiles/${staffId}`),
+  academicYears: () => getJson<AcademicYearSummary[]>("/api/v1/academic-years"),
+  staffProfile: (staffId: string, academicYear?: string) =>
+    getJson<StaffProfileDetail>(
+      `/api/v1/staff-profiles/${staffId}${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`
+    ),
+  saveElevateStatusLevel: (staffId: string, levelNumber: number, request: SaveElevateStatusLevelRequest) =>
+    sendJson<SaveElevateStatusLevelRequest, StaffProfileDetail["elevateStatus"]>(
+      `/api/v1/staff-profiles/${staffId}/elevate-status/${levelNumber}`,
+      "PUT",
+      request
+    ),
   elevatePracticeMe: () => getJson<ElevatePracticeWorkspace>("/api/v1/elevate-practice/me"),
   saveElevatePractice: (request: SaveElevatePracticeAssessmentRequest) =>
     sendJson<SaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>("/api/v1/elevate-practice/me", "PUT", request),

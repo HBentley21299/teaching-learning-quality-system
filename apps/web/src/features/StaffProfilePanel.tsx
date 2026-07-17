@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ExternalLink, Plus, Save } from "lucide-react";
+import { Award, ChevronDown, ExternalLink, Plus, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
@@ -8,7 +8,8 @@ import type {
   StaffProfileDetail,
   StaffProfileSummary,
   StaffReflectionSummary,
-  SaveStaffReflectionRequest
+  SaveStaffReflectionRequest,
+  ElevateStatusLevelSummary
 } from "../services/types";
 
 type StaffReflectionDraft = SaveStaffReflectionRequest;
@@ -21,12 +22,14 @@ type StaffReflectionDraft = SaveStaffReflectionRequest;
  * same rule on save.
  */
 export function StaffProfilePanel({
+  academicYear,
   staffId,
   user,
   profiles = [],
   openElevateResult = false,
   elevateRecordId = ""
 }: {
+  academicYear: string;
   staffId: string;
   user: CurrentUser;
   profiles?: StaffProfileSummary[];
@@ -41,6 +44,10 @@ export function StaffProfilePanel({
   const [statusMessage, setStatusMessage] = useState("");
   const [showElevateResult, setShowElevateResult] = useState(openElevateResult);
   const [activeProfileTab, setActiveProfileTab] = useState<"overview" | "cpd">("overview");
+  const [elevateEvidenceEventId, setElevateEvidenceEventId] = useState("");
+  const [elevateImplementationImpact, setElevateImplementationImpact] = useState("");
+  const [controlledLevelDrafts, setControlledLevelDrafts] = useState<Record<number, boolean>>({});
+  const [savingElevateLevel, setSavingElevateLevel] = useState<number | null>(null);
 
   useEffect(() => {
     setShowElevateResult(openElevateResult);
@@ -55,7 +62,7 @@ export function StaffProfilePanel({
     setStatusMessage("");
     setActiveProfileTab("overview");
     api
-      .staffProfile(staffId)
+      .staffProfile(staffId, academicYear)
       .then((nextDetail) => {
         if (cancelled) {
           return;
@@ -63,6 +70,7 @@ export function StaffProfilePanel({
 
         setDetail(nextDetail);
         setDrafts(buildReflectionDrafts(nextDetail.reflections));
+        syncElevateStatusDrafts(nextDetail);
       })
       .catch(() => {
         if (!cancelled) {
@@ -79,7 +87,7 @@ export function StaffProfilePanel({
     return () => {
       cancelled = true;
     };
-  }, [openElevateResult, staffId]);
+  }, [academicYear, openElevateResult, staffId]);
 
   const canEditReflections =
     Boolean(detail) && (detail?.staffId === user.staffId || user.permissions.includes("staff.manage"));
@@ -92,15 +100,50 @@ export function StaffProfilePanel({
     (total, record) => total + (record.durationMinutes ?? 0),
     0
   ) ?? 0;
+  const internalCpdCount = detail?.cpdRecords.filter((record) => record.isInternal).length ?? 0;
+  const externalCpdCount = detail?.cpdRecords.filter((record) => !record.isInternal).length ?? 0;
 
   async function reloadDetail() {
     try {
-      const nextDetail = await api.staffProfile(staffId);
+      const nextDetail = await api.staffProfile(staffId, academicYear);
       setDetail(nextDetail);
       setDrafts(buildReflectionDrafts(nextDetail.reflections));
+      syncElevateStatusDrafts(nextDetail);
     } catch {
       setStatusMessage("The Staff Profile could not be reloaded from the API.");
     }
+  }
+
+  function syncElevateStatusDrafts(nextDetail: StaffProfileDetail) {
+    const explorer = nextDetail.elevateStatus.levels.find((level) => level.levelNumber === 1);
+    setElevateEvidenceEventId(explorer?.evidenceCpdEventId ?? "");
+    setElevateImplementationImpact(explorer?.implementationImpact ?? "");
+    setControlledLevelDrafts(Object.fromEntries(
+      nextDetail.elevateStatus.levels
+        .filter((level) => level.levelNumber > 1)
+        .map((level) => [level.levelNumber, level.isAwarded])
+    ));
+  }
+
+  async function saveElevateLevel(level: ElevateStatusLevelSummary) {
+    if (!detail) return;
+
+    setSavingElevateLevel(level.levelNumber);
+    setStatusMessage("");
+    const result = await api.saveElevateStatusLevel(detail.staffId, level.levelNumber, {
+      academicYear: detail.academicYear,
+      confirmed: level.levelNumber === 1 ? true : Boolean(controlledLevelDrafts[level.levelNumber]),
+      evidenceCpdEventId: level.levelNumber === 1 ? elevateEvidenceEventId : undefined,
+      implementationImpact: level.levelNumber === 1 ? elevateImplementationImpact : undefined
+    });
+    setSavingElevateLevel(null);
+    if (!result.ok) {
+      setStatusMessage(result.message ?? "The Elevate Status level could not be saved.");
+      return;
+    }
+
+    setStatusMessage(`${level.name} ${level.levelNumber === 1 || controlledLevelDrafts[level.levelNumber] ? "saved" : "revoked"}.`);
+    await reloadDetail();
   }
 
   async function createReflection() {
@@ -202,6 +245,135 @@ export function StaffProfilePanel({
         </button>
       </div>
 
+      {detail.elevateStatus.levels.some((level) => level.isAwarded) ? (
+        <section className="elevate-status-banner" hidden={activeProfileTab !== "overview"} aria-label={`Elevate Status badges for ${detail.academicYear}`}>
+          <div className="elevate-status-banner-heading">
+            <div>
+              <span>Elevate Status</span>
+              <strong>{detail.displayName}</strong>
+            </div>
+            <small>{detail.academicYear}</small>
+          </div>
+          <div className="elevate-status-badges">
+            {detail.elevateStatus.levels.filter((level) => level.isAwarded).map((level) => (
+              <img alt={`Elevate ${level.name}`} key={level.levelNumber} src={elevateStatusAsset(level.levelKey)} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <details className="panel elevate-status-panel" hidden={activeProfileTab !== "overview"}>
+        <summary className="elevate-status-summary">
+          <div className="elevate-status-summary-icon"><Award aria-hidden="true" size={20} /></div>
+          <div>
+            <h2>Elevate Status</h2>
+            <span>{detail.elevateStatus.internalCpdSessionsAttended} of 15 internal CPD sessions recorded in {detail.academicYear}</span>
+          </div>
+          <span>{detail.elevateStatus.levels.filter((level) => level.isAwarded).length} of 5 levels</span>
+          <ChevronDown aria-hidden="true" size={19} />
+        </summary>
+        <div className="elevate-status-body">
+          <div className="elevate-level-track" aria-label="Elevate Status progress">
+            {detail.elevateStatus.levels.map((level) => (
+              <div className={level.isAwarded ? "is-awarded" : level.isEligible ? "is-eligible" : ""} key={level.levelNumber}>
+                <span>Level {level.levelNumber}</span>
+                <strong>{level.name}</strong>
+                <small>{level.requiredSessions} sessions</small>
+              </div>
+            ))}
+          </div>
+
+          {detail.elevateStatus.levels.filter((level) => level.levelNumber === 1).map((level) => (
+            <section className="elevate-level-editor" key={level.levelNumber}>
+              <div className="elevate-level-editor-heading">
+                <div>
+                  <span>Level 1</span>
+                  <h3>Explorer evidence</h3>
+                </div>
+                <span className={`status-pill ${level.isAwarded ? "status-complete" : level.isEligible ? "status-open" : "status-draft"}`}>
+                  {level.isAwarded ? "Awarded" : level.isEligible ? "Ready for evidence" : `${level.requiredSessions} sessions required`}
+                </span>
+              </div>
+              <div className="elevate-explorer-fields">
+                <label className="entry-field">
+                  <span>Internal CPD session</span>
+                  <select
+                    disabled={!detail.elevateStatus.canSubmitExplorerEvidence || (!level.isEligible && !level.isAwarded)}
+                    onChange={(event) => setElevateEvidenceEventId(event.target.value)}
+                    value={elevateEvidenceEventId}
+                  >
+                    <option value="">Select attended CPD</option>
+                    {detail.elevateStatus.eligibleInternalCpd.map((record) => (
+                      <option key={record.cpdEventId} value={record.cpdEventId}>
+                        {formatDate(record.eventDate)} - {record.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="entry-field">
+                  <span>Implementation and impact</span>
+                  <textarea
+                    disabled={!detail.elevateStatus.canSubmitExplorerEvidence || (!level.isEligible && !level.isAwarded)}
+                    onChange={(event) => setElevateImplementationImpact(event.target.value)}
+                    placeholder="Describe what you implemented and the impact it had."
+                    rows={4}
+                    value={elevateImplementationImpact}
+                  />
+                </label>
+              </div>
+              {detail.elevateStatus.canSubmitExplorerEvidence ? (
+                <div className="elevate-level-editor-footer">
+                  <Button
+                    disabled={savingElevateLevel !== null || (!level.isEligible && !level.isAwarded) || !elevateEvidenceEventId || !elevateImplementationImpact.trim()}
+                    icon={Save}
+                    onClick={() => void saveElevateLevel(level)}
+                    variant="primary"
+                  >
+                    {savingElevateLevel === 1 ? "Saving..." : level.isAwarded ? "Update Explorer evidence" : "Save Explorer evidence"}
+                  </Button>
+                </div>
+              ) : null}
+            </section>
+          ))}
+
+          {detail.elevateStatus.canManageControlledLevels ? (
+            <section className="elevate-controlled-levels">
+              <div className="elevate-controlled-heading">
+                <h3>Teaching and Learning confirmations</h3>
+                <span>T&L and Admin only</span>
+              </div>
+              {detail.elevateStatus.levels.filter((level) => level.levelNumber > 1).map((level) => (
+                <article className="elevate-controlled-row" key={level.levelNumber}>
+                  <div>
+                    <span>Level {level.levelNumber} - {level.requiredSessions} sessions</span>
+                    <strong>{level.name}</strong>
+                    <p>{level.requirementLabel}</p>
+                  </div>
+                  <label className="elevate-confirmation-check">
+                    <input
+                      checked={Boolean(controlledLevelDrafts[level.levelNumber])}
+                      disabled={savingElevateLevel !== null || (!level.isEligible && !level.isAwarded)}
+                      onChange={(event) => setControlledLevelDrafts((current) => ({ ...current, [level.levelNumber]: event.target.checked }))}
+                      type="checkbox"
+                    />
+                    <span>Confirmed</span>
+                  </label>
+                  <Button
+                    disabled={savingElevateLevel !== null
+                      || (!level.isEligible && !level.isAwarded)
+                      || Boolean(controlledLevelDrafts[level.levelNumber]) === level.isAwarded}
+                    icon={Save}
+                    onClick={() => void saveElevateLevel(level)}
+                  >
+                    {savingElevateLevel === level.levelNumber ? "Saving..." : "Save"}
+                  </Button>
+                </article>
+              ))}
+            </section>
+          ) : null}
+        </div>
+      </details>
+
       <section className="kpi-strip" aria-label="Staff Profile summary" hidden={activeProfileTab !== "overview"}>
         <div className="kpi kpi-blue">
           <span>CPD sessions</span>
@@ -300,12 +472,12 @@ export function StaffProfilePanel({
             <strong>{formatDuration(totalCpdMinutes)}</strong>
           </div>
           <div>
-            <span>CPD records</span>
-            <strong>{detail.cpdRecords.length}</strong>
+            <span>Internal CPD</span>
+            <strong>{internalCpdCount}</strong>
           </div>
           <div>
-            <span>Records with duration</span>
-            <strong>{detail.cpdRecords.filter((record) => record.durationMinutes).length}</strong>
+            <span>External CPD</span>
+            <strong>{externalCpdCount}</strong>
           </div>
         </div>
         <div className="table-shell">
@@ -315,13 +487,14 @@ export function StaffProfilePanel({
                 <th>Session</th>
                 <th>Date</th>
                 <th>Themes</th>
+                <th>Type</th>
                 <th>Duration</th>
               </tr>
             </thead>
             <tbody>
               {detail.cpdRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={4}>No CPD attendance has been recorded yet.</td>
+                  <td colSpan={5}>No CPD attendance has been recorded yet.</td>
                 </tr>
               ) : (
                 detail.cpdRecords.map((record) => (
@@ -329,6 +502,7 @@ export function StaffProfilePanel({
                     <td>{record.title}</td>
                     <td>{record.eventDate}</td>
                     <td>{formatThemes(record.themes)}</td>
+                    <td>{record.isInternal ? "Internal" : "External"}</td>
                     <td>{record.durationMinutes ? formatDuration(record.durationMinutes) : "Not recorded"}</td>
                   </tr>
                 ))
@@ -393,7 +567,7 @@ export function StaffProfilePanel({
           </div>
           {canEditReflections ? (
             <Button
-              disabled={isCreatingReflection || detail.elevatePractice?.status !== "submitted"}
+              disabled={isCreatingReflection || detail.elevatePractice?.status !== "submitted" || detail.academicYear !== currentAcademicYear()}
               icon={Plus}
               onClick={() => void createReflection()}
               variant="primary"
@@ -638,6 +812,10 @@ function formatDate(value: string) {
 }
 
 function formatActionSource(moduleName?: string, recordType?: string) {
+  if (recordType === "liv") {
+    return "Learning and Innovation Visits";
+  }
+
   if (moduleName) {
     return moduleName;
   }
@@ -654,4 +832,15 @@ function formatActionSource(moduleName?: string, recordType?: string) {
 
 function formatCoachingType(value: "coaching" | "mentoring") {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function elevateStatusAsset(levelKey: ElevateStatusLevelSummary["levelKey"]) {
+  return `/system-assets/elevate-status/${levelKey}.png`;
+}
+
+function currentAcademicYear() {
+  const now = new Date();
+  const calendarYear = now.getUTCFullYear();
+  const startYear = now.getUTCMonth() >= 7 ? calendarYear : calendarYear - 1;
+  return `${startYear}/${String((startYear + 1) % 100).padStart(2, "0")}`;
 }

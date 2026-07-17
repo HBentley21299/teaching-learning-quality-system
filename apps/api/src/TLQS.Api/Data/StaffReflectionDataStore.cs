@@ -41,7 +41,8 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN people.staff updated_by ON updated_by.id = updated_account.staff_id
             WHERE reflection.staff_id = @staffId
               AND reflection.archived_at IS NULL
-            ORDER BY reflection.reflection_date DESC, reflection.created_at DESC;
+            ORDER BY reflection.reflection_date DESC, reflection.created_at DESC
+            OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);
             """,
             command => command.Parameters.AddWithValue("@staffId", staffId),
             reader => new StaffReflectionRow(

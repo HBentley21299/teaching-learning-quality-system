@@ -121,6 +121,7 @@ export const mockActions: ActionSummary[] = [
     isOverdue: false,
     extensionCount: 0,
     createdAt: "2026-09-01T09:00:00Z",
+    academicYear: "2026/27",
     isDeleted: false
   },
   {
@@ -134,6 +135,7 @@ export const mockActions: ActionSummary[] = [
     isOverdue: false,
     extensionCount: 0,
     createdAt: "2026-09-02T09:00:00Z",
+    academicYear: "2026/27",
     isDeleted: false
   }
 ];
@@ -388,7 +390,8 @@ export const mockRecords: RecordSummary[] = [
     orgUnitId: "20000000-0000-0000-0000-000000000023",
     recordDate: "2026-09-18",
     createdAt: "2026-09-18T10:00:00Z",
-    submissionStatus: "submitted"
+    submissionStatus: "submitted",
+    academicYear: "2026/27"
   }
 ];
 

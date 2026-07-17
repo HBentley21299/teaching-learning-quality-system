@@ -11,6 +11,7 @@ public static class PermissionKeys
     public const string WorkScrutinySubmit = "work_scrutiny.submit";
     public const string CpdManage = "cpd.manage";
     public const string CpdSelfLog = "cpd.self_log";
+    public const string ElevateStatusManage = "elevate_status.manage";
     public const string EvidenceSubmit = "evidence.submit";
     public const string EvidenceReview = "evidence.review";
     public const string ActionsManage = "actions.manage";
@@ -42,6 +43,7 @@ public static class PermissionKeys
         WorkScrutinySubmit,
         CpdManage,
         CpdSelfLog,
+        ElevateStatusManage,
         EvidenceSubmit,
         EvidenceReview,
         ActionsManage,

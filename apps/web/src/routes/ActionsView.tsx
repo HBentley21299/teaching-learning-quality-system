@@ -26,6 +26,7 @@ import type {
 } from "../services/types";
 
 type ActionsViewProps = {
+  academicYear: string;
   actions: ActionSummary[];
   staff: StaffSummary[];
   orgUnits: OrgUnitSummary[];
@@ -74,7 +75,7 @@ function formatDateTime(value?: string) {
   return value ? new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "Not recorded";
 }
 
-export function ActionsView({ actions, staff, orgUnits, user, onChanged, initialStaffId = "", onOpenSource }: ActionsViewProps) {
+export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", onOpenSource }: ActionsViewProps) {
   const [localActions, setLocalActions] = useState(actions);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -120,8 +121,15 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
     || user.permissions.includes("reports.view_all");
 
   useEffect(() => {
-    if (!includeDeleted) setLocalActions(actions);
-  }, [actions, includeDeleted]);
+    if (!includeDeleted) {
+      setLocalActions(actions);
+      return;
+    }
+
+    void api.actions(true)
+      .then((nextActions) => setLocalActions(nextActions.filter((action) => action.academicYear === academicYear)))
+      .catch(() => setLocalActions(actions));
+  }, [academicYear, actions, includeDeleted]);
 
   useEffect(() => {
     setStaffFilter(initialStaffId);
@@ -190,7 +198,8 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
 
   async function refresh() {
     await onChanged();
-    setLocalActions(await api.actions(includeDeleted));
+    const nextActions = await api.actions(includeDeleted);
+    setLocalActions(nextActions.filter((action) => action.academicYear === academicYear));
   }
 
   async function createAction() {
@@ -333,7 +342,7 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
           <label className="mini-filter"><span>Source form</span><select onChange={(event) => setSourceFilter(event.target.value)} value={sourceFilter}><option value="">All sources</option>{sourceOptions.map((source) => <option key={source} value={source}>{sourceLabel(source)}</option>)}</select></label>
           <label className="mini-filter"><span>Due date</span><select onChange={(event) => setDueFilter(event.target.value as DueFilter)} value={dueFilter}><option value="all">Any date</option><option value="overdue">Overdue</option><option value="next_7">Next 7 days</option><option value="next_30">Next 30 days</option><option value="no_date">No date</option></select></label>
           <label className="mini-filter"><span>Sort by</span><select onChange={(event) => setSortMode(event.target.value as SortMode)} value={sortMode}><option value="due">Date due</option><option value="newest">Newest created</option><option value="owner">Owner</option><option value="source">Source</option><option value="title">Action</option></select></label>
-          {canManageActions ? <label className="action-deleted-toggle"><input checked={includeDeleted} onChange={(event) => { const checked = event.target.checked; setIncludeDeleted(checked); void api.actions(checked).then(setLocalActions); }} type="checkbox" /><span>Include deleted</span></label> : null}
+          {canManageActions ? <label className="action-deleted-toggle"><input checked={includeDeleted} onChange={(event) => setIncludeDeleted(event.target.checked)} type="checkbox" /><span>Include deleted</span></label> : null}
         </div>
 
         {visibleActions.length === 0 ? <div className="empty-row">No actions match the current filters.</div> : (

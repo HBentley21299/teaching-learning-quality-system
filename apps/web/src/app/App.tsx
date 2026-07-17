@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, LogOut, PanelLeftClose, Search } from "lucide-react";
+import { AlertTriangle, CalendarDays, LogOut, PanelLeftClose, Search } from "lucide-react";
 import { navigationItems, type AppRoute } from "./navigation";
 import { api } from "../services/api";
 import { isAuthEnabled, signOut } from "../services/auth";
 import { FirstTimeOnboarding } from "../components/FirstTimeOnboarding";
 import type {
   ActionSummary,
+  AcademicYearSummary,
   AdminRecord,
   CurrentUser,
   ModuleSummary,
@@ -43,6 +44,8 @@ export function App() {
   const [actions, setActions] = useState<ActionSummary[]>([]);
   const [processRecords, setProcessRecords] = useState<ProcessDashboardRecordSummary[]>([]);
   const [profiles, setProfiles] = useState<StaffProfileSummary[]>([]);
+  const [academicYears, setAcademicYears] = useState<AcademicYearSummary[]>([]);
+  const [academicYear, setAcademicYear] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [profileStaffId, setProfileStaffId] = useState("");
@@ -64,18 +67,23 @@ export function App() {
         return;
       }
 
-      const [nextModules, nextOrgUnits, nextStaff, nextActions, nextProfiles] = await Promise.all([
+      const [nextModules, nextOrgUnits, nextStaff, nextActions, nextProfiles, nextAcademicYears] = await Promise.all([
         api.modules(),
         api.orgUnits(),
         api.staff().catch(() => [] as StaffSummary[]),
         api.actions(),
-        api.staffProfiles()
+        api.staffProfiles(),
+        api.academicYears()
       ]);
       setModules(nextModules);
       setOrgUnits(nextOrgUnits);
       setStaff(nextStaff);
       setActions(nextActions);
       setProfiles(nextProfiles);
+      setAcademicYears(nextAcademicYears);
+      setAcademicYear((current) => current && nextAcademicYears.some((year) => year.academicYear === current)
+        ? current
+        : nextAcademicYears.find((year) => year.isCurrent)?.academicYear ?? nextAcademicYears[0]?.academicYear ?? "");
       void api
         .processDashboardRecords()
         .then(setProcessRecords)
@@ -113,6 +121,16 @@ export function App() {
     [user.permissions]
   );
   const activeItem = useMemo(() => visibleNavigationItems.find((item) => item.key === route), [route, visibleNavigationItems]);
+  const yearActions = useMemo(
+    () => academicYear ? actions.filter((action) => action.academicYear === academicYear) : actions,
+    [academicYear, actions]
+  );
+  const yearProcessRecords = useMemo(
+    () => academicYear
+      ? processRecords.filter((record) => academicYearForDate(record.recordDate ?? record.createdAt) === academicYear)
+      : processRecords,
+    [academicYear, processRecords]
+  );
 
   function navigate(nextRoute: AppRoute) {
     setProfileStaffId("");
@@ -235,6 +253,19 @@ export function App() {
             <Search size={16} aria-hidden="true" />
             <input aria-label="Search i-Elevate" placeholder="Search staff, actions, records" />
           </div>
+          {academicYears.length > 0 ? (
+            <label className="academic-year-selector">
+              <CalendarDays size={16} aria-hidden="true" />
+              <span className="sr-only">Academic year</span>
+              <select aria-label="Academic year" onChange={(event) => setAcademicYear(event.target.value)} value={academicYear}>
+                {academicYears.map((year) => (
+                  <option key={year.academicYear} value={year.academicYear}>
+                    {year.academicYear}{year.isCurrent ? " (current)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <div className="user-chip">
             <span>{user.displayName}</span>
             {isAuthEnabled ? (
@@ -278,18 +309,18 @@ export function App() {
             <Suspense fallback={<div className="route-stack"><p className="muted-copy">Loading this workspace...</p></div>}>
               {route === "dashboard" ? (
                 <Dashboard
-                  actions={actions}
+                  actions={yearActions}
                   orgUnits={orgUnits}
-                  processRecords={processRecords}
+                  processRecords={yearProcessRecords}
                   user={user}
                   onRefresh={loadCoreData}
                 />
               ) : null}
-              {route === "staff" ? <StaffProfiles staff={staff} profiles={profiles} user={user} /> : null}
+              {route === "staff" ? <StaffProfiles academicYear={academicYear} staff={staff} profiles={profiles} user={user} /> : null}
               {route === "team" ? <MyTeam onOpenActions={openTeamActions} onOpenProfile={openTeamProfile} /> : null}
               {route === "admin" ? <AdminCentre user={user} modules={modules} profiles={profiles} staff={staff} onOpenRecord={openAdminRecord} /> : null}
               {route === "learning" ? (
-                <ModuleWorkspace title="Learning Walks" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="learning" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace academicYear={academicYear} title="Learning Walks" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="learning" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
               {route === "liv" ? (
                 <LivVisits
@@ -303,7 +334,7 @@ export function App() {
               ) : null}
               {route === "probation" ? (
                 <ProbationObservations
-                  actions={actions}
+                  actions={yearActions}
                   initialSourceRecordId={sourceRecordId}
                   onActionsChanged={refreshActions}
                   onOpenEliReport={openElevateReport}
@@ -314,6 +345,7 @@ export function App() {
               ) : null}
               {route === "elevate" ? (
                 <ModuleWorkspace
+                  academicYear={academicYear}
                   title="Elevate Learning Environments"
                   eyebrow="Learning environment quality"
                   initialRecordId={sourceRecordId}
@@ -328,14 +360,14 @@ export function App() {
                 <CoachingMentoring initialRecordId={sourceRecordId} staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
               {route === "scrutiny" ? (
-                <ModuleWorkspace title="Work Scrutiny" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace academicYear={academicYear} title="Work Scrutiny" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
               {route === "cpd" ? (
-                <ModuleWorkspace title="CPD Management" eyebrow="Professional learning" mode="cpd" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace academicYear={academicYear} title="CPD Management" eyebrow="Professional learning" mode="cpd" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "profile" ? <StaffProfileWorkspace initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} profiles={profiles} staff={staff} user={user} /> : null}
+              {route === "profile" ? <StaffProfileWorkspace academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} profiles={profiles} staff={staff} user={user} /> : null}
               {route === "actions" ? (
-                <ActionsView actions={actions} initialStaffId={actionStaffId} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} onChanged={refreshActions} />
+                <ActionsView academicYear={academicYear} actions={yearActions} initialStaffId={actionStaffId} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} onChanged={refreshActions} />
               ) : null}
             </Suspense>
           )}
@@ -343,4 +375,11 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function academicYearForDate(value: string) {
+  const date = new Date(value.length === 10 ? `${value}T00:00:00Z` : value);
+  const calendarYear = date.getUTCFullYear();
+  const startYear = date.getUTCMonth() >= 7 ? calendarYear : calendarYear - 1;
+  return `${startYear}/${String((startYear + 1) % 100).padStart(2, "0")}`;
 }
