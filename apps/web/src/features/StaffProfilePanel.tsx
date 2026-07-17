@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Plus, Save } from "lucide-react";
+import { ChevronDown, ExternalLink, Plus, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
@@ -15,7 +15,7 @@ type StaffReflectionDraft = SaveStaffReflectionRequest;
 
 /**
  * Full staff profile view assembled from its source records (Elevate Your
- * Practice, reflections, CPD, actions and coaching) and backed by
+ * Practice, staff reflections, CPD, actions and coaching) and backed by
  * GET /staff-profiles/{staffId}. Reflections are editable when the viewer is
  * the staff member themselves or holds staff.manage - the API enforces the
  * same rule on save.
@@ -268,46 +268,26 @@ export function StaffProfilePanel({
             {detail.elevatePractice?.status === "submitted"
               ? "The submitted assessment is locked. Development plans are available in Actions."
               : detail.elevatePractice?.status === "draft"
-                ? "The annual assessment is in progress and has not been submitted."
-                : "No annual self-assessment has been started yet."}
+                ? "The assessment is in progress and has not been submitted."
+                : "No self-assessment has been started yet."}
           </p>
-          {detail.elevatePractice?.developmentAreas.length ? (
+          {detail.elevatePractice?.focusAreas.length ? (
             <div className="profile-development-list">
-              <h3>Current development areas</h3>
-              {detail.elevatePractice.developmentAreas.map((area) => (
-                <article key={area.areaKey}>
+              <h3>Current LIV focus areas</h3>
+              {detail.elevatePractice.focusAreas.map((focus) => (
+                <article key={`${focus.focusType}-${focus.focusKey}`}>
                   <div>
-                    <strong>{area.areaName}</strong>
+                    <span>{focus.focusType === "primary" ? "Primary focus" : "Secondary focus"}</span>
+                    <strong>{focus.focusName}</strong>
                   </div>
-                  {area.developmentApproach ? <p>{area.developmentApproach}</p> : null}
-                  {area.intendedImpact ? <small>Intended impact: {area.intendedImpact}</small> : null}
                 </article>
               ))}
             </div>
           ) : (
-            <p className="muted-copy">No current development areas have been selected.</p>
+            <p className="muted-copy">No LIV focus areas have been selected.</p>
           )}
         </section>
       </div>
-
-      <section className="panel" hidden={activeProfileTab !== "overview"}>
-        <div className="panel-heading">
-          <h2>Elevate Learning and Innovation reflections</h2>
-          <span>{detail.elevatePractice?.reflections.length ?? 0} recorded</span>
-        </div>
-        {detail.elevatePractice?.reflections.length ? (
-          <div className="profile-source-reflections">
-            {detail.elevatePractice.reflections.map((reflection) => (
-              <article key={reflection.areaKey}>
-                <strong>{reflection.areaName}</strong>
-                <p>{reflection.reflection}</p>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="muted-copy">No Elevate Learning and Innovation reflections are available for the current assessment.</p>
-        )}
-      </section>
 
       <section className="panel" hidden={activeProfileTab !== "cpd"} role="tabpanel">
         <div className="panel-heading">
@@ -389,8 +369,8 @@ export function StaffProfilePanel({
                     <td>{formatDate(record.sessionDate)}</td>
                     <td>{record.coachName}</td>
                     <td>
-                      {record.mainFocus ?? "Not recorded"}
-                      {record.keyTakeaway ? <small className="table-subline">{record.keyTakeaway}</small> : null}
+                      {record.primaryFocus ?? "Not recorded"}
+                      {record.specificSessionFocus ? <small className="table-subline">{record.specificSessionFocus}</small> : null}
                     </td>
                     <td>
                       <span className={`status-pill ${record.status === "completed" ? "status-complete" : "status-draft"}`}>
@@ -432,8 +412,8 @@ export function StaffProfilePanel({
             const isSaving = savingReflectionId === reflection.id;
             const hasChanges = reflectionHasChanges(reflection, draft);
             return (
-              <article className="staff-reflection-entry" key={reflection.id}>
-                <div className="staff-reflection-heading">
+              <details className="staff-reflection-entry" key={reflection.id}>
+                <summary className="staff-reflection-heading">
                   <div>
                     <h3>Reflection from {formatDate(reflection.reflectionDate)}</h3>
                     <span>Elevate Learning and Innovation {reflection.elevatePracticeAcademicYear}</span>
@@ -441,96 +421,101 @@ export function StaffProfilePanel({
                   <span className={`status-pill ${reflection.status === "submitted" ? "status-complete" : "status-draft"}`}>
                     {reflection.status === "submitted" ? "Submitted" : "Draft"}
                   </span>
-                </div>
+                  <ChevronDown aria-hidden="true" size={18} />
+                </summary>
 
-                <div className="staff-reflection-meta-grid">
-                  <label className="entry-field">
-                    <span>Reflection date</span>
-                    <input
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(reflection.id, "reflectionDate", event.target.value)}
-                      type="date"
-                      value={draft.reflectionDate}
-                    />
-                  </label>
-                  <label className="entry-field">
-                    <span>Record status</span>
-                    <select
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(
-                        reflection.id,
-                        "status",
-                        event.target.value as StaffReflectionDraft["status"]
-                      )}
-                      value={draft.status}
-                    >
-                      <option value="draft">Draft</option>
-                      <option value="submitted">Submitted</option>
-                    </select>
-                  </label>
-                </div>
+                <div className="staff-reflection-body">
+                  <div className="staff-reflection-meta-grid">
+                    <label className="entry-field">
+                      <span>Reflection date</span>
+                      <input
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(reflection.id, "reflectionDate", event.target.value)}
+                        type="date"
+                        value={draft.reflectionDate}
+                      />
+                    </label>
+                    <label className="entry-field">
+                      <span>Record status</span>
+                      <select
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(
+                          reflection.id,
+                          "status",
+                          event.target.value as StaffReflectionDraft["status"]
+                        )}
+                        value={draft.status}
+                      >
+                        <option value="draft">Draft</option>
+                        <option value="submitted">Submitted</option>
+                      </select>
+                    </label>
+                  </div>
 
-                <div className="staff-reflection-areas">
-                  <strong>Linked development areas</strong>
-                  {reflection.developmentAreas.length === 0 ? (
-                    <span>None selected in the linked assessment</span>
-                  ) : (
-                    <ul>
-                      {reflection.developmentAreas.map((area) => (
-                        <li key={area.developmentAreaId}>{area.textSnapshot}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+                  <div className="staff-reflection-areas">
+                    <strong>Linked LIV focus areas</strong>
+                    {reflection.focusAreas.length === 0 ? (
+                      <span>No primary or secondary focus was recorded in the linked assessment</span>
+                    ) : (
+                      <ul>
+                        {reflection.focusAreas.map((focus) => (
+                          <li key={`${focus.focusType}-${focus.displayOrder}`}>
+                            <strong>{focus.focusType === "primary" ? "Primary" : "Secondary"}:</strong> {focus.textSnapshot}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
 
-                <div className="staff-reflection-fields">
-                  <label className="entry-field">
-                    <span>Progress</span>
-                    <textarea
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(reflection.id, "progress", event.target.value)}
-                      rows={4}
-                      value={draft.progress ?? ""}
-                    />
-                  </label>
-                  <label className="entry-field">
-                    <span>Impact</span>
-                    <textarea
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(reflection.id, "impact", event.target.value)}
-                      rows={4}
-                      value={draft.impact ?? ""}
-                    />
-                  </label>
-                  <label className="entry-field">
-                    <span>Examples</span>
-                    <textarea
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(reflection.id, "examples", event.target.value)}
-                      rows={4}
-                      value={draft.examples ?? ""}
-                    />
-                  </label>
-                </div>
+                  <div className="staff-reflection-fields">
+                    <label className="entry-field">
+                      <span>Progress</span>
+                      <textarea
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(reflection.id, "progress", event.target.value)}
+                        rows={4}
+                        value={draft.progress ?? ""}
+                      />
+                    </label>
+                    <label className="entry-field">
+                      <span>Impact</span>
+                      <textarea
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(reflection.id, "impact", event.target.value)}
+                        rows={4}
+                        value={draft.impact ?? ""}
+                      />
+                    </label>
+                    <label className="entry-field">
+                      <span>Examples</span>
+                      <textarea
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(reflection.id, "examples", event.target.value)}
+                        rows={4}
+                        value={draft.examples ?? ""}
+                      />
+                    </label>
+                  </div>
 
-                <div className="staff-reflection-footer">
-                  <small className="muted-copy">
-                    {reflection.updatedAt
-                      ? `Updated ${formatDateTime(reflection.updatedAt)}${reflection.updatedByName ? ` by ${reflection.updatedByName}` : ""}`
-                      : `Created ${formatDateTime(reflection.createdAt)}${reflection.createdByName ? ` by ${reflection.createdByName}` : ""}`}
-                  </small>
-                  {canEditReflections ? (
-                    <Button
-                      disabled={isSaving || !hasChanges}
-                      icon={Save}
-                      onClick={() => void saveReflection(reflection)}
-                      variant="primary"
-                    >
-                      {isSaving ? "Saving..." : "Save reflection"}
-                    </Button>
-                  ) : null}
+                  <div className="staff-reflection-footer">
+                    <small className="muted-copy">
+                      {reflection.updatedAt
+                        ? `Updated ${formatDateTime(reflection.updatedAt)}${reflection.updatedByName ? ` by ${reflection.updatedByName}` : ""}`
+                        : `Created ${formatDateTime(reflection.createdAt)}${reflection.createdByName ? ` by ${reflection.createdByName}` : ""}`}
+                    </small>
+                    {canEditReflections ? (
+                      <Button
+                        disabled={isSaving || !hasChanges}
+                        icon={Save}
+                        onClick={() => void saveReflection(reflection)}
+                        variant="primary"
+                      >
+                        {isSaving ? "Saving..." : "Save reflection"}
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
-              </article>
+              </details>
             );
           })}
         </div>
@@ -667,6 +652,6 @@ function formatActionSource(moduleName?: string, recordType?: string) {
   return "Action engine";
 }
 
-function formatCoachingType(value: "coaching" | "mentoring" | "combined") {
-  return value === "combined" ? "Coaching and mentoring" : value.charAt(0).toUpperCase() + value.slice(1);
+function formatCoachingType(value: "coaching" | "mentoring") {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }

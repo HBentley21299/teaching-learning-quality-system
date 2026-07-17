@@ -364,6 +364,10 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
           <dl className="action-detail-grid">
             <div><dt>Owner</dt><dd>{selectedAction.ownerStaffName}</dd></div><div><dt>Staff member</dt><dd>{selectedAction.subjectStaffName ?? "Not staff-specific"}</dd></div>
             <div><dt>Original date</dt><dd>{selectedAction.originalDueDate ?? "No date"}</dd></div><div><dt>Current date</dt><dd>{selectedAction.dueDate ?? "No date"}</dd></div>
+            {selectedAction.reviewDate ? <div><dt>Review date</dt><dd>{selectedAction.reviewDate}</dd></div> : null}
+            {selectedAction.progressStatus ? <div><dt>Coaching progress</dt><dd>{selectedAction.progressStatus.replaceAll("_", " ")}</dd></div> : null}
+            {selectedAction.intendedEvidence ? <div><dt>Intended evidence</dt><dd>{selectedAction.intendedEvidence}</dd></div> : null}
+            {selectedAction.intendedImpact ? <div><dt>Intended impact</dt><dd>{selectedAction.intendedImpact}</dd></div> : null}
             <div><dt>Visibility</dt><dd>{visibilityLabels[selectedAction.visibilitySetting]}</dd></div><div><dt>Faculty / team</dt><dd>{[selectedAction.facultyName, selectedAction.teamName].filter(Boolean).join(" / ") || "Organisation"}</dd></div>
             <div><dt>Created</dt><dd>{formatDateTime(selectedAction.createdAt)} by {selectedAction.createdByName ?? "System"}</dd></div><div><dt>Last updated</dt><dd>{formatDateTime(selectedAction.updatedAt)}{selectedAction.updatedByName ? ` by ${selectedAction.updatedByName}` : ""}</dd></div>
             {selectedAction.completedDate ? <div><dt>Closure</dt><dd>{selectedAction.completedDate} by {selectedAction.completedByName ?? "Unknown"}<br />{selectedAction.completionNote}</dd></div> : null}

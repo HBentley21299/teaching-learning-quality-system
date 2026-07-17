@@ -19,6 +19,7 @@ const Dashboard = lazy(() => import("../routes/Dashboard").then((module) => ({ d
 const StaffProfiles = lazy(() => import("../routes/StaffProfiles").then((module) => ({ default: module.StaffProfiles })));
 const AdminCentre = lazy(() => import("../routes/AdminCentre").then((module) => ({ default: module.AdminCentre })));
 const LivVisits = lazy(() => import("../routes/LivVisits").then((module) => ({ default: module.LivVisits })));
+const ProbationObservations = lazy(() => import("../routes/ProbationObservations").then((module) => ({ default: module.ProbationObservations })));
 const ModuleWorkspace = lazy(() => import("../routes/ModuleWorkspace").then((module) => ({ default: module.ModuleWorkspace })));
 const ActionsView = lazy(() => import("../routes/ActionsView").then((module) => ({ default: module.ActionsView })));
 const StaffProfileWorkspace = lazy(() => import("../routes/StaffProfileWorkspace").then((module) => ({ default: module.StaffProfileWorkspace })));
@@ -134,6 +135,13 @@ export function App() {
     setRoute("actions");
   }
 
+  function openElevateReport(staffId: string, elevateRecordId: string) {
+    setProfileStaffId(staffId);
+    setActionStaffId("");
+    setSourceRecordId(elevateRecordId);
+    setRoute("profile");
+  }
+
   function openActionSource(action: ActionSummary) {
     if (!action.sourceRecordId) return;
     setSourceRecordId(action.sourceRecordId);
@@ -149,6 +157,7 @@ export function App() {
       elevate_environment: "elevate",
       learning_walk: "learning",
       liv: "liv",
+      probation_observation: "probation",
       work_scrutiny: "scrutiny"
     };
     setRoute(sourceRoutes[action.sourceFormType] ?? "actions");
@@ -169,6 +178,7 @@ export function App() {
       elevate_environment: "elevate",
       learning_walk: "learning",
       liv: "liv",
+      probation_case: "probation",
       work_scrutiny: "scrutiny"
     };
     setRoute(recordRoutes[record.recordType] ?? "dashboard");
@@ -286,6 +296,17 @@ export function App() {
                   initialSourceRecordId={sourceRecordId}
                   onActionsChanged={refreshActions}
                   onOpenStaffProfile={openTeamProfile}
+                  orgUnits={orgUnits}
+                  staff={staff}
+                  user={user}
+                />
+              ) : null}
+              {route === "probation" ? (
+                <ProbationObservations
+                  actions={actions}
+                  initialSourceRecordId={sourceRecordId}
+                  onActionsChanged={refreshActions}
+                  onOpenEliReport={openElevateReport}
                   orgUnits={orgUnits}
                   staff={staff}
                   user={user}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -17,10 +17,13 @@ import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
+  CoachingActionReview,
+  CoachingActionStatus,
   CoachingConfiguration,
   CoachingContext,
   CoachingLookupOption,
-  CoachingPreviousActionStatus,
+  CoachingPreviousActionSummary,
+  CoachingReviewOutcome,
   CoachingRubricOption,
   CoachingSessionAction,
   CoachingSessionDetail,
@@ -40,26 +43,22 @@ type CoachingMentoringProps = {
 
 const sessionTypes = [
   ["coaching", "Coaching"],
-  ["mentoring", "Mentoring"],
-  ["combined", "Combined"]
+  ["mentoring", "Mentoring"]
 ] as const;
 
-const reasonOptions = [
-  ["requested_by_staff", "Requested by staff member"],
-  ["follow_up", "Follow-up session"],
-  ["cpd_implementation", "CPD implementation"],
-  ["new_role_responsibility", "New role or responsibility"],
-  ["quality_activity", "Quality activity"],
-  ["development_priority", "Development priority"],
-  ["other", "Other"]
-] as const;
-
-const previousStatusOptions = [
+const actionStatuses: Array<[CoachingActionStatus, string]> = [
   ["not_started", "Not started"],
   ["in_progress", "In progress"],
   ["completed", "Completed"],
-  ["not_applicable", "Not applicable"]
-] as const;
+  ["closed", "Closed"]
+];
+
+const reviewOutcomes: Array<[CoachingReviewOutcome, string]> = [
+  ["completed", "Completed"],
+  ["continue", "Continue"],
+  ["revised", "Revised"],
+  ["closed_without_completion", "Closed without completion"]
+];
 
 export function CoachingMentoring({ staff, user, onActionsChanged, initialRecordId = "" }: CoachingMentoringProps) {
   const canCreate = user.permissions.includes("coaching.submit") || user.permissions.includes("coaching.manage");
@@ -91,11 +90,8 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
     if (!initialRecordId || isLoading || openedInitialRecord.current === initialRecordId) return;
     openedInitialRecord.current = initialRecordId;
     const session = sessions.find((candidate) => candidate.recordId === initialRecordId);
-    if (session) {
-      void openSession(session.id);
-    } else {
-      setMessage("The coaching source record is outside your permitted scope.");
-    }
+    if (session) void openSession(session.id);
+    else setMessage("The coaching source record is outside your permitted scope.");
     // openSession is permission checked by the API.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRecordId, isLoading, sessions]);
@@ -158,7 +154,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
     if (value === "new") {
       const nextContext = await api.coachingContext(form.staffId);
       setContext(nextContext);
-      setForm({ ...form, cycleId: undefined, createNewCycle: true, previousActionUpdates: [] });
+      setForm({ ...form, cycleId: undefined, createNewCycle: true, actionReviews: [] });
       return;
     }
 
@@ -170,11 +166,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
         ...form,
         cycleId: value,
         createNewCycle: false,
-        previousActionUpdates: nextContext.previousActions.map((action) => ({
-          actionId: action.actionId,
-          status: action.status,
-          updateText: ""
-        }))
+        actionReviews: nextContext.previousActions.map((action) => ({ actionId: action.actionId }))
       });
     } catch {
       setMessage("The selected coaching cycle could not be loaded.");
@@ -185,7 +177,17 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
 
   async function save(status: "draft" | "completed") {
     if (!form) return;
-    if (status === "completed" && !window.confirm("Complete this session and publish its agreed actions?")) return;
+    const previousActions = detail?.previousActions ?? context?.previousActions ?? [];
+    if (status === "completed") {
+      const validationMessage = validateCompletion(form, previousActions, configuration?.maxActionsPerSession ?? 3);
+      if (validationMessage) {
+        setMessage(validationMessage);
+        return;
+      }
+      if (!window.confirm(form.closeCycle
+        ? "Complete this session and close the coaching cycle?"
+        : "Complete this session and publish its agreed actions?")) return;
+    }
 
     setIsSaving(true);
     setMessage("");
@@ -206,14 +208,18 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
       setDetail(savedDetail);
       setForm(formFromDetail(savedDetail));
     }
-    setMessage(status === "completed" ? "Session completed and agreed actions published." : "Draft session saved.");
+    setMessage(status === "completed"
+      ? form.closeCycle
+        ? "Session completed and coaching cycle closed."
+        : "Session completed and agreed actions published."
+      : "Draft session saved.");
     if (status === "completed") onActionsChanged();
   }
 
   const filteredSessions = useMemo(() => {
     const query = search.trim().toLowerCase();
     const filtered = sessions.filter((session) => {
-      const matchesSearch = !query || [session.staffName, session.coachName, session.mainFocus ?? ""]
+      const matchesSearch = !query || [session.staffName, session.coachName, session.primaryFocus ?? ""]
         .some((value) => value.toLowerCase().includes(query));
       return matchesSearch
         && (statusFilter === "all" || session.status === statusFilter)
@@ -287,7 +293,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
                     <tr><td colSpan={7}>No coaching or mentoring sessions match these filters.</td></tr>
                   ) : filteredSessions.map((session) => (
                     <tr key={session.id}>
-                      <td><strong>{session.staffName}</strong><small className="table-subline">{lookupLabel(configuration?.focusAreas, session.mainFocus)}</small></td>
+                      <td><strong>{session.staffName}</strong><small className="table-subline">{lookupLabel(configuration?.focusAreas, session.primaryFocus)}</small></td>
                       <td>Cycle {session.cycleNumber} / Session {session.sessionNumber}</td>
                       <td>{formatDate(session.sessionDate)}</td>
                       <td>{labelFor(sessionTypes, session.sessionType)}</td>
@@ -336,34 +342,50 @@ function CoachingSessionEditor({
   const staffName = detail?.staffName ?? context?.staffName ?? "";
   const cycleNumber = detail?.cycleNumber ?? context?.cycles.find((cycle) => cycle.id === form.cycleId)?.cycleNumber;
   const sessionNumber = detail?.sessionNumber ?? context?.nextSessionNumber ?? 1;
+  const hasOtherFocus = form.primaryFocusKey === "other" || form.secondaryFocusKey === "other";
+  const hasOtherSupport = form.supportTypes.includes("other");
+  const maxActions = configuration?.maxActionsPerSession ?? 3;
 
   function update<K extends keyof SaveCoachingSessionRequest>(key: K, value: SaveCoachingSessionRequest[K]) {
     onChange({ ...form, [key]: value });
   }
 
-  function toggleList(key: "focusAreas" | "supportTypes", value: string) {
-    const current = form[key];
-    update(key, current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
+  function toggleSupport(value: string) {
+    update("supportTypes", form.supportTypes.includes(value)
+      ? form.supportTypes.filter((item) => item !== value)
+      : [...form.supportTypes, value]);
   }
 
-  function updatePreviousAction(actionId: string, updates: { status?: CoachingPreviousActionStatus; updateText?: string }) {
-    const existing = form.previousActionUpdates.find((item) => item.actionId === actionId);
+  function updateReview(actionId: string, changes: Partial<CoachingActionReview>) {
+    const existing = form.actionReviews.find((item) => item.actionId === actionId);
     const next = existing
-      ? form.previousActionUpdates.map((item) => item.actionId === actionId ? { ...item, ...updates } : item)
-      : [...form.previousActionUpdates, { actionId, status: updates.status ?? "not_started", updateText: updates.updateText ?? "" }];
-    update("previousActionUpdates", next);
+      ? form.actionReviews.map((item) => item.actionId === actionId ? { ...item, ...changes } : item)
+      : [...form.actionReviews, { actionId, ...changes }];
+    update("actionReviews", next);
+  }
+
+  function setReviewOutcome(action: CoachingPreviousActionSummary, outcome?: CoachingReviewOutcome) {
+    const changes: Partial<CoachingActionReview> = { reviewOutcome: outcome };
+    if (outcome === "revised") {
+      const existing = form.actionReviews.find((item) => item.actionId === action.actionId);
+      changes.revisedAction = existing?.revisedAction ?? revisedActionFrom(action);
+    } else {
+      changes.revisedAction = undefined;
+    }
+    updateReview(action.actionId, changes);
   }
 
   function addAction() {
-    update("actions", [...form.actions, emptyAction()]);
+    if (form.actions.length >= maxActions) return;
+    update("actions", [...form.actions, emptyAction(form.actions.length + 1)]);
   }
 
-  function updateAction(index: number, updates: Partial<CoachingSessionAction>) {
-    update("actions", form.actions.map((action, actionIndex) => actionIndex === index ? { ...action, ...updates } : action));
+  function updateAction(index: number, changes: Partial<CoachingSessionAction>) {
+    update("actions", form.actions.map((action, actionIndex) => actionIndex === index ? { ...action, ...changes } : action));
   }
 
   function removeAction(index: number) {
-    update("actions", form.actions.filter((_, actionIndex) => actionIndex !== index));
+    update("actions", form.actions.filter((_, actionIndex) => actionIndex !== index).map((action, actionIndex) => ({ ...action, actionOrder: actionIndex + 1 })));
   }
 
   return (
@@ -371,89 +393,127 @@ function CoachingSessionEditor({
       <div className="route-header coaching-editor-header">
         <div>
           <button className="back-link" onClick={onBack} type="button"><ArrowLeft size={16} aria-hidden="true" />Back to sessions</button>
-          <p className="eyebrow">{detail ? `Cycle ${detail.cycleNumber} / Session ${detail.sessionNumber}` : "New coaching record"}</p>
+          <p className="eyebrow">Coaching and Mentoring</p>
           <h1>{staffName || "Coaching and Mentoring Record"}</h1>
         </div>
-        <div className="coaching-header-meta"><span>{coachName}</span><strong className={`status-badge status-${detail?.status ?? form.status}`}>{detail?.status ?? form.status}</strong></div>
+        <div className="coaching-header-summary">
+          <div><span>Coaching cycle</span><strong>{cycleNumber ? `Cycle ${cycleNumber}` : "New cycle"}</strong></div>
+          <div><span>Session</span><strong>{sessionNumber}</strong></div>
+          <div><span>Coach or mentor</span><strong>{coachName || "Resolving"}</strong></div>
+          <strong className={`status-badge status-${detail?.status ?? form.status}`}>{detail?.status ?? form.status}</strong>
+        </div>
       </div>
 
       {message ? <div className="notice-row">{message}</div> : null}
 
       <fieldset disabled={!editable || isSaving}>
-        <CoachingSection number={1} title="Session details">
-          <div className="coaching-form-grid coaching-form-grid-4">
-            <ReadOnlyField label="Staff member" value={staffName} />
-            <ReadOnlyField label="Coach or mentor" value={coachName} />
-            <label className="entry-field"><span>Date</span><input onChange={(event) => update("sessionDate", event.target.value)} type="date" value={form.sessionDate} /></label>
-            <ReadOnlyField label="Session number" value={String(sessionNumber)} />
-            <label className="entry-field"><span>Session type</span><select onChange={(event) => update("sessionType", event.target.value as CoachingSessionType)} value={form.sessionType}>{sessionTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="entry-field"><span>Delivery method</span><select onChange={(event) => update("deliveryMethod", event.target.value as SaveCoachingSessionRequest["deliveryMethod"])} value={form.deliveryMethod ?? ""}><option value="">Select method</option><option value="in_person">In person</option><option value="online">Online</option><option value="telephone">Telephone</option></select></label>
-            <DurationWheel onChange={(value) => update("durationMinutes", value)} value={form.durationMinutes} />
-            <label className="entry-field"><span>Staff development stage</span><select onChange={(event) => update("developmentStageKey", event.target.value || undefined)} value={form.developmentStageKey ?? ""}><option value="">Select stage</option>{configuration?.developmentStages.map((option) => <option key={option.id} value={option.valueKey}>{option.displayName}</option>)}</select></label>
-            {detail ? <ReadOnlyField label="Coaching cycle" value={`Cycle ${cycleNumber}`} /> : (
-              <label className="entry-field"><span>Coaching cycle</span><select onChange={(event) => onCycleChange(event.target.value)} value={form.cycleId ?? "new"}><option value="new">New cycle</option>{context?.cycles.filter((cycle) => cycle.status === "active").map((cycle) => <option key={cycle.id} value={cycle.id}>Cycle {cycle.cycleNumber} - {labelFor(sessionTypes, cycle.cycleType)} ({cycle.sessionCount} sessions)</option>)}</select></label>
-            )}
+        <CoachingSection defaultOpen number={1} title="Session Details">
+          <div className="coaching-session-overview">
+            <div className="coaching-person-summary">
+              <span>Staff member</span>
+              <strong>{staffName}</strong>
+              <small>Coach or mentor: {coachName}</small>
+            </div>
+            <div className="coaching-form-grid coaching-form-grid-3">
+              <label className="entry-field"><span>Session date</span><input onChange={(event) => update("sessionDate", event.target.value)} type="date" value={form.sessionDate} /></label>
+              <label className="entry-field"><span>Session type</span><select onChange={(event) => update("sessionType", event.target.value as CoachingSessionType)} value={form.sessionType}>{sessionTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label className="entry-field"><span>Delivery method</span><select onChange={(event) => update("deliveryMethod", event.target.value as SaveCoachingSessionRequest["deliveryMethod"])} value={form.deliveryMethod ?? ""}><option value="">Select method</option><option value="in_person">In person</option><option value="online">Online</option><option value="telephone">Telephone</option></select></label>
+              <DurationWheel onChange={(value) => update("durationMinutes", value)} value={form.durationMinutes} />
+              <label className="entry-field"><span>Qualification status</span><select onChange={(event) => update("qualificationStatusKey", event.target.value || undefined)} value={form.qualificationStatusKey ?? ""}><option value="">Select status</option>{configuration?.qualificationStatuses.map((option) => <option key={option.id} value={option.valueKey}>{option.displayName}</option>)}</select></label>
+              {detail ? <ReadOnlyField label="Coaching cycle" value={`Cycle ${cycleNumber}`} /> : (
+                <label className="entry-field"><span>Coaching cycle</span><select onChange={(event) => onCycleChange(event.target.value)} value={form.cycleId ?? "new"}><option value="new">Start a new cycle</option>{context?.cycles.filter((cycle) => cycle.status === "active").map((cycle) => <option key={cycle.id} value={cycle.id}>Cycle {cycle.cycleNumber} - {labelFor(sessionTypes, cycle.cycleType)} ({cycle.sessionCount} sessions)</option>)}</select></label>
+              )}
+            </div>
           </div>
         </CoachingSection>
 
-        <CoachingSection number={2} title="Previous actions">
-          {previousActions.length === 0 ? <p className="muted-copy">No incomplete actions from earlier sessions in this cycle.</p> : (
-            <div className="table-wrap coaching-previous-actions"><table><thead><tr><th>Action</th><th>Due date</th><th>Status</th><th>Closure comments or update</th></tr></thead><tbody>{previousActions.map((action) => {
-              const updateRow = form.previousActionUpdates.find((item) => item.actionId === action.actionId);
-              return <tr key={action.actionId}>
-                <td><strong>{action.title}</strong>{action.latestUpdate ? <small className="table-subline">Last update: {action.latestUpdate}</small> : null}{action.lastExtensionReason ? <small className="table-subline">Extension: {action.lastExtensionReason}</small> : null}</td>
-                <td>{formatDate(action.targetDate)}{action.extensionCount > 0 ? <small className="table-subline">{action.extensionCount} extension{action.extensionCount === 1 ? "" : "s"}</small> : null}</td>
-                <td><select aria-label={`Status for ${action.title}`} onChange={(event) => updatePreviousAction(action.actionId, { status: event.target.value as CoachingPreviousActionStatus })} value={updateRow?.status ?? action.status}>{previousStatusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>
-                <td><input aria-label={`Closure comments or update for ${action.title}`} onChange={(event) => updatePreviousAction(action.actionId, { updateText: event.target.value })} placeholder="Closure comments or progress update" value={updateRow?.updateText ?? ""} /></td>
-              </tr>;
-            })}</tbody></table></div>
+        {sessionNumber > 1 && previousActions.length > 0 ? (
+          <CoachingSection number={2} title="Review Previous Actions">
+            <p className="coaching-section-intro">Review every active action carried forward from this coaching cycle.</p>
+            <div className="coaching-review-list">
+              {previousActions.map((action) => {
+                const review = form.actionReviews.find((item) => item.actionId === action.actionId);
+                return (
+                  <article className="coaching-review-card" key={action.actionId}>
+                    <div className="coaching-review-card-heading">
+                      <div><span>{formatActionStatus(action.status)}</span><h3>{action.title}</h3></div>
+                      <dl>
+                        <div><dt>Owner</dt><dd>{action.ownerName}</dd></div>
+                        <div><dt>Due</dt><dd>{formatDate(action.dueDate)}</dd></div>
+                        <div><dt>Review</dt><dd>{formatDate(action.reviewDate)}</dd></div>
+                      </dl>
+                    </div>
+                    {action.intendedEvidence || action.intendedImpact ? (
+                      <div className="coaching-review-context">
+                        {action.intendedEvidence ? <p><strong>Evidence:</strong> {action.intendedEvidence}</p> : null}
+                        {action.intendedImpact ? <p><strong>Intended impact:</strong> {action.intendedImpact}</p> : null}
+                      </div>
+                    ) : null}
+                    <div className="coaching-form-grid coaching-form-grid-2">
+                      <TextAreaField label="Progress, evidence or update" onChange={(value) => updateReview(action.actionId, { progressUpdate: value })} rows={2} value={review?.progressUpdate} />
+                      <TextAreaField label="Impact observed" onChange={(value) => updateReview(action.actionId, { impactObserved: value })} rows={2} value={review?.impactObserved} />
+                    </div>
+                    <label className="entry-field coaching-review-outcome"><span>Review outcome</span><select onChange={(event) => setReviewOutcome(action, event.target.value ? event.target.value as CoachingReviewOutcome : undefined)} value={review?.reviewOutcome ?? ""}><option value="">Select outcome</option>{reviewOutcomes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+                    {review?.reviewOutcome === "revised" && review.revisedAction ? (
+                      <div className="coaching-revised-action">
+                        <h4>Revised action</h4>
+                        <ActionFields action={review.revisedAction} coachName={coachName} index={0} staffName={staffName} onChange={(changes) => updateReview(action.actionId, { revisedAction: { ...review.revisedAction!, ...changes } })} />
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          </CoachingSection>
+        ) : null}
+
+        <CoachingSection number={sessionNumber > 1 && previousActions.length > 0 ? 3 : 2} title="Focus of Session and Current Practice">
+          <div className="coaching-form-grid coaching-form-grid-2">
+            <label className="entry-field"><span>Primary focus area</span><select onChange={(event) => update("primaryFocusKey", event.target.value || undefined)} value={form.primaryFocusKey ?? ""}><option value="">Select primary focus</option>{configuration?.focusAreas.map((option) => <option key={option.id} value={option.valueKey}>{option.displayName}</option>)}</select></label>
+            <label className="entry-field"><span>Secondary focus area <small>Optional</small></span><select onChange={(event) => update("secondaryFocusKey", event.target.value || undefined)} value={form.secondaryFocusKey ?? ""}><option value="">No secondary focus</option>{configuration?.focusAreas.filter((option) => option.valueKey !== form.primaryFocusKey).map((option) => <option key={option.id} value={option.valueKey}>{option.displayName}</option>)}</select></label>
+          </div>
+          {hasOtherFocus ? <label className="entry-field coaching-conditional-field"><span>Describe the other focus area</span><input onChange={(event) => update("focusOtherText", event.target.value)} value={form.focusOtherText ?? ""} /></label> : null}
+          <TextAreaField label="What is the specific focus for this session?" onChange={(value) => update("specificSessionFocus", value)} rows={2} value={form.specificSessionFocus} />
+          <WordingRubric label="Current practice at the time of this session" onChange={(id) => update("currentPracticeDescriptorId", id)} options={configuration?.currentPracticeRubric ?? []} value={form.currentPracticeDescriptorId} />
+          <TextAreaField label="Briefly describe the current practice or evidence that informed this judgement" onChange={(value) => update("currentPracticeEvidence", value)} optional rows={2} value={form.currentPracticeEvidence} />
+        </CoachingSection>
+
+        <CoachingSection number={sessionNumber > 1 && previousActions.length > 0 ? 4 : 3} title="Coaching and Mentoring Conversation">
+          <MultiSelect title="Support provided" options={configuration?.supportTypes ?? []} values={form.supportTypes} onToggle={toggleSupport} />
+          {hasOtherSupport ? <label className="entry-field coaching-conditional-field"><span>Describe the other support provided</span><input onChange={(event) => update("supportOtherText", event.target.value)} value={form.supportOtherText ?? ""} /></label> : null}
+          <TextAreaField
+            label="Conversation summary"
+            onChange={(value) => update("conversationSummary", value)}
+            prompt="Summarise the coaching or mentoring conversation, including the key reflections, guidance and agreed approach."
+            rows={4}
+            value={form.conversationSummary}
+          />
+        </CoachingSection>
+
+        <CoachingSection number={sessionNumber > 1 && previousActions.length > 0 ? 5 : 4} title="Actions">
+          <div className="coaching-actions-heading">
+            <div><strong>{form.actions.length} of {maxActions} actions</strong><p className="muted-copy">Actions feed directly into My Actions and the central Action Engine.</p></div>
+            <Button disabled={form.actions.length >= maxActions} icon={Plus} onClick={addAction} variant="secondary">Add action</Button>
+          </div>
+          {form.actions.length === 0 ? <div className="coaching-empty-actions">No new actions have been added.</div> : (
+            <div className="coaching-action-list">
+              {form.actions.map((action, index) => (
+                <article className="coaching-action-card" key={action.id ?? index}>
+                  <div className="coaching-action-card-heading"><strong>Action {index + 1}</strong><button className="icon-button" disabled={Boolean(action.id)} onClick={() => removeAction(index)} title={action.id ? "Published actions cannot be removed" : "Remove action"} type="button"><Trash2 size={16} aria-hidden="true" /></button></div>
+                  <ActionFields action={action} coachName={coachName} index={index} staffName={staffName} onChange={(changes) => updateAction(index, changes)} />
+                </article>
+              ))}
+            </div>
           )}
-          <TextAreaField label="Progress reflection" onChange={(value) => update("progressReflection", value)} prompt="What has changed? What worked? Any barriers?" value={form.progressReflection} />
-        </CoachingSection>
-
-        <CoachingSection number={3} title="Session focus">
-          <MultiSelect title="Focus areas" options={configuration?.focusAreas ?? []} values={form.focusAreas} onToggle={(value) => toggleList("focusAreas", value)} />
-          <TextAreaField label="Additional focus" onChange={(value) => update("additionalFocus", value)} value={form.additionalFocus} />
-          <label className="entry-field"><span>Reason for session</span><select onChange={(event) => update("sessionReason", event.target.value || undefined)} value={form.sessionReason ?? ""}><option value="">Select reason</option>{reasonOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        </CoachingSection>
-
-        <CoachingSection number={4} title="Intended outcome">
-          <TextAreaField label="Goal" onChange={(value) => update("goal", value)} prompt="What do you want to achieve?" value={form.goal} />
-          <TextAreaField label="Intended impact" onChange={(value) => update("intendedImpact", value)} value={form.intendedImpact} />
-          <WordingRubric label="Intended impact outcome" onChange={(id) => update("intendedImpactDescriptorId", id)} options={configuration?.intendedImpactRubric ?? []} value={form.intendedImpactDescriptorId} />
-        </CoachingSection>
-
-        <CoachingSection number={5} title="Discussion">
-          <div className="coaching-discussion-stack">
-            <TextAreaField label="Current situation" onChange={(value) => update("currentSituation", value)} value={form.currentSituation} />
-            <TextAreaField label="What's working" onChange={(value) => update("whatsWorking", value)} value={form.whatsWorking} />
-            <TextAreaField label="Challenges" onChange={(value) => update("challenges", value)} value={form.challenges} />
-            <TextAreaField label="Key discussion points" onChange={(value) => update("keyDiscussionPoints", value)} value={form.keyDiscussionPoints} />
-          </div>
-        </CoachingSection>
-
-        <CoachingSection number={6} title="Mentor Comments">
-          <TextAreaField label="Mentor comments" onChange={(value) => update("mentorComments", value)} value={form.mentorComments} />
-          <MultiSelect title="Support provided" options={configuration?.supportTypes ?? []} values={form.supportTypes} onToggle={(value) => toggleList("supportTypes", value)} />
-        </CoachingSection>
-
-        <CoachingSection number={7} title="Actions">
-          <div className="coaching-actions-heading"><p className="muted-copy">{form.actions.length} agreed {form.actions.length === 1 ? "action" : "actions"}</p><Button icon={Plus} onClick={addAction} variant="secondary">Add action</Button></div>
-          <div className="coaching-action-list">
-            {form.actions.map((action, index) => (
-              <div className="coaching-action-row" key={action.id ?? index}>
-                <label className="entry-field coaching-action-text"><span>Action</span><textarea onChange={(event) => updateAction(index, { actionText: event.target.value })} rows={2} value={action.actionText} /></label>
-                <label className="entry-field"><span>Owner</span><select onChange={(event) => updateAction(index, { ownerType: event.target.value as CoachingSessionAction["ownerType"] })} value={action.ownerType}><option value="staff">Staff</option><option value="coach">Coach or mentor</option><option value="joint">Joint</option></select></label>
-                <label className="entry-field"><span>Date to be implemented by</span><input onChange={(event) => updateAction(index, { targetDate: event.target.value })} type="date" value={action.targetDate} /></label>
-                <button className="icon-button coaching-action-remove" disabled={Boolean(action.actionId)} onClick={() => removeAction(index)} title={action.actionId ? "Published actions cannot be removed" : "Remove action"} type="button"><Trash2 size={16} aria-hidden="true" /></button>
-              </div>
-            ))}
-          </div>
+          <label className="coaching-cycle-close">
+            <input checked={form.closeCycle} onChange={(event) => update("closeCycle", event.target.checked)} type="checkbox" />
+            <span><strong>Complete this session and close the coaching cycle</strong><small>All carried actions must be completed or closed. A new action is not required when the cycle is formally closed.</small></span>
+          </label>
         </CoachingSection>
       </fieldset>
 
       <div className="coaching-save-bar">
-        <div><span>Cycle {cycleNumber ?? "New"}</span><strong>Session {sessionNumber}</strong></div>
+        <div><span>{cycleNumber ? `Cycle ${cycleNumber}` : "New coaching cycle"}</span><strong>Session {sessionNumber}</strong></div>
         {editable ? (
           isCompleted ? (
             <div><Button disabled={isSaving} icon={Save} onClick={() => onSave("completed")} variant="primary">Save changes</Button></div>
@@ -469,16 +529,21 @@ function CoachingSessionEditor({
   );
 }
 
-function CoachingSection({ number, title, children }: { number: number; title: string; children: ReactNode }) {
-  return <section className="coaching-section"><div className="coaching-section-heading"><span>{number}</span><h2>{title}</h2></div><div className="coaching-section-body">{children}</div></section>;
+function CoachingSection({ number, title, defaultOpen = false, children }: { number: number; title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  return (
+    <details className="coaching-section" open={defaultOpen}>
+      <summary className="coaching-section-heading"><span>{number}</span><h2>{title}</h2><ChevronDown size={18} aria-hidden="true" /></summary>
+      <div className="coaching-section-body">{children}</div>
+    </details>
+  );
 }
 
 function ReadOnlyField({ label, value }: { label: string; value: string }) {
   return <label className="entry-field"><span>{label}</span><input readOnly value={value} /></label>;
 }
 
-function TextAreaField({ label, value, prompt, onChange }: { label: string; value?: string; prompt?: string; onChange: (value: string) => void }) {
-  return <label className="entry-field"><span>{label}</span><textarea onChange={(event) => onChange(event.target.value)} placeholder={prompt} rows={3} value={value ?? ""} /></label>;
+function TextAreaField({ label, value, prompt, optional = false, rows = 3, onChange }: { label: string; value?: string; prompt?: string; optional?: boolean; rows?: number; onChange: (value: string) => void }) {
+  return <label className="entry-field"><span>{label}{optional ? <small>Optional</small> : null}</span><textarea onChange={(event) => onChange(event.target.value)} placeholder={prompt} rows={rows} value={value ?? ""} /></label>;
 }
 
 function DurationWheel({ value, onChange }: { value?: number; onChange: (value?: number) => void }) {
@@ -516,13 +581,27 @@ function WordingRubric({ label, options, value, onChange }: { label: string; opt
       <legend>{label}</legend>
       <div>
         {options.map((option) => (
-          <button aria-pressed={value === option.id} className={value === option.id ? "is-selected" : ""} key={option.id} onClick={() => onChange(option.id)} title={option.guidanceText} type="button">
+          <button aria-pressed={value === option.id} className={value === option.id ? "is-selected" : ""} key={option.id} onClick={() => onChange(option.id)} type="button">
             <i aria-hidden="true" style={{ backgroundColor: option.colorHex ?? "#60736b" }} />
             <span><strong>{option.visibleWording}</strong><small>{option.guidanceText}</small></span>
           </button>
         ))}
       </div>
     </fieldset>
+  );
+}
+
+function ActionFields({ action, coachName, index, staffName, onChange }: { action: CoachingSessionAction; coachName: string; index: number; staffName: string; onChange: (changes: Partial<CoachingSessionAction>) => void }) {
+  return (
+    <div className="coaching-action-fields">
+      <label className="entry-field coaching-action-description"><span>Action description</span><textarea onChange={(event) => onChange({ actionText: event.target.value })} rows={2} value={action.actionText} /></label>
+      <label className="entry-field"><span>Action owner</span><select onChange={(event) => onChange({ ownerType: event.target.value as CoachingSessionAction["ownerType"] })} value={action.ownerType}><option value="staff">{staffName}</option><option value="coach">{coachName}</option><option value="joint">Staff member and coach</option></select></label>
+      <label className="entry-field"><span>Due date</span><input onChange={(event) => onChange({ dueDate: event.target.value || undefined })} type="date" value={action.dueDate ?? ""} /></label>
+      <label className="entry-field"><span>Review date</span><input onChange={(event) => onChange({ reviewDate: event.target.value || undefined })} type="date" value={action.reviewDate ?? ""} /></label>
+      <label className="entry-field coaching-action-evidence"><span>Intended evidence of completion or success</span><textarea onChange={(event) => onChange({ intendedEvidence: event.target.value })} rows={2} value={action.intendedEvidence ?? ""} /></label>
+      <label className="entry-field coaching-action-impact"><span>Intended impact</span><textarea onChange={(event) => onChange({ intendedImpact: event.target.value })} rows={2} value={action.intendedImpact ?? ""} /></label>
+      <label className="entry-field"><span>Status</span><select aria-label={`Status for action ${index + 1}`} onChange={(event) => onChange({ status: event.target.value as CoachingActionStatus })} value={action.status}>{actionStatuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+    </div>
   );
 }
 
@@ -533,15 +612,29 @@ function emptyCoachingForm(staffId: string): SaveCoachingSessionRequest {
     sessionDate: new Date().toISOString().slice(0, 10),
     sessionType: "coaching",
     status: "draft",
-    focusAreas: [],
     supportTypes: [],
-    previousActionUpdates: [],
+    closeCycle: false,
+    actionReviews: [],
     actions: []
   };
 }
 
-function emptyAction(): CoachingSessionAction {
-  return { actionText: "", ownerType: "staff", targetDate: "" };
+function emptyAction(actionOrder: number): CoachingSessionAction {
+  return { actionOrder, actionText: "", ownerType: "staff", status: "not_started" };
+}
+
+function revisedActionFrom(action: CoachingPreviousActionSummary): CoachingSessionAction {
+  return {
+    actionOrder: 0,
+    actionText: action.title,
+    ownerType: action.ownerType,
+    dueDate: action.dueDate,
+    intendedEvidence: action.intendedEvidence,
+    intendedImpact: action.intendedImpact,
+    reviewDate: action.reviewDate,
+    status: "not_started",
+    parentActionId: action.actionId
+  };
 }
 
 function formFromDetail(detail: CoachingSessionDetail): SaveCoachingSessionRequest {
@@ -554,23 +647,40 @@ function formFromDetail(detail: CoachingSessionDetail): SaveCoachingSessionReque
     deliveryMethod: detail.deliveryMethod,
     durationMinutes: detail.durationMinutes,
     status: detail.status,
-    developmentStageKey: detail.developmentStageKey,
-    focusAreas: detail.focusAreas,
-    additionalFocus: detail.additionalFocus,
-    progressReflection: detail.progressReflection,
-    sessionReason: detail.sessionReason,
-    goal: detail.goal,
-    intendedImpact: detail.intendedImpact,
-    intendedImpactDescriptorId: detail.intendedImpactDescriptorId,
-    currentSituation: detail.currentSituation,
-    whatsWorking: detail.whatsWorking,
-    challenges: detail.challenges,
-    keyDiscussionPoints: detail.keyDiscussionPoints,
+    qualificationStatusKey: detail.qualificationStatusKey,
+    primaryFocusKey: detail.primaryFocusKey,
+    secondaryFocusKey: detail.secondaryFocusKey,
+    focusOtherText: detail.focusOtherText,
+    specificSessionFocus: detail.specificSessionFocus,
+    currentPracticeDescriptorId: detail.currentPracticeDescriptorId,
+    currentPracticeEvidence: detail.currentPracticeEvidence,
     supportTypes: detail.supportTypes,
-    mentorComments: detail.mentorComments,
-    previousActionUpdates: detail.previousActions.map((action) => detail.previousActionUpdates.find((update) => update.actionId === action.actionId) ?? { actionId: action.actionId, status: action.status, updateText: "" }),
+    supportOtherText: detail.supportOtherText,
+    conversationSummary: detail.conversationSummary,
+    closeCycle: detail.closesCycle,
+    actionReviews: detail.previousActions.map((action) =>
+      detail.actionReviews.find((review) => review.actionId === action.actionId) ?? { actionId: action.actionId }),
     actions: detail.actions
   };
+}
+
+function validateCompletion(form: SaveCoachingSessionRequest, previousActions: CoachingPreviousActionSummary[], maxActions: number) {
+  if (!form.deliveryMethod || !form.durationMinutes || !form.qualificationStatusKey) return "Complete all required Session Details before completing the record.";
+  if (!form.primaryFocusKey || !form.specificSessionFocus?.trim() || !form.currentPracticeDescriptorId) return "Complete the session focus and current-practice judgement.";
+  if ((form.primaryFocusKey === "other" || form.secondaryFocusKey === "other") && !form.focusOtherText?.trim()) return "Describe the focus area selected as Other.";
+  if (form.supportTypes.length === 0 || !form.conversationSummary?.trim()) return "Select the support provided and add the conversation summary.";
+  if (form.supportTypes.includes("other") && !form.supportOtherText?.trim()) return "Describe the support type selected as Other.";
+  if (form.actions.length > maxActions) return `This session can contain no more than ${maxActions} actions.`;
+  if (previousActions.some((action) => !form.actionReviews.find((review) => review.actionId === action.actionId)?.reviewOutcome)) return "Record a review outcome for every active action.";
+  if (form.closeCycle && form.actionReviews.some((review) => review.reviewOutcome && !["completed", "closed_without_completion"].includes(review.reviewOutcome))) return "Complete or close every previous action before closing the coaching cycle.";
+
+  const actions = [
+    ...form.actions,
+    ...form.actionReviews.filter((review) => review.reviewOutcome === "revised" && review.revisedAction).map((review) => review.revisedAction!)
+  ].filter((action) => action.actionText.trim());
+  if (!form.closeCycle && actions.length === 0) return "Add at least one action, or formally close the coaching cycle.";
+  if (actions.some((action) => !action.actionText.trim() || !action.dueDate || !action.reviewDate || !action.intendedEvidence?.trim() || !action.intendedImpact?.trim())) return "Complete every field for each agreed action.";
+  return "";
 }
 
 function lookupLabel(options?: CoachingLookupOption[], value?: string) {
@@ -594,4 +704,8 @@ function formatDuration(totalMinutes: number) {
   if (hours === 0) return `${minutes} minutes`;
   if (minutes === 0) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
   return `${hours} ${hours === 1 ? "hour" : "hours"} ${minutes} minutes`;
+}
+
+function formatActionStatus(value: CoachingActionStatus) {
+  return actionStatuses.find(([status]) => status === value)?.[1] ?? value.replaceAll("_", " ");
 }

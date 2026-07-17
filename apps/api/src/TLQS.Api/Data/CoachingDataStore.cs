@@ -10,7 +10,7 @@ public sealed partial class SqlFoundationDataStore
 {
     private static readonly HashSet<string> CoachingSessionTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "coaching", "mentoring", "combined"
+        "coaching", "mentoring"
     };
 
     private static readonly HashSet<string> CoachingDeliveryMethods = new(StringComparer.OrdinalIgnoreCase)
@@ -18,10 +18,9 @@ public sealed partial class SqlFoundationDataStore
         "in_person", "online", "telephone"
     };
 
-    private static readonly HashSet<string> CoachingReasons = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> CoachingActionStatuses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "requested_by_staff", "follow_up", "cpd_implementation", "new_role_responsibility",
-        "quality_activity", "development_priority", "other"
+        "not_started", "in_progress", "completed", "closed"
     };
 
     private static readonly HashSet<string> CoachingActionOwners = new(StringComparer.OrdinalIgnoreCase)
@@ -29,9 +28,9 @@ public sealed partial class SqlFoundationDataStore
         "staff", "coach", "joint"
     };
 
-    private static readonly HashSet<string> CoachingPreviousActionStatuses = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> CoachingReviewOutcomes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "not_started", "in_progress", "completed", "not_applicable"
+        "completed", "continue", "revised", "closed_without_completion"
     };
 
     public async Task<CoachingConfigurationSummary> GetCoachingConfigurationAsync(CancellationToken cancellationToken)
@@ -73,11 +72,49 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetInt32(4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6)),
             cancellationToken);
 
+        var maxActions = await QueryAsync(
+            """
+            SELECT max_actions_per_session
+            FROM quality.coaching_configuration
+            WHERE configuration_id = 1;
+            """,
+            null,
+            reader => reader.GetInt32(0),
+            cancellationToken);
+
         return new CoachingConfigurationSummary(
             await GetOptionsAsync("coaching_development_stage"),
             await GetOptionsAsync("coaching_focus_area"),
             await GetOptionsAsync("coaching_support_type"),
-            rubric);
+            rubric,
+            maxActions.FirstOrDefault(3));
+    }
+
+    public async Task<int> UpdateCoachingConfigurationAsync(
+        UpdateCoachingConfigurationRequest request,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        if (request.MaxActionsPerSession is < 1 or > 10)
+        {
+            throw new WorkflowValidationException("The maximum actions per session must be between 1 and 10.");
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = new SqlCommand(
+            """
+            UPDATE quality.coaching_configuration
+            SET max_actions_per_session = @maxActions,
+                updated_by_user_account_id = @userAccountId,
+                updated_at = sysutcdatetime()
+            WHERE configuration_id = 1;
+            """,
+            connection);
+        command.Parameters.AddWithValue("@maxActions", request.MaxActionsPerSession);
+        command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        return request.MaxActionsPerSession;
     }
 
     public async Task<bool> CanStartCoachingForStaffAsync(
@@ -181,7 +218,7 @@ public sealed partial class SqlFoundationDataStore
         var nextSessionNumber = selectedCycle is null ? 1 : selectedCycle.SessionCount + 1;
         var previousActions = selectedCycle is null
             ? []
-            : await GetCoachingPreviousActionsAsync(selectedCycle.Id, null, cancellationToken);
+            : await GetCoachingPreviousActionsAsync(selectedCycle.Id, null, null, cancellationToken);
 
         return new CoachingContextSummary(
             staffRows[0].Id,
@@ -206,7 +243,7 @@ public sealed partial class SqlFoundationDataStore
             SELECT session.id, session.record_id, session.cycle_id, cycle.cycle_number,
                    session.staff_id, staff.display_name, session.coach_staff_id, coach.display_name,
                    session.session_number, session.session_date, session.session_type, session.status,
-                   COALESCE(JSON_VALUE(session.focus_area_keys_json, '$[0]'), session.main_focus),
+                   primary_focus.value_key,
                    session.created_at, session.updated_at,
                    CONVERT(bit, CASE
                        WHEN @canManage = 1 THEN 1
@@ -219,6 +256,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN quality.coaching_cycles cycle ON cycle.id = session.cycle_id
             JOIN people.staff staff ON staff.id = session.staff_id
             JOIN people.staff coach ON coach.id = session.coach_staff_id
+            LEFT JOIN core.lookup_values primary_focus ON primary_focus.id = session.primary_focus_lookup_value_id
             WHERE session.archived_at IS NULL
               AND (
                     @canViewAll = 1
@@ -267,23 +305,20 @@ public sealed partial class SqlFoundationDataStore
             SELECT session.id, session.record_id, session.cycle_id, cycle.cycle_number,
                    session.staff_id, staff.display_name, session.coach_staff_id, coach.display_name,
                    session.session_number, session.session_date, session.session_type, session.delivery_method,
-                   session.duration_minutes, session.status, session.progress_reflection, session.main_focus,
-                   session.additional_focus_json, session.session_reason, session.goal, session.why_this_matters,
-                   session.confidence_before, session.current_situation, session.whats_working, session.challenges,
-                   session.key_discussion_points, session.support_types_json, session.support_resources,
-                   session.intended_impact_areas_json, session.impact_statement, session.confidence_to_complete,
-                   session.support_needed_json, session.additional_support_details, session.key_takeaway,
-                   session.session_summary, session.staff_agrees, session.coach_agrees,
-                   session.another_session_required, session.next_session_date, session.next_focus,
-                   session.completed_at, session.created_by_user_account_id, session.created_at, session.updated_at,
-                   development_stage.value_key, session.focus_area_keys_json, session.additional_focus_text,
-                   session.intended_impact_text, session.intended_impact_descriptor_id,
-                   session.intended_impact_wording_snapshot, session.mentor_comments
+                   session.duration_minutes, session.status, qualification.value_key,
+                   primary_focus.value_key, secondary_focus.value_key, session.focus_other_text,
+                   session.specific_session_focus, session.current_practice_descriptor_id,
+                   session.current_practice_wording_snapshot, session.current_practice_evidence,
+                   session.support_types_json, session.support_other_text, session.conversation_summary,
+                   session.closes_cycle, session.completed_at, session.created_by_user_account_id,
+                   session.created_at, session.updated_at
             FROM quality.coaching_sessions session
             JOIN quality.coaching_cycles cycle ON cycle.id = session.cycle_id
             JOIN people.staff staff ON staff.id = session.staff_id
             JOIN people.staff coach ON coach.id = session.coach_staff_id
-            LEFT JOIN core.lookup_values development_stage ON development_stage.id = session.development_stage_lookup_value_id
+            LEFT JOIN core.lookup_values qualification ON qualification.id = session.development_stage_lookup_value_id
+            LEFT JOIN core.lookup_values primary_focus ON primary_focus.id = session.primary_focus_lookup_value_id
+            LEFT JOIN core.lookup_values secondary_focus ON secondary_focus.id = session.secondary_focus_lookup_value_id
             WHERE session.id = @sessionId AND session.archived_at IS NULL;
             """,
             command => command.Parameters.AddWithValue("@sessionId", sessionId),
@@ -293,19 +328,11 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetInt32(8), DateOnly.FromDateTime(reader.GetDateTime(9)), reader.GetString(10),
                 GetStringOrNull(reader, 11), reader.IsDBNull(12) ? null : reader.GetInt32(12), reader.GetString(13),
                 GetStringOrNull(reader, 14), GetStringOrNull(reader, 15), GetStringOrNull(reader, 16),
-                GetStringOrNull(reader, 17), GetStringOrNull(reader, 18), GetStringOrNull(reader, 19),
-                reader.IsDBNull(20) ? null : reader.GetByte(20), GetStringOrNull(reader, 21),
-                GetStringOrNull(reader, 22), GetStringOrNull(reader, 23), GetStringOrNull(reader, 24),
-                GetStringOrNull(reader, 25), GetStringOrNull(reader, 26), GetStringOrNull(reader, 27),
-                GetStringOrNull(reader, 28), reader.IsDBNull(29) ? null : reader.GetByte(29),
-                GetStringOrNull(reader, 30), GetStringOrNull(reader, 31), GetStringOrNull(reader, 32),
-                GetStringOrNull(reader, 33), reader.GetBoolean(34), reader.GetBoolean(35),
-                GetStringOrNull(reader, 36), GetDateOnlyOrNull(reader, 37), GetStringOrNull(reader, 38),
-                GetDateTimeOffsetOrNull(reader, 39), GetGuidOrNull(reader, 40),
-                reader.GetFieldValue<DateTimeOffset>(41), GetDateTimeOffsetOrNull(reader, 42),
-                GetStringOrNull(reader, 43), GetStringOrNull(reader, 44), GetStringOrNull(reader, 45),
-                GetStringOrNull(reader, 46), GetGuidOrNull(reader, 47), GetStringOrNull(reader, 48),
-                GetStringOrNull(reader, 49)),
+                GetStringOrNull(reader, 17), GetStringOrNull(reader, 18), GetGuidOrNull(reader, 19),
+                GetStringOrNull(reader, 20), GetStringOrNull(reader, 21), GetStringOrNull(reader, 22),
+                GetStringOrNull(reader, 23), GetStringOrNull(reader, 24), reader.GetBoolean(25),
+                GetDateTimeOffsetOrNull(reader, 26), GetGuidOrNull(reader, 27),
+                reader.GetFieldValue<DateTimeOffset>(28), GetDateTimeOffsetOrNull(reader, 29)),
             cancellationToken);
         if (rows.Count == 0)
         {
@@ -313,35 +340,68 @@ public sealed partial class SqlFoundationDataStore
         }
 
         var row = rows[0];
-        var previousActions = await GetCoachingPreviousActionsAsync(row.CycleId, row.SessionNumber, cancellationToken);
-        var previousUpdates = await QueryAsync(
+        var previousActions = await GetCoachingPreviousActionsAsync(row.CycleId, row.SessionNumber, row.Id, cancellationToken);
+        var actionReviews = await QueryAsync(
             """
-            SELECT action_id, status, update_text
-            FROM quality.coaching_previous_action_updates
-            WHERE session_id = @sessionId;
+            SELECT review.action_id, review.review_outcome, review.progress_update, review.impact_observed,
+                   revised.id, revised.source_display_order, revised.title, COALESCE(revised.owner_context, 'staff'),
+                   revised_owner.display_name, revised.due_date, revised.intended_evidence,
+                   revised.intended_impact, revised.review_date, COALESCE(revised.progress_status, 'not_started'),
+                   revised.parent_action_id
+            FROM quality.coaching_action_reviews review
+            LEFT JOIN quality.actions revised ON revised.id = review.revised_action_id
+            LEFT JOIN people.staff revised_owner ON revised_owner.id = revised.owner_staff_id
+            WHERE review.session_id = @sessionId
+            ORDER BY review.created_at, review.id;
             """,
             command => command.Parameters.AddWithValue("@sessionId", sessionId),
-            reader => new CoachingPreviousActionUpdateSummary(reader.GetGuid(0), reader.GetString(1), GetStringOrNull(reader, 2)),
+            reader => new CoachingActionReviewSummary(
+                reader.GetGuid(0),
+                GetStringOrNull(reader, 1),
+                GetStringOrNull(reader, 2),
+                GetStringOrNull(reader, 3),
+                reader.IsDBNull(4)
+                    ? null
+                    : new CoachingSessionActionSummary(
+                        reader.GetGuid(4),
+                        reader.GetInt32(5),
+                        reader.GetString(6),
+                        reader.GetString(7),
+                        reader.GetString(8),
+                        GetDateOnlyOrNull(reader, 9),
+                        GetStringOrNull(reader, 10),
+                        GetStringOrNull(reader, 11),
+                        GetDateOnlyOrNull(reader, 12),
+                        reader.GetString(13),
+                        GetGuidOrNull(reader, 14))),
             cancellationToken);
         var actions = await QueryAsync(
             """
-            SELECT action.id, action.id, action.source_display_order, action.title,
-                   COALESCE(action.owner_context, 'staff'), action.due_date, action.detail
+            SELECT action.id, action.source_display_order, action.title,
+                   COALESCE(action.owner_context, 'staff'), owner.display_name, action.due_date,
+                   action.intended_evidence, action.intended_impact, action.review_date,
+                   COALESCE(action.progress_status, 'not_started'), action.parent_action_id
             FROM quality.actions action
+            JOIN people.staff owner ON owner.id = action.owner_staff_id
             WHERE action.source_sub_record_type = 'coaching_session'
               AND action.source_sub_record_id = @sessionId
               AND action.archived_at IS NULL
+              AND action.parent_action_id IS NULL
             ORDER BY action.source_display_order, action.created_at;
             """,
             command => command.Parameters.AddWithValue("@sessionId", sessionId),
             reader => new CoachingSessionActionSummary(
                 reader.GetGuid(0),
-                GetGuidOrNull(reader, 1),
-                reader.GetInt32(2),
+                reader.GetInt32(1),
+                reader.GetString(2),
                 reader.GetString(3),
                 reader.GetString(4),
-                DateOnly.FromDateTime(reader.GetDateTime(5)),
-                GetStringOrNull(reader, 6)),
+                GetDateOnlyOrNull(reader, 5),
+                GetStringOrNull(reader, 6),
+                GetStringOrNull(reader, 7),
+                GetDateOnlyOrNull(reader, 8),
+                reader.GetString(9),
+                GetGuidOrNull(reader, 10)),
             cancellationToken);
 
         var canEdit = currentUser.HasPermission(PermissionKeys.CoachingManage)
@@ -351,18 +411,11 @@ public sealed partial class SqlFoundationDataStore
         return new CoachingSessionDetail(
             row.Id, row.RecordId, row.CycleId, row.CycleNumber, row.StaffId, row.StaffName,
             row.CoachStaffId, row.CoachName, row.SessionNumber, row.SessionDate, row.SessionType,
-            row.DeliveryMethod, row.DurationMinutes, row.Status, row.DevelopmentStageKey,
-            ParseCoachingFocusAreas(row.FocusAreaKeysJson, row.MainFocus, row.AdditionalFocusJson), row.AdditionalFocusText,
-            row.ProgressReflection, row.MainFocus,
-            ParseCoachingJsonList(row.AdditionalFocusJson), row.SessionReason, row.Goal, row.WhyThisMatters,
-            row.IntendedImpactText ?? row.WhyThisMatters, row.IntendedImpactDescriptorId,
-            row.IntendedImpactWordingSnapshot, row.ConfidenceBefore, row.CurrentSituation, row.WhatsWorking,
-            row.Challenges, row.KeyDiscussionPoints, ParseCoachingJsonList(row.SupportTypesJson), row.SupportResources,
-            row.MentorComments,
-            ParseCoachingJsonList(row.IntendedImpactAreasJson), row.ImpactStatement, row.ConfidenceToComplete,
-            ParseCoachingJsonList(row.SupportNeededJson), row.AdditionalSupportDetails, row.KeyTakeaway,
-            row.SessionSummary, row.StaffAgrees, row.CoachAgrees, row.AnotherSessionRequired,
-            row.NextSessionDate, row.NextFocus, row.CompletedAt, canEdit, previousActions, previousUpdates, actions);
+            row.DeliveryMethod, row.DurationMinutes, row.Status, row.QualificationStatusKey,
+            row.PrimaryFocusKey, row.SecondaryFocusKey, row.FocusOtherText, row.SpecificSessionFocus,
+            row.CurrentPracticeDescriptorId, row.CurrentPracticeWording, row.CurrentPracticeEvidence,
+            ParseCoachingJsonList(row.SupportTypesJson), row.SupportOtherText, row.ConversationSummary,
+            row.ClosesCycle, row.CompletedAt, canEdit, previousActions, actionReviews, actions);
     }
 
     public async Task<CoachingSessionSaveSummary> SaveCoachingSessionAsync(
@@ -537,12 +590,15 @@ public sealed partial class SqlFoundationDataStore
 
             await UpdateCoachingSessionAsync(
                 connection, transaction, targetSessionId, request, currentUser.UserAccountId.Value, cancellationToken);
-            await SaveCoachingPreviousActionUpdatesAsync(
-                connection, transaction, targetSessionId, cycleId, sessionNumber,
-                request.PreviousActionUpdates ?? [], request.Status, currentUser, cancellationToken);
+            await ValidateCoachingActionReviewCoverageAsync(
+                connection, transaction, cycleId, sessionNumber, request, cancellationToken);
             await SaveCoachingSessionActionsAsync(
                 connection, transaction, targetSessionId, recordId, request.StaffId, coachStaffId,
                 request.Actions ?? [], request.Status, currentUser, cancellationToken);
+            await SaveCoachingActionReviewsAsync(
+                connection, transaction, targetSessionId, recordId, cycleId, sessionNumber,
+                request.StaffId, coachStaffId, request.ActionReviews ?? [], request.Actions?.Count ?? 0,
+                request.Status, currentUser, cancellationToken);
 
             await using (var recordUpdate = new SqlCommand(
                 """
@@ -573,14 +629,14 @@ public sealed partial class SqlFoundationDataStore
                 await using var cycleStatus = new SqlCommand(
                     """
                     UPDATE quality.coaching_cycles
-                    SET status = CASE WHEN @anotherSessionRequired = 'no' THEN 'closed' ELSE 'active' END,
-                        closed_on = CASE WHEN @anotherSessionRequired = 'no' THEN @sessionDate ELSE NULL END,
+                    SET status = CASE WHEN @closeCycle = 1 THEN 'closed' ELSE 'active' END,
+                        closed_on = CASE WHEN @closeCycle = 1 THEN @sessionDate ELSE NULL END,
                         updated_at = sysutcdatetime()
                     WHERE id = @cycleId;
                     """,
                     connection,
                     transaction);
-                cycleStatus.Parameters.AddWithValue("@anotherSessionRequired", ToDbValue(request.AnotherSessionRequired?.ToLowerInvariant()));
+                cycleStatus.Parameters.AddWithValue("@closeCycle", request.CloseCycle);
                 cycleStatus.Parameters.AddWithValue("@sessionDate", request.SessionDate.ToDateTime(TimeOnly.MinValue));
                 cycleStatus.Parameters.AddWithValue("@cycleId", cycleId);
                 await cycleStatus.ExecuteNonQueryAsync(cancellationToken);
@@ -596,7 +652,7 @@ public sealed partial class SqlFoundationDataStore
                 previousStatus == "new" ? "coaching_session.created" : "coaching_session.updated",
                 $"Coaching cycle {cycleNumber}, session {sessionNumber} for {staff.Name} saved as {request.Status.ToLowerInvariant()} by {currentUser.DisplayName}.",
                 previousStatus == "new" ? null : JsonSerializer.Serialize(new { status = previousStatus }),
-                JsonSerializer.Serialize(new { status = request.Status.ToLowerInvariant(), cycleNumber, sessionNumber }),
+                JsonSerializer.Serialize(new { status = request.Status.ToLowerInvariant(), cycleNumber, sessionNumber, request.CloseCycle }),
                 cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
@@ -655,59 +711,72 @@ public sealed partial class SqlFoundationDataStore
     private async Task<IReadOnlyList<CoachingPreviousActionSummary>> GetCoachingPreviousActionsAsync(
         Guid cycleId,
         int? beforeSessionNumber,
+        Guid? reviewSessionId,
         CancellationToken cancellationToken) =>
         await QueryAsync(
             """
-            SELECT action.id, action.title, action.due_date,
-                   CASE status.value_key
-                       WHEN 'in_progress' THEN 'in_progress'
-                       WHEN 'complete' THEN 'completed'
-                       WHEN 'not_applicable' THEN 'not_applicable'
-                       ELSE 'not_started'
+            SELECT action.id, action.title, COALESCE(action.owner_context, 'staff'),
+                   CASE
+                       WHEN action.owner_context = 'coach' THEN origin_coach.display_name
+                       WHEN action.owner_context = 'joint' THEN CONCAT(origin_staff.display_name, ' and ', origin_coach.display_name)
+                       ELSE origin_staff.display_name
                    END,
-                    latest_update.update_text,
-                    (SELECT COUNT(*) FROM quality.action_extensions extension WHERE extension.action_id = action.id),
-                    latest_extension.reason
+                   action.due_date, action.review_date,
+                   COALESCE(action.progress_status, 'not_started'),
+                   action.intended_evidence, action.intended_impact,
+                   latest_review.progress_update, latest_review.impact_observed
             FROM quality.actions action
             JOIN quality.coaching_sessions origin
               ON action.source_sub_record_type = 'coaching_session'
              AND origin.id = action.source_sub_record_id
+            JOIN people.staff origin_staff ON origin_staff.id = origin.staff_id
+            JOIN people.staff origin_coach ON origin_coach.id = origin.coach_staff_id
             LEFT JOIN core.lookup_values status ON status.id = action.status_lookup_value_id
             OUTER APPLY (
-                SELECT TOP (1) update_row.update_text
-                FROM quality.coaching_previous_action_updates update_row
-                JOIN quality.coaching_sessions update_session ON update_session.id = update_row.session_id
-                WHERE update_row.action_id = action.id
+                SELECT TOP (1) review.progress_update, review.impact_observed
+                FROM quality.coaching_action_reviews review
+                JOIN quality.coaching_sessions update_session ON update_session.id = review.session_id
+                WHERE review.action_id = action.id
                   AND update_session.status = 'completed'
-                ORDER BY update_session.session_number DESC, update_row.updated_at DESC, update_row.created_at DESC
-            ) latest_update
-            OUTER APPLY (
-                SELECT TOP (1) extension.reason
-                FROM quality.action_extensions extension
-                WHERE extension.action_id = action.id
-                ORDER BY extension.created_at DESC
-            ) latest_extension
+                ORDER BY update_session.session_number DESC, review.updated_at DESC, review.created_at DESC
+            ) latest_review
             WHERE origin.cycle_id = @cycleId
               AND origin.status = 'completed'
               AND (@beforeSessionNumber IS NULL OR origin.session_number < @beforeSessionNumber)
               AND action.archived_at IS NULL
-              AND action.completed_date IS NULL
-              AND ISNULL(status.value_key, 'open') NOT IN ('complete', 'cancelled')
+              AND (
+                    (
+                        action.completed_date IS NULL
+                        AND ISNULL(status.value_key, 'open') NOT IN ('complete', 'cancelled')
+                        AND COALESCE(action.progress_status, 'not_started') NOT IN ('completed', 'closed')
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM quality.coaching_action_reviews current_review
+                        WHERE current_review.session_id = @reviewSessionId
+                          AND current_review.action_id = action.id
+                    )
+              )
             ORDER BY action.due_date, action.title;
             """,
             command =>
             {
                 command.Parameters.AddWithValue("@cycleId", cycleId);
                 command.Parameters.AddWithValue("@beforeSessionNumber", beforeSessionNumber.HasValue ? beforeSessionNumber.Value : DBNull.Value);
+                command.Parameters.AddWithValue("@reviewSessionId", reviewSessionId.HasValue ? reviewSessionId.Value : DBNull.Value);
             },
             reader => new CoachingPreviousActionSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
-                GetDateOnlyOrNull(reader, 2),
+                reader.GetString(2),
                 reader.GetString(3),
-                GetStringOrNull(reader, 4),
-                reader.GetInt32(5),
-                GetStringOrNull(reader, 6)),
+                GetDateOnlyOrNull(reader, 4),
+                GetDateOnlyOrNull(reader, 5),
+                reader.GetString(6),
+                GetStringOrNull(reader, 7),
+                GetStringOrNull(reader, 8),
+                GetStringOrNull(reader, 9),
+                GetStringOrNull(reader, 10)),
             cancellationToken);
 
     private async Task<CoachingCoachRow> ResolveCoachAsync(
@@ -887,31 +956,40 @@ public sealed partial class SqlFoundationDataStore
                     FROM core.lookup_values value
                     JOIN core.lookup_types type ON type.id = value.lookup_type_id
                     WHERE type.lookup_key = 'coaching_development_stage'
-                      AND value.value_key = @developmentStageKey
+                      AND value.value_key = @qualificationStatusKey
                 ),
-                focus_area_keys_json = @focusAreaKeysJson,
-                additional_focus_text = @additionalFocus,
-                progress_reflection = @progressReflection,
-                session_reason = @sessionReason,
-                goal = @goal,
-                intended_impact_text = @intendedImpact,
-                intended_impact_descriptor_id = @intendedImpactDescriptorId,
-                intended_impact_wording_snapshot = (
+                primary_focus_lookup_value_id = (
+                    SELECT TOP (1) value.id
+                    FROM core.lookup_values value
+                    JOIN core.lookup_types type ON type.id = value.lookup_type_id
+                    WHERE type.lookup_key = 'coaching_focus_area'
+                      AND value.value_key = @primaryFocusKey
+                ),
+                secondary_focus_lookup_value_id = (
+                    SELECT TOP (1) value.id
+                    FROM core.lookup_values value
+                    JOIN core.lookup_types type ON type.id = value.lookup_type_id
+                    WHERE type.lookup_key = 'coaching_focus_area'
+                      AND value.value_key = @secondaryFocusKey
+                ),
+                focus_other_text = @focusOtherText,
+                specific_session_focus = @specificSessionFocus,
+                current_practice_descriptor_id = @currentPracticeDescriptorId,
+                current_practice_wording_snapshot = (
                     SELECT TOP (1) descriptor.visible_wording
                     FROM quality.elevate_practice_rubric_descriptors descriptor
-                    WHERE descriptor.id = @intendedImpactDescriptorId
+                    WHERE descriptor.id = @currentPracticeDescriptorId
                 ),
-                intended_impact_hidden_score = (
+                current_practice_hidden_score = (
                     SELECT TOP (1) descriptor.hidden_numeric_value
                     FROM quality.elevate_practice_rubric_descriptors descriptor
-                    WHERE descriptor.id = @intendedImpactDescriptorId
+                    WHERE descriptor.id = @currentPracticeDescriptorId
                 ),
-                current_situation = @currentSituation,
-                whats_working = @whatsWorking,
-                challenges = @challenges,
-                key_discussion_points = @keyDiscussionPoints,
+                current_practice_evidence = @currentPracticeEvidence,
                 support_types_json = @supportTypesJson,
-                mentor_comments = @mentorComments,
+                support_other_text = @supportOtherText,
+                conversation_summary = @conversationSummary,
+                closes_cycle = @closeCycle,
                 completed_at = CASE WHEN @status = 'completed' THEN COALESCE(completed_at, sysutcdatetime()) ELSE NULL END,
                 updated_by_user_account_id = @userAccountId,
                 updated_at = sysutcdatetime()
@@ -925,20 +1003,84 @@ public sealed partial class SqlFoundationDataStore
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task SaveCoachingPreviousActionUpdatesAsync(
+    private static async Task ValidateCoachingActionReviewCoverageAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        Guid cycleId,
+        int sessionNumber,
+        SaveCoachingSessionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!request.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) || sessionNumber <= 1)
+        {
+            return;
+        }
+
+        var expected = new HashSet<Guid>();
+        await using (var command = new SqlCommand(
+            """
+            SELECT action.id
+            FROM quality.actions action
+            JOIN quality.coaching_sessions origin
+              ON origin.id = action.source_sub_record_id
+             AND action.source_sub_record_type = 'coaching_session'
+            LEFT JOIN core.lookup_values status ON status.id = action.status_lookup_value_id
+            WHERE origin.cycle_id = @cycleId
+              AND origin.session_number < @sessionNumber
+              AND origin.status = 'completed'
+              AND action.archived_at IS NULL
+              AND action.completed_date IS NULL
+              AND ISNULL(status.value_key, 'open') NOT IN ('complete', 'cancelled')
+              AND COALESCE(action.progress_status, 'not_started') NOT IN ('completed', 'closed');
+            """,
+            connection,
+            transaction))
+        {
+            command.Parameters.AddWithValue("@cycleId", cycleId);
+            command.Parameters.AddWithValue("@sessionNumber", sessionNumber);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                expected.Add(reader.GetGuid(0));
+            }
+        }
+
+        var submitted = (request.ActionReviews ?? [])
+            .Where(review => !string.IsNullOrWhiteSpace(review.ReviewOutcome))
+            .GroupBy(review => review.ActionId)
+            .ToDictionary(group => group.Key, group => group.Last().ReviewOutcome!, EqualityComparer<Guid>.Default);
+        if (expected.Any(actionId => !submitted.ContainsKey(actionId)))
+        {
+            throw new WorkflowValidationException("Record a review outcome for every active action before completing this session.");
+        }
+
+        if (request.CloseCycle && !CoachingCycleWorkflow.CanCloseCycle(submitted.Values))
+        {
+            throw new WorkflowValidationException("Complete or close every previous action before closing the coaching cycle.");
+        }
+    }
+
+    private static async Task SaveCoachingActionReviewsAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         Guid sessionId,
+        Guid recordId,
         Guid cycleId,
         int sessionNumber,
-        IReadOnlyList<CoachingPreviousActionUpdateRequest> updates,
+        Guid staffId,
+        Guid coachStaffId,
+        IReadOnlyList<CoachingActionReviewRequest> reviews,
+        int regularActionCount,
         string sessionStatus,
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
-        foreach (var update in updates.GroupBy(item => item.ActionId).Select(group => group.Last()))
+        var submittedActionIds = new HashSet<Guid>();
+        var reviewIndex = 0;
+        foreach (var review in reviews.GroupBy(item => item.ActionId).Select(group => group.Last()))
         {
-            await using var command = new SqlCommand(
+            submittedActionIds.Add(review.ActionId);
+            await using (var validateCommand = new SqlCommand(
                 """
                 IF NOT EXISTS (
                     SELECT 1
@@ -953,72 +1095,173 @@ public sealed partial class SqlFoundationDataStore
                       AND action.archived_at IS NULL
                 )
                     THROW 51000, 'A previous action does not belong to this coaching cycle.', 1;
+                """,
+                connection,
+                transaction))
+            {
+                validateCommand.Parameters.AddWithValue("@actionId", review.ActionId);
+                validateCommand.Parameters.AddWithValue("@cycleId", cycleId);
+                validateCommand.Parameters.AddWithValue("@sessionNumber", sessionNumber);
+                await validateCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
 
-                UPDATE quality.coaching_previous_action_updates
-                SET status = @status, update_text = @updateText, updated_at = sysutcdatetime()
+            Guid? existingRevisedActionId = null;
+            await using (var existingCommand = new SqlCommand(
+                """
+                SELECT revised_action_id
+                FROM quality.coaching_action_reviews
+                WHERE session_id = @sessionId AND action_id = @actionId;
+                """,
+                connection,
+                transaction))
+            {
+                existingCommand.Parameters.AddWithValue("@sessionId", sessionId);
+                existingCommand.Parameters.AddWithValue("@actionId", review.ActionId);
+                var existing = await existingCommand.ExecuteScalarAsync(cancellationToken);
+                existingRevisedActionId = existing is null or DBNull ? null : (Guid)existing;
+            }
+
+            Guid? revisedActionId = null;
+            if (review.ReviewOutcome?.Equals("revised", StringComparison.OrdinalIgnoreCase) == true
+                && review.RevisedAction is not null)
+            {
+                revisedActionId = existingRevisedActionId ?? Guid.NewGuid();
+                reviewIndex++;
+                await UpsertCoachingActionAsync(
+                    connection,
+                    transaction,
+                    revisedActionId.Value,
+                    sessionId,
+                    recordId,
+                    staffId,
+                    coachStaffId,
+                    regularActionCount + reviewIndex,
+                    review.RevisedAction,
+                    review.ActionId,
+                    sessionStatus,
+                    currentUser,
+                    cancellationToken);
+            }
+            else if (existingRevisedActionId.HasValue)
+            {
+                await using var archiveRevised = new SqlCommand(
+                    """
+                    UPDATE quality.actions
+                    SET archived_at = sysutcdatetime(),
+                        deleted_by_user_account_id = @userAccountId,
+                        deletion_reason = 'Revised action removed while editing its coaching review.',
+                        updated_by_user_account_id = @userAccountId,
+                        updated_at = sysutcdatetime()
+                    WHERE id = @id;
+                    """,
+                    connection,
+                    transaction);
+                archiveRevised.Parameters.AddWithValue("@id", existingRevisedActionId.Value);
+                archiveRevised.Parameters.AddWithValue("@userAccountId", currentUser.UserAccountId!.Value);
+                await archiveRevised.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var reviewCommand = new SqlCommand(
+                """
+                UPDATE quality.coaching_action_reviews
+                SET review_outcome = @reviewOutcome,
+                    progress_update = @progressUpdate,
+                    impact_observed = @impactObserved,
+                    revised_action_id = @revisedActionId,
+                    updated_by_user_account_id = @userAccountId,
+                    updated_at = sysutcdatetime()
                 WHERE session_id = @sessionId AND action_id = @actionId;
 
                 IF @@ROWCOUNT = 0
                 BEGIN
-                    INSERT INTO quality.coaching_previous_action_updates (session_id, action_id, status, update_text)
-                    VALUES (@sessionId, @actionId, @status, @updateText);
+                    INSERT INTO quality.coaching_action_reviews (
+                        session_id, action_id, review_outcome, progress_update, impact_observed,
+                        revised_action_id, created_by_user_account_id, updated_by_user_account_id
+                    )
+                    VALUES (
+                        @sessionId, @actionId, @reviewOutcome, @progressUpdate, @impactObserved,
+                        @revisedActionId, @userAccountId, @userAccountId
+                    );
                 END;
                 """,
                 connection,
-                transaction);
-            command.Parameters.AddWithValue("@sessionId", sessionId);
-            command.Parameters.AddWithValue("@actionId", update.ActionId);
-            command.Parameters.AddWithValue("@cycleId", cycleId);
-            command.Parameters.AddWithValue("@sessionNumber", sessionNumber);
-            command.Parameters.AddWithValue("@status", update.Status.ToLowerInvariant());
-            command.Parameters.AddWithValue("@updateText", ToDbValue(update.UpdateText));
-            await command.ExecuteNonQueryAsync(cancellationToken);
+                transaction))
+            {
+                reviewCommand.Parameters.AddWithValue("@sessionId", sessionId);
+                reviewCommand.Parameters.AddWithValue("@actionId", review.ActionId);
+                reviewCommand.Parameters.AddWithValue("@reviewOutcome", ToDbValue(review.ReviewOutcome?.ToLowerInvariant()));
+                reviewCommand.Parameters.AddWithValue("@progressUpdate", ToDbValue(review.ProgressUpdate));
+                reviewCommand.Parameters.AddWithValue("@impactObserved", ToDbValue(review.ImpactObserved));
+                reviewCommand.Parameters.AddWithValue("@revisedActionId", ToDbValue(revisedActionId));
+                reviewCommand.Parameters.AddWithValue("@userAccountId", currentUser.UserAccountId!.Value);
+                await reviewCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
 
-            if (!sessionStatus.Equals("completed", StringComparison.OrdinalIgnoreCase))
+            if (!sessionStatus.Equals("completed", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(review.ReviewOutcome))
             {
                 continue;
             }
 
-            var lookupStatus = update.Status.ToLowerInvariant() switch
-            {
-                "not_started" => "open",
-                "in_progress" => "open",
-                "completed" => "complete",
-                "not_applicable" => "cancelled",
-                _ => "open"
-            };
-            var isClosed = lookupStatus is "complete" or "cancelled";
-            var isCancelled = lookupStatus == "cancelled";
+            var outcome = review.ReviewOutcome.ToLowerInvariant();
+            var progressStatus = CoachingCycleWorkflow.GetProgressStatusForReview(outcome);
+            var centralStatus = CoachingCycleWorkflow.GetCentralStatusForReview(outcome);
+            var isComplete = centralStatus == "complete";
+            var isCancelled = centralStatus == "cancelled";
+            var reviewNote = string.Join(
+                Environment.NewLine,
+                new[] { review.ProgressUpdate, review.ImpactObserved }
+                    .Where(value => !string.IsNullOrWhiteSpace(value)));
 
             await using var actionCommand = new SqlCommand(
                 """
                 UPDATE quality.actions
-                SET status_lookup_value_id = (
+                SET progress_status = @progressStatus,
+                    status_lookup_value_id = (
                         SELECT TOP (1) value.id
                         FROM core.lookup_values value
                         JOIN core.lookup_types type ON type.id = value.lookup_type_id
                         WHERE type.lookup_key = 'action_status' AND value.value_key = @statusKey
                     ),
-                    completed_date = CASE WHEN @isClosed = 1 THEN CONVERT(date, sysutcdatetime()) ELSE NULL END,
-                    completion_note = @updateText,
-                    completed_by_user_account_id = CASE WHEN @isClosed = 1 THEN @userAccountId ELSE NULL END,
+                    completed_date = CASE WHEN @isComplete = 1 THEN CONVERT(date, sysutcdatetime()) ELSE NULL END,
+                    completion_note = CASE WHEN @isComplete = 1 THEN @reviewNote ELSE completion_note END,
+                    completed_by_user_account_id = CASE WHEN @isComplete = 1 THEN @userAccountId ELSE NULL END,
                     cancelled_at = CASE WHEN @isCancelled = 1 THEN sysutcdatetime() ELSE NULL END,
                     cancelled_by_user_account_id = CASE WHEN @isCancelled = 1 THEN @userAccountId ELSE NULL END,
-                    cancellation_comments = CASE WHEN @isCancelled = 1 THEN @updateText ELSE NULL END,
+                    cancellation_comments = CASE WHEN @isCancelled = 1 THEN @reviewNote ELSE NULL END,
                     updated_by_user_account_id = @userAccountId,
                     updated_at = sysutcdatetime()
                 WHERE id = @actionId AND archived_at IS NULL;
                 """,
                 connection,
                 transaction);
-            actionCommand.Parameters.AddWithValue("@statusKey", lookupStatus);
-            actionCommand.Parameters.AddWithValue("@isClosed", isClosed);
+            actionCommand.Parameters.AddWithValue("@progressStatus", progressStatus);
+            actionCommand.Parameters.AddWithValue("@statusKey", centralStatus);
+            actionCommand.Parameters.AddWithValue("@isComplete", isComplete);
             actionCommand.Parameters.AddWithValue("@isCancelled", isCancelled);
-            actionCommand.Parameters.AddWithValue("@updateText", ToDbValue(update.UpdateText));
+            actionCommand.Parameters.AddWithValue("@reviewNote", ToDbValue(reviewNote));
             actionCommand.Parameters.AddWithValue("@userAccountId", currentUser.UserAccountId!.Value);
-            actionCommand.Parameters.AddWithValue("@actionId", update.ActionId);
+            actionCommand.Parameters.AddWithValue("@actionId", review.ActionId);
             await actionCommand.ExecuteNonQueryAsync(cancellationToken);
         }
+
+        await using var removeCommand = new SqlCommand(
+            """
+            DELETE FROM quality.coaching_action_reviews
+            WHERE session_id = @sessionId
+              AND action_id NOT IN (
+                  SELECT value
+                  FROM OPENJSON(@retainedActionIds)
+                  WITH (value uniqueidentifier '$')
+              );
+            """,
+            connection,
+            transaction);
+        removeCommand.Parameters.AddWithValue("@sessionId", sessionId);
+        removeCommand.Parameters.AddWithValue(
+            "@retainedActionIds",
+            JsonSerializer.Serialize(submittedActionIds));
+        await removeCommand.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task SaveCoachingSessionActionsAsync(
@@ -1040,6 +1283,7 @@ public sealed partial class SqlFoundationDataStore
             SET source_display_order = source_display_order + 1000
             WHERE source_sub_record_type = 'coaching_session'
               AND source_sub_record_id = @sessionId
+              AND parent_action_id IS NULL
               AND archived_at IS NULL;
             """,
             connection,
@@ -1055,6 +1299,7 @@ public sealed partial class SqlFoundationDataStore
             FROM quality.actions
             WHERE source_sub_record_type = 'coaching_session'
               AND source_sub_record_id = @sessionId
+              AND parent_action_id IS NULL
               AND archived_at IS NULL;
             """,
             connection,
@@ -1079,62 +1324,9 @@ public sealed partial class SqlFoundationDataStore
                 ? requestAction.Id.Value
                 : Guid.NewGuid();
             retained.Add(rowId);
-
-            await using var command = new SqlCommand(
-                """
-                UPDATE quality.actions
-                SET source_display_order = @actionOrder,
-                    title = @actionText,
-                    owner_context = @ownerType,
-                    owner_staff_id = @ownerStaffId,
-                    due_date = @targetDate,
-                    original_due_date = COALESCE(original_due_date, @targetDate),
-                    detail = @evidenceText,
-                    published_to_staff = @publishedToStaff,
-                    visibility_setting = @visibilitySetting,
-                    updated_by_user_account_id = @userAccountId,
-                    updated_at = sysutcdatetime()
-                WHERE id = @id
-                  AND source_sub_record_type = 'coaching_session'
-                  AND source_sub_record_id = @sessionId;
-
-                IF @@ROWCOUNT = 0
-                BEGIN
-                    INSERT INTO quality.actions (
-                        id, source_record_id, source_form_type, source_sub_record_type, source_sub_record_id,
-                        source_display_order, owner_context, subject_staff_id, owner_staff_id, title, detail,
-                        priority_lookup_value_id, status_lookup_value_id, due_date, original_due_date,
-                        published_to_staff, visibility_setting, created_by_user_account_id
-                    )
-                    VALUES (
-                        @id, @recordId, 'coaching_mentoring', 'coaching_session', @sessionId,
-                        @actionOrder, @ownerType, @staffId, @ownerStaffId, @actionText, @evidenceText,
-                        (SELECT TOP (1) value.id FROM core.lookup_values value
-                         JOIN core.lookup_types type ON type.id = value.lookup_type_id
-                         WHERE type.lookup_key = 'priority' AND value.value_key = 'medium'),
-                        (SELECT TOP (1) value.id FROM core.lookup_values value
-                         JOIN core.lookup_types type ON type.id = value.lookup_type_id
-                         WHERE type.lookup_key = 'action_status' AND value.value_key = 'open'),
-                        @targetDate, @targetDate, @publishedToStaff, @visibilitySetting, @userAccountId
-                    );
-                END;
-                """,
-                connection,
-                transaction);
-            command.Parameters.AddWithValue("@id", rowId);
-            command.Parameters.AddWithValue("@sessionId", sessionId);
-            command.Parameters.AddWithValue("@recordId", recordId);
-            command.Parameters.AddWithValue("@staffId", staffId);
-            command.Parameters.AddWithValue("@actionOrder", index + 1);
-            command.Parameters.AddWithValue("@actionText", requestAction.ActionText.Trim());
-            command.Parameters.AddWithValue("@ownerType", requestAction.OwnerType.ToLowerInvariant());
-            command.Parameters.AddWithValue("@ownerStaffId", requestAction.OwnerType.Equals("coach", StringComparison.OrdinalIgnoreCase) ? coachStaffId : staffId);
-            command.Parameters.AddWithValue("@targetDate", requestAction.TargetDate.ToDateTime(TimeOnly.MinValue));
-            command.Parameters.AddWithValue("@evidenceText", ToDbValue(requestAction.EvidenceText));
-            command.Parameters.AddWithValue("@publishedToStaff", sessionStatus.Equals("completed", StringComparison.OrdinalIgnoreCase));
-            command.Parameters.AddWithValue("@visibilitySetting", sessionStatus.Equals("completed", StringComparison.OrdinalIgnoreCase) ? "staff_and_management" : "source_editors");
-            command.Parameters.AddWithValue("@userAccountId", currentUser.UserAccountId!.Value);
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            await UpsertCoachingActionAsync(
+                connection, transaction, rowId, sessionId, recordId, staffId, coachStaffId,
+                index + 1, requestAction, null, sessionStatus, currentUser, cancellationToken);
         }
 
         foreach (var removed in existing.Except(retained))
@@ -1157,6 +1349,120 @@ public sealed partial class SqlFoundationDataStore
         }
     }
 
+    private static async Task UpsertCoachingActionAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        Guid actionId,
+        Guid sessionId,
+        Guid recordId,
+        Guid staffId,
+        Guid coachStaffId,
+        int actionOrder,
+        CoachingSessionActionRequest request,
+        Guid? parentActionId,
+        string sessionStatus,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        var progressStatus = request.Status.ToLowerInvariant();
+        var centralStatus = CoachingCycleWorkflow.GetCentralActionStatus(progressStatus);
+        var isComplete = centralStatus == "complete";
+        var isCancelled = centralStatus == "cancelled";
+        var isPublished = sessionStatus.Equals("completed", StringComparison.OrdinalIgnoreCase);
+
+        await using var command = new SqlCommand(
+            """
+            UPDATE quality.actions
+            SET source_display_order = @actionOrder,
+                title = @actionText,
+                owner_context = @ownerType,
+                owner_staff_id = @ownerStaffId,
+                due_date = @dueDate,
+                original_due_date = COALESCE(original_due_date, @dueDate),
+                detail = @intendedEvidence,
+                intended_evidence = @intendedEvidence,
+                intended_impact = @intendedImpact,
+                review_date = @reviewDate,
+                progress_status = @progressStatus,
+                parent_action_id = @parentActionId,
+                status_lookup_value_id = (
+                    SELECT TOP (1) value.id FROM core.lookup_values value
+                    JOIN core.lookup_types type ON type.id = value.lookup_type_id
+                    WHERE type.lookup_key = 'action_status' AND value.value_key = @centralStatus
+                ),
+                completed_date = CASE WHEN @isComplete = 1 THEN COALESCE(completed_date, CONVERT(date, sysutcdatetime())) ELSE NULL END,
+                completed_by_user_account_id = CASE WHEN @isComplete = 1 THEN @userAccountId ELSE NULL END,
+                cancelled_at = CASE WHEN @isCancelled = 1 THEN COALESCE(cancelled_at, sysutcdatetime()) ELSE NULL END,
+                cancelled_by_user_account_id = CASE WHEN @isCancelled = 1 THEN @userAccountId ELSE NULL END,
+                published_to_staff = @publishedToStaff,
+                visibility_setting = @visibilitySetting,
+                archived_at = NULL,
+                updated_by_user_account_id = @userAccountId,
+                updated_at = sysutcdatetime()
+            WHERE id = @id
+              AND source_sub_record_type = 'coaching_session'
+              AND source_sub_record_id = @sessionId;
+
+            IF @@ROWCOUNT = 0
+            BEGIN
+                INSERT INTO quality.actions (
+                    id, source_record_id, source_form_type, source_sub_record_type, source_sub_record_id,
+                    source_display_order, owner_context, subject_staff_id, owner_staff_id, title, detail,
+                    intended_evidence, intended_impact, review_date, progress_status, parent_action_id,
+                    priority_lookup_value_id, status_lookup_value_id, due_date, original_due_date,
+                    completed_date, completed_by_user_account_id, cancelled_at, cancelled_by_user_account_id,
+                    published_to_staff, visibility_setting, created_by_user_account_id
+                )
+                VALUES (
+                    @id, @recordId, 'coaching_mentoring', 'coaching_session', @sessionId,
+                    @actionOrder, @ownerType, @staffId, @ownerStaffId, @actionText, @intendedEvidence,
+                    @intendedEvidence, @intendedImpact, @reviewDate, @progressStatus, @parentActionId,
+                    (SELECT TOP (1) value.id FROM core.lookup_values value
+                     JOIN core.lookup_types type ON type.id = value.lookup_type_id
+                     WHERE type.lookup_key = 'priority' AND value.value_key = 'medium'),
+                    (SELECT TOP (1) value.id FROM core.lookup_values value
+                     JOIN core.lookup_types type ON type.id = value.lookup_type_id
+                     WHERE type.lookup_key = 'action_status' AND value.value_key = @centralStatus),
+                    @dueDate, @dueDate,
+                    CASE WHEN @isComplete = 1 THEN CONVERT(date, sysutcdatetime()) ELSE NULL END,
+                    CASE WHEN @isComplete = 1 THEN @userAccountId ELSE NULL END,
+                    CASE WHEN @isCancelled = 1 THEN sysutcdatetime() ELSE NULL END,
+                    CASE WHEN @isCancelled = 1 THEN @userAccountId ELSE NULL END,
+                    @publishedToStaff, @visibilitySetting, @userAccountId
+                );
+            END;
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@id", actionId);
+        command.Parameters.AddWithValue("@sessionId", sessionId);
+        command.Parameters.AddWithValue("@recordId", recordId);
+        command.Parameters.AddWithValue("@staffId", staffId);
+        command.Parameters.AddWithValue("@actionOrder", actionOrder);
+        command.Parameters.AddWithValue("@actionText", request.ActionText.Trim());
+        command.Parameters.AddWithValue("@ownerType", request.OwnerType.ToLowerInvariant());
+        command.Parameters.AddWithValue(
+            "@ownerStaffId",
+            request.OwnerType.Equals("coach", StringComparison.OrdinalIgnoreCase) ? coachStaffId : staffId);
+        command.Parameters.AddWithValue(
+            "@dueDate",
+            request.DueDate.HasValue ? request.DueDate.Value.ToDateTime(TimeOnly.MinValue) : DBNull.Value);
+        command.Parameters.AddWithValue("@intendedEvidence", ToDbValue(request.IntendedEvidence));
+        command.Parameters.AddWithValue("@intendedImpact", ToDbValue(request.IntendedImpact));
+        command.Parameters.AddWithValue(
+            "@reviewDate",
+            request.ReviewDate.HasValue ? request.ReviewDate.Value.ToDateTime(TimeOnly.MinValue) : DBNull.Value);
+        command.Parameters.AddWithValue("@progressStatus", progressStatus);
+        command.Parameters.AddWithValue("@parentActionId", ToDbValue(parentActionId));
+        command.Parameters.AddWithValue("@centralStatus", centralStatus);
+        command.Parameters.AddWithValue("@isComplete", isComplete);
+        command.Parameters.AddWithValue("@isCancelled", isCancelled);
+        command.Parameters.AddWithValue("@publishedToStaff", isPublished);
+        command.Parameters.AddWithValue("@visibilitySetting", isPublished ? "staff_and_management" : "source_editors");
+        command.Parameters.AddWithValue("@userAccountId", currentUser.UserAccountId!.Value);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static void ValidateCoachingRequest(SaveCoachingSessionRequest request)
     {
         if (request.StaffId == Guid.Empty)
@@ -1171,7 +1477,6 @@ public sealed partial class SqlFoundationDataStore
 
         ValidateCoachingOption(request.SessionType, CoachingSessionTypes, "session type", true);
         ValidateCoachingOption(request.DeliveryMethod, CoachingDeliveryMethods, "delivery method", false);
-        ValidateCoachingOption(request.SessionReason, CoachingReasons, "reason for session", false);
 
         if (!string.Equals(request.Status, "draft", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(request.Status, "completed", StringComparison.OrdinalIgnoreCase))
@@ -1184,23 +1489,35 @@ public sealed partial class SqlFoundationDataStore
             throw new WorkflowValidationException("Duration must be between 1 minute and 24 hours.");
         }
 
-        foreach (var action in request.Actions ?? [])
+        if (request.CloseCycle && !request.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
         {
-            if (string.IsNullOrWhiteSpace(action.ActionText))
-            {
-                throw new WorkflowValidationException("Every agreed action needs a description.");
-            }
-
-            ValidateCoachingOption(action.OwnerType, CoachingActionOwners, "action owner", true);
-            if (action.TargetDate == default)
-            {
-                throw new WorkflowValidationException("Every agreed action needs a target date.");
-            }
+            throw new WorkflowValidationException("A coaching cycle can only be closed when the session is completed.");
         }
 
-        foreach (var update in request.PreviousActionUpdates ?? [])
+        foreach (var action in request.Actions ?? [])
         {
-            ValidateCoachingOption(update.Status, CoachingPreviousActionStatuses, "previous action status", true);
+            ValidateCoachingOption(action.OwnerType, CoachingActionOwners, "action owner", true);
+            ValidateCoachingOption(action.Status, CoachingActionStatuses, "action status", true);
+        }
+
+        foreach (var review in request.ActionReviews ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(review.ReviewOutcome))
+            {
+                ValidateCoachingOption(review.ReviewOutcome, CoachingReviewOutcomes, "action review outcome", true);
+            }
+
+            if (review.ReviewOutcome?.Equals("revised", StringComparison.OrdinalIgnoreCase) == true
+                && review.RevisedAction is null)
+            {
+                throw new WorkflowValidationException("Enter the revised action before saving a Revised outcome.");
+            }
+
+            if (review.RevisedAction is not null)
+            {
+                ValidateCoachingOption(review.RevisedAction.OwnerType, CoachingActionOwners, "revised action owner", true);
+                ValidateCoachingOption(review.RevisedAction.Status, CoachingActionStatuses, "revised action status", true);
+            }
         }
 
         if (!string.Equals(request.Status, "completed", StringComparison.OrdinalIgnoreCase))
@@ -1210,16 +1527,57 @@ public sealed partial class SqlFoundationDataStore
 
         if (string.IsNullOrWhiteSpace(request.DeliveryMethod)
             || !request.DurationMinutes.HasValue
-            || string.IsNullOrWhiteSpace(request.DevelopmentStageKey)
-            || request.FocusAreas is null || request.FocusAreas.Count == 0
-            || string.IsNullOrWhiteSpace(request.SessionReason)
-            || string.IsNullOrWhiteSpace(request.Goal)
-            || string.IsNullOrWhiteSpace(request.IntendedImpact)
-            || !request.IntendedImpactDescriptorId.HasValue
-            || string.IsNullOrWhiteSpace(request.KeyDiscussionPoints)
-            )
+            || string.IsNullOrWhiteSpace(request.QualificationStatusKey)
+            || string.IsNullOrWhiteSpace(request.PrimaryFocusKey)
+            || string.IsNullOrWhiteSpace(request.SpecificSessionFocus)
+            || !request.CurrentPracticeDescriptorId.HasValue
+            || request.SupportTypes is null || request.SupportTypes.Count == 0
+            || string.IsNullOrWhiteSpace(request.ConversationSummary))
         {
-            throw new WorkflowValidationException("Complete the session details, development stage, focus, goal, intended impact and discussion before completing the session.");
+            throw new WorkflowValidationException("Complete the session details, qualification status, focus, current-practice judgement, support and conversation summary before completing the session.");
+        }
+
+        if ((string.Equals(request.PrimaryFocusKey, "other", StringComparison.OrdinalIgnoreCase)
+             || request.SecondaryFocusKey?.Equals("other", StringComparison.OrdinalIgnoreCase) == true)
+            && string.IsNullOrWhiteSpace(request.FocusOtherText))
+        {
+            throw new WorkflowValidationException("Describe the session focus when Other is selected.");
+        }
+
+        if (request.SupportTypes?.Any(value => value.Equals("other", StringComparison.OrdinalIgnoreCase)) == true
+            && string.IsNullOrWhiteSpace(request.SupportOtherText))
+        {
+            throw new WorkflowValidationException("Describe the support provided when Other is selected.");
+        }
+
+        var completedActions = (request.Actions ?? [])
+            .Where(action => !string.IsNullOrWhiteSpace(action.ActionText))
+            .Concat((request.ActionReviews ?? [])
+                .Where(review => review.ReviewOutcome?.Equals("revised", StringComparison.OrdinalIgnoreCase) == true)
+                .Select(review => review.RevisedAction)
+                .OfType<CoachingSessionActionRequest>())
+            .ToArray();
+        var revisedActionCount = (request.ActionReviews ?? [])
+            .Count(review => review.ReviewOutcome?.Equals("revised", StringComparison.OrdinalIgnoreCase) == true
+                             && review.RevisedAction is not null);
+        if (!CoachingCycleWorkflow.MeetsActionRequirement(
+                (request.Actions ?? []).Count(action => !string.IsNullOrWhiteSpace(action.ActionText)),
+                revisedActionCount,
+                request.CloseCycle))
+        {
+            throw new WorkflowValidationException("Add at least one action, or formally close the coaching cycle.");
+        }
+
+        foreach (var action in completedActions)
+        {
+            if (string.IsNullOrWhiteSpace(action.ActionText)
+                || !action.DueDate.HasValue
+                || string.IsNullOrWhiteSpace(action.IntendedEvidence)
+                || string.IsNullOrWhiteSpace(action.IntendedImpact)
+                || !action.ReviewDate.HasValue)
+            {
+                throw new WorkflowValidationException("Every action needs a description, owner, due date, intended evidence, intended impact and review date.");
+            }
         }
     }
 
@@ -1249,15 +1607,23 @@ public sealed partial class SqlFoundationDataStore
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(request.DevelopmentStageKey))
+        if (!string.IsNullOrWhiteSpace(request.QualificationStatusKey))
         {
             await ValidateLookupValueAsync(
-                "coaching_development_stage", request.DevelopmentStageKey, "staff development stage");
+                "coaching_development_stage", request.QualificationStatusKey, "qualification status");
         }
 
-        foreach (var value in (request.FocusAreas ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var value in new[] { request.PrimaryFocusKey, request.SecondaryFocusKey }
+                     .Where(value => !string.IsNullOrWhiteSpace(value))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            await ValidateLookupValueAsync("coaching_focus_area", value, "focus area");
+            await ValidateLookupValueAsync("coaching_focus_area", value!, "focus area");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.PrimaryFocusKey)
+            && request.PrimaryFocusKey.Equals(request.SecondaryFocusKey, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkflowValidationException("Choose different primary and secondary focus areas.");
         }
 
         foreach (var value in (request.SupportTypes ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -1265,7 +1631,23 @@ public sealed partial class SqlFoundationDataStore
             await ValidateLookupValueAsync("coaching_support_type", value, "support type");
         }
 
-        if (!request.IntendedImpactDescriptorId.HasValue)
+        var actionCount = (request.Actions ?? []).Count(action => !string.IsNullOrWhiteSpace(action.ActionText));
+        await using (var limitCommand = new SqlCommand(
+            "SELECT max_actions_per_session FROM quality.coaching_configuration WHERE configuration_id = 1;",
+            connection,
+            transaction))
+        {
+            var maxActions = Convert.ToInt32(await limitCommand.ExecuteScalarAsync(cancellationToken));
+            var revisedActionCount = (request.ActionReviews ?? [])
+                .Count(review => review.ReviewOutcome?.Equals("revised", StringComparison.OrdinalIgnoreCase) == true
+                                 && review.RevisedAction is not null);
+            if (!CoachingCycleWorkflow.IsWithinActionLimit(actionCount + revisedActionCount, maxActions))
+            {
+                throw new WorkflowValidationException($"A coaching session can contain no more than {maxActions} new actions.");
+            }
+        }
+
+        if (!request.CurrentPracticeDescriptorId.HasValue)
         {
             return;
         }
@@ -1274,10 +1656,10 @@ public sealed partial class SqlFoundationDataStore
             "SELECT COUNT(*) FROM quality.elevate_practice_rubric_descriptors WHERE id = @id;",
             connection,
             transaction);
-        descriptorCommand.Parameters.AddWithValue("@id", request.IntendedImpactDescriptorId.Value);
+        descriptorCommand.Parameters.AddWithValue("@id", request.CurrentPracticeDescriptorId.Value);
         if (Convert.ToInt32(await descriptorCommand.ExecuteScalarAsync(cancellationToken)) == 0)
         {
-            throw new WorkflowValidationException("The selected intended impact judgement is not valid.");
+            throw new WorkflowValidationException("The selected current-practice judgement is not valid.");
         }
     }
 
@@ -1323,20 +1705,17 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@deliveryMethod", ToDbValue(request.DeliveryMethod?.ToLowerInvariant()));
         command.Parameters.AddWithValue("@durationMinutes", request.DurationMinutes.HasValue ? request.DurationMinutes.Value : DBNull.Value);
         command.Parameters.AddWithValue("@status", request.Status.ToLowerInvariant());
-        command.Parameters.AddWithValue("@developmentStageKey", ToDbValue(request.DevelopmentStageKey?.ToLowerInvariant()));
-        command.Parameters.AddWithValue("@focusAreaKeysJson", ToDbValue(SerializeCoachingList(request.FocusAreas)));
-        command.Parameters.AddWithValue("@additionalFocus", ToDbValue(request.AdditionalFocus));
-        command.Parameters.AddWithValue("@progressReflection", ToDbValue(request.ProgressReflection));
-        command.Parameters.AddWithValue("@sessionReason", ToDbValue(request.SessionReason?.ToLowerInvariant()));
-        command.Parameters.AddWithValue("@goal", ToDbValue(request.Goal));
-        command.Parameters.AddWithValue("@intendedImpact", ToDbValue(request.IntendedImpact));
-        command.Parameters.AddWithValue("@intendedImpactDescriptorId", ToDbValue(request.IntendedImpactDescriptorId));
-        command.Parameters.AddWithValue("@currentSituation", ToDbValue(request.CurrentSituation));
-        command.Parameters.AddWithValue("@whatsWorking", ToDbValue(request.WhatsWorking));
-        command.Parameters.AddWithValue("@challenges", ToDbValue(request.Challenges));
-        command.Parameters.AddWithValue("@keyDiscussionPoints", ToDbValue(request.KeyDiscussionPoints));
+        command.Parameters.AddWithValue("@qualificationStatusKey", ToDbValue(request.QualificationStatusKey?.ToLowerInvariant()));
+        command.Parameters.AddWithValue("@primaryFocusKey", ToDbValue(request.PrimaryFocusKey?.ToLowerInvariant()));
+        command.Parameters.AddWithValue("@secondaryFocusKey", ToDbValue(request.SecondaryFocusKey?.ToLowerInvariant()));
+        command.Parameters.AddWithValue("@focusOtherText", ToDbValue(request.FocusOtherText));
+        command.Parameters.AddWithValue("@specificSessionFocus", ToDbValue(request.SpecificSessionFocus));
+        command.Parameters.AddWithValue("@currentPracticeDescriptorId", ToDbValue(request.CurrentPracticeDescriptorId));
+        command.Parameters.AddWithValue("@currentPracticeEvidence", ToDbValue(request.CurrentPracticeEvidence));
         command.Parameters.AddWithValue("@supportTypesJson", ToDbValue(SerializeCoachingList(request.SupportTypes)));
-        command.Parameters.AddWithValue("@mentorComments", ToDbValue(request.MentorComments));
+        command.Parameters.AddWithValue("@supportOtherText", ToDbValue(request.SupportOtherText));
+        command.Parameters.AddWithValue("@conversationSummary", ToDbValue(request.ConversationSummary));
+        command.Parameters.AddWithValue("@closeCycle", request.CloseCycle);
     }
 
     private static void AddCoachingRecordParameters(
@@ -1351,7 +1730,7 @@ public sealed partial class SqlFoundationDataStore
     {
         command.Parameters.AddWithValue("@recordId", recordId);
         command.Parameters.AddWithValue("@title", $"Coaching cycle {cycleNumber}, session {sessionNumber}: {staff.Name}");
-        command.Parameters.AddWithValue("@summary", ToDbValue(request.FocusAreas?.FirstOrDefault() ?? request.IntendedImpact ?? "Draft coaching session"));
+        command.Parameters.AddWithValue("@summary", ToDbValue(request.SpecificSessionFocus ?? request.PrimaryFocusKey ?? "Draft coaching session"));
         command.Parameters.AddWithValue("@recordStatus", request.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ? "submitted" : "draft");
         command.Parameters.AddWithValue("@staffId", request.StaffId);
         command.Parameters.AddWithValue("@coachStaffId", coachStaffId);
@@ -1434,40 +1813,20 @@ public sealed partial class SqlFoundationDataStore
         string? DeliveryMethod,
         int? DurationMinutes,
         string Status,
-        string? ProgressReflection,
-        string? MainFocus,
-        string? AdditionalFocusJson,
-        string? SessionReason,
-        string? Goal,
-        string? WhyThisMatters,
-        int? ConfidenceBefore,
-        string? CurrentSituation,
-        string? WhatsWorking,
-        string? Challenges,
-        string? KeyDiscussionPoints,
+        string? QualificationStatusKey,
+        string? PrimaryFocusKey,
+        string? SecondaryFocusKey,
+        string? FocusOtherText,
+        string? SpecificSessionFocus,
+        Guid? CurrentPracticeDescriptorId,
+        string? CurrentPracticeWording,
+        string? CurrentPracticeEvidence,
         string? SupportTypesJson,
-        string? SupportResources,
-        string? IntendedImpactAreasJson,
-        string? ImpactStatement,
-        int? ConfidenceToComplete,
-        string? SupportNeededJson,
-        string? AdditionalSupportDetails,
-        string? KeyTakeaway,
-        string? SessionSummary,
-        bool StaffAgrees,
-        bool CoachAgrees,
-        string? AnotherSessionRequired,
-        DateOnly? NextSessionDate,
-        string? NextFocus,
+        string? SupportOtherText,
+        string? ConversationSummary,
+        bool ClosesCycle,
         DateTimeOffset? CompletedAt,
         Guid? CreatedByUserAccountId,
         DateTimeOffset CreatedAt,
-        DateTimeOffset? UpdatedAt,
-        string? DevelopmentStageKey,
-        string? FocusAreaKeysJson,
-        string? AdditionalFocusText,
-        string? IntendedImpactText,
-        Guid? IntendedImpactDescriptorId,
-        string? IntendedImpactWordingSnapshot,
-        string? MentorComments);
+        DateTimeOffset? UpdatedAt);
 }

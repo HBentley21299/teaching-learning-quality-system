@@ -128,7 +128,12 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\024_trusted_self_onboarding.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\025_learning_environment_central_actions.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\026_cpd_self_log_and_duration.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\027_elevate_learning_innovation_and_liv_cycles.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\027_elevate_learning_innovation_and_liv_cycles.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\028_eli_statement_ratings_and_liv_visit_delivery.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\029_staff_reflection_liv_focus_links.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\030_coaching_cycle_workflow_refactor.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\031_probationary_observations.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\032_probation_liv_link_uniqueness.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

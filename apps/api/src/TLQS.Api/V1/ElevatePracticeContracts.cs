@@ -61,7 +61,7 @@ public sealed record SaveElevatePracticeAssessmentRequest(
     IReadOnlyList<string>? StrengthAreaKeys = null,
     IReadOnlyList<string>? DevelopmentAreaKeys = null,
     IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans = null);
-public sealed record ElevatePracticeRatingRequest(Guid AreaId, Guid DescriptorId, Guid StatementId = default);
+public sealed record ElevatePracticeRatingRequest(Guid AreaId, Guid DescriptorId, Guid StatementId);
 public sealed record ElevatePracticeReflectionRequest(string AreaKey, string? Text);
 public sealed record ElevatePracticePlanRequest(
     string AreaKey,
@@ -132,19 +132,10 @@ public sealed record StaffElevatePracticeSummary(
     string Status,
     string? Judgement,
     DateTimeOffset? SubmittedAt,
-    IReadOnlyList<StaffElevateDevelopmentAreaSummary> DevelopmentAreas,
-    IReadOnlyList<StaffElevateReflectionSummary> Reflections);
+    IReadOnlyList<StaffElevateFocusAreaSummary> FocusAreas);
 
-public sealed record StaffElevateDevelopmentAreaSummary(
-    string AreaKey,
-    string AreaName,
-    string? DevelopmentApproach,
-    string? SupportDetails,
-    string? SuccessEvidence,
-    string? IntendedImpact,
-    Guid? ActionId);
-
-public sealed record StaffElevateReflectionSummary(
-    string AreaKey,
-    string AreaName,
-    string Reflection);
+public sealed record StaffElevateFocusAreaSummary(
+    string FocusKey,
+    string FocusName,
+    string FocusType,
+    int DisplayOrder);

@@ -782,50 +782,32 @@ public sealed partial class SqlFoundationDataStore
             return null;
         }
 
-        var developmentAreas = await QueryAsync(
+        var focusAreas = await QueryAsync(
             """
-            SELECT
-                area.area_key,
-                area.name,
-                plan_row.development_approach,
-                plan_row.support_details,
-                plan_row.success_evidence,
-                plan_row.intended_impact,
-                plan_row.action_id
-            FROM quality.elevate_practice_selections selection
-            JOIN quality.elevate_practice_areas area ON area.id = selection.area_id
-            LEFT JOIN quality.elevate_practice_development_plans plan_row
-                ON plan_row.assessment_id = selection.assessment_id
-                AND plan_row.area_id = selection.area_id
-            WHERE selection.assessment_id = @assessmentId
-              AND selection.selection_type = 'development'
-            ORDER BY area.display_order;
+            SELECT focus.value_key, focus.display_name, N'primary', 1
+            FROM quality.elevate_practice_liv_information information
+            JOIN core.lookup_values focus ON focus.id = information.primary_focus_lookup_value_id
+            WHERE information.assessment_id = @assessmentId
+            UNION ALL
+            SELECT focus.value_key,
+                   CASE
+                       WHEN focus.value_key = N'other'
+                           THEN COALESCE(NULLIF(LTRIM(RTRIM(information.secondary_focus_other)), N''), focus.display_name)
+                       ELSE focus.display_name
+                   END,
+                   N'secondary',
+                   2
+            FROM quality.elevate_practice_liv_information information
+            JOIN core.lookup_values focus ON focus.id = information.secondary_focus_lookup_value_id
+            WHERE information.assessment_id = @assessmentId
+            ORDER BY 4;
             """,
             command => command.Parameters.AddWithValue("@assessmentId", assessment.Id),
-            reader => new StaffElevateDevelopmentAreaSummary(
+            reader => new StaffElevateFocusAreaSummary(
                 reader.GetString(0),
                 reader.GetString(1),
-                GetStringOrNull(reader, 2),
-                GetStringOrNull(reader, 3),
-                GetStringOrNull(reader, 4),
-                GetStringOrNull(reader, 5),
-                GetGuidOrNull(reader, 6)),
-            cancellationToken);
-
-        var reflections = await QueryAsync(
-            """
-            SELECT area.area_key, area.name, reflection.reflection_text
-            FROM quality.elevate_practice_reflections reflection
-            JOIN quality.elevate_practice_areas area ON area.id = reflection.area_id
-            WHERE reflection.assessment_id = @assessmentId
-              AND NULLIF(LTRIM(RTRIM(reflection.reflection_text)), '') IS NOT NULL
-            ORDER BY area.display_order;
-            """,
-            command => command.Parameters.AddWithValue("@assessmentId", assessment.Id),
-            reader => new StaffElevateReflectionSummary(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetString(2)),
+                reader.GetString(2),
+                reader.GetInt32(3)),
             cancellationToken);
 
         string? judgement = null;
@@ -856,8 +838,7 @@ public sealed partial class SqlFoundationDataStore
             assessment.Status,
             judgement,
             assessment.SubmittedAt,
-            developmentAreas,
-            reflections);
+            focusAreas);
     }
 
     private static void ValidateElevatePracticeSubmission(

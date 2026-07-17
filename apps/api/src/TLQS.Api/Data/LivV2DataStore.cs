@@ -43,7 +43,11 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT staff.id, staff.display_name, assessment.id, assessment.academic_year,
                    focus.value_key, focus.display_name, information.desired_outcome,
-                   liv.id, liv.record_id
+                   liv.id, liv.record_id,
+                   notice.value_key, notice.display_name,
+                   CONVERT(nvarchar(7), information.preferred_visit_month, 126),
+                   secondary_focus.value_key, secondary_focus.display_name,
+                   information.secondary_focus_other
             FROM people.staff staff
             OUTER APPLY (
                 SELECT TOP (1) assessment.id, assessment.academic_year
@@ -55,6 +59,8 @@ public sealed partial class SqlFoundationDataStore
             ) assessment
             LEFT JOIN quality.elevate_practice_liv_information information ON information.assessment_id = assessment.id
             LEFT JOIN core.lookup_values focus ON focus.id = information.primary_focus_lookup_value_id
+            LEFT JOIN core.lookup_values notice ON notice.id = information.notice_preference_lookup_value_id
+            LEFT JOIN core.lookup_values secondary_focus ON secondary_focus.id = information.secondary_focus_lookup_value_id
             OUTER APPLY (
                 SELECT TOP (1) record.id, record.record_id
                 FROM quality.liv_records record
@@ -83,7 +89,9 @@ public sealed partial class SqlFoundationDataStore
             reader => new LivStaffContextSummary(
                 reader.GetGuid(0), reader.GetString(1), GetGuidOrNull(reader, 2),
                 GetStringOrNull(reader, 3), GetStringOrNull(reader, 4), GetStringOrNull(reader, 5),
-                GetStringOrNull(reader, 6), GetGuidOrNull(reader, 7), GetGuidOrNull(reader, 8)),
+                GetStringOrNull(reader, 6), GetGuidOrNull(reader, 7), GetGuidOrNull(reader, 8),
+                GetStringOrNull(reader, 9), GetStringOrNull(reader, 10), GetStringOrNull(reader, 11),
+                GetStringOrNull(reader, 12), GetStringOrNull(reader, 13), GetStringOrNull(reader, 14)),
             cancellationToken);
         return rows.FirstOrDefault();
     }
@@ -133,14 +141,33 @@ public sealed partial class SqlFoundationDataStore
                    CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId
                         THEN liv.area_of_practice_other ELSE NULL END,
                    delivery.value_key, delivery.display_name,
-                   liv.source_elevate_assessment_id, liv.eli_primary_focus_key,
-                   liv.eli_primary_focus_snapshot, liv.eli_desired_outcome
+                    COALESCE(liv.source_elevate_assessment_id, probation_case.source_elevate_assessment_id),
+                   COALESCE(source_primary.value_key, liv.eli_primary_focus_key),
+                   COALESCE(source_primary.display_name, liv.eli_primary_focus_snapshot),
+                   COALESCE(source_information.desired_outcome, liv.eli_desired_outcome),
+                   source_notice.value_key, source_notice.display_name,
+                   CONVERT(nvarchar(7), source_information.preferred_visit_month, 126),
+                   source_secondary.value_key, source_secondary.display_name,
+                    source_information.secondary_focus_other,
+                    probation_case.id, probation_observation.observation_number
             FROM quality.liv_records liv
             JOIN people.staff subject ON subject.id = liv.subject_staff_id
             LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
             LEFT JOIN org.org_units area ON area.id = liv.org_unit_id
             LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id
             LEFT JOIN core.lookup_values delivery ON delivery.id = liv.delivery_area_lookup_value_id
+            LEFT JOIN quality.probation_observations probation_observation
+              ON probation_observation.linked_liv_record_id = liv.id
+            LEFT JOIN quality.probation_cases probation_case
+              ON probation_case.id = probation_observation.probation_case_id AND probation_case.archived_at IS NULL
+            LEFT JOIN quality.elevate_practice_liv_information source_information
+              ON source_information.assessment_id = COALESCE(liv.source_elevate_assessment_id, probation_case.source_elevate_assessment_id)
+            LEFT JOIN core.lookup_values source_notice
+              ON source_notice.id = source_information.notice_preference_lookup_value_id
+            LEFT JOIN core.lookup_values source_primary
+              ON source_primary.id = source_information.primary_focus_lookup_value_id
+            LEFT JOIN core.lookup_values source_secondary
+              ON source_secondary.id = source_information.secondary_focus_lookup_value_id
             WHERE liv.archived_at IS NULL
             {visibilityFilter}
             OPTION (LOOP JOIN);
@@ -164,7 +191,10 @@ public sealed partial class SqlFoundationDataStore
                 reader.IsDBNull(18) ? null : reader.GetBoolean(18),
                 ParseLivStringList(GetStringOrNull(reader, 19)), GetStringOrNull(reader, 20), [], [],
                 GetStringOrNull(reader, 21), GetStringOrNull(reader, 22), GetGuidOrNull(reader, 23),
-                GetStringOrNull(reader, 24), GetStringOrNull(reader, 25), GetStringOrNull(reader, 26), []),
+                GetStringOrNull(reader, 24), GetStringOrNull(reader, 25), GetStringOrNull(reader, 26), [],
+                GetStringOrNull(reader, 27), GetStringOrNull(reader, 28), GetStringOrNull(reader, 29),
+                GetStringOrNull(reader, 30), GetStringOrNull(reader, 31), GetStringOrNull(reader, 32),
+                GetGuidOrNull(reader, 33), reader.IsDBNull(34) ? null : reader.GetByte(34)),
             cancellationToken);
 
         if (cases.Count == 0)
@@ -173,17 +203,28 @@ public sealed partial class SqlFoundationDataStore
         }
 
         var caseIds = cases.Select(item => item.Id).ToHashSet();
+        var caseIdsCsv = string.Join(',', caseIds);
         var themes = await QueryAsync(
-            "SELECT liv_record_id, theme_id FROM quality.liv_record_themes;",
-            null,
+            """
+            SELECT liv_record_id, theme_id
+            FROM quality.liv_record_themes
+            WHERE liv_record_id IN (
+                SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@caseIds, ',')
+            );
+            """,
+            command => command.Parameters.AddWithValue("@caseIds", caseIdsCsv),
             reader => new LivThemeSelectionV2Row(reader.GetGuid(0), reader.GetGuid(1)),
             cancellationToken);
         var cycles = await QueryAsync(
             """
             SELECT id, liv_record_id, cycle_number, cycle_status, started_at, completed_at
             FROM quality.liv_cycles
+            WHERE liv_record_id IN (
+                SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@caseIds, ',')
+            )
             ORDER BY liv_record_id, cycle_number;
             """,
+            command => command.Parameters.AddWithValue("@caseIds", caseIdsCsv),
             reader => new LivCycleV2Row(
                 reader.GetGuid(0), reader.GetGuid(1), reader.GetInt32(2), reader.GetString(3),
                 reader.GetFieldValue<DateTimeOffset>(4), GetDateTimeOffsetOrNull(reader, 5)),
@@ -196,9 +237,14 @@ public sealed partial class SqlFoundationDataStore
                    stage.intended_follow_up_date, stage.distance_impact_text,
                    stage.development_opportunity_keys_json, stage.liv_visit_id
             FROM quality.liv_stages stage
+            JOIN quality.liv_cycles cycle ON cycle.id = stage.liv_cycle_id
             WHERE stage.archived_at IS NULL
+              AND cycle.liv_record_id IN (
+                  SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@caseIds, ',')
+              )
             ORDER BY stage.liv_cycle_id, stage.stage_order;
             """,
+            command => command.Parameters.AddWithValue("@caseIds", caseIdsCsv),
             reader => new LivStageV2Row(
                 reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetInt32(3),
                 reader.GetString(4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6),
@@ -210,9 +256,14 @@ public sealed partial class SqlFoundationDataStore
             SELECT rating.visit_id, focus.value_key, focus.display_name,
                    rating.descriptor_id, descriptor.visible_wording, rating.is_not_applicable
             FROM quality.liv_visit_ratings rating
+            JOIN quality.liv_visits visit ON visit.id = rating.visit_id
             JOIN core.lookup_values focus ON focus.id = rating.focus_lookup_value_id
-            LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id;
+            LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id
+            WHERE visit.liv_record_id IN (
+                SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@caseIds, ',')
+            );
             """,
+            command => command.Parameters.AddWithValue("@caseIds", caseIdsCsv),
             reader => new LivVisitRatingV2Row(
                 reader.GetGuid(0), new LivVisitRatingSummary(
                     reader.GetString(1), reader.GetString(2), GetGuidOrNull(reader, 3),
@@ -224,11 +275,16 @@ public sealed partial class SqlFoundationDataStore
                    CONVERT(nvarchar(5), visit.visit_time, 108), visit.visit_type,
                    visit.course_name, visit.course_group, visit.course_level,
                    visit.reflection_notes, visit.findings, visit.visit_status,
-                   visit.created_at, visit.updated_at, visit.cycle_id
+                   visit.created_at, visit.updated_at, visit.cycle_id,
+                   delivery.value_key, delivery.display_name
             FROM quality.liv_visits visit
-            WHERE visit.archived_at IS NULL;
+            LEFT JOIN core.lookup_values delivery ON delivery.id = visit.delivery_area_lookup_value_id
+            WHERE visit.archived_at IS NULL
+              AND visit.liv_record_id IN (
+                  SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@caseIds, ',')
+              );
             """,
-            null,
+            command => command.Parameters.AddWithValue("@caseIds", caseIdsCsv),
             reader => new LivVisitV2Row(
                 reader.GetGuid(0),
                 new LivVisitSummary(
@@ -237,7 +293,7 @@ public sealed partial class SqlFoundationDataStore
                     GetStringOrNull(reader, 7), GetStringOrNull(reader, 8), GetStringOrNull(reader, 9),
                     GetStringOrNull(reader, 10), reader.GetString(11),
                     reader.GetFieldValue<DateTimeOffset>(12), GetDateTimeOffsetOrNull(reader, 13),
-                    GetGuidOrNull(reader, 14), [])),
+                    GetGuidOrNull(reader, 14), [], GetStringOrNull(reader, 15), GetStringOrNull(reader, 16))),
             cancellationToken);
 
         var ratingsByVisit = visitRatings.GroupBy(row => row.VisitId)
@@ -290,6 +346,14 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         try
         {
+            await ValidateLivCreationScopeAsync(
+                connection,
+                transaction,
+                request.SubjectStaffId,
+                request.OrgUnitId,
+                currentUser,
+                cancellationToken);
+
             var moduleId = await GetModuleIdAsync(connection, transaction, "liv", cancellationToken);
             var recordId = Guid.NewGuid();
             var livId = Guid.NewGuid();
@@ -300,9 +364,6 @@ public sealed partial class SqlFoundationDataStore
             {
                 throw new WorkflowValidationException("This Elevate Learning and Innovation assessment already has a LIV case.");
             }
-            var deliveryAreaId = await ReadActiveLookupValueIdAsync(
-                connection, transaction, "liv_delivery_area", request.DeliveryAreaKey, true, cancellationToken);
-
             await using (var command = new SqlCommand(
                 """
                 INSERT INTO core.records (
@@ -349,7 +410,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@isElevatePractitioner", ToDbValue(request.IsElevatePractitioner));
                 command.Parameters.AddWithValue("@areaKeysJson", ToDbValue(SerializeLivStringList(request.AreaOfPracticeKeys)));
                 command.Parameters.AddWithValue("@areaOther", ToDbValue(request.AreaOfPracticeOther));
-                command.Parameters.AddWithValue("@deliveryAreaId", deliveryAreaId);
+                command.Parameters.AddWithValue("@deliveryAreaId", DBNull.Value);
                 command.Parameters.AddWithValue("@sourceAssessmentId", ToDbValue(source?.AssessmentId));
                 command.Parameters.AddWithValue("@primaryFocusKey", ToDbValue(source?.PrimaryFocusKey));
                 command.Parameters.AddWithValue("@primaryFocusName", ToDbValue(source?.PrimaryFocusName));
@@ -398,14 +459,21 @@ public sealed partial class SqlFoundationDataStore
             if (metadata is null) return FormSubmissionUpdateResult.NotFound;
             if (!CanEditLivMetadata(metadata, currentUser)) return FormSubmissionUpdateResult.Forbidden;
 
-            var deliveryAreaId = await ReadActiveLookupValueIdAsync(
-                connection, transaction, "liv_delivery_area", request.DeliveryAreaKey, true, cancellationToken);
+            if (request.OrgUnitId.HasValue)
+            {
+                await ValidateLivOrgUnitScopeAsync(
+                    connection,
+                    transaction,
+                    request.OrgUnitId.Value,
+                    currentUser,
+                    cancellationToken);
+            }
+
             var canWriteSensitive = CanViewLivSensitiveMetadata(metadata, currentUser);
             await using (var command = new SqlCommand(
                 """
                 UPDATE quality.liv_records
                 SET org_unit_id = COALESCE(@orgUnitId, org_unit_id),
-                    delivery_area_lookup_value_id = @deliveryAreaId,
                     is_elevate_practitioner = CASE WHEN @canWriteSensitive = 1 THEN @isElevatePractitioner ELSE is_elevate_practitioner END,
                     area_of_practice_other = CASE WHEN @canWriteSensitive = 1 THEN @areaOther ELSE area_of_practice_other END,
                     updated_by_user_account_id = @updatedBy,
@@ -417,7 +485,6 @@ public sealed partial class SqlFoundationDataStore
             {
                 command.Parameters.AddWithValue("@id", livId);
                 command.Parameters.AddWithValue("@orgUnitId", ToDbValue(request.OrgUnitId));
-                command.Parameters.AddWithValue("@deliveryAreaId", deliveryAreaId);
                 command.Parameters.AddWithValue("@canWriteSensitive", canWriteSensitive);
                 command.Parameters.AddWithValue("@isElevatePractitioner", ToDbValue(request.IsElevatePractitioner));
                 command.Parameters.AddWithValue("@areaOther", ToDbValue(request.AreaOfPracticeOther));
@@ -583,6 +650,8 @@ public sealed partial class SqlFoundationDataStore
             var metadata = await GetLivCaseMetadataV2Async(connection, transaction, livId, cancellationToken);
             if (metadata is null) return FormSubmissionUpdateResult.NotFound;
             if (!CanEditLivMetadata(metadata, currentUser)) return FormSubmissionUpdateResult.Forbidden;
+            var deliveryAreaId = await ReadActiveLookupValueIdAsync(
+                connection, transaction, "liv_delivery_area", request.DeliveryAreaKey, true, cancellationToken);
 
             await using (var command = new SqlCommand(
                 """
@@ -590,7 +659,8 @@ public sealed partial class SqlFoundationDataStore
                 SET visit_date = @visitDate, visit_time = @visitTime,
                     course_name = @courseName, course_group = @courseGroup,
                     course_level = @courseLevel, reflection_notes = @reflectionNotes,
-                    findings = @findings, updated_by_user_account_id = @updatedBy,
+                    findings = @findings, delivery_area_lookup_value_id = @deliveryAreaId,
+                    updated_by_user_account_id = @updatedBy,
                     updated_at = sysutcdatetime()
                 WHERE id = @visitId AND liv_record_id = @livId AND archived_at IS NULL;
                 """, connection, (SqlTransaction)transaction))
@@ -598,6 +668,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@visitId", visitId);
                 command.Parameters.AddWithValue("@livId", livId);
                 command.Parameters.AddWithValue("@updatedBy", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@deliveryAreaId", deliveryAreaId);
                 AddLivVisitParameters(command, request);
                 if (await command.ExecuteNonQueryAsync(cancellationToken) == 0) return FormSubmissionUpdateResult.NotFound;
             }
@@ -644,6 +715,76 @@ public sealed partial class SqlFoundationDataStore
             if (required.Any(value => !stageTypes.Contains(value)))
             {
                 throw new WorkflowValidationException("Add all five LIV stages before completing this cycle.");
+            }
+
+            ProbationLivCompletionLink? probationLink = null;
+            await using (var read = new SqlCommand(
+                """
+                SELECT observation.id, probation.id, probation.record_id
+                FROM quality.probation_observations observation
+                JOIN quality.probation_cases probation ON probation.id = observation.probation_case_id
+                WHERE observation.linked_liv_record_id = @livId
+                  AND observation.observation_number = 2
+                  AND observation.status = N'in_progress'
+                  AND probation.status = N'in_progress' AND probation.archived_at IS NULL;
+                """, connection, (SqlTransaction)transaction))
+            {
+                read.Parameters.AddWithValue("@livId", livId);
+                await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+                if (await reader.ReadAsync(cancellationToken))
+                    probationLink = new ProbationLivCompletionLink(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2));
+            }
+
+            if (probationLink is not null)
+            {
+                await using (var command = new SqlCommand(
+                    """
+                    UPDATE quality.liv_cycles
+                    SET cycle_status = N'completed', completed_at = sysutcdatetime(),
+                        updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE id = @cycleId;
+                    UPDATE quality.liv_stages
+                    SET stage_status = N'completed', updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE liv_cycle_id = @cycleId AND archived_at IS NULL;
+                    UPDATE quality.liv_visits
+                    SET visit_status = N'completed', updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE cycle_id = @cycleId AND archived_at IS NULL;
+                    UPDATE quality.liv_records
+                    SET status = N'closed', current_stage = N'completed', completion_date = CONVERT(date, sysutcdatetime()),
+                        updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE id = @livId;
+                    UPDATE quality.probation_observations
+                    SET status = N'completed', completed_at = sysutcdatetime(), completed_by_user_account_id = @user,
+                        updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE id = @observationId;
+                    UPDATE quality.probation_observations
+                    SET status = N'in_progress', started_at = COALESCE(started_at, sysutcdatetime()),
+                        updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE probation_case_id = @probationCaseId AND observation_number = 3 AND status = N'not_started';
+                    UPDATE quality.probation_cases
+                    SET current_observation_number = 3, updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE id = @probationCaseId;
+                    """, connection, (SqlTransaction)transaction))
+                {
+                    command.Parameters.AddWithValue("@cycleId", cycle.Id);
+                    command.Parameters.AddWithValue("@livId", livId);
+                    command.Parameters.AddWithValue("@observationId", probationLink.ObservationId);
+                    command.Parameters.AddWithValue("@probationCaseId", probationLink.CaseId);
+                    command.Parameters.AddWithValue("@user", ToDbValue(currentUser.UserAccountId));
+                    await command.ExecuteNonQueryAsync(cancellationToken);
+                }
+                await WriteAuditAsync(
+                    connection, transaction, currentUser.UserAccountId, metadata.RecordId,
+                    "liv_cycle", cycle.Id, "liv.probation_observation_completed",
+                    $"Probation Observation 2 LIV completed by {currentUser.DisplayName}.", null,
+                    JsonSerializer.Serialize(new { cycle.CycleNumber, probationLink.CaseId }), cancellationToken);
+                await WriteAuditAsync(
+                    connection, transaction, currentUser.UserAccountId, probationLink.CaseRecordId,
+                    "probation_observation", probationLink.ObservationId, "probation.observation_completed",
+                    $"Probation Observation 2 completed through LIV by {currentUser.DisplayName}.", null,
+                    JsonSerializer.Serialize(new { livId, cycle.CycleNumber }), cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new LivCycleSummary(cycle.Id, cycle.CycleNumber, "completed", cycle.StartedAt, DateTimeOffset.UtcNow, false, []);
             }
 
             var nextCycleId = Guid.NewGuid();
@@ -778,6 +919,64 @@ public sealed partial class SqlFoundationDataStore
             : null;
     }
 
+    private static async Task ValidateLivCreationScopeAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid subjectStaffId,
+        Guid? orgUnitId,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM people.staff staff
+            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = staff.id
+            WHERE staff.id = @subjectStaffId
+              AND staff.account_status = 'active'
+              AND staff.archived_at IS NULL;
+            """,
+            connection,
+            (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
+        command.Parameters.AddWithValue("@subjectStaffId", subjectStaffId);
+        if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != 1)
+        {
+            throw new WorkflowValidationException("You cannot create a LIV for a staff member outside your assigned scope.");
+        }
+
+        if (orgUnitId.HasValue)
+        {
+            await ValidateLivOrgUnitScopeAsync(connection, transaction, orgUnitId.Value, currentUser, cancellationToken);
+        }
+    }
+
+    private static async Task ValidateLivOrgUnitScopeAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid orgUnitId,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM org.org_units unit
+            JOIN org.fn_visible_org_units(@currentUserAccountId) visible ON visible.org_unit_id = unit.id
+            WHERE unit.id = @orgUnitId
+              AND unit.is_active = 1
+              AND unit.archived_at IS NULL;
+            """,
+            connection,
+            (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
+        command.Parameters.AddWithValue("@orgUnitId", orgUnitId);
+        if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != 1)
+        {
+            throw new WorkflowValidationException("The selected LIV team or faculty is outside your assigned scope.");
+        }
+    }
+
     private static bool CanEditLivMetadata(LivCaseMetadataV2 metadata, CurrentUser currentUser) =>
         metadata.Status == "in_progress"
         && (metadata.ReviewerStaffId == currentUser.StaffId
@@ -898,17 +1097,23 @@ public sealed partial class SqlFoundationDataStore
         Guid? userAccountId,
         CancellationToken cancellationToken)
     {
+        Guid? deliveryAreaId = null;
+        if (!string.IsNullOrWhiteSpace(request.DeliveryAreaKey))
+        {
+            deliveryAreaId = await ReadActiveLookupValueIdAsync(
+                connection, transaction, "liv_delivery_area", request.DeliveryAreaKey, true, cancellationToken);
+        }
         await using var command = new SqlCommand(
             """
             INSERT INTO quality.liv_visits (
                 id, liv_record_id, cycle_id, visit_number, visit_date, visit_time,
                 visit_type, course_name, course_group, course_level, reflection_notes,
-                findings, visit_status, created_by_user_account_id
+                findings, delivery_area_lookup_value_id, visit_status, created_by_user_account_id
             ) VALUES (
                 @id, @livId, @cycleId, @visitNumber, @visitDate, @visitTime,
                 CASE WHEN @visitNumber = 1 THEN N'initial' ELSE N'follow_up' END,
                 @courseName, @courseGroup, @courseLevel, @reflectionNotes,
-                @findings, N'in_progress', @createdBy
+                @findings, @deliveryAreaId, N'in_progress', @createdBy
             );
             """, connection, (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@id", visitId);
@@ -916,6 +1121,7 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@cycleId", cycleId);
         command.Parameters.AddWithValue("@visitNumber", visitNumber);
         command.Parameters.AddWithValue("@createdBy", ToDbValue(userAccountId));
+        command.Parameters.AddWithValue("@deliveryAreaId", ToDbValue(deliveryAreaId));
         AddLivVisitParameters(command, request);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -997,4 +1203,5 @@ public sealed partial class SqlFoundationDataStore
     private sealed record LivVisitRatingV2Row(Guid VisitId, LivVisitRatingSummary Rating);
     private sealed record ElevateLivSourceV2Row(Guid AssessmentId, string? PrimaryFocusKey, string? PrimaryFocusName, string? DesiredOutcome, Guid? ExistingLivId);
     private sealed record LivCaseMetadataV2(Guid RecordId, Guid SubjectStaffId, Guid? ReviewerStaffId, Guid? CreatedByUserAccountId, string Status);
+    private sealed record ProbationLivCompletionLink(Guid ObservationId, Guid CaseId, Guid CaseRecordId);
 }

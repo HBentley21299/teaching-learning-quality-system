@@ -27,19 +27,16 @@ public sealed partial class SqlFoundationDataStore
         }
 
         var ratings = (request.Ratings ?? [])
-            .GroupBy(value => value.AreaId)
-            .Select(group => group.Last())
-            .ToArray();
-        var reflections = (request.Reflections ?? [])
-            .Where(value => !string.IsNullOrWhiteSpace(value.AreaKey))
-            .GroupBy(value => value.AreaKey, StringComparer.OrdinalIgnoreCase)
+            .Where(value => value.StatementId != Guid.Empty)
+            .GroupBy(value => value.StatementId)
             .Select(group => group.Last())
             .ToArray();
         var livInformation = request.LivInformation
             ?? new SaveElevateLivInformationRequest(null, null, null, null, null, null);
 
-        var knownAreaIds = current.Areas.Select(area => area.Id).ToHashSet();
-        var knownAreaKeys = current.Areas.Select(area => area.AreaKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var statementAreas = current.Areas
+            .SelectMany(area => area.Statements.Select(statement => new { statement.Id, AreaId = area.Id }))
+            .ToDictionary(value => value.Id, value => value.AreaId);
         var activeDescriptorIds = current.RatingScale
             .Where(value => value.IsActive)
             .Select(value => value.Id)
@@ -47,13 +44,12 @@ public sealed partial class SqlFoundationDataStore
         var noticeKeys = current.LivInformation.NoticeOptions.Select(option => option.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var focusKeys = current.LivInformation.FocusOptions.Select(option => option.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        if (ratings.Any(value => !knownAreaIds.Contains(value.AreaId) || !activeDescriptorIds.Contains(value.DescriptorId)))
+        if (ratings.Any(value =>
+                !statementAreas.TryGetValue(value.StatementId, out var areaId)
+                || areaId != value.AreaId
+                || !activeDescriptorIds.Contains(value.DescriptorId)))
         {
-            throw new WorkflowValidationException("Every section response must use an active descriptor from this assessment framework.");
-        }
-        if (reflections.Any(value => !knownAreaKeys.Contains(value.AreaKey)))
-        {
-            throw new WorkflowValidationException("One or more reflections do not belong to this assessment framework.");
+            throw new WorkflowValidationException("Every statement response must use an active descriptor from this assessment framework.");
         }
         if (!string.IsNullOrWhiteSpace(livInformation.NoticePreferenceKey)
             && !noticeKeys.Contains(livInformation.NoticePreferenceKey))
@@ -92,9 +88,9 @@ public sealed partial class SqlFoundationDataStore
 
         if (request.Submit)
         {
-            if (ratings.Length != current.Areas.Count)
+            if (ratings.Length != statementAreas.Count)
             {
-                throw new WorkflowValidationException("Rate every Elevate Learning and Innovation section before submitting.");
+                throw new WorkflowValidationException("Rate every Elevate Learning and Innovation statement before submitting.");
             }
             if (string.IsNullOrWhiteSpace(livInformation.NoticePreferenceKey)
                 || !preferredVisitMonth.HasValue
@@ -125,47 +121,11 @@ public sealed partial class SqlFoundationDataStore
 
             foreach (var rating in ratings)
             {
-                await using var command = new SqlCommand(
-                    """
-                    INSERT INTO quality.elevate_practice_area_ratings (
-                        assessment_id, area_id, descriptor_id, hidden_numeric_value
-                    )
-                    SELECT @assessmentId, area.id, descriptor.id, descriptor.hidden_numeric_value
-                    FROM quality.elevate_practice_areas area
-                    JOIN quality.elevate_practice_rubric_descriptors descriptor
-                      ON descriptor.id = @descriptorId
-                     AND descriptor.framework_id = area.framework_id
-                    WHERE area.id = @areaId
-                      AND area.framework_id = @frameworkId
-                      AND descriptor.is_active = 1
-                      AND descriptor.archived_at IS NULL;
-                    """,
-                    connection,
-                    (SqlTransaction)transaction);
-                command.Parameters.AddWithValue("@assessmentId", assessmentId);
-                command.Parameters.AddWithValue("@areaId", rating.AreaId);
-                command.Parameters.AddWithValue("@descriptorId", rating.DescriptorId);
-                command.Parameters.AddWithValue("@frameworkId", frameworkId);
-                await command.ExecuteNonQueryAsync(cancellationToken);
+                await InsertElevateStatementRatingAsync(
+                    connection, transaction, assessmentId, frameworkId, rating, true, cancellationToken);
             }
-
-            foreach (var reflection in reflections)
-            {
-                await using var command = new SqlCommand(
-                    """
-                    INSERT INTO quality.elevate_practice_reflections (assessment_id, area_id, reflection_text)
-                    SELECT @assessmentId, id, @text
-                    FROM quality.elevate_practice_areas
-                    WHERE framework_id = @frameworkId AND area_key = @areaKey;
-                    """,
-                    connection,
-                    (SqlTransaction)transaction);
-                command.Parameters.AddWithValue("@assessmentId", assessmentId);
-                command.Parameters.AddWithValue("@frameworkId", frameworkId);
-                command.Parameters.AddWithValue("@areaKey", reflection.AreaKey);
-                command.Parameters.AddWithValue("@text", ToDbValue(string.IsNullOrWhiteSpace(reflection.Text) ? null : reflection.Text.Trim()));
-                await command.ExecuteNonQueryAsync(cancellationToken);
-            }
+            await RebuildElevateAreaRatingsAsync(
+                connection, transaction, assessmentId, frameworkId, cancellationToken);
 
             await SaveElevateLivInformationAsync(
                 connection, transaction, assessmentId, livInformation, preferredVisitMonth, cancellationToken);
@@ -364,6 +324,81 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@secondaryFocusKey", ToDbValue(request.SecondaryFocusKey));
         command.Parameters.AddWithValue("@secondaryFocusOther", ToDbValue(request.SecondaryFocusOther?.Trim()));
         command.Parameters.AddWithValue("@desiredOutcome", ToDbValue(request.DesiredOutcome?.Trim()));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertElevateStatementRatingAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid assessmentId,
+        Guid frameworkId,
+        ElevatePracticeRatingRequest rating,
+        bool requireActiveDescriptor,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            $"""
+            INSERT INTO quality.elevate_practice_ratings (
+                assessment_id, statement_id, score, descriptor_id
+            )
+            SELECT @assessmentId, statement.id, descriptor.hidden_numeric_value, descriptor.id
+            FROM quality.elevate_practice_statements statement
+            JOIN quality.elevate_practice_areas area ON area.id = statement.area_id
+            JOIN quality.elevate_practice_rubric_descriptors descriptor
+              ON descriptor.id = @descriptorId
+             AND descriptor.framework_id = area.framework_id
+            WHERE statement.id = @statementId
+              AND area.id = @areaId
+              AND area.framework_id = @frameworkId
+              AND descriptor.archived_at IS NULL
+              {(requireActiveDescriptor ? "AND descriptor.is_active = 1" : string.Empty)};
+            """,
+            connection,
+            (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@assessmentId", assessmentId);
+        command.Parameters.AddWithValue("@statementId", rating.StatementId);
+        command.Parameters.AddWithValue("@areaId", rating.AreaId);
+        command.Parameters.AddWithValue("@descriptorId", rating.DescriptorId);
+        command.Parameters.AddWithValue("@frameworkId", frameworkId);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
+        {
+            throw new WorkflowValidationException("One or more statement responses are invalid.");
+        }
+    }
+
+    private static async Task RebuildElevateAreaRatingsAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid assessmentId,
+        Guid frameworkId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            ;WITH area_scores AS (
+                SELECT statement.area_id,
+                       CAST(ROUND(AVG(CAST(rating.score AS decimal(9, 4))), 0) AS tinyint) AS hidden_numeric_value
+                FROM quality.elevate_practice_ratings rating
+                JOIN quality.elevate_practice_statements statement ON statement.id = rating.statement_id
+                WHERE rating.assessment_id = @assessmentId
+                GROUP BY statement.area_id
+            )
+            INSERT INTO quality.elevate_practice_area_ratings (
+                assessment_id, area_id, descriptor_id, hidden_numeric_value
+            )
+            SELECT @assessmentId, score.area_id, descriptor.id, score.hidden_numeric_value
+            FROM area_scores score
+            JOIN quality.elevate_practice_areas area
+              ON area.id = score.area_id AND area.framework_id = @frameworkId
+            JOIN quality.elevate_practice_rubric_descriptors descriptor
+              ON descriptor.framework_id = @frameworkId
+             AND descriptor.hidden_numeric_value = score.hidden_numeric_value
+             AND descriptor.archived_at IS NULL;
+            """,
+            connection,
+            (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@assessmentId", assessmentId);
+        command.Parameters.AddWithValue("@frameworkId", frameworkId);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

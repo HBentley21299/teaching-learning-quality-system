@@ -26,6 +26,8 @@ public static class PermissionKeys
     public const string ElevatePracticeSubmit = "elevate_practice.submit";
     public const string CoachingSubmit = "coaching.submit";
     public const string CoachingManage = "coaching.manage";
+    public const string ProbationSubmit = "probation.submit";
+    public const string ProbationManage = "probation.manage";
     public const string ReportsViewAll = "reports.view_all";
     public const string ReportsViewScoped = "reports.view_scoped";
 
@@ -55,6 +57,8 @@ public static class PermissionKeys
         ElevatePracticeSubmit,
         CoachingSubmit,
         CoachingManage,
+        ProbationSubmit,
+        ProbationManage,
         ReportsViewAll,
         ReportsViewScoped
     ];

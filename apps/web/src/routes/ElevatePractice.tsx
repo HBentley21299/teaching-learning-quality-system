@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -27,7 +28,6 @@ type LivInformationDraft = Omit<ElevateLivInformation, "noticeOptions" | "focusO
 
 type PracticeDraft = {
   ratings: Record<string, string>;
-  reflections: Record<string, string>;
   livInformation: LivInformationDraft;
 };
 
@@ -87,7 +87,7 @@ export function ElevatePractice({
   return (
     <div className="route-stack">
       <div className="route-header">
-        <div><p className="eyebrow">Annual staff self-assessment</p><h1>Elevate Learning and Innovation</h1></div>
+        <div><p className="eyebrow">Staff self-assessment</p><h1>Elevate Learning and Innovation</h1></div>
         {isAdmin ? (
           <div className="segmented-control" aria-label="Elevate Learning and Innovation view">
             <button className={view === "assessment" ? "is-active" : ""} onClick={() => setView("assessment")} type="button">My assessment</button>
@@ -248,8 +248,12 @@ function AssessmentEditor({
 }) {
   const livStep = workspace.areas.length;
   const activeArea = step < workspace.areas.length ? workspace.areas[step] : null;
-  const completed = workspace.areas.filter((area) => draft.ratings[area.id]).length;
-  const percentage = workspace.areas.length ? Math.round((completed / workspace.areas.length) * 100) : 0;
+  const totalStatements = workspace.areas.reduce((total, area) => total + area.statements.length, 0);
+  const completed = workspace.areas.reduce(
+    (total, area) => total + area.statements.filter((statement) => draft.ratings[statement.id]).length,
+    0
+  );
+  const percentage = totalStatements ? Math.round((completed / totalStatements) * 100) : 0;
 
   function updateLiv(updates: Partial<LivInformationDraft>) {
     onChange({ ...draft, livInformation: { ...draft.livInformation, ...updates } });
@@ -265,14 +269,14 @@ function AssessmentEditor({
         <div><span>Status</span><strong>{adminStatus === "submitted" || workspace.status === "submitted" ? "Submitted" : adminStatus === "draft" || workspace.status === "draft" ? "Draft" : "Not started"}</strong></div>
       </section>
       <section className="practice-progress-band" aria-label="Assessment progress">
-        <div><strong>{completed}/{workspace.areas.length}</strong><span>sections rated</span></div>
+        <div><strong>{completed}/{totalStatements}</strong><span>statements rated</span></div>
         <div className="practice-progress-track"><span style={{ width: `${percentage}%` }} /></div><span>{percentage}%</span>
       </section>
       <div className="practice-editor-layout">
         <aside className="practice-step-list" aria-label="Assessment sections">
           {workspace.areas.map((area, index) => (
             <button className={step === index ? "is-active" : ""} key={area.areaKey} onClick={() => onStepChange(index)} type="button">
-              <span>{index + 1}</span><strong>{area.name}</strong>{draft.ratings[area.id] ? <Check size={15} aria-label="Complete" /> : null}
+              <span>{index + 1}</span><strong>{area.name}</strong>{area.statements.every((statement) => draft.ratings[statement.id]) ? <Check size={15} aria-label="Complete" /> : null}
             </button>
           ))}
           <button className={step === livStep ? "is-active" : ""} onClick={() => onStepChange(livStep)} type="button"><span>{livStep + 1}</span><strong>LIV Information</strong></button>
@@ -280,29 +284,41 @@ function AssessmentEditor({
         <div className="practice-editor-content">
           {activeArea ? (
             <div className="practice-area-section">
-              <div className="panel-heading"><div><p className="eyebrow">{activeArea.category}</p><h2>{activeArea.name}</h2></div><span>{draft.ratings[activeArea.id] ? "Rated" : "Choose one descriptor"}</span></div>
-              <fieldset className="coaching-wording-rubric">
-                <legend>Choose the wording that best represents your current practice</legend>
+              <div className="panel-heading"><div><p className="eyebrow">{activeArea.category}</p><h2>{activeArea.name}</h2></div><span>{activeArea.statements.filter((statement) => draft.ratings[statement.id]).length}/{activeArea.statements.length} rated</span></div>
+              <section className="practice-rubric-reference" aria-label="Elevate Learning and Innovation rubric reference">
+                <h3>Rubric reference</h3>
                 <div>
                   {workspace.ratingScale.filter((rating) => rating.isActive).map((rating) => (
-                    <button
-                      className={draft.ratings[activeArea.id] === rating.id ? "is-selected" : ""}
-                      key={rating.id}
-                      onClick={() => onChange({ ...draft, ratings: { ...draft.ratings, [activeArea.id]: rating.id } })}
-                      style={{ borderLeftColor: rating.colorHex ?? "#60736b" }}
-                      type="button"
-                    >
+                    <div key={rating.id} style={{ borderLeftColor: rating.colorHex ?? "#60736b" }}>
                       <i aria-hidden="true" style={{ background: rating.colorHex ?? "#60736b" }} />
                       <span><strong>{rating.descriptor}</strong><small>{rating.meaning}</small></span>
-                    </button>
+                    </div>
                   ))}
                 </div>
-              </fieldset>
+              </section>
               <div className="practice-statement-list">
-                <div className="panel-heading"><h3>Teaching and learning statements</h3><span>Guidance and reference</span></div>
-                {activeArea.statements.map((statement, index) => <div className="practice-statement" key={statement.id}><p><span>{index + 1}</span>{statement.text}</p></div>)}
+                <div className="panel-heading"><h3>Teaching and learning statements</h3><span>Choose one response per statement</span></div>
+                {activeArea.statements.map((statement, index) => (
+                  <div className="practice-statement" key={statement.id}>
+                    <p><span>{index + 1}</span>{statement.text}</p>
+                    <div className="likert-control" role="group" aria-label={`Response for ${statement.text}`}>
+                      {workspace.ratingScale.filter((rating) => rating.isActive).map((rating) => (
+                        <button
+                          aria-pressed={draft.ratings[statement.id] === rating.id}
+                          className={draft.ratings[statement.id] === rating.id ? "is-selected" : ""}
+                          key={rating.id}
+                          onClick={() => onChange({ ...draft, ratings: { ...draft.ratings, [statement.id]: rating.id } })}
+                          style={{ "--rating-color": rating.colorHex ?? "#60736b" } as CSSProperties}
+                          type="button"
+                        >
+                          <i aria-hidden="true" />
+                          <strong>{rating.descriptor}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
-              <label className="entry-field practice-reflection"><span>Evidence or reflection <small>Optional</small></span><small>{activeArea.reflectionPrompt}</small><textarea onChange={(event) => onChange({ ...draft, reflections: { ...draft.reflections, [activeArea.areaKey]: event.target.value } })} rows={5} value={draft.reflections[activeArea.areaKey] ?? ""} /></label>
             </div>
           ) : (
             <LivInformationEditor information={draft.livInformation} onChange={updateLiv} workspace={workspace} />
@@ -418,16 +434,16 @@ function ElevatePracticeResult({ workspace, onBack }: { workspace: ElevatePracti
         <div className="practice-result-score"><span>Overall profile</span><strong>{workspace.overallJudgement ?? "Not yet rated"}</strong><small>Rubric outcome</small></div>
         <div className="practice-result-lock"><LockKeyhole size={18} aria-hidden="true" /><span>Locked</span><small>{workspace.academicYear}{workspace.submittedAt ? ` · ${formatDate(workspace.submittedAt)}` : ""}</small></div>
       </section>
-      <section className="panel"><div className="panel-heading"><h2>Section outcomes</h2><span>Wording judgements</span></div><div className="practice-result-areas">{workspace.areas.map((area) => <div key={area.areaKey}><span>{area.name}</span><strong>{area.judgement ?? "Not yet rated"}</strong>{area.reflection ? <small>{area.reflection}</small> : null}</div>)}</div></section>
-      <section className="panel">
-        <div className="panel-heading"><h2>LIV Information</h2><span>Used when a LIV case is created</span></div>
-        <div className="detail-grid">
+      <section className="panel"><div className="panel-heading"><h2>Practice outcomes</h2><span>Section results</span></div><div className="practice-result-areas">{workspace.areas.map((area) => <div key={area.areaKey}><span>{area.name}</span><strong>{area.judgement ?? "Not yet rated"}</strong></div>)}</div></section>
+      <section className="panel practice-liv-summary">
+        <div className="panel-heading"><div><p className="eyebrow">Learning, Innovation and Vision</p><h2>LIV information</h2></div><span>Ready for case creation</span></div>
+        <div className="liv-information-grid">
           <div><span>Notice preference</span><strong>{optionName(workspace.livInformation.noticePreferenceKey, workspace.livInformation.noticeOptions)}</strong></div>
-          <div><span>Preferred month</span><strong>{workspace.livInformation.preferredVisitMonth ?? "Not provided"}</strong></div>
+          <div><span>Preferred month</span><strong>{formatPreferredMonth(workspace.livInformation.preferredVisitMonth)}</strong></div>
           <div><span>Primary focus</span><strong>{optionName(workspace.livInformation.primaryFocusKey, workspace.livInformation.focusOptions)}</strong></div>
           <div><span>Secondary focus</span><strong>{workspace.livInformation.secondaryFocusKey === "other" ? workspace.livInformation.secondaryFocusOther ?? "Other" : optionName(workspace.livInformation.secondaryFocusKey, workspace.livInformation.focusOptions)}</strong></div>
         </div>
-        <details><summary>Desired outcome</summary><p>{workspace.livInformation.desiredOutcome || "No desired outcome recorded."}</p></details>
+        <div className="practice-liv-outcome"><span>What I would like to achieve through my LIV</span><p>{workspace.livInformation.desiredOutcome || "No desired outcome recorded."}</p></div>
       </section>
     </div>
   );
@@ -435,8 +451,7 @@ function ElevatePracticeResult({ workspace, onBack }: { workspace: ElevatePracti
 
 function createDraft(workspace: ElevatePracticeWorkspace): PracticeDraft {
   return {
-    ratings: Object.fromEntries(workspace.areas.filter((area) => area.descriptorId).map((area) => [area.id, area.descriptorId!])),
-    reflections: Object.fromEntries(workspace.areas.map((area) => [area.areaKey, area.reflection ?? ""])),
+    ratings: Object.fromEntries(workspace.areas.flatMap((area) => area.statements.filter((statement) => statement.descriptorId).map((statement) => [statement.id, statement.descriptorId!] as const))),
     livInformation: {
       noticePreferenceKey: workspace.livInformation.noticePreferenceKey,
       preferredVisitMonth: workspace.livInformation.preferredVisitMonth,
@@ -450,8 +465,10 @@ function createDraft(workspace: ElevatePracticeWorkspace): PracticeDraft {
 
 function toSaveRequest(workspace: ElevatePracticeWorkspace, draft: PracticeDraft, submit: boolean): SaveElevatePracticeAssessmentRequest {
   return {
-    ratings: Object.entries(draft.ratings).map(([areaId, descriptorId]) => ({ areaId, descriptorId })),
-    reflections: workspace.areas.map((area) => ({ areaKey: area.areaKey, text: draft.reflections[area.areaKey] ?? "" })),
+    ratings: workspace.areas.flatMap((area) => area.statements
+      .filter((statement) => draft.ratings[statement.id])
+      .map((statement) => ({ areaId: area.id, statementId: statement.id, descriptorId: draft.ratings[statement.id] }))),
+    reflections: [],
     livInformation: draft.livInformation,
     submit
   };
@@ -467,3 +484,4 @@ function practiceStatusClass(status: ElevatePracticeProgress["status"]) { return
 function formatAuditAction(action: string) { return action.split(/[._]/).filter(Boolean).map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" "); }
 function formatAuditJson(value?: string) { if (!value) return "No record snapshot"; try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; } }
 function formatDate(value: string) { return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
+function formatPreferredMonth(value?: string) { if (!value) return "Not provided"; const [year, month] = value.split("-").map(Number); return new Date(year, month - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" }); }

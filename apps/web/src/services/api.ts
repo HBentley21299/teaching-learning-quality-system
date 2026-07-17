@@ -42,6 +42,10 @@ import type {
   MyTeamMember,
   OrgUnitSummary,
   ProcessDashboardRecordSummary,
+  ProbationCase,
+  ProbationConfiguration,
+  ProbationStaffContext,
+  CreateProbationCaseRequest,
   RecordDetail,
   RecordAudit,
   RecordSummary,
@@ -52,6 +56,8 @@ import type {
   SaveOrgUnitManagerRequest,
   SaveOrganisationMembershipRequest,
   SaveLivVisitRequest,
+  SaveProbationStageRequest,
+  SaveProbationVisitRequest,
   SaveLearningWalkThemeRequest,
   SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
@@ -272,6 +278,20 @@ export const api = {
     sendJson<never, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete`, "POST"),
   changeLivStatus: (id: string, action: "close" | "reopen" | "archive") =>
     sendJson(`/api/v1/liv-records/${id}/status`, "POST", { action }),
+  probationCases: () => getJson<ProbationCase[]>("/api/v1/probation-observations"),
+  probationConfiguration: () => getJson<ProbationConfiguration>("/api/v1/probation-observations/configuration"),
+  probationStaffContext: (staffId: string) =>
+    getJson<ProbationStaffContext>(`/api/v1/probation-observations/staff/${staffId}/context`),
+  createProbationCase: (request: CreateProbationCaseRequest) =>
+    sendJson<CreateProbationCaseRequest, { id: string }>("/api/v1/probation-observations", "POST", request),
+  updateProbationStage: (caseId: string, observationId: string, stageId: string, request: SaveProbationStageRequest) =>
+    sendJson(`/api/v1/probation-observations/${caseId}/observations/${observationId}/stages/${stageId}`, "PUT", request),
+  updateProbationVisit: (caseId: string, observationId: string, request: SaveProbationVisitRequest) =>
+    sendJson(`/api/v1/probation-observations/${caseId}/observations/${observationId}/visit`, "PUT", request),
+  completeProbationObservation: (caseId: string, observationId: string) =>
+    sendJson(`/api/v1/probation-observations/${caseId}/observations/${observationId}/complete`, "POST"),
+  startProbationLiv: (caseId: string) =>
+    sendJson<never, { livRecordId: string; livSourceRecordId: string }>(`/api/v1/probation-observations/${caseId}/observations/2/start`, "POST"),
   staffProfiles: () =>
     getJson<StaffProfileSummary[]>("/api/v1/reports/staff-profile-summaries"),
   staffProfileRecords: () => getJson<StaffProfileRecordSummary[]>("/api/v1/staff-profiles"),
@@ -298,6 +318,12 @@ export const api = {
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/records/${recordId}`),
   coachingSessions: () => getJson<CoachingSessionSummary[]>("/api/v1/coaching/sessions"),
   coachingConfiguration: () => getJson<CoachingConfiguration>("/api/v1/coaching/configuration"),
+  updateCoachingConfiguration: (maxActionsPerSession: number) =>
+    sendJson<{ maxActionsPerSession: number }, { maxActionsPerSession: number }>(
+      "/api/v1/admin/coaching/configuration",
+      "PUT",
+      { maxActionsPerSession }
+    ),
   coachingSession: (id: string) => getJson<CoachingSessionDetail>(`/api/v1/coaching/sessions/${id}`),
   coachingContext: (staffId: string, cycleId?: string) =>
     getJson<CoachingContext>(

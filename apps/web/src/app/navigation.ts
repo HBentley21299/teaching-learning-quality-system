@@ -21,6 +21,7 @@ export const navigationItems = [
   { key: "admin", label: "Admin Centre", icon: Settings },
   { key: "learning", label: "Learning Walks", icon: Activity },
   { key: "liv", label: "LIV", icon: Lightbulb },
+  { key: "probation", label: "Probationary Observations", icon: ClipboardCheck },
   { key: "elevate", label: "Elevate Environments", icon: Building2 },
   { key: "practice", label: "Elevate Learning and Innovation", icon: Sparkles },
   { key: "coaching", label: "Coaching & Mentoring", icon: MessagesSquare },

@@ -7,7 +7,8 @@ import {
   MessagesSquare,
   RefreshCw,
   RotateCcw,
-  Search
+  Search,
+  UsersRound
 } from "lucide-react";
 import type { LucideProps } from "lucide-react";
 import { useMemo, useState, type ComponentType } from "react";
@@ -48,7 +49,8 @@ const processDefinitions: ProcessDefinition[] = [
   { key: "work_scrutiny", label: "Work Scrutiny", singular: "Work Scrutiny", icon: ClipboardCheck, tone: "blue" },
   { key: "cpd_event", label: "CPD", singular: "CPD event", icon: GraduationCap, tone: "green" },
   { key: "elevate_environment", label: "Elevate Environments", singular: "environment check", icon: Building2, tone: "amber" },
-  { key: "coaching_session", label: "Coaching & Mentoring", singular: "session", icon: MessagesSquare, tone: "teal" }
+  { key: "coaching_session", label: "Coaching & Mentoring", singular: "session", icon: MessagesSquare, tone: "teal" },
+  { key: "probation_case", label: "Probationary Observations", singular: "probation case", icon: UsersRound, tone: "blue" }
 ];
 
 export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }: DashboardProps) {
@@ -134,7 +136,10 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
   }, [analysisRecords, searchTerm, sortKey]);
 
   const selectedDefinition = processDefinitions.find((definition) => definition.key === selectedProcess)!;
-  const selectedRecordIds = useMemo(() => new Set(analysisRecords.map((record) => record.id)), [analysisRecords]);
+  const selectedRecordIds = useMemo(
+    () => new Set(analysisRecords.flatMap((record) => [record.id, record.relatedRecordId].filter((value): value is string => Boolean(value)))),
+    [analysisRecords]
+  );
   const linkedActions = useMemo(
     () => actions.filter((action) => action.sourceRecordId && selectedRecordIds.has(action.sourceRecordId)),
     [actions, selectedRecordIds]
@@ -236,7 +241,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
                 <strong>{definition.label}</strong>
                 <small>{supportingMetric}</small>
               </span>
-              <span className="process-tile-value">{records.length}</span>
+              <span className="process-tile-value">{definition.key === "probation_case" ? records.filter((record) => record.sampleSize > 0).length : records.length}</span>
             </button>
           );
         })}
@@ -485,6 +490,16 @@ function buildKpis(
     ];
   }
 
+  if (processKey === "probation_case") {
+    return [
+      { label: "Completed Observation 1", value: records.filter((record) => record.sampleSize === 1).length, tone: "blue" as const },
+      { label: "Completed Observation 2", value: records.filter((record) => record.sampleSize === 2).length, tone: "amber" as const },
+      { label: "Completed Observation 3", value: records.filter((record) => record.sampleSize === 3).length, tone: "green" as const },
+      { label: "Open actions", value: openActions.length, tone: "amber" as const },
+      { label: "Overdue actions", value: overdueActions.length, tone: overdueActions.length ? "red" as const : "green" as const }
+    ];
+  }
+
   return [
     { label: "Learning walks", value: records.length, tone: "blue" as const },
     { label: "Areas covered", value: areaCount, tone: "blue" as const },
@@ -511,6 +526,10 @@ function getTileSupportingMetric(processKey: ProcessKey, records: ProcessDashboa
   if (processKey === "coaching_session") {
     const completed = records.filter((record) => record.status === "completed").length;
     return `${completed} completed`;
+  }
+  if (processKey === "probation_case") {
+    const counts = [1, 2, 3].map((number) => records.filter((record) => record.sampleSize === number).length);
+    return `1: ${counts[0]} / 2: ${counts[1]} / 3: ${counts[2]}`;
   }
   const areas = countRecordAreas(records);
   return `${areas} area${areas === 1 ? "" : "s"} covered`;
@@ -733,6 +752,9 @@ function getRecordMeasure(record: ProcessDashboardRecordSummary, processKey: Pro
   if (processKey === "coaching_session") {
     return record.ownerDisplayName ?? "Not recorded";
   }
+  if (processKey === "probation_case") {
+    return record.sampleSize > 0 ? `Observation ${record.sampleSize}` : "Started";
+  }
   return record.ownerDisplayName ?? "Not recorded";
 }
 
@@ -748,6 +770,9 @@ function getMeasureHeader(processKey: ProcessKey) {
   }
   if (processKey === "coaching_session") {
     return "Coach or mentor";
+  }
+  if (processKey === "probation_case") {
+    return "Highest completed";
   }
   return "Recorded by";
 }

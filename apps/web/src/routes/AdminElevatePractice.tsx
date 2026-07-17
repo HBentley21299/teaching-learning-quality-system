@@ -73,7 +73,7 @@ export function AdminElevatePractice() {
 
       <section className="panel">
         <div className="panel-heading">
-          <div><p className="eyebrow">Annual self-assessment administration</p><h2>Elevate Learning and Innovation records</h2></div>
+          <div><p className="eyebrow">Self-assessment administration</p><h2>Elevate Learning and Innovation records</h2></div>
           <span>{filtered.length} shown</span>
         </div>
 
