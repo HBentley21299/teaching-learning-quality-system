@@ -383,10 +383,6 @@ export function StaffProfilePanel({
           <span>Evidence submitted</span>
           <strong>{detail.evidenceSubmitted}</strong>
         </div>
-        <div className="kpi">
-          <span>Milestones completed</span>
-          <strong>{detail.milestonesCompleted}</strong>
-        </div>
         <div className="kpi kpi-amber">
           <span>Reflections</span>
           <strong>
