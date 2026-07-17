@@ -36,6 +36,7 @@ export type ActionSummary = {
   id: string;
   sourceRecordId?: string;
   sourceRecordTitle?: string;
+  sourceRecordType?: string;
   subjectStaffId?: string;
   subjectStaffName?: string;
   ownerStaffId: string;
@@ -180,6 +181,7 @@ export type DashboardSummary = {
 export type ProcessDashboardRecordSummary = {
   id: string;
   processKey: "learning_walk" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session";
+  recordType: string;
   title: string;
   summary?: string;
   recordDate?: string;
@@ -193,6 +195,7 @@ export type ProcessDashboardRecordSummary = {
   subjectDisplayName?: string;
   theme?: string;
   detail?: string;
+  practiceObserved?: string;
   participantAreaBreakdown?: string;
   participantCount: number;
   attendanceCredits: number;
@@ -200,6 +203,13 @@ export type ProcessDashboardRecordSummary = {
   scoreTotal: number;
   scoreCount: number;
   barrierCount: number;
+  belowSecureCount: number;
+};
+
+export type ActivityOverTimePoint = {
+  month: string;
+  recordCount: number;
+  recordType: string;
 };
 
 export type StaffProfileSummary = {
@@ -241,10 +251,11 @@ export type StaffReflectionSummary = {
 };
 
 export type StaffCpdRecordSummary = {
-  id: string;
+  recordId: string;
   title: string;
   eventDate: string;
   themes?: string;
+  recordType: string;
 };
 
 export type StaffLivActionSummary = {
@@ -520,6 +531,7 @@ export type CoachingSessionSaveSummary = {
 
 export type StaffElevatePracticeSummary = {
   assessmentId: string;
+  recordId: string;
   academicYear: string;
   status: "draft" | "submitted";
   overallAverage?: number;
@@ -536,10 +548,72 @@ export type StaffProfileDetail = {
   accountStatus: string;
   evidenceSubmitted: number;
   milestonesCompleted: number;
+  attendanceCredits: number;
   reflections: StaffReflectionSummary[];
+  reflectionRecords: StaffReflectionRecordSummary[];
   cpdRecords: StaffCpdRecordSummary[];
   livActions: StaffLivActionSummary[];
+  associatedRecords: StaffAssociatedRecordSummary[];
   elevatePractice?: StaffElevatePracticeSummary;
+};
+
+export type StaffReflectionRecordSummary = {
+  id: string;
+  recordId: string;
+  title: string;
+  text: string;
+  reflectionDate: string;
+  createdAt: string;
+};
+
+export type StaffAssociatedRecordSummary = {
+  recordId: string;
+  recordType: string;
+  title: string;
+  recordDate?: string;
+  status: string;
+  summary?: string;
+  practiceObserved?: string;
+};
+
+export type StaffReflectionDetail = {
+  id: string;
+  recordId: string;
+  staffId: string;
+  staffName: string;
+  title: string;
+  text: string;
+  reflectionDate: string;
+  createdAt: string;
+};
+
+export type AuditHistory = {
+  id: string;
+  action: string;
+  summary?: string;
+  userDisplayName?: string;
+  createdAt: string;
+};
+
+export type ActionDetail = {
+  id: string;
+  sourceRecordId?: string;
+  sourceRecordTitle?: string;
+  sourceRecordType?: string;
+  subjectStaffId?: string;
+  subjectStaffName?: string;
+  ownerStaffId: string;
+  ownerStaffName?: string;
+  title: string;
+  detail?: string;
+  statusKey?: string;
+  priorityKey?: string;
+  dueDate?: string;
+  completedDate?: string;
+  completionNote?: string;
+  createdAt: string;
+  updatedAt?: string;
+  auditHistory: AuditHistory[];
 };
 
 export type AdminUserScopeSummary = {

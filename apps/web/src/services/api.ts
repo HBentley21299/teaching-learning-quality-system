@@ -1,5 +1,7 @@
 import type {
+  ActionDetail,
   ActionSummary,
+  ActivityOverTimePoint,
   AdminRoleSummary,
   AdminUserSummary,
   CoachingContext,
@@ -33,6 +35,7 @@ import type {
   StaffProfileDetail,
   StaffProfileRecordSummary,
   StaffProfileSummary,
+  StaffReflectionDetail,
   StaffSummary,
   SubmitFormRequest,
   UpdateActionRequest,
@@ -68,10 +71,16 @@ async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${url}`, { headers: await buildHeaders(false) });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText} for ${url}`);
+    throw new ApiRequestError(response.status, `${response.status} ${response.statusText} for ${url}`);
   }
 
   return (await response.json()) as T;
+}
+
+export class ApiRequestError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
 }
 
 async function sendJson<TRequest, TResponse = never>(url: string, method: "POST" | "PUT", body?: TRequest): Promise<ApiResult<TResponse>> {
@@ -130,11 +139,27 @@ export const api = {
   records: () => getJson<RecordSummary[]>("/api/v1/records"),
   recordDetail: (id: string) => getJson<RecordDetail>(`/api/v1/records/${id}`),
   actions: () => getJson<ActionSummary[]>("/api/v1/actions"),
+  actionDetail: (id: string) => getJson<ActionDetail>(`/api/v1/actions/${id}`),
   createAction: (request: CreateActionRequest) => sendJson("/api/v1/actions", "POST", request),
   updateAction: (id: string, request: UpdateActionRequest) => sendJson(`/api/v1/actions/${id}`, "PUT", request),
   dashboards: () => getJson<DashboardSummary[]>("/api/v1/reports/dashboards"),
   processDashboardRecords: () =>
     getJson<ProcessDashboardRecordSummary[]>("/api/v1/reports/process-records"),
+  activityOverTime: (filters: {
+    processKey: string;
+    startDate?: string;
+    endDate?: string;
+    areaCode?: string;
+    status?: string;
+    theme?: string;
+    practiceObserved?: string;
+  }) => {
+    const query = new URLSearchParams({ processKey: filters.processKey });
+    for (const [key, value] of Object.entries(filters)) {
+      if (key !== "processKey" && value) query.set(key, value);
+    }
+    return getJson<ActivityOverTimePoint[]>(`/api/v1/reports/activity-over-time?${query.toString()}`);
+  },
   learningWalkRollup: () =>
     getJson<LearningWalkRollupSummary[]>("/api/v1/reports/learning-walk-rollup"),
   formTemplates: () => getJson<FormTemplateSummary[]>("/api/v1/form-templates"),
@@ -156,6 +181,8 @@ export const api = {
   changeSubmissionStatus: (id: string, action: "submit" | "reopen" | "archive") =>
     sendJson(`/api/v1/form-submissions/${id}/status`, "POST", { action }),
   livRecords: () => getJson<LivRecordSummary[]>("/api/v1/liv-records"),
+  livRecordByRecordId: (recordId: string) =>
+    getJson<LivRecordSummary>(`/api/v1/liv-records/by-record/${recordId}`),
   createLivRecord: (request: SaveLivRecordRequest) => sendJson("/api/v1/liv-records", "POST", request),
   updateLivRecord: (id: string, request: SaveLivRecordRequest) =>
     sendJson(`/api/v1/liv-records/${id}`, "PUT", request),
@@ -171,8 +198,12 @@ export const api = {
   elevatePracticeProgress: () => getJson<ElevatePracticeProgress[]>("/api/v1/elevate-practice/progress"),
   elevatePracticeResult: (staffId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/latest`),
+  elevatePracticeRecord: (recordId: string) =>
+    getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/records/${recordId}`),
   coachingSessions: () => getJson<CoachingSessionSummary[]>("/api/v1/coaching/sessions"),
   coachingSession: (id: string) => getJson<CoachingSessionDetail>(`/api/v1/coaching/sessions/${id}`),
+  coachingRecord: (recordId: string) =>
+    getJson<CoachingSessionDetail>(`/api/v1/coaching/records/${recordId}`),
   coachingContext: (staffId: string, cycleId?: string) =>
     getJson<CoachingContext>(
       `/api/v1/coaching/staff/${staffId}/context${cycleId ? `?cycleId=${encodeURIComponent(cycleId)}` : ""}`
@@ -183,6 +214,10 @@ export const api = {
     sendJson<SaveCoachingSessionRequest, CoachingSessionSaveSummary>(`/api/v1/coaching/sessions/${id}`, "PUT", request),
   saveReflection: (staffId: string, pointKey: string, text: string) =>
     sendJson(`/api/v1/staff-profiles/${staffId}/reflections/${pointKey}`, "PUT", { text }),
+  createReflection: (staffId: string, request: { title: string; text: string; reflectionDate: string }) =>
+    sendJson<typeof request, { recordId: string }>(`/api/v1/staff-profiles/${staffId}/reflections`, "POST", request),
+  reflectionRecord: (recordId: string) =>
+    getJson<StaffReflectionDetail>(`/api/v1/reflections/by-record/${recordId}`),
   adminUsers: () => getJson<AdminUserSummary[]>("/api/v1/admin/users"),
   createAdminUser: (request: CreateAdminUserRequest) => sendJson("/api/v1/admin/users", "POST", request),
   updateAdminUser: (id: string, request: UpdateAdminUserRequest) =>

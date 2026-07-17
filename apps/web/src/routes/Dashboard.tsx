@@ -3,6 +3,7 @@ import {
   BookOpenCheck,
   Building2,
   ClipboardCheck,
+  Download,
   GraduationCap,
   MessagesSquare,
   RefreshCw,
@@ -10,11 +11,15 @@ import {
   Search
 } from "lucide-react";
 import type { LucideProps } from "lucide-react";
-import { useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { AccessiblePieChart, MonthlyActivityChart, type ChartDatum } from "../components/DashboardCharts";
+import { CollapsibleSection } from "../components/CollapsibleSection";
 import { DataTable } from "../components/DataTable";
+import { ActionDetailLink, FullRecordLink } from "../components/FullRecordLink";
 import { KpiStrip } from "../components/KpiStrip";
 import { Button } from "../design-system/Button";
-import type { ActionSummary, CurrentUser, OrgUnitSummary, ProcessDashboardRecordSummary } from "../services/types";
+import { api } from "../services/api";
+import type { ActionSummary, ActivityOverTimePoint, CurrentUser, OrgUnitSummary, ProcessDashboardRecordSummary } from "../services/types";
 
 type ProcessKey = ProcessDashboardRecordSummary["processKey"];
 type SortKey = "date_desc" | "date_asc" | "title" | "area" | "status";
@@ -57,9 +62,11 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
   const [areaFilter, setAreaFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [themeFilter, setThemeFilter] = useState("all");
+  const [practiceFilter, setPracticeFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date_desc");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activityPoints, setActivityPoints] = useState<ActivityOverTimePoint[]>([]);
 
   const canViewReports = user.permissions.includes("reports.view_all") || user.permissions.includes("reports.view_scoped");
   const canViewAll = user.permissions.includes("reports.view_all");
@@ -99,16 +106,39 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     () => uniqueValues(processRecordsInScope.flatMap((record) => splitValues(record.theme))),
     [processRecordsInScope]
   );
+  const practiceOptions = useMemo(
+    () => uniqueValues(processRecordsInScope.map((record) => record.practiceObserved ?? "")),
+    [processRecordsInScope]
+  );
 
   const analysisRecords = useMemo(
     () =>
       processRecordsInScope.filter((record) => {
         const matchesStatus = statusFilter === "all" || record.status === statusFilter;
         const matchesTheme = themeFilter === "all" || splitValues(record.theme).includes(themeFilter);
-        return matchesStatus && matchesTheme;
+        const matchesPractice = practiceFilter === "all" || record.practiceObserved === practiceFilter;
+        return matchesStatus && matchesTheme && matchesPractice;
       }),
-    [processRecordsInScope, statusFilter, themeFilter]
+    [practiceFilter, processRecordsInScope, statusFilter, themeFilter]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    api.activityOverTime({
+      processKey: selectedProcess,
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      areaCode: areaFilter === "all" ? undefined : areaFilter,
+      status: statusFilter === "all" ? undefined : statusFilter,
+      theme: themeFilter === "all" ? undefined : themeFilter,
+      practiceObserved: practiceFilter === "all" ? undefined : practiceFilter
+    }).then((points) => {
+      if (!cancelled) setActivityPoints(points);
+    }).catch(() => {
+      if (!cancelled) setActivityPoints([]);
+    });
+    return () => { cancelled = true; };
+  }, [areaFilter, endDate, practiceFilter, selectedProcess, startDate, statusFilter, themeFilter]);
 
   const visibleRecords = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase();
@@ -150,7 +180,12 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     { label: "Overdue", value: overdueActions.length }
   ];
 
-  const trendData = useMemo(() => buildMonthlyTrend(analysisRecords), [analysisRecords]);
+  const trendData = useMemo<ChartDatum[]>(
+    () => activityPoints.length
+      ? activityPoints.map((point) => ({ label: formatMonth(point.month), value: point.recordCount, detail: point.recordType }))
+      : buildMonthlyTrend(analysisRecords, startDate, endDate),
+    [activityPoints, analysisRecords, endDate, startDate]
+  );
   const areaData = useMemo(
     () => buildAreaBreakdown(analysisRecords, selectedProcess, areaFilter),
     [analysisRecords, areaFilter, selectedProcess]
@@ -168,6 +203,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     setSelectedProcess(processKey);
     setStatusFilter("all");
     setThemeFilter("all");
+    setPracticeFilter("all");
     setSearchTerm("");
     setSortKey("date_desc");
   }
@@ -178,6 +214,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     setAreaFilter("all");
     setStatusFilter("all");
     setThemeFilter("all");
+    setPracticeFilter("all");
     setSearchTerm("");
     setSortKey("date_desc");
   }
@@ -274,6 +311,15 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
               </select>
             </label>
           ) : null}
+          {selectedProcess === "learning_walk" ? (
+            <label className="record-filter-field">
+              <span>Practice observed</span>
+              <select onChange={(event) => setPracticeFilter(event.target.value)} value={practiceFilter}>
+                <option value="all">All judgements</option>
+                {practiceOptions.map((practice) => <option key={practice} value={practice}>{practice}</option>)}
+              </select>
+            </label>
+          ) : null}
           <Button icon={RotateCcw} onClick={clearFilters} variant="secondary">Reset</Button>
         </div>
       </section>
@@ -288,8 +334,13 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
       <KpiStrip items={kpis} />
 
       <div className="dashboard-visual-grid">
-        <DashboardBars title="Activity over time" subtitle="Records by month" data={trendData} />
-        <DashboardBars
+        <MonthlyActivityChart
+          title="Activity over time"
+          subtitle="Records aggregated by calendar month"
+          data={trendData}
+          recordType={selectedDefinition.label}
+        />
+        <AccessiblePieChart
           title="Organisation breakdown"
           subtitle={selectedProcess === "cpd_event" ? "Participants by area" : selectedProcess === "elevate_environment" ? "Checks by building" : "Records by area"}
           data={areaData}
@@ -297,7 +348,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
         {selectedProcess === "work_scrutiny" ? (
           <DashboardBars title="Action status" subtitle="Actions linked to scrutinies" data={actionStatusData} />
         ) : (
-          <DashboardBars
+          <AccessiblePieChart
             title={selectedProcess === "elevate_environment" ? "Overall standards" : selectedProcess === "coaching_session" ? "Session focus" : "Themes and focus"}
             subtitle="Frequency in the current view"
             data={themeData}
@@ -305,11 +356,11 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
         )}
         <section className="panel dashboard-attention-panel">
           <div className="panel-heading">
-            <h2>Needs attention</h2>
+            <h2>Upcoming Actions</h2>
             <span>{attentionActions.length} due or overdue</span>
           </div>
           {attentionActions.length === 0 ? (
-            <div className="empty-row">No linked actions need immediate attention.</div>
+            <div className="empty-row">No linked upcoming actions are due soon or overdue.</div>
           ) : (
             <div className="dashboard-attention-list">
               {attentionActions.map((action) => (
@@ -319,6 +370,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
                   </span>
                   <div>
                     <strong>{action.title}</strong>
+                    <ActionDetailLink actionId={action.id} />
                     <span>{action.ownerStaffName ?? "Unassigned"} · {formatDate(action.dueDate)}</span>
                   </div>
                 </div>
@@ -328,12 +380,13 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
         </section>
       </div>
 
-      <section className="panel dashboard-record-panel">
-        <div className="panel-heading dashboard-record-heading">
-          <div>
-            <h2>{selectedDefinition.label} records</h2>
-            <span>{visibleRecords.length} shown</span>
-          </div>
+      <CollapsibleSection
+        className="dashboard-record-panel"
+        count={visibleRecords.length}
+        defaultOpen={false}
+        title={`${selectedDefinition.label} records`}
+      >
+        <div className="dashboard-record-heading">
           <div className="dashboard-record-tools">
             <label className="search-box dashboard-record-search">
               <Search size={16} aria-hidden="true" />
@@ -354,6 +407,14 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
                 <option value="status">Status</option>
               </select>
             </label>
+            <Button
+              disabled={visibleRecords.length === 0}
+              icon={Download}
+              onClick={() => exportProcessRecords(visibleRecords, selectedDefinition.label)}
+              variant="secondary"
+            >
+              Export filtered CSV
+            </Button>
           </div>
         </div>
         {visibleRecords.length === 0 ? (
@@ -383,11 +444,16 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
                 key: "actions",
                 header: "Open actions",
                 render: (record) => actions.filter((action) => action.sourceRecordId === record.id && !action.completedDate).length
+              },
+              {
+                key: "open",
+                header: "",
+                render: (record) => <FullRecordLink label="Open record" recordId={record.id} recordType={record.recordType} />
               }
             ]}
           />
         )}
-      </section>
+      </CollapsibleSection>
     </div>
   );
 }
@@ -436,11 +502,11 @@ function buildKpis(
       ? scoredRecords.reduce((total, record) => total + record.scoreTotal, 0) / scoreCount
       : 0;
     return [
-      { label: "Completed checks", value: records.length, tone: "blue" as const },
-      { label: "Rooms checked", value: new Set(records.map((record) => record.areaCode).filter(Boolean)).size, tone: "green" as const },
+      { label: "Completed audits", value: records.length, tone: "blue" as const },
+      { label: "Rooms audited", value: new Set(records.map((record) => record.areaCode).filter(Boolean)).size, tone: "green" as const },
       { label: "Buildings covered", value: new Set(records.map((record) => record.parentAreaCode).filter(Boolean)).size, tone: "blue" as const },
-      { label: "Average score", value: averageScore.toFixed(1), tone: averageScore >= 2 ? "green" as const : "amber" as const },
-      { label: "Barrier findings", value: records.reduce((total, record) => total + record.barrierCount, 0), tone: records.some((record) => record.barrierCount > 0) ? "red" as const : "green" as const }
+      { label: "Average score", value: averageScore.toFixed(1), tone: averageScore >= 3 ? "green" as const : "amber" as const },
+      { label: "Below Secure", value: records.reduce((total, record) => total + record.belowSecureCount, 0), tone: records.some((record) => record.belowSecureCount > 0) ? "red" as const : "green" as const }
     ];
   }
 
@@ -642,16 +708,25 @@ function parseCpdAreaMetrics(value?: string): CpdAreaMetric[] {
   });
 }
 
-function buildMonthlyTrend(records: ProcessDashboardRecordSummary[]) {
+export function buildMonthlyTrend(records: ProcessDashboardRecordSummary[], startDate = "", endDate = "") {
   const counts = new Map<string, number>();
   for (const record of records) {
     const monthKey = getRecordDate(record).slice(0, 7);
     counts.set(monthKey, (counts.get(monthKey) ?? 0) + 1);
   }
-  return [...counts.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .slice(-8)
-    .map(([month, value]) => ({ label: formatMonth(month), value }));
+  const sortedMonths = [...counts.keys()].sort();
+  const resolvedEnd = (endDate || sortedMonths.at(-1) || new Date().toISOString().slice(0, 7)).slice(0, 7);
+  const end = new Date(`${resolvedEnd}-01T00:00:00`);
+  const defaultStart = new Date(end);
+  defaultStart.setMonth(defaultStart.getMonth() - 7);
+  const resolvedStart = (startDate || sortedMonths[0] || defaultStart.toISOString().slice(0, 7)).slice(0, 7);
+  const start = new Date(`${resolvedStart}-01T00:00:00`);
+  const result: ChartDatum[] = [];
+  for (const month = new Date(start); month <= end; month.setMonth(month.getMonth() + 1)) {
+    const key = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`;
+    result.push({ label: formatMonth(key), value: counts.get(key) ?? 0 });
+  }
+  return result;
 }
 
 function buildAreaBreakdown(records: ProcessDashboardRecordSummary[], processKey: ProcessKey, areaFilter: string) {
@@ -717,7 +792,7 @@ function getRecordMeasure(record: ProcessDashboardRecordSummary, processKey: Pro
     return record.sampleSize;
   }
   if (processKey === "elevate_environment") {
-    return record.scoreCount ? `${(record.scoreTotal / record.scoreCount).toFixed(1)} / 3` : "Not scored";
+    return record.scoreCount ? `${(record.scoreTotal / record.scoreCount).toFixed(1)} / 5` : "Not scored";
   }
   if (processKey === "coaching_session") {
     return record.ownerDisplayName ?? "Not recorded";
@@ -788,8 +863,38 @@ function formatDate(value?: string) {
 }
 
 function formatMonth(value: string) {
+  const monthValue = value.slice(0, 7);
   return new Intl.DateTimeFormat("en-GB", { month: "short", year: "2-digit" })
-    .format(new Date(`${value}-01T00:00:00`));
+    .format(new Date(`${monthValue}-01T00:00:00`));
+}
+
+function exportProcessRecords(records: ProcessDashboardRecordSummary[], label: string) {
+  const rows = [
+    ["Record ID", "Record type", "Title", "Date", "Organisation", "Owner", "Staff member", "Status", "Theme", "Focus", "Practice observed"],
+    ...records.map((record) => [
+      record.id,
+      record.recordType,
+      record.title,
+      getRecordDate(record),
+      formatArea(record),
+      record.ownerDisplayName ?? "",
+      record.subjectDisplayName ?? "",
+      record.status,
+      record.theme ?? "",
+      record.detail ?? "",
+      record.practiceObserved ?? ""
+    ])
+  ];
+  downloadCsv(rows, `${label.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-")}-filtered.csv`);
+}
+
+function downloadCsv(rows: string[][], filename: string) {
+  const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(",")).join("\r\n");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 
 function formatLabel(value: string) {

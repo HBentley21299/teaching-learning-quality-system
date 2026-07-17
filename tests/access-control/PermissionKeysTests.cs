@@ -21,5 +21,11 @@ public sealed class PermissionKeysTests
             Assert.Equal(key.ToLowerInvariant(), key);
         });
     }
-}
 
+    [Fact]
+    public void ExternalCpdSubmission_IsAFirstClassPermission()
+    {
+        Assert.Contains(PermissionKeys.CpdExternalSubmit, PermissionKeys.All);
+        Assert.NotEqual(PermissionKeys.CpdManage, PermissionKeys.CpdExternalSubmit);
+    }
+}

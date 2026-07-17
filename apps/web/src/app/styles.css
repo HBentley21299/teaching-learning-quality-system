@@ -890,6 +890,455 @@ td {
   }
 }
 
+/* Shared quality-system enhancements */
+.brand-block {
+  background: #000000;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  justify-content: center;
+  min-height: 66px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.brand-logo {
+  display: block;
+  height: 62px;
+  object-fit: contain;
+  width: auto;
+}
+
+.brand-block:focus-visible,
+.record-link:focus-visible,
+.rubric-option:focus-visible,
+.panel-collapse-button:focus-visible,
+.activity-chart [tabindex="0"]:focus-visible,
+.pie-chart [tabindex="0"]:focus-visible {
+  outline: 3px solid #5eead4;
+  outline-offset: 3px;
+}
+
+.record-link {
+  align-items: center;
+  color: var(--teal-strong);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  gap: 5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.record-link:hover {
+  text-decoration: underline;
+}
+
+.record-link-stack {
+  align-items: flex-start;
+  display: flex !important;
+  flex-direction: column;
+  gap: 7px !important;
+}
+
+.record-row {
+  grid-template-columns: minmax(180px, 1fr) repeat(4, auto);
+}
+
+.preserve-lines,
+.answer-item strong,
+.reflection-record-list .record-row span {
+  white-space: pre-wrap;
+}
+
+.collapsible-panel-heading {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.collapsible-panel-heading h2 {
+  margin-right: auto;
+}
+
+.collapsible-panel-tools {
+  width: 100%;
+}
+
+.dashboard-record-heading {
+  align-items: end;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+}
+
+.chart-shell {
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.activity-chart {
+  display: block;
+  height: auto;
+  max-height: 270px;
+  width: 100%;
+}
+
+.chart-grid-line {
+  stroke: #dce5df;
+  stroke-width: 1;
+}
+
+.chart-axis {
+  stroke: #52635d;
+  stroke-width: 1.4;
+}
+
+.chart-tick {
+  fill: #52635d;
+  font-size: 11px;
+}
+
+.chart-month-tick {
+  font-size: 10px;
+}
+
+.chart-axis-label {
+  fill: #31423c;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.activity-chart-bar {
+  fill: var(--teal);
+}
+
+.activity-chart g:hover .activity-chart-bar,
+.activity-chart g:focus .activity-chart-bar {
+  fill: var(--blue);
+}
+
+.pie-chart-layout {
+  align-items: center;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+}
+
+.pie-chart {
+  display: block;
+  height: auto;
+  max-width: 190px;
+  width: 100%;
+}
+
+.pie-chart path:focus,
+.pie-chart path:hover {
+  filter: brightness(0.88);
+}
+
+.pie-chart-legend {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pie-chart-legend li {
+  align-items: center;
+  display: grid;
+  font-size: 0.78rem;
+  gap: 7px;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+}
+
+.pie-chart-legend li > span {
+  border-radius: 3px;
+  height: 12px;
+  width: 12px;
+}
+
+.pie-chart-legend small {
+  color: var(--text-muted);
+}
+
+.cpd-entry-actions {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cpd-entry-actions-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cpd-entry-actions .button {
+  justify-content: center;
+  min-height: 48px;
+  width: 100%;
+}
+
+.rubric-entry-field {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.rubric-option-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.rubric-option {
+  align-content: center;
+  background: #ffffff;
+  border: 2px solid var(--rubric-color);
+  border-radius: 7px;
+  color: #263a33;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  min-height: 84px;
+  padding: 8px;
+  text-align: left;
+}
+
+.rubric-option small {
+  color: var(--text-muted);
+}
+
+.rubric-option > strong {
+  color: #263a33;
+  font-size: 0.83rem;
+}
+
+.rubric-option-selected {
+  background: color-mix(in srgb, var(--rubric-color) 13%, #ffffff);
+  box-shadow: inset 0 0 0 1px var(--rubric-color);
+}
+
+.rubric-selected-label {
+  color: #263a33 !important;
+  font-size: 0.7rem;
+  justify-content: flex-start !important;
+}
+
+.rubric-descriptor-guide {
+  background: #f7faf8;
+  border-radius: 6px;
+  padding: 9px 11px;
+}
+
+.rubric-descriptor-guide summary {
+  color: var(--teal-strong);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.rubric-descriptor-guide ol {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-left: 24px;
+}
+
+.rubric-descriptor-guide li {
+  border-left: 4px solid var(--rubric-color);
+  padding-left: 9px;
+}
+
+.rubric-descriptor-guide li strong,
+.rubric-descriptor-guide li span {
+  display: block;
+  justify-content: flex-start;
+}
+
+.rubric-descriptor-guide li span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+  margin-top: 2px;
+}
+
+.elevate-score-legend {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.elevate-status-panel {
+  height: 168px;
+  overflow: hidden;
+}
+
+.elevate-status-slots {
+  display: grid;
+  gap: 10px;
+  grid-auto-columns: 112px;
+  grid-auto-flow: column;
+  justify-content: start;
+  min-height: 84px;
+  overflow-x: auto;
+  padding-bottom: 3px;
+}
+
+.elevate-status-slot {
+  align-content: center;
+  background: #f2f5f3;
+  border: 1px dashed #cbd6cf;
+  border-radius: 8px;
+  display: grid;
+  height: 80px;
+  justify-items: center;
+  width: 112px;
+}
+
+.elevate-status-slot-active {
+  background: #e0f3ec;
+  border: 1px solid #68a88e;
+  color: #0b5d4d;
+}
+
+.elevate-status-slot small,
+.elevate-status-slot span {
+  font-size: 0.7rem;
+}
+
+.elevate-status-slot strong {
+  font-size: 1.35rem;
+}
+
+.full-record-page {
+  display: grid;
+  gap: 16px;
+}
+
+.full-record-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.full-record-header h1,
+.full-record-header p {
+  margin: 0;
+}
+
+.record-meta-panel {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.record-meta-panel div {
+  display: grid;
+  gap: 3px;
+}
+
+.record-meta-panel span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.audit-history-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.audit-history-list li {
+  display: grid;
+  gap: 2px;
+}
+
+.reflection-create-form {
+  background: #f7faf8;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  margin-bottom: 14px;
+  padding: 12px;
+}
+
+.staff-history-row small {
+  color: var(--text-muted);
+}
+
+.filter-result-count {
+  align-self: end;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 10px 0;
+}
+
+@media (max-width: 1100px) {
+  .brand-block {
+    min-height: 48px;
+    padding: 0;
+  }
+
+  .brand-logo {
+    height: 42px;
+  }
+
+  .rubric-option-grid,
+  .elevate-score-legend {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .brand-block {
+    min-height: 44px;
+    width: 78px;
+  }
+
+  .brand-logo {
+    height: 40px;
+  }
+
+  .dashboard-record-heading,
+  .full-record-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pie-chart-layout,
+  .cpd-entry-actions,
+  .rubric-option-grid,
+  .elevate-score-legend {
+    grid-template-columns: 1fr;
+  }
+
+  .pie-chart {
+    margin-inline: auto;
+  }
+
+  .rubric-option {
+    min-height: 64px;
+  }
+
+  .record-row {
+    align-items: start;
+    grid-template-columns: 1fr;
+  }
+
+  .record-row > span,
+  .record-row > a,
+  .record-row > button {
+    justify-self: start;
+  }
+
+  .activity-chart {
+    min-height: 210px;
+  }
+}
+
 /* Elevate Your Practice */
 .segmented-control {
   align-items: center;
@@ -2904,11 +3353,18 @@ td {
     display: flex;
     flex-direction: row;
     gap: 10px;
+    -ms-overflow-style: none;
     overflow-x: auto;
     padding: 10px;
     position: sticky;
+    scrollbar-width: none;
     top: 0;
     z-index: 8;
+  }
+
+  .sidebar::-webkit-scrollbar,
+  .sidebar nav::-webkit-scrollbar {
+    display: none;
   }
 
   .brand-block {
@@ -2919,7 +3375,9 @@ td {
   nav {
     display: flex;
     gap: 6px;
+    -ms-overflow-style: none;
     overflow-x: auto;
+    scrollbar-width: none;
   }
 
   .nav-item {

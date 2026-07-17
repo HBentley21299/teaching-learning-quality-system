@@ -48,6 +48,7 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\011_elevate_your_practice.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\012_remove_sustainable_resource_area.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\013_coaching_and_mentoring.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\014_quality_ui_data_linking.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\004_seed_elevate_rooms.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\005_seed_official_curriculum_staff.sql")
 )

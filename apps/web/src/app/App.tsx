@@ -22,6 +22,7 @@ import { PermissionsView } from "../routes/PermissionsView";
 import { StaffProfileWorkspace } from "../routes/StaffProfileWorkspace";
 import { ElevatePractice } from "../routes/ElevatePractice";
 import { CoachingMentoring } from "../routes/CoachingMentoring";
+import { RecordDetailPage, type DetailRoute } from "../routes/RecordDetailPage";
 
 const emptyUser: CurrentUser = {
   displayName: "Loading...",
@@ -32,6 +33,7 @@ const emptyUser: CurrentUser = {
 
 export function App() {
   const [route, setRoute] = useState<AppRoute>("dashboard");
+  const [detailRoute, setDetailRoute] = useState<DetailRoute | null>(() => parseDetailRoute(window.location.hash));
   const [user, setUser] = useState<CurrentUser>(emptyUser);
   const [modules, setModules] = useState<ModuleSummary[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
@@ -84,6 +86,12 @@ export function App() {
     void loadCoreData();
   }, [loadCoreData]);
 
+  useEffect(() => {
+    const handleHashChange = () => setDetailRoute(parseDetailRoute(window.location.hash));
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
   const refreshActions = useCallback(async () => {
     try {
       setActions(await api.actions());
@@ -94,16 +102,29 @@ export function App() {
 
   const activeItem = useMemo(() => navigationItems.find((item) => item.key === route), [route]);
 
+  const navigateTo = (nextRoute: AppRoute) => {
+    if (window.location.hash) {
+      window.history.pushState(null, "", `${window.location.pathname}${window.location.search}`);
+      setDetailRoute(null);
+    }
+    setRoute(nextRoute);
+  };
+
+  const returnFromDetail = () => {
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      setDetailRoute(null);
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
-        <div className="brand-block">
-          <div className="brand-mark">TL</div>
-          <div>
-            <strong>Quality System</strong>
-            <span>Teaching & Learning</span>
-          </div>
-        </div>
+        <button className="brand-block" onClick={() => navigateTo("dashboard")} title="Go to dashboard" type="button">
+          <img alt="iElevate" className="brand-logo" src="/assets/elevate-logo.png" />
+        </button>
         <nav>
           {navigationItems.map((item) => {
             const Icon = item.icon;
@@ -111,7 +132,7 @@ export function App() {
               <button
                 className={item.key === route ? "nav-item nav-item-active" : "nav-item"}
                 key={item.key}
-                onClick={() => setRoute(item.key)}
+                onClick={() => navigateTo(item.key)}
                 title={item.label}
                 type="button"
               >
@@ -152,7 +173,7 @@ export function App() {
           </div>
         ) : null}
 
-        <div className="content-frame" aria-label={activeItem?.label ?? "Dashboard"}>
+        <div className="content-frame" aria-label={detailRoute ? "Full record" : activeItem?.label ?? "Dashboard"}>
           {isLoading ? (
             <div className="route-stack">
               <p className="muted-copy">Loading the Teaching &amp; Learning system...</p>
@@ -173,7 +194,8 @@ export function App() {
             </section>
           ) : (
             <>
-              {route === "dashboard" ? (
+              {detailRoute ? <RecordDetailPage route={detailRoute} onBack={returnFromDetail} /> : null}
+              {!detailRoute && route === "dashboard" ? (
                 <Dashboard
                   actions={actions}
                   orgUnits={orgUnits}
@@ -182,13 +204,13 @@ export function App() {
                   onRefresh={loadCoreData}
                 />
               ) : null}
-              {route === "staff" ? <StaffProfiles staff={staff} profiles={profiles} user={user} /> : null}
-              {route === "admin" ? <AdminCentre user={user} modules={modules} profiles={profiles} staff={staff} /> : null}
-              {route === "learning" ? (
+              {!detailRoute && route === "staff" ? <StaffProfiles staff={staff} profiles={profiles} user={user} /> : null}
+              {!detailRoute && route === "admin" ? <AdminCentre user={user} modules={modules} profiles={profiles} staff={staff} /> : null}
+              {!detailRoute && route === "learning" ? (
                 <ModuleWorkspace title="Learning Walks" eyebrow="Quality activity" mode="learning" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "liv" ? <LivVisits staff={staff} user={user} onActionsChanged={refreshActions} /> : null}
-              {route === "elevate" ? (
+              {!detailRoute && route === "liv" ? <LivVisits staff={staff} user={user} onActionsChanged={refreshActions} /> : null}
+              {!detailRoute && route === "elevate" ? (
                 <ModuleWorkspace
                   title="Elevate Learning Environments"
                   eyebrow="Learning environment quality"
@@ -198,25 +220,39 @@ export function App() {
                   onActionsChanged={refreshActions}
                 />
               ) : null}
-              {route === "practice" ? <ElevatePractice user={user} onActionsChanged={refreshActions} /> : null}
-              {route === "coaching" ? (
+              {!detailRoute && route === "practice" ? <ElevatePractice user={user} onActionsChanged={refreshActions} /> : null}
+              {!detailRoute && route === "coaching" ? (
                 <CoachingMentoring staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "scrutiny" ? (
+              {!detailRoute && route === "scrutiny" ? (
                 <ModuleWorkspace title="Work Scrutiny" eyebrow="Quality activity" mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "cpd" ? (
+              {!detailRoute && route === "cpd" ? (
                 <ModuleWorkspace title="CPD Management" eyebrow="Professional learning" mode="cpd" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "profile" ? <StaffProfileWorkspace profiles={profiles} staff={staff} user={user} /> : null}
-              {route === "actions" ? (
+              {!detailRoute && route === "profile" ? <StaffProfileWorkspace profiles={profiles} staff={staff} user={user} /> : null}
+              {!detailRoute && route === "actions" ? (
                 <ActionsView actions={actions} staff={staff} user={user} onChanged={refreshActions} />
               ) : null}
-              {route === "security" ? <PermissionsView /> : null}
+              {!detailRoute && route === "security" ? <PermissionsView /> : null}
             </>
           )}
         </div>
       </main>
     </div>
   );
+}
+
+function parseDetailRoute(hash: string): DetailRoute | null {
+  const recordMatch = hash.match(/^#\/records\/([^/]+)\/([^/]+)$/);
+  if (recordMatch) {
+    return {
+      kind: "record",
+      recordType: decodeURIComponent(recordMatch[1]),
+      recordId: decodeURIComponent(recordMatch[2])
+    };
+  }
+
+  const actionMatch = hash.match(/^#\/actions\/([^/]+)$/);
+  return actionMatch ? { kind: "action", actionId: decodeURIComponent(actionMatch[1]) } : null;
 }

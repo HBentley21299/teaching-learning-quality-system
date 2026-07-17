@@ -77,6 +77,7 @@ public sealed record ElevatePracticeProgressSummary(
 
 public sealed record StaffElevatePracticeSummary(
     Guid AssessmentId,
+    Guid RecordId,
     string AcademicYear,
     string Status,
     decimal? OverallAverage,

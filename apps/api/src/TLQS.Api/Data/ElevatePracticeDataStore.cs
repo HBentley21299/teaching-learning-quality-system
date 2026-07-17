@@ -653,22 +653,23 @@ public sealed partial class SqlFoundationDataStore
     {
         var rows = await QueryAsync(
             """
-            SELECT TOP (1) assessment.id, assessment.academic_year, assessment.status,
+            SELECT TOP (1) assessment.id, assessment.record_id, assessment.academic_year, assessment.status,
                    CAST(AVG(CAST(rating.score AS decimal(10, 2))) AS decimal(10, 2)) AS overall_average,
                    assessment.submitted_at
             FROM quality.elevate_practice_assessments assessment
             LEFT JOIN quality.elevate_practice_ratings rating ON rating.assessment_id = assessment.id
             WHERE assessment.staff_id = @staffId
-            GROUP BY assessment.id, assessment.academic_year, assessment.status, assessment.submitted_at
+            GROUP BY assessment.id, assessment.record_id, assessment.academic_year, assessment.status, assessment.submitted_at
             ORDER BY assessment.academic_year DESC;
             """,
             command => command.Parameters.AddWithValue("@staffId", staffId),
             reader => new StaffElevatePracticeSummary(
                 reader.GetGuid(0),
-                reader.GetString(1),
+                reader.GetGuid(1),
                 reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetDecimal(3),
-                GetDateTimeOffsetOrNull(reader, 4)),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetDecimal(4),
+                GetDateTimeOffsetOrNull(reader, 5)),
             cancellationToken);
         return rows.FirstOrDefault();
     }

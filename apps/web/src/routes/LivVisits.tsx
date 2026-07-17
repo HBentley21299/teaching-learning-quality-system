@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Archive, CheckCircle2, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Search, Send, X } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { ActionDetailLink, FullRecordLink } from "../components/FullRecordLink";
 import { KpiStrip } from "../components/KpiStrip";
 import { api } from "../services/api";
 import type {
@@ -55,6 +56,12 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
   const [selectedStaffId, setSelectedStaffId] = useState("");
   const [form, setForm] = useState<LivFormState>(emptyForm);
   const [statusMessage, setStatusMessage] = useState("");
+  const [recordSearch, setRecordSearch] = useState("");
+  const [recordStatusFilter, setRecordStatusFilter] = useState("all");
+  const [recordStaffFilter, setRecordStaffFilter] = useState("all");
+  const [recordReviewerFilter, setRecordReviewerFilter] = useState("all");
+  const [recordStartDate, setRecordStartDate] = useState("");
+  const [recordEndDate, setRecordEndDate] = useState("");
   const [isCreatingAction, setIsCreatingAction] = useState(false);
   const [actionTitle, setActionTitle] = useState("");
   const [actionDetail, setActionDetail] = useState("");
@@ -66,6 +73,19 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
   const canManageActions = user.permissions.includes("actions.manage");
 
   const selectedRecord = records.find((record) => record.id === selectedRecordId) ?? null;
+  const filteredRecords = useMemo(() => {
+    const query = recordSearch.trim().toLocaleLowerCase();
+    return records.filter((record) => {
+      const date = record.livDate ?? "";
+      return (!query || [record.subjectStaffName, record.reviewerStaffName, record.courseSeen, record.orgUnitCode, record.parentOrgUnitCode]
+        .some((value) => value?.toLocaleLowerCase().includes(query))) &&
+        (recordStatusFilter === "all" || record.status === recordStatusFilter) &&
+        (recordStaffFilter === "all" || record.subjectStaffId === recordStaffFilter) &&
+        (recordReviewerFilter === "all" || record.reviewerStaffId === recordReviewerFilter) &&
+        (!recordStartDate || date >= recordStartDate) &&
+        (!recordEndDate || date <= recordEndDate);
+    });
+  }, [recordEndDate, recordReviewerFilter, recordSearch, recordStaffFilter, recordStartDate, recordStatusFilter, records]);
 
   useEffect(() => {
     void refreshData();
@@ -438,15 +458,26 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
       <section className="panel">
         <div className="panel-heading">
           <h2>LIV records</h2>
-          <span>{records.length} visible to you</span>
+          <span>{filteredRecords.length} of {records.length} visible to you</span>
+        </div>
+        <div className="record-filter-bar">
+          <label className="record-filter-field record-filter-search"><span>Search records</span><input onChange={(event) => setRecordSearch(event.target.value)} placeholder="Staff, reviewer, course or team" type="search" value={recordSearch} /></label>
+          <label className="record-filter-field"><span>Status</span><select onChange={(event) => setRecordStatusFilter(event.target.value)} value={recordStatusFilter}><option value="all">All statuses</option><option value="draft">Draft</option><option value="open">Open</option><option value="closed">Closed</option></select></label>
+          <label className="record-filter-field"><span>Staff member</span><select onChange={(event) => setRecordStaffFilter(event.target.value)} value={recordStaffFilter}><option value="all">All staff</option>{staff.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
+          <label className="record-filter-field"><span>Reviewer</span><select onChange={(event) => setRecordReviewerFilter(event.target.value)} value={recordReviewerFilter}><option value="all">All reviewers</option>{staff.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
+          <label className="record-filter-field"><span>From</span><input onChange={(event) => setRecordStartDate(event.target.value)} type="date" value={recordStartDate} /></label>
+          <label className="record-filter-field"><span>To</span><input onChange={(event) => setRecordEndDate(event.target.value)} type="date" value={recordEndDate} /></label>
+          <Button icon={X} onClick={() => { setRecordSearch(""); setRecordStatusFilter("all"); setRecordStaffFilter("all"); setRecordReviewerFilter("all"); setRecordStartDate(""); setRecordEndDate(""); }} variant="quiet">Clear filters</Button>
         </div>
         <div className="record-list">
           {records.length === 0 ? (
             <div className="empty-row">
               No LIV records yet. {canSubmitLiv ? "Use \"New LIV record\" to add the first one." : "Records relating to you will appear here."}
             </div>
+          ) : filteredRecords.length === 0 ? (
+            <div className="empty-row">No LIV records match the selected filters.</div>
           ) : (
-            records.map((record) => (
+            filteredRecords.map((record) => (
               <div className="record-row" key={record.id}>
                 <div>
                   <strong>{record.subjectStaffName}</strong>
@@ -457,6 +488,7 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
                 </div>
                 <span className={`status-pill status-${record.status}`}>{formatLivStatus(record.status)}</span>
                 <span>{record.livDate ?? "No date"}{record.livTime ? ` ${record.livTime}` : ""}</span>
+                <FullRecordLink label="Open record" recordId={record.recordId} recordType="liv_record" />
                 <button
                   className="icon-button"
                   onClick={() => {
@@ -481,7 +513,7 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
         <section className="panel">
           <div className="panel-heading">
             <h2>LIV - {selectedRecord.subjectStaffName}</h2>
-            <span>Reviewer: {selectedRecord.reviewerStaffName ?? "Not recorded"}</span>
+            <div><span>Reviewer: {selectedRecord.reviewerStaffName ?? "Not recorded"}</span><FullRecordLink label="Open full record" recordId={selectedRecord.recordId} recordType="liv_record" /></div>
           </div>
           <div className="record-detail-meta">
             <span>
@@ -593,6 +625,7 @@ export function LivVisits({ staff, user, onActionsChanged }: LivVisitsProps) {
                   <div>
                     <strong>{action.title}</strong>
                     <span>{action.detail ?? ""}</span>
+                    <ActionDetailLink actionId={action.id} />
                   </div>
                   <span className={`status-pill ${action.completedDate ? "status-closed" : "status-open"}`}>
                     {action.completedDate ? "Closed" : action.isOverdue ? "Overdue" : "Open"}

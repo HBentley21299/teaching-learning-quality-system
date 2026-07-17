@@ -14,6 +14,7 @@ import {
   UsersRound
 } from "lucide-react";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
+import { FullRecordLink } from "../components/FullRecordLink";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -124,7 +125,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [sort, setSort] = useState("date_desc");
-  const [historyOpen, setHistoryOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
     void refreshSessions();
@@ -325,7 +326,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
             {historyOpen ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}
             Session history
           </span>
-          <strong>{sessions.length}</strong>
+          <strong>{filteredSessions.length} of {sessions.length}</strong>
         </button>
         {historyOpen ? (
           <>
@@ -361,12 +362,12 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
             </div>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Staff member</th><th>Cycle / session</th><th>Date</th><th>Type</th><th>Coach or mentor</th><th>Status</th><th><span className="sr-only">Open</span></th></tr></thead>
+                <thead><tr><th>Staff member</th><th>Cycle / session</th><th>Date</th><th>Type</th><th>Coach or mentor</th><th>Status</th><th>Report</th><th><span className="sr-only">Manage</span></th></tr></thead>
                 <tbody>
                   {isLoading ? (
-                    <tr><td colSpan={7}>Loading sessions...</td></tr>
+                    <tr><td colSpan={8}>Loading sessions...</td></tr>
                   ) : filteredSessions.length === 0 ? (
-                    <tr><td colSpan={7}>No coaching or mentoring sessions match these filters.</td></tr>
+                    <tr><td colSpan={8}>No coaching or mentoring sessions match these filters.</td></tr>
                   ) : filteredSessions.map((session) => (
                     <tr key={session.id}>
                       <td><strong>{session.staffName}</strong><small className="table-subline">{labelFor(focusOptions, session.mainFocus)}</small></td>
@@ -375,6 +376,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
                       <td>{labelFor(sessionTypes, session.sessionType)}</td>
                       <td>{session.coachName}</td>
                       <td><span className={`status-badge status-${session.status}`}>{session.status}</span></td>
+                      <td><FullRecordLink label="View report" recordId={session.recordId} recordType="coaching_session" /></td>
                       <td><button className="icon-button" onClick={() => void openSession(session.id)} title={session.canEdit ? "Open session" : "View session"} type="button"><Eye size={16} aria-hidden="true" /></button></td>
                     </tr>
                   ))}
