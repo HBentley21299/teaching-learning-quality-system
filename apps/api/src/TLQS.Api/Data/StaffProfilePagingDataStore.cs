@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TLQS.Api.V1;
 using TLQS.Application.Security;
 
@@ -65,6 +66,20 @@ public sealed partial class SqlFoundationDataStore
                  JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
                  WHERE attendance.staff_id = @staffId AND attendance.attendance_status = N'Attended'
                    AND attendance.archived_at IS NULL AND event_row.event_date BETWEEN @startDate AND @endDate),
+                (SELECT COUNT(*) FROM cpd.cpd_attendance attendance
+                 JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
+                 WHERE attendance.staff_id = @staffId AND attendance.attendance_status = N'Attended' AND attendance.archived_at IS NULL
+                   AND event_row.event_date BETWEEN @startDate AND @endDate
+                   AND EXISTS (SELECT 1 FROM forms.form_submissions submission JOIN forms.form_template_versions version_row ON version_row.id=submission.form_template_version_id JOIN forms.form_templates template ON template.id=version_row.form_template_id WHERE submission.record_id=event_row.record_id AND submission.archived_at IS NULL AND template.template_key=N'cpd_core')),
+                (SELECT COUNT(*) FROM cpd.cpd_attendance attendance
+                 JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
+                 WHERE attendance.staff_id = @staffId AND attendance.attendance_status = N'Attended' AND attendance.archived_at IS NULL
+                   AND event_row.event_date BETWEEN @startDate AND @endDate
+                   AND NOT EXISTS (SELECT 1 FROM forms.form_submissions submission JOIN forms.form_template_versions version_row ON version_row.id=submission.form_template_version_id JOIN forms.form_templates template ON template.id=version_row.form_template_id WHERE submission.record_id=event_row.record_id AND submission.archived_at IS NULL AND template.template_key=N'cpd_core')),
+                (SELECT COALESCE(SUM(event_row.duration_minutes), 0) FROM cpd.cpd_attendance attendance
+                 JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
+                 WHERE attendance.staff_id = @staffId AND attendance.attendance_status = N'Attended' AND attendance.archived_at IS NULL
+                   AND event_row.event_date BETWEEN @startDate AND @endDate),
                 (SELECT COUNT(*) FROM quality.actions action_row
                  LEFT JOIN core.records record_row ON record_row.id = action_row.source_record_id
                  WHERE (action_row.subject_staff_id = @staffId OR action_row.owner_staff_id = @staffId)
@@ -94,7 +109,8 @@ public sealed partial class SqlFoundationDataStore
             },
             reader => new StaffProfileSectionSummary(
                 reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3),
-                reader.GetInt32(4), reader.GetInt32(5), reader.GetInt32(6)),
+                reader.GetInt32(4), reader.GetInt32(5), reader.GetInt32(6), reader.GetInt32(7),
+                reader.GetInt32(8), reader.GetInt32(9)),
             cancellationToken);
         return rows[0];
     }
@@ -103,9 +119,68 @@ public sealed partial class SqlFoundationDataStore
         Guid staffId, string academicYear, int page, int pageSize, CancellationToken cancellationToken)
     {
         (page, pageSize) = NormalizePage(page, pageSize);
-        var allForStaff = await GetStaffReflectionsAsync(staffId, cancellationToken);
-        var matching = allForStaff.Where(item => string.Equals(item.ElevatePracticeAcademicYear, academicYear, StringComparison.OrdinalIgnoreCase)).ToArray();
-        return Page(matching, page, pageSize);
+        var totalRows = await QueryAsync(
+            """
+            SELECT COUNT(*)
+            FROM quality.staff_reflections reflection
+            JOIN quality.elevate_practice_assessments assessment ON assessment.id = reflection.elevate_practice_assessment_id
+            WHERE reflection.staff_id = @staffId AND assessment.academic_year = @academicYear AND reflection.archived_at IS NULL;
+            """,
+            command => { command.Parameters.AddWithValue("@staffId", staffId); command.Parameters.AddWithValue("@academicYear", academicYear); },
+            reader => reader.GetInt32(0), cancellationToken);
+        var rows = await QueryAsync(
+            """
+            SELECT reflection.id, reflection.staff_id, reflection.elevate_practice_assessment_id,
+                   reflection.elevate_practice_record_id, assessment.academic_year, reflection.reflection_date,
+                   reflection.progress, reflection.impact, reflection.examples, reflection.status,
+                   reflection.created_by_user_account_id, created_by.display_name, reflection.created_at,
+                   reflection.updated_by_user_account_id, updated_by.display_name, reflection.updated_at
+            FROM quality.staff_reflections reflection
+            JOIN quality.elevate_practice_assessments assessment ON assessment.id = reflection.elevate_practice_assessment_id
+            LEFT JOIN auth.user_accounts created_account ON created_account.id = reflection.created_by_user_account_id
+            LEFT JOIN people.staff created_by ON created_by.id = created_account.staff_id
+            LEFT JOIN auth.user_accounts updated_account ON updated_account.id = reflection.updated_by_user_account_id
+            LEFT JOIN people.staff updated_by ON updated_by.id = updated_account.staff_id
+            WHERE reflection.staff_id = @staffId AND assessment.academic_year = @academicYear AND reflection.archived_at IS NULL
+            ORDER BY reflection.reflection_date DESC, reflection.created_at DESC
+            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYear", academicYear);
+                command.Parameters.AddWithValue("@offset", (page - 1) * pageSize);
+                command.Parameters.AddWithValue("@pageSize", pageSize);
+            },
+            reader => new StaffReflectionRow(
+                reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3), reader.GetString(4),
+                DateOnly.FromDateTime(reader.GetDateTime(5)), GetStringOrNull(reader, 6), GetStringOrNull(reader, 7),
+                GetStringOrNull(reader, 8), reader.GetString(9), GetGuidOrNull(reader, 10), GetStringOrNull(reader, 11),
+                reader.GetFieldValue<DateTimeOffset>(12), GetGuidOrNull(reader, 13), GetStringOrNull(reader, 14), GetDateTimeOffsetOrNull(reader, 15)),
+            cancellationToken);
+        if (rows.Count == 0) return CreatePage<StaffReflectionSummary>([], page, pageSize, totalRows[0]);
+
+        var focusRows = await QueryAsync(
+            """
+            SELECT link.reflection_id, link.focus_lookup_value_id, link.focus_key_snapshot,
+                   link.focus_text_snapshot, link.focus_type, link.display_order
+            FROM quality.staff_reflection_focus_areas link
+            JOIN OPENJSON(@reflectionIds) ids ON TRY_CONVERT(uniqueidentifier, ids.value) = link.reflection_id
+            ORDER BY link.reflection_id, link.display_order;
+            """,
+            command => command.Parameters.AddWithValue("@reflectionIds", JsonSerializer.Serialize(rows.Select(row => row.Id))),
+            reader => new StaffReflectionFocusRow(reader.GetGuid(0), GetGuidOrNull(reader, 1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetInt32(5)),
+            cancellationToken);
+        var focusByReflection = focusRows.GroupBy(row => row.ReflectionId).ToDictionary(
+            group => group.Key,
+            group => (IReadOnlyList<StaffReflectionFocusAreaSummary>)group.Select(focus => new StaffReflectionFocusAreaSummary(
+                focus.FocusLookupValueId, focus.FocusKeySnapshot, focus.TextSnapshot, focus.FocusType, focus.DisplayOrder)).ToArray());
+        var items = rows.Select(row => new StaffReflectionSummary(
+            row.Id, row.StaffId, row.ElevatePracticeAssessmentId, row.ElevatePracticeRecordId, row.AcademicYear,
+            row.ReflectionDate, row.Progress, row.Impact, row.Examples, row.Status,
+            focusByReflection.GetValueOrDefault(row.Id, []), row.CreatedByUserAccountId, row.CreatedByName,
+            row.CreatedAt, row.UpdatedByUserAccountId, row.UpdatedByName, row.UpdatedAt)).ToArray();
+        return CreatePage(items, page, pageSize, totalRows[0]);
     }
 
     public async Task<PagedResult<StaffCpdRecordSummary>> GetStaffProfileCpdPageAsync(
@@ -238,7 +313,6 @@ public sealed partial class SqlFoundationDataStore
     }
 
     private static (int Page, int PageSize) NormalizePage(int page, int pageSize) => (Math.Max(1, page), Math.Clamp(pageSize, 1, 100));
-    private static PagedResult<T> Page<T>(IReadOnlyList<T> all, int page, int pageSize) => CreatePage(all.Skip((page - 1) * pageSize).Take(pageSize).ToArray(), page, pageSize, all.Count);
     private static PagedResult<T> CreatePage<T>(IReadOnlyList<T> items, int page, int pageSize, int total) => new(items, page, pageSize, total, total == 0 ? 0 : (int)Math.Ceiling(total / (double)pageSize));
     private sealed record StaffProfileShellRow(Guid StaffId, string ExternalId, string DisplayName, string Email, string? PrimaryOrgCode, string AccountStatus, int EvidenceSubmitted);
 }

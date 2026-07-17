@@ -7,6 +7,11 @@ import type {
   AdminOrganisationStructure,
   AdminOrganisationStaff,
   MembershipChangeImpact,
+  MessageDeliverySummary,
+  MessagePreview,
+  MessageTemplateSummary,
+  MessageTemplateVersionSummary,
+  MessagingParameter,
   OrganisationChangeImpact,
   OrganisationMigrationReview,
   PagedResult,
@@ -58,6 +63,7 @@ import type {
   SaveLivRecordRequest,
   SaveLivStageRequest,
   SaveManagerRelationshipRequest,
+  SaveMessageTemplateRequest,
   SaveOrgUnitManagerRequest,
   SaveOrganisationUnitRequest,
   SaveOrganisationMembershipRequest,
@@ -315,6 +321,31 @@ export const api = {
     getJson<StaffProfileDetail>(
       `/api/v1/staff-profiles/${staffId}${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`
     ),
+  staffProfileSectionSummary: (staffId: string, academicYear: string, signal?: AbortSignal) =>
+    getJson<StaffProfileSectionSummary>(
+      `/api/v1/staff-profiles/${staffId}/section-summary?academicYear=${encodeURIComponent(academicYear)}`,
+      signal
+    ),
+  staffProfileReflections: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffReflectionSummary>>(
+      `/api/v1/staff-profiles/${staffId}/reflections?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileCpd: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffCpdRecordSummary>>(
+      `/api/v1/staff-profiles/${staffId}/cpd?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileCoaching: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffProfileCoachingSummary>>(
+      `/api/v1/staff-profiles/${staffId}/coaching?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileActions: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffProfileActionSummary>>(
+      `/api/v1/staff-profiles/${staffId}/actions?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
   saveElevateStatusLevel: (staffId: string, levelNumber: number, request: SaveElevateStatusLevelRequest) =>
     sendJson<SaveElevateStatusLevelRequest, StaffProfileDetail["elevateStatus"]>(
       `/api/v1/staff-profiles/${staffId}/elevate-status/${levelNumber}`,
@@ -429,5 +460,30 @@ export const api = {
   adminRoles: () => getJson<AdminRoleSummary[]>("/api/v1/admin/roles"),
   updateFormTemplateStructure: (id: string, request: UpdateFormTemplateStructureRequest) =>
     sendJson(`/api/v1/form-templates/${id}/structure`, "PUT", request),
-  publishFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST")
+  publishFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST"),
+  messageTemplates: (includeDeleted = false) =>
+    getJson<MessageTemplateSummary[]>(`/api/v1/admin/messaging/templates?includeDeleted=${includeDeleted}`),
+  messagingParameters: () => getJson<MessagingParameter[]>("/api/v1/admin/messaging/parameters"),
+  messageTemplateVersions: (id: string) =>
+    getJson<MessageTemplateVersionSummary[]>(`/api/v1/admin/messaging/templates/${id}/versions`),
+  createMessageTemplate: (request: SaveMessageTemplateRequest) =>
+    sendJson<SaveMessageTemplateRequest, { id: string }>("/api/v1/admin/messaging/templates", "POST", request),
+  updateMessageTemplate: (id: string, request: SaveMessageTemplateRequest) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}`, "PUT", request),
+  duplicateMessageTemplate: (id: string, messageKey: string, name: string) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}/duplicate`, "POST", { messageKey, name }),
+  previewMessageTemplate: (request: SaveMessageTemplateRequest) =>
+    sendJson<SaveMessageTemplateRequest, MessagePreview>("/api/v1/admin/messaging/templates/preview", "POST", request),
+  setMessageTemplateStatus: (id: string, isActive: boolean, restore: boolean, reason: string) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}/status`, "POST", { isActive, restore, reason }),
+  deleteMessageTemplate: (id: string, reason: string) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}/delete`, "POST", { reason }),
+  sendTestMessage: (id: string, recipientEmail: string) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}/test`, "POST", { recipientEmail }),
+  messageDeliveries: (take = 100) =>
+    getJson<MessageDeliverySummary[]>(`/api/v1/admin/messaging/deliveries?take=${take}`),
+  retryMessageDelivery: (id: string, reason: string) =>
+    sendJson(`/api/v1/admin/messaging/deliveries/${id}/retry`, "POST", { reason }),
+  cancelMessageDelivery: (id: string, reason: string) =>
+    sendJson(`/api/v1/admin/messaging/deliveries/${id}/cancel`, "POST", { reason })
 };

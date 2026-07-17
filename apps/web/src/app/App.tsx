@@ -113,7 +113,7 @@ export function App() {
     () => navigationItems.filter((item) => {
       if (item.key === "team") return user.permissions.includes("my_team.view");
       if (item.key === "admin") {
-        return ["users.manage", "permissions.manage", "organisation.manage", "lists.manage", "forms.manage", "records.manage"]
+        return ["users.manage", "permissions.manage", "organisation.manage", "lists.manage", "forms.manage", "records.manage", "messaging.manage"]
           .some((permission) => user.permissions.includes(permission));
       }
       return true;

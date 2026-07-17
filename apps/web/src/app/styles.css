@@ -5458,6 +5458,347 @@ td {
   z-index: 5;
 }
 
+/* Messaging administration */
+.messaging-heading,
+.messaging-heading .inline-actions,
+.message-title-line,
+.message-editor-actions,
+.message-test-row,
+.message-preview > div:first-child {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.compact-checkbox {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 0.8rem;
+  gap: 7px;
+}
+
+.compact-checkbox input,
+.recipient-checklist input,
+.attachment-options input {
+  accent-color: var(--teal);
+  height: 16px;
+  width: 16px;
+}
+
+.message-template-list,
+.version-list,
+.delivery-list {
+  display: grid;
+}
+
+.message-template-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 14px 0;
+}
+
+.message-template-row:first-child {
+  border-top: 0;
+}
+
+.message-template-row.is-deleted {
+  opacity: 0.72;
+}
+
+.message-template-row > div:first-child,
+.message-title-line,
+.delivery-list > div > div,
+.version-list > div {
+  display: grid;
+  gap: 4px;
+}
+
+.message-title-line {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.message-template-row span,
+.message-template-row small,
+.version-list span,
+.version-list small,
+.delivery-list span,
+.delivery-list small {
+  color: var(--text-muted);
+}
+
+.icon-action-row {
+  display: flex;
+  gap: 4px;
+}
+
+.icon-action-row button,
+.delivery-list > div > button,
+.icon-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+.icon-action-row button:hover,
+.delivery-list > div > button:hover,
+.icon-button:hover {
+  background: var(--surface-muted);
+  border-color: var(--line);
+  color: var(--teal-strong);
+}
+
+.message-editor-basics {
+  margin-bottom: 18px;
+}
+
+.message-config-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.message-config-group {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  min-width: 0;
+  padding: 14px;
+}
+
+.message-config-group legend {
+  color: #263832;
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 0 6px;
+}
+
+.recipient-checklist {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.recipient-checklist > strong {
+  grid-column: 1 / -1;
+}
+
+.recipient-checklist label,
+.attachment-options > label:not(.entry-field) {
+  align-items: center;
+  display: flex;
+  font-size: 0.78rem;
+  gap: 6px;
+}
+
+.two-column-compact {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.segmented-control {
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 3px;
+}
+
+.segmented-control button {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  min-height: 34px;
+}
+
+.segmented-control button[aria-pressed="true"] {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(31, 42, 39, 0.12);
+  color: var(--teal-strong);
+  font-weight: 750;
+}
+
+.message-composer-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  margin-top: 18px;
+}
+
+.message-body-fields,
+.parameter-picker,
+.parameter-picker > div {
+  display: grid;
+  gap: 10px;
+}
+
+.parameter-picker {
+  align-content: start;
+  background: #f7faf8;
+  border-left: 3px solid var(--teal);
+  max-height: 470px;
+  overflow: auto;
+  padding: 14px;
+}
+
+.parameter-picker > span,
+.parameter-picker small {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.parameter-picker > div {
+  gap: 5px;
+}
+
+.parameter-picker button {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: #263832;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.parameter-picker button:hover {
+  border-color: var(--teal);
+}
+
+.attachment-options {
+  grid-template-columns: auto auto minmax(240px, 1fr);
+  margin-top: 18px;
+}
+
+.message-editor-actions,
+.message-test-row {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 14px;
+}
+
+.message-test-row {
+  justify-content: flex-start;
+}
+
+.message-test-row .entry-field {
+  min-width: min(420px, 100%);
+}
+
+.message-preview {
+  background: #f7faf8;
+  border-left: 4px solid var(--teal);
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.message-preview > div:first-child {
+  justify-content: flex-start;
+}
+
+.message-preview p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.message-preview-body {
+  line-height: 1.5;
+}
+
+.version-list > div,
+.delivery-list > div {
+  border-top: 1px solid var(--line);
+  padding: 11px 0;
+}
+
+.version-list > div:first-child,
+.delivery-list > div:first-child {
+  border-top: 0;
+}
+
+.delivery-list > div {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.error-copy {
+  color: var(--red) !important;
+}
+
+.status-complete,
+.status-sent {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.status-draft,
+.status-pending,
+.status-processing,
+.status-retrying {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.status-failed,
+.status-cancelled {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+@media (max-width: 1000px) {
+  .message-config-grid,
+  .message-composer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .parameter-picker {
+    max-height: 300px;
+  }
+}
+
+@media (max-width: 680px) {
+  .messaging-heading,
+  .message-editor-actions,
+  .message-test-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .message-template-row,
+  .two-column-compact,
+  .attachment-options {
+    grid-template-columns: 1fr;
+  }
+
+  .icon-action-row {
+    justify-content: flex-end;
+  }
+}
+
 .coaching-header-summary {
   align-items: center;
   display: flex;
@@ -7423,4 +7764,117 @@ td {
     align-items: stretch;
     grid-template-columns: 1fr;
   }
+}
+.collapsible-section {
+  padding: 0;
+  overflow: hidden;
+}
+
+.collapsible-section-header {
+  display: flex;
+  align-items: stretch;
+  min-height: 58px;
+}
+
+.collapsible-section-header > button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 24px;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 14px 16px;
+  text-align: left;
+}
+
+.collapsible-section-header > button:hover,
+.collapsible-section-header > button:focus-visible {
+  background: #f4f8f6;
+}
+
+.collapsible-section-header > button > span:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.collapsible-section-header small {
+  color: var(--muted-text);
+}
+
+.collapsible-section-header svg {
+  transition: transform 160ms ease;
+}
+
+.collapsible-section.is-expanded .collapsible-section-header svg {
+  transform: rotate(180deg);
+}
+
+.collapsible-count {
+  min-width: 30px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.collapsible-section-actions {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px 8px 0;
+}
+
+.collapsible-section-content {
+  border-top: 1px solid var(--line);
+  padding: 14px 16px 16px;
+}
+
+.section-state {
+  color: var(--muted-text);
+  padding: 14px 2px;
+}
+
+.section-state-error {
+  color: #9f1d1d;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.pagination-controls button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.pagination-controls button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.organisation-unit-button.is-inactive {
+  opacity: .62;
+}
+
+.organisation-migration-review {
+  border-top: 1px solid var(--line);
+  padding: 14px 16px;
+}
+
+.organisation-migration-review > summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
 }

@@ -1,7 +1,11 @@
 using System.Diagnostics;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using TLQS.Api.Data;
+using TLQS.Api.Exports;
+using TLQS.Api.Messaging;
 using TLQS.Api.Security;
 using TLQS.Api.V1;
 using TLQS.Application.Workflows;
@@ -18,6 +22,37 @@ if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("TlqsDat
 }
 
 builder.Services.AddSingleton<SqlFoundationDataStore>();
+builder.Services.AddSingleton<ExcelExportService>();
+builder.Services.AddSingleton<WordExportService>();
+builder.Services.Configure<ExportBrandingOptions>(builder.Configuration.GetSection("ExportBranding"));
+builder.Services.Configure<MessagingOptions>(builder.Configuration.GetSection("Messaging"));
+builder.Services.AddHttpClient<IEmailProvider, MicrosoftGraphEmailProvider>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddHostedService<MessageOutboxWorker>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirst("oid")?.Value
+                ?? context.Connection.RemoteIpAddress?.ToString()
+                ?? "anonymous",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 180,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddFixedWindowLimiter("sensitive", limiter =>
+    {
+        limiter.PermitLimit = 20;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+});
 builder.Services.AddProblemDetails(options =>
 {
     options.CustomizeProblemDetails = context =>
@@ -148,6 +183,7 @@ app.UseStaticFiles(new StaticFileOptions
     }
 });
 app.UseCors("web");
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 

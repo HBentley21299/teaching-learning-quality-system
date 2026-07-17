@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -21,6 +21,7 @@ import { AdminWorkScrutiny } from "./AdminWorkScrutiny";
 import { AdminManagedLists } from "./AdminManagedLists";
 import { AdminRecordsPanel } from "./AdminRecordsPanel";
 import { OrganisationStructureAdmin } from "./OrganisationStructureAdmin";
+import { MessagingAdminPanel } from "./MessagingAdminPanel";
 
 export function AdminCentre({
   user,
@@ -49,7 +50,8 @@ export function AdminCentre({
   const canManageLists = user.permissions.includes("lists.manage");
   const canManageForms = user.permissions.includes("forms.manage");
   const canManageRecords = user.permissions.includes("records.manage");
-  const canUseAdmin = canManagePeople || canManageOrganisation || canManageLists || canManageForms || canManageRecords;
+  const canManageMessaging = user.permissions.includes("messaging.manage");
+  const canUseAdmin = canManagePeople || canManageOrganisation || canManageLists || canManageForms || canManageRecords || canManageMessaging;
   const tabAccess: Record<AdminTabKey, boolean> = {
     overview: canUseAdmin,
     "staff-access": canManagePeople,
@@ -58,6 +60,7 @@ export function AdminCentre({
     forms: canManageForms,
     elevate: canManageRecords || user.permissions.includes("users.manage"),
     records: canManageRecords,
+    messaging: canManageMessaging,
     dashboards: canManageRecords
   };
   const visibleTabs = adminTabs.filter((tab) => tabAccess[tab.key]);
@@ -130,12 +133,13 @@ export function AdminCentre({
       {activeTab === "forms" ? <FormBuilder embedded user={user} /> : null}
       {activeTab === "elevate" ? <AdminElevatePractice /> : null}
       {activeTab === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
+      {activeTab === "messaging" ? <MessagingAdminPanel /> : null}
       {activeTab === "dashboards" ? <DashboardAdminPanel /> : null}
     </div>
   );
 }
 
-type AdminTabKey = "overview" | "staff-access" | "organisation" | "lists" | "forms" | "elevate" | "records" | "dashboards";
+type AdminTabKey = "overview" | "staff-access" | "organisation" | "lists" | "forms" | "elevate" | "records" | "messaging" | "dashboards";
 
 const adminTabs: Array<{ key: AdminTabKey; label: string; icon: typeof SlidersHorizontal }> = [
   { key: "overview", label: "Overview", icon: SlidersHorizontal },
@@ -145,6 +149,7 @@ const adminTabs: Array<{ key: AdminTabKey; label: string; icon: typeof SlidersHo
   { key: "forms", label: "Forms", icon: FileText },
   { key: "elevate", label: "Elevate Records", icon: Sparkles },
   { key: "records", label: "Records", icon: Database },
+  { key: "messaging", label: "Messaging", icon: Mail },
   { key: "dashboards", label: "Dashboards", icon: LayoutDashboard }
 ];
 

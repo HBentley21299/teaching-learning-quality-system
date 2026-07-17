@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
@@ -7697,10 +7698,14 @@ public sealed partial class SqlFoundationDataStore(
     private async Task<SqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var connection = new SqlConnection(_connectionString);
+        var startedAt = Stopwatch.GetTimestamp();
 
         try
         {
             await connection.OpenAsync(cancellationToken);
+            var elapsed = Stopwatch.GetElapsedTime(startedAt);
+            if (elapsed > TimeSpan.FromSeconds(2))
+                logger.LogWarning("Opening a SQL connection took {ElapsedMilliseconds:F0} ms.", elapsed.TotalMilliseconds);
             return connection;
         }
         catch

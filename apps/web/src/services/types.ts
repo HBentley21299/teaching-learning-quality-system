@@ -802,6 +802,9 @@ export type StaffProfileSectionSummary = {
   submittedReflectionCount: number;
   coachingCount: number;
   cpdCount: number;
+  internalCpdCount: number;
+  externalCpdCount: number;
+  totalCpdMinutes: number;
   openActionCount: number;
   completedActionCount: number;
   overdueActionCount: number;
@@ -1544,4 +1547,77 @@ export type UpdateFormSubmissionRequest = {
   recordDate?: string;
   responses: Array<{ fieldId: string; value?: string }>;
   courseIds?: string[];
+};
+
+export type MessageAttachmentRequest = {
+  attachmentType: "static" | "record" | "excel_export" | "word_report";
+  displayName: string;
+  fileAssetId?: string;
+  exportModuleKey?: string;
+};
+
+export type SaveMessageTemplateRequest = {
+  messageKey: string;
+  name: string;
+  internalDescription?: string;
+  subjectTemplate: string;
+  plainTextTemplate: string;
+  htmlTemplate?: string;
+  recipientConfigJson: string;
+  eventType: string;
+  conditionConfigJson: string;
+  scheduleConfigJson: string;
+  isActive: boolean;
+  attachments?: MessageAttachmentRequest[];
+};
+
+export type MessageTemplateSummary = SaveMessageTemplateRequest & {
+  id: string;
+  isDeleted: boolean;
+  versionNumber: number;
+  createdAt: string;
+  updatedAt?: string;
+  pendingCount: number;
+  failedCount: number;
+  sentCount: number;
+};
+
+export type MessageTemplateVersionSummary = {
+  id: string;
+  versionNumber: number;
+  subjectTemplate: string;
+  plainTextTemplate: string;
+  htmlTemplate?: string;
+  recipientConfigJson: string;
+  createdAt: string;
+  createdBy?: string;
+};
+
+export type MessagingParameter = {
+  key: string;
+  label: string;
+  category: string;
+  sampleValue: string;
+};
+
+export type MessagePreview = {
+  subject: string;
+  plainTextBody: string;
+  htmlBody?: string;
+  recipients: string[];
+};
+
+export type MessageDeliverySummary = {
+  id: string;
+  templateName: string;
+  templateVersion: number;
+  triggeringEvent: string;
+  status: "pending" | "processing" | "sent" | "failed" | "retrying" | "cancelled";
+  recipients: string;
+  attemptCount: number;
+  queuedAt: string;
+  deliveredAt?: string;
+  failedAt?: string;
+  lastError?: string;
+  providerResponseId?: string;
 };

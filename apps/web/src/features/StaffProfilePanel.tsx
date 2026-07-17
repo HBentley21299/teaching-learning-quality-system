@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Award, ChevronDown, ExternalLink, Plus, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { CollapsibleSection, Pagination } from "../components/CollapsibleSection";
 import { api } from "../services/api";
 import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
 import type {
@@ -10,6 +11,7 @@ import type {
   StaffReflectionSummary,
   SaveStaffReflectionRequest,
   ElevateStatusLevelSummary
+  ,StaffProfileSectionSummary
 } from "../services/types";
 
 type StaffReflectionDraft = SaveStaffReflectionRequest;
@@ -48,6 +50,12 @@ export function StaffProfilePanel({
   const [elevateImplementationImpact, setElevateImplementationImpact] = useState("");
   const [controlledLevelDrafts, setControlledLevelDrafts] = useState<Record<number, boolean>>({});
   const [savingElevateLevel, setSavingElevateLevel] = useState<number | null>(null);
+  const [sectionSummary, setSectionSummary] = useState<StaffProfileSectionSummary | null>(null);
+  const [loadedSections, setLoadedSections] = useState<Record<string, boolean>>({});
+  const [loadingSection, setLoadingSection] = useState<string | null>(null);
+  const [sectionErrors, setSectionErrors] = useState<Record<string, string>>({});
+  const [sectionPages, setSectionPages] = useState<Record<string, { page: number; totalPages: number }>>({});
+  const sectionRequests = useRef<Record<string, AbortController>>({});
 
   useEffect(() => {
     setShowElevateResult(openElevateResult);
@@ -61,20 +69,26 @@ export function StaffProfilePanel({
     setIsLoading(true);
     setStatusMessage("");
     setActiveProfileTab("overview");
-    api
-      .staffProfile(staffId, academicYear)
-      .then((nextDetail) => {
+    setLoadedSections({});
+    setSectionErrors({});
+    setSectionPages({});
+    Object.values(sectionRequests.current).forEach((controller) => controller.abort());
+    sectionRequests.current = {};
+    Promise.all([api.staffProfile(staffId, academicYear), api.staffProfileSectionSummary(staffId, academicYear)])
+      .then(([nextDetail, nextSummary]) => {
         if (cancelled) {
           return;
         }
 
         setDetail(nextDetail);
+        setSectionSummary(nextSummary);
         setDrafts(buildReflectionDrafts(nextDetail.reflections));
         syncElevateStatusDrafts(nextDetail);
       })
       .catch(() => {
         if (!cancelled) {
           setDetail(null);
+          setSectionSummary(null);
           setStatusMessage("The Staff Profile could not be loaded from the API.");
         }
       })
@@ -86,32 +100,83 @@ export function StaffProfilePanel({
 
     return () => {
       cancelled = true;
+      Object.values(sectionRequests.current).forEach((controller) => controller.abort());
     };
   }, [academicYear, openElevateResult, staffId]);
 
   const canEditReflections =
     Boolean(detail) && (detail?.staffId === user.staffId || user.permissions.includes("staff.manage"));
 
-  const submittedReflectionCount =
-    detail?.reflections.filter((reflection) => reflection.status === "submitted").length ?? 0;
-  const openActionCount = detail?.actions.filter((action) => !action.completedDate).length ?? 0;
-  const completedActionCount = detail?.actions.filter((action) => Boolean(action.completedDate)).length ?? 0;
-  const totalCpdMinutes = detail?.cpdRecords.reduce(
-    (total, record) => total + (record.durationMinutes ?? 0),
-    0
-  ) ?? 0;
-  const internalCpdCount = detail?.cpdRecords.filter((record) => record.isInternal).length ?? 0;
-  const externalCpdCount = detail?.cpdRecords.filter((record) => !record.isInternal).length ?? 0;
+  const submittedReflectionCount = sectionSummary?.submittedReflectionCount ?? 0;
+  const openActionCount = sectionSummary?.openActionCount ?? 0;
+  const completedActionCount = sectionSummary?.completedActionCount ?? 0;
+  const totalCpdMinutes = sectionSummary?.totalCpdMinutes ?? 0;
+  const internalCpdCount = sectionSummary?.internalCpdCount ?? 0;
+  const externalCpdCount = sectionSummary?.externalCpdCount ?? 0;
 
   async function reloadDetail() {
     try {
-      const nextDetail = await api.staffProfile(staffId, academicYear);
+      const [nextDetail, nextSummary] = await Promise.all([
+        api.staffProfile(staffId, academicYear),
+        api.staffProfileSectionSummary(staffId, academicYear)
+      ]);
       setDetail(nextDetail);
-      setDrafts(buildReflectionDrafts(nextDetail.reflections));
+      setSectionSummary(nextSummary);
       syncElevateStatusDrafts(nextDetail);
+      if (loadedSections.reflections) await loadProfileSection("reflections", sectionPages.reflections?.page ?? 1, nextDetail);
+      if (loadedSections.cpd) await loadProfileSection("cpd", sectionPages.cpd?.page ?? 1, nextDetail);
+      if (loadedSections.coaching) await loadProfileSection("coaching", sectionPages.coaching?.page ?? 1, nextDetail);
+      if (loadedSections.actions) await loadProfileSection("actions", sectionPages.actions?.page ?? 1, nextDetail);
     } catch {
       setStatusMessage("The Staff Profile could not be reloaded from the API.");
     }
+  }
+
+  async function loadProfileSection(
+    section: "reflections" | "cpd" | "coaching" | "actions",
+    page = 1,
+    shell = detail
+  ) {
+    if (!shell) return;
+    sectionRequests.current[section]?.abort();
+    const controller = new AbortController();
+    sectionRequests.current[section] = controller;
+    setLoadingSection(section);
+    setSectionErrors((current) => ({ ...current, [section]: "" }));
+    try {
+      if (section === "reflections") {
+        const result = await api.staffProfileReflections(staffId, academicYear, page, 20, controller.signal);
+        setDetail((current) => current ? { ...current, reflections: result.items } : current);
+        setDrafts(buildReflectionDrafts(result.items));
+        setSectionPages((current) => ({ ...current, reflections: { page: result.page, totalPages: result.totalPages } }));
+      } else if (section === "cpd") {
+        const result = await api.staffProfileCpd(staffId, academicYear, page, 20, controller.signal);
+        setDetail((current) => current ? { ...current, cpdRecords: result.items } : current);
+        setSectionPages((current) => ({ ...current, cpd: { page: result.page, totalPages: result.totalPages } }));
+      } else if (section === "coaching") {
+        const result = await api.staffProfileCoaching(staffId, academicYear, page, 20, controller.signal);
+        setDetail((current) => current ? { ...current, coachingRecords: result.items } : current);
+        setSectionPages((current) => ({ ...current, coaching: { page: result.page, totalPages: result.totalPages } }));
+      } else {
+        const result = await api.staffProfileActions(staffId, academicYear, page, 20, controller.signal);
+        setDetail((current) => current ? { ...current, actions: result.items } : current);
+        setSectionPages((current) => ({ ...current, actions: { page: result.page, totalPages: result.totalPages } }));
+      }
+      setLoadedSections((current) => ({ ...current, [section]: true }));
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      setSectionErrors((current) => ({ ...current, [section]: "These records could not be loaded." }));
+    } finally {
+      if (sectionRequests.current[section] === controller) {
+        delete sectionRequests.current[section];
+        setLoadingSection((current) => current === section ? null : current);
+      }
+    }
+  }
+
+  function handleSectionExpansion(section: "reflections" | "coaching" | "actions", expanded: boolean) {
+    if (expanded && !loadedSections[section]) void loadProfileSection(section);
+    if (!expanded) sectionRequests.current[section]?.abort();
   }
 
   function syncElevateStatusDrafts(nextDetail: StaffProfileDetail) {
@@ -237,7 +302,10 @@ export function StaffProfilePanel({
         <button
           aria-selected={activeProfileTab === "cpd"}
           className={activeProfileTab === "cpd" ? "is-active" : ""}
-          onClick={() => setActiveProfileTab("cpd")}
+          onClick={() => {
+            setActiveProfileTab("cpd");
+            if (!loadedSections.cpd) void loadProfileSection("cpd");
+          }}
           role="tab"
           type="button"
         >
@@ -377,7 +445,7 @@ export function StaffProfilePanel({
       <section className="kpi-strip" aria-label="Staff Profile summary" hidden={activeProfileTab !== "overview"}>
         <div className="kpi kpi-blue">
           <span>CPD sessions</span>
-          <strong>{detail.cpdRecords.length}</strong>
+          <strong>{sectionSummary?.cpdCount ?? 0}</strong>
         </div>
         <div className="kpi kpi-green">
           <span>Evidence submitted</span>
@@ -386,7 +454,7 @@ export function StaffProfilePanel({
         <div className="kpi kpi-amber">
           <span>Reflections</span>
           <strong>
-            {submittedReflectionCount}/{detail.reflections.length}
+              {submittedReflectionCount}/{sectionSummary?.reflectionCount ?? 0}
           </strong>
         </div>
         <div className="kpi kpi-red">
@@ -476,7 +544,9 @@ export function StaffProfilePanel({
             <strong>{externalCpdCount}</strong>
           </div>
         </div>
-        <div className="table-shell">
+        {loadingSection === "cpd" ? <div className="section-state" role="status">Loading CPD records...</div> : null}
+        {sectionErrors.cpd ? <div className="section-state section-state-error" role="alert">{sectionErrors.cpd}</div> : null}
+        {loadingSection !== "cpd" && !sectionErrors.cpd ? <div className="table-shell">
           <table>
             <thead>
               <tr>
@@ -505,14 +575,22 @@ export function StaffProfilePanel({
               )}
             </tbody>
           </table>
-        </div>
+        </div> : null}
+        <Pagination page={sectionPages.cpd?.page ?? 1} totalPages={sectionPages.cpd?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("cpd", page)} />
       </section>
 
-      <section className="panel" hidden={activeProfileTab !== "overview"}>
-        <div className="panel-heading">
-          <h2>Coaching and mentoring</h2>
-          <span>{detail.coachingRecords.length} sessions</span>
-        </div>
+      <div hidden={activeProfileTab !== "overview"}>
+      <CollapsibleSection
+        count={sectionSummary?.coachingCount ?? 0}
+        emptyMessage="No coaching or mentoring sessions have been recorded yet."
+        error={sectionErrors.coaching}
+        isEmpty={(sectionSummary?.coachingCount ?? 0) === 0}
+        isLoading={loadingSection === "coaching"}
+        onExpandedChange={(expanded) => handleSectionExpansion("coaching", expanded)}
+        statusSummary="Session history"
+        storageKey={`staff-profile:${staffId}:${academicYear}:coaching`}
+        title="Coaching and mentoring"
+      >
         <div className="table-shell">
           <table>
             <thead>
@@ -553,15 +631,13 @@ export function StaffProfilePanel({
             </tbody>
           </table>
         </div>
-      </section>
+        <Pagination page={sectionPages.coaching?.page ?? 1} totalPages={sectionPages.coaching?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("coaching", page)} />
+      </CollapsibleSection>
+      </div>
 
-      <section className="panel" hidden={activeProfileTab !== "overview"}>
-        <div className="panel-heading">
-          <div>
-            <h2>Staff reflections</h2>
-            <span>{detail.reflections.length} record{detail.reflections.length === 1 ? "" : "s"}</span>
-          </div>
-          {canEditReflections ? (
+      <div hidden={activeProfileTab !== "overview"}>
+      <CollapsibleSection
+        actions={canEditReflections ? (
             <Button
               disabled={isCreatingReflection || detail.elevatePractice?.status !== "submitted" || detail.academicYear !== currentAcademicYear()}
               icon={Plus}
@@ -570,10 +646,17 @@ export function StaffProfilePanel({
             >
               {isCreatingReflection ? "Creating..." : "Add reflection"}
             </Button>
-          ) : (
-            <span>Read only</span>
-          )}
-        </div>
+          ) : undefined}
+        count={sectionSummary?.reflectionCount ?? 0}
+        emptyMessage="No staff reflections have been recorded."
+        error={sectionErrors.reflections}
+        isEmpty={(sectionSummary?.reflectionCount ?? 0) === 0}
+        isLoading={loadingSection === "reflections"}
+        onExpandedChange={(expanded) => handleSectionExpansion("reflections", expanded)}
+        statusSummary={`${submittedReflectionCount} submitted`}
+        storageKey={`staff-profile:${staffId}:${academicYear}:reflections`}
+        title="Staff reflections"
+      >
         <div className="staff-reflection-list">
           {detail.reflections.length === 0 ? (
             <p className="muted-copy">No staff reflections have been recorded.</p>
@@ -689,13 +772,22 @@ export function StaffProfilePanel({
             );
           })}
         </div>
-      </section>
+        <Pagination page={sectionPages.reflections?.page ?? 1} totalPages={sectionPages.reflections?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("reflections", page)} />
+      </CollapsibleSection>
+      </div>
 
-      <section className="panel" hidden={activeProfileTab !== "overview"}>
-        <div className="panel-heading">
-          <h2>Actions</h2>
-          <span>{openActionCount} open / {completedActionCount} completed</span>
-        </div>
+      <div hidden={activeProfileTab !== "overview"}>
+      <CollapsibleSection
+        count={openActionCount + completedActionCount}
+        emptyMessage="No actions are connected to this staff member."
+        error={sectionErrors.actions}
+        isEmpty={openActionCount + completedActionCount === 0}
+        isLoading={loadingSection === "actions"}
+        onExpandedChange={(expanded) => handleSectionExpansion("actions", expanded)}
+        statusSummary={`${openActionCount} open / ${sectionSummary?.overdueActionCount ?? 0} overdue / ${completedActionCount} completed`}
+        storageKey={`staff-profile:${staffId}:${academicYear}:actions`}
+        title="Actions"
+      >
         <div className="table-shell">
           <table>
             <thead>
@@ -738,7 +830,9 @@ export function StaffProfilePanel({
             </tbody>
           </table>
         </div>
-      </section>
+        <Pagination page={sectionPages.actions?.page ?? 1} totalPages={sectionPages.actions?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("actions", page)} />
+      </CollapsibleSection>
+      </div>
     </>
   );
 }

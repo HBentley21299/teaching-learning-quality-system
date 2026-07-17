@@ -9,7 +9,8 @@ public static class AdministrationAccessPolicy
         || CanManageOrganisation(currentUser)
         || CanManageLists(currentUser)
         || CanManageForms(currentUser)
-        || CanManageRecords(currentUser);
+        || CanManageRecords(currentUser)
+        || CanManageMessaging(currentUser);
 
     public static bool CanManagePeopleAndAccess(CurrentUser currentUser) =>
         currentUser.HasPermission(PermissionKeys.UsersManage)
@@ -26,4 +27,7 @@ public static class AdministrationAccessPolicy
 
     public static bool CanManageRecords(CurrentUser currentUser) =>
         currentUser.HasPermission(PermissionKeys.RecordsManage);
+
+    public static bool CanManageMessaging(CurrentUser currentUser) =>
+        currentUser.HasPermission(PermissionKeys.MessagingManage);
 }

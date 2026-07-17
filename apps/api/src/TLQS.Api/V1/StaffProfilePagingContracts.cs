@@ -12,6 +12,9 @@ public sealed record StaffProfileSectionSummary(
     int SubmittedReflectionCount,
     int CoachingCount,
     int CpdCount,
+    int InternalCpdCount,
+    int ExternalCpdCount,
+    int TotalCpdMinutes,
     int OpenActionCount,
     int CompletedActionCount,
     int OverdueActionCount);
