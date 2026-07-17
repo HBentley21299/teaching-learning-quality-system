@@ -136,7 +136,8 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\032_probation_liv_link_uniqueness.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\033_academic_years_and_elevate_status.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\034_staff_profile_query_indexes.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\035_rename_liv.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\035_rename_liv.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\036_scalable_operations_and_org_alignment.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

@@ -190,6 +190,7 @@ app.MapGet("/health/ready", ReadinessAsync);
 app.MapGet("/health", ReadinessAsync);
 
 app.MapFoundationEndpoints();
+app.MapPlatformOperationsEndpoints();
 
 // Production packages the React application into wwwroot. Client-side routes
 // resolve to index.html while API and health endpoints retain their own 404s.

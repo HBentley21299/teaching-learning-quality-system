@@ -789,6 +789,24 @@ export type ElevatePracticeWorkspace = {
   livInformation: ElevateLivInformation;
 };
 
+export type PagedResult<T> = {
+  items: T[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+};
+
+export type StaffProfileSectionSummary = {
+  reflectionCount: number;
+  submittedReflectionCount: number;
+  coachingCount: number;
+  cpdCount: number;
+  openActionCount: number;
+  completedActionCount: number;
+  overdueActionCount: number;
+};
+
 export type ElevateLookupOption = { key: string; name: string; displayOrder: number; isOther?: boolean };
 export type ElevateLivInformation = {
   noticePreferenceKey?: string;
@@ -1241,10 +1259,14 @@ export type AdminOrganisationUnit = {
   orgUnitType: "faculty" | "team";
   code: string;
   name: string;
+  description?: string;
   directStaffCount: number;
   totalStaffCount: number;
   childTeamCount: number;
   managedTeamCount: number;
+  isActive: boolean;
+  legacyCodes: string[];
+  alignedFacultyCodes: string[];
   manager?: AdminOrganisationManager;
   parentManager?: AdminOrganisationManager;
 };
@@ -1267,6 +1289,54 @@ export type AdminOrganisationStructure = {
 export type SaveOrgUnitManagerRequest = {
   managerStaffId: string;
   reason?: string;
+};
+
+export type SaveOrganisationUnitRequest = {
+  orgUnitType: "faculty" | "team";
+  code: string;
+  name: string;
+  description?: string;
+  parentOrgUnitId?: string;
+};
+
+export type OrganisationChangeImpact = {
+  orgUnitId: string;
+  activeMemberships: number;
+  activeLeaderships: number;
+  activePermissionScopes: number;
+  childUnits: number;
+  historicalRecords: number;
+  draftRecords: number;
+  openActions: number;
+  warnings: string[];
+};
+
+export type MembershipChangeImpact = {
+  membershipId: string;
+  staffId: string;
+  staffName: string;
+  orgUnitCode: string;
+  isPrimary: boolean;
+  permissionScopes: number;
+  directReports: number;
+  assignedOpenActions: number;
+  draftRecords: number;
+  activeReviews: number;
+  warnings: string[];
+};
+
+export type OrganisationMigrationReview = {
+  id: string;
+  migrationKey: string;
+  itemType: string;
+  sourceCode?: string;
+  proposedCode?: string;
+  staffId?: string;
+  staffName?: string;
+  details: string;
+  status: "open" | "resolved" | "ignored";
+  resolutionNote?: string;
+  createdAt: string;
 };
 
 export type SaveOrganisationMembershipRequest = {

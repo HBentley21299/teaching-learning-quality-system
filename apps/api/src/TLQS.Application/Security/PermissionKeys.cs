@@ -31,6 +31,9 @@ public static class PermissionKeys
     public const string ProbationManage = "probation.manage";
     public const string ReportsViewAll = "reports.view_all";
     public const string ReportsViewScoped = "reports.view_scoped";
+    public const string MessagingManage = "messaging.manage";
+    public const string MessagingSend = "messaging.send";
+    public const string ExportsCreate = "exports.create";
 
     public static readonly string[] All =
     [
@@ -62,6 +65,9 @@ public static class PermissionKeys
         ProbationSubmit,
         ProbationManage,
         ReportsViewAll,
-        ReportsViewScoped
+        ReportsViewScoped,
+        MessagingManage,
+        MessagingSend,
+        ExportsCreate
     ];
 }

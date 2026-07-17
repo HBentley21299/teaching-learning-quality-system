@@ -842,7 +842,7 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            var detail = await store.GetStaffProfileDetailAsync(
+            var detail = await store.GetStaffProfileShellAsync(
                 staffId,
                 academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(),
                 currentUser,

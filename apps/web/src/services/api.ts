@@ -6,6 +6,10 @@ import type {
   AdminManagedList,
   AdminOrganisationStructure,
   AdminOrganisationStaff,
+  MembershipChangeImpact,
+  OrganisationChangeImpact,
+  OrganisationMigrationReview,
+  PagedResult,
   AdminRecord,
   AdminWorkScrutinyRecord,
   AdminWorkScrutinyAction,
@@ -55,6 +59,7 @@ import type {
   SaveLivStageRequest,
   SaveManagerRelationshipRequest,
   SaveOrgUnitManagerRequest,
+  SaveOrganisationUnitRequest,
   SaveOrganisationMembershipRequest,
   SaveLivVisitRequest,
   SaveProbationStageRequest,
@@ -65,8 +70,12 @@ import type {
   SaveElevateStatusLevelRequest,
   SaveStaffReflectionRequest,
   StaffProfileDetail,
+  StaffProfileActionSummary,
+  StaffProfileCoachingSummary,
   StaffProfileRecordSummary,
+  StaffProfileSectionSummary,
   StaffProfileSummary,
+  StaffCpdRecordSummary,
   StaffReflectionSummary,
   StaffSummary,
   StaffOnboardingOptions,
@@ -108,8 +117,8 @@ async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> 
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-async function getJson<T>(url: string): Promise<T> {
-  const response = await requestApi(url, { headers: await buildHeaders(false) });
+async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await requestApi(url, { headers: await buildHeaders(false) }, signal);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText} for ${url}`);
   }
@@ -154,9 +163,11 @@ async function sendJson<TRequest, TResponse = never>(url: string, method: "POST"
   }
 }
 
-async function requestApi(url: string, init: RequestInit): Promise<Response> {
+async function requestApi(url: string, init: RequestInit, externalSignal?: AbortSignal): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), apiRequestTimeoutMs);
+  const abortFromCaller = () => controller.abort();
+  externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
   try {
     return await fetch(`${apiBaseUrl}${url}`, {
@@ -166,6 +177,7 @@ async function requestApi(url: string, init: RequestInit): Promise<Response> {
     });
   } finally {
     window.clearTimeout(timeoutId);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
   }
 }
 
@@ -359,6 +371,16 @@ export const api = {
     getJson<AdminOrganisationStaff[]>("/api/v1/admin/organisation/staff"),
   adminOrganisationStructure: () =>
     getJson<AdminOrganisationStructure>("/api/v1/admin/organisation/structure"),
+  createOrganisationUnit: (request: SaveOrganisationUnitRequest) =>
+    sendJson<SaveOrganisationUnitRequest, { id: string }>("/api/v1/admin/organisation/units", "POST", request),
+  updateOrganisationUnit: (orgUnitId: string, request: SaveOrganisationUnitRequest) =>
+    sendJson<SaveOrganisationUnitRequest>(`/api/v1/admin/organisation/units/${orgUnitId}`, "PUT", request),
+  organisationUnitImpact: (orgUnitId: string) =>
+    getJson<OrganisationChangeImpact>(`/api/v1/admin/organisation/units/${orgUnitId}/impact`),
+  setOrganisationUnitStatus: (orgUnitId: string, isActive: boolean, reason: string, confirmImpact: boolean) =>
+    sendJson(`/api/v1/admin/organisation/units/${orgUnitId}/status`, "POST", { isActive, reason, confirmImpact }),
+  organisationMigrationReviews: () =>
+    getJson<OrganisationMigrationReview[]>("/api/v1/admin/organisation/migration-reviews"),
   saveOrgUnitManager: (orgUnitId: string, request: SaveOrgUnitManagerRequest) =>
     sendJson<SaveOrgUnitManagerRequest, { id: string }>(
       `/api/v1/admin/organisation/units/${orgUnitId}/manager`,
@@ -377,6 +399,8 @@ export const api = {
     sendJson(`/api/v1/admin/organisation/staff/${staffId}/memberships/${membershipId}/primary`, "POST"),
   archiveOrganisationMembership: (staffId: string, membershipId: string, reason: string) =>
     sendJson(`/api/v1/admin/organisation/staff/${staffId}/memberships/${membershipId}/archive`, "POST", { reason }),
+  organisationMembershipImpact: (staffId: string, membershipId: string) =>
+    getJson<MembershipChangeImpact>(`/api/v1/admin/organisation/staff/${staffId}/memberships/${membershipId}/impact`),
   saveManagerRelationship: (staffId: string, request: SaveManagerRelationshipRequest) =>
     sendJson<SaveManagerRelationshipRequest, { id: string }>(
       `/api/v1/admin/organisation/staff/${staffId}/managers`,

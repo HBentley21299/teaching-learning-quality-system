@@ -68,10 +68,14 @@ public sealed record AdminOrganisationUnitSummary(
     string OrgUnitType,
     string Code,
     string Name,
+    string? Description,
     int DirectStaffCount,
     int TotalStaffCount,
     int ChildTeamCount,
     int ManagedTeamCount,
+    bool IsActive,
+    IReadOnlyList<string> LegacyCodes,
+    IReadOnlyList<string> AlignedFacultyCodes,
     AdminOrganisationManagerSummary? Manager,
     AdminOrganisationManagerSummary? ParentManager);
 
@@ -96,6 +100,52 @@ public sealed record AdminOrganisationStaffOption(
 public sealed record SaveOrgUnitManagerRequest(Guid ManagerStaffId, string? Reason);
 
 public sealed record ArchiveReasonRequest(string Reason);
+
+public sealed record SaveOrganisationUnitRequest(
+    string OrgUnitType,
+    string Code,
+    string Name,
+    string? Description,
+    Guid? ParentOrgUnitId);
+
+public sealed record SetOrganisationUnitStatusRequest(bool IsActive, string Reason, bool ConfirmImpact);
+
+public sealed record OrganisationChangeImpactSummary(
+    Guid OrgUnitId,
+    int ActiveMemberships,
+    int ActiveLeaderships,
+    int ActivePermissionScopes,
+    int ChildUnits,
+    int HistoricalRecords,
+    int DraftRecords,
+    int OpenActions,
+    IReadOnlyList<string> Warnings);
+
+public sealed record MembershipChangeImpactSummary(
+    Guid MembershipId,
+    Guid StaffId,
+    string StaffName,
+    string OrgUnitCode,
+    bool IsPrimary,
+    int PermissionScopes,
+    int DirectReports,
+    int AssignedOpenActions,
+    int DraftRecords,
+    int ActiveReviews,
+    IReadOnlyList<string> Warnings);
+
+public sealed record OrganisationMigrationReviewSummary(
+    Guid Id,
+    string MigrationKey,
+    string ItemType,
+    string? SourceCode,
+    string? ProposedCode,
+    Guid? StaffId,
+    string? StaffName,
+    string Details,
+    string Status,
+    string? ResolutionNote,
+    DateTimeOffset CreatedAt);
 
 public sealed record AdminManagedListSummary(
     string LookupKey,

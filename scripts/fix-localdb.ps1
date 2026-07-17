@@ -68,7 +68,7 @@ Invoke-Native -FilePath $localDb -Arguments @("start", $Instance)
 Invoke-Native -FilePath $localDb -Arguments @("info", $Instance)
 
 $server = "(localdb)\$Instance"
-$sqlOptions = @("-No", "-C")
+$sqlOptions = @("-No", "-C", "-l", "60")
 
 Write-Host "Creating database $Database if needed..."
 $databaseCheckArguments = @(
