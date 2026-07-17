@@ -5480,8 +5480,7 @@ td {
 }
 
 .compact-checkbox input,
-.recipient-checklist input,
-.attachment-options input {
+.recipient-checklist input {
   accent-color: var(--teal);
   height: 16px;
   width: 16px;
@@ -5597,8 +5596,7 @@ td {
   grid-column: 1 / -1;
 }
 
-.recipient-checklist label,
-.attachment-options > label:not(.entry-field) {
+.recipient-checklist label {
   align-items: center;
   display: flex;
   font-size: 0.78rem;
@@ -5680,11 +5678,6 @@ td {
 
 .parameter-picker button:hover {
   border-color: var(--teal);
-}
-
-.attachment-options {
-  grid-template-columns: auto auto minmax(240px, 1fr);
-  margin-top: 18px;
 }
 
 .message-editor-actions,
@@ -5789,8 +5782,7 @@ td {
   }
 
   .message-template-row,
-  .two-column-compact,
-  .attachment-options {
+  .two-column-compact {
     grid-template-columns: 1fr;
   }
 
@@ -5805,6 +5797,17 @@ td {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.export-control {
+  align-items: flex-start;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.export-control small {
+  max-width: 220px;
 }
 
 .coaching-header-summary > div {

@@ -57,6 +57,21 @@ production values in `appsettings.json`.
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Production Application Insights resource |
 | `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | `true` on App Service |
 
+Messaging remains disabled until its separate production gate is complete. When
+enabled, add these settings through the Bicep deployment parameters and Key Vault:
+
+| Setting | Requirement |
+| --- | --- |
+| `Messaging__Enabled` | `true` only after the Graph delivery test passes |
+| `Messaging__TenantId` | College Entra tenant ID |
+| `Messaging__ClientId` | Client ID of the dedicated Graph email application |
+| `Messaging__ClientSecret` | Key Vault reference to `messaging-graph-client-secret` |
+| `Messaging__SenderAddress` | Licensed or shared college mailbox used by `sendMail` |
+| `Messaging__ReplyToAddress` | Monitored college reply-to mailbox, if different |
+| `Messaging__ApplicationUrl` | Exact HTTPS application origin |
+| `Messaging__TestMode` | `false` in production; `true` in non-production |
+| `Messaging__TestRecipient` | Mandatory safe sink address in non-production |
+
 The API fails during startup when the database or production authentication
 settings are absent. Local origins are permitted only in `Development`.
 
@@ -109,6 +124,12 @@ replace information-governance approval for live staff data.
 - Audit entries are written for create, edit, submit, manager change, action closure and archive operations.
 - No production dependency vulnerability is reported by the release gate.
 - Tablet layouts and keyboard navigation complete without blocking defects.
+- Every Excel export opens without repair warnings and contains only the requesting
+  user's permitted staff and organisation scope.
+- Word record reports open without repair warnings; final college branding is an
+  approval item rather than a schema dependency.
+- Messaging test mode resolves recipients, renders only approved parameters and
+  produces one outbox row when the same event is replayed.
 
 ## Monitoring Gate
 

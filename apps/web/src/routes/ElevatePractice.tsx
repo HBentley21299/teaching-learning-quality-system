@@ -13,6 +13,7 @@ import {
   X
 } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { ExportExcelButton } from "../components/ExportButtons";
 import { api } from "../services/api";
 import type {
   AdminSaveElevatePracticeAssessmentRequest,
@@ -88,12 +89,15 @@ export function ElevatePractice({
     <div className="route-stack">
       <div className="route-header">
         <div><p className="eyebrow">Staff self-assessment</p><h1>Elevate Learning and Innovation</h1></div>
-        {isAdmin ? (
-          <div className="segmented-control" aria-label="Elevate Learning and Innovation view">
-            <button className={view === "assessment" ? "is-active" : ""} onClick={() => setView("assessment")} type="button">My assessment</button>
-            <button className={view === "progress" ? "is-active" : ""} onClick={() => setView("progress")} type="button">Completion overview</button>
-          </div>
-        ) : null}
+        <div className="toolbar">
+          {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: workspace?.academicYear }} moduleKey="elevate-practice" /> : null}
+          {isAdmin ? (
+            <div className="segmented-control" aria-label="Elevate Learning and Innovation view">
+              <button className={view === "assessment" ? "is-active" : ""} onClick={() => setView("assessment")} type="button">My assessment</button>
+              <button className={view === "progress" ? "is-active" : ""} onClick={() => setView("progress")} type="button">Completion overview</button>
+            </div>
+          ) : null}
+        </div>
       </div>
       {message ? <div className="notice-row">{message}</div> : null}
       {view === "progress" && isAdmin ? <ElevatePracticeProgressView /> : workspace && draft ? (

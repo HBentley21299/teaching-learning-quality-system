@@ -53,18 +53,6 @@ const recipientOptions = [
   ["reviewer", "Allocated reviewer"]
 ] as const;
 
-const exportModules = [
-  ["learning-walks", "Learning Walk"],
-  ["work-scrutiny", "Work Scrutiny"],
-  ["elevate-practice", "Elevate Learning and Innovation"],
-  ["coaching", "Coaching and Mentoring"],
-  ["reflections", "Reflections"],
-  ["actions", "Actions"],
-  ["cpd", "CPD"],
-  ["liv", "Learning and Innovation Visits"],
-  ["staff", "Staff"]
-] as const;
-
 type EditorTarget = "subject" | "plain" | "html";
 type EditorState = {
   id?: string;
@@ -85,9 +73,6 @@ type EditorState = {
   scheduleMode: "immediate" | "relative";
   daysOffset: string;
   isActive: boolean;
-  includeExcel: boolean;
-  includeWord: boolean;
-  attachmentModule: string;
 };
 
 const emptyEditor: EditorState = {
@@ -107,10 +92,7 @@ const emptyEditor: EditorState = {
   teamCode: "",
   scheduleMode: "immediate",
   daysOffset: "0",
-  isActive: false,
-  includeExcel: false,
-  includeWord: false,
-  attachmentModule: "learning-walks"
+  isActive: false
 };
 
 export function MessagingAdminPanel() {
@@ -319,6 +301,7 @@ export function MessagingAdminPanel() {
       </section>
 
       {editor ? (
+        <>
         <section className="panel message-editor">
           <div className="panel-heading">
             <div><h2>{editor.id ? "Edit message" : "Add message"}</h2><span>{editor.id ? "Saving creates a new immutable version" : "Inactive until you choose to activate it"}</span></div>
@@ -373,13 +356,6 @@ export function MessagingAdminPanel() {
             </aside>
           </div>
 
-          <fieldset className="message-config-group attachment-options">
-            <legend>Generated attachments</legend>
-            <label><input checked={editor.includeExcel} onChange={(event) => setEditor({ ...editor, includeExcel: event.target.checked })} type="checkbox" />Excel export</label>
-            <label><input checked={editor.includeWord} onChange={(event) => setEditor({ ...editor, includeWord: event.target.checked })} type="checkbox" />Word report</label>
-            {editor.includeExcel || editor.includeWord ? <label className="entry-field"><span>Source module</span><select onChange={(event) => setEditor({ ...editor, attachmentModule: event.target.value })} value={editor.attachmentModule}>{exportModules.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label> : null}
-          </fieldset>
-
           <div className="message-editor-actions">
             <label className="compact-checkbox"><input checked={editor.isActive} onChange={(event) => setEditor({ ...editor, isActive: event.target.checked })} type="checkbox" />Active after save</label>
             <div className="inline-actions">
@@ -392,8 +368,9 @@ export function MessagingAdminPanel() {
 
           {editor.id ? <div className="message-test-row"><label className="entry-field"><span>Test recipient</span><input onChange={(event) => setTestEmail(event.target.value)} placeholder="name@example.ac.uk" type="email" value={testEmail} /></label><Button icon={Send} onClick={() => void sendTest()}>Queue test</Button></div> : null}
 
-          {versions.length > 0 ? <CollapsibleSection count={versions.length} isEmpty={false} storageKey={`message-versions-${editor.id}`} title="Template versions"><div className="version-list">{versions.map((version) => <div key={version.id}><strong>Version {version.versionNumber}</strong><span>{new Date(version.createdAt).toLocaleString()} · {version.createdBy ?? "System"}</span><small>{version.subjectTemplate}</small></div>)}</div></CollapsibleSection> : null}
         </section>
+        {versions.length > 0 ? <CollapsibleSection count={versions.length} isEmpty={false} storageKey={`message-versions-${editor.id}`} title="Template versions"><div className="version-list">{versions.map((version) => <div key={version.id}><strong>Version {version.versionNumber}</strong><span>{new Date(version.createdAt).toLocaleString()} · {version.createdBy ?? "System"}</span><small>{version.subjectTemplate}</small></div>)}</div></CollapsibleSection> : null}
+        </>
       ) : null}
 
       <CollapsibleSection
@@ -431,9 +408,6 @@ function toRequest(editor: EditorState): SaveMessageTemplateRequest {
     facultyCode: editor.facultyCode.trim(),
     teamCode: editor.teamCode.trim()
   }).filter(([, value]) => value));
-  const attachments: SaveMessageTemplateRequest["attachments"] = [];
-  if (editor.includeExcel) attachments.push({ attachmentType: "excel_export", displayName: `${editor.name || "Message"} data`, exportModuleKey: editor.attachmentModule });
-  if (editor.includeWord) attachments.push({ attachmentType: "word_report", displayName: `${editor.name || "Message"} report`, exportModuleKey: editor.attachmentModule });
   return {
     messageKey: editor.messageKey,
     name: editor.name,
@@ -446,7 +420,7 @@ function toRequest(editor: EditorState): SaveMessageTemplateRequest {
     conditionConfigJson: JSON.stringify(conditions),
     scheduleConfigJson: JSON.stringify(editor.scheduleMode === "immediate" ? { mode: "immediate" } : { mode: "relative", daysOffset: Number(editor.daysOffset || 0) }),
     isActive: editor.isActive,
-    attachments
+    attachments: []
   };
 }
 

@@ -143,8 +143,16 @@ public static class PlatformOperationsEndpoints
                 staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken));
         });
 
-        api.MapGet("/admin/messaging/parameters", (ClaimsPrincipal principal) =>
-            Results.Ok(MessageTemplatePolicy.Parameters));
+        api.MapGet("/admin/messaging/parameters", async (
+            ClaimsPrincipal principal,
+            SqlFoundationDataStore store,
+            CancellationToken cancellationToken) =>
+        {
+            var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
+            return AdministrationAccessPolicy.CanManageMessaging(user)
+                ? Results.Ok(MessageTemplatePolicy.Parameters)
+                : Results.Forbid();
+        });
 
         api.MapGet("/admin/messaging/templates", async (
             bool includeDeleted,

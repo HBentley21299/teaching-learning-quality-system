@@ -1,5 +1,6 @@
 import { Search, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { ExportExcelButton } from "../components/ExportButtons";
 import { StaffProfilePanel } from "../features/StaffProfilePanel";
 import type { CurrentUser, StaffProfileSummary, StaffSummary } from "../services/types";
 
@@ -93,6 +94,7 @@ export function StaffProfiles({
           <p className="eyebrow">People and scope</p>
           <h1>Staff</h1>
         </div>
+        {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear }} moduleKey="staff" /> : null}
       </div>
 
       <section className="panel">

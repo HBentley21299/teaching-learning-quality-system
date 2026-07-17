@@ -610,7 +610,10 @@ public sealed partial class SqlFoundationDataStore
         CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        await using var command = new SqlCommand(sql, connection) { CommandTimeout = 90 };
+        var optimizedSql = sql.TrimEnd();
+        if (optimizedSql.EndsWith(';')) optimizedSql = optimizedSql[..^1];
+        optimizedSql += " OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);";
+        await using var command = new SqlCommand(optimizedSql, connection) { CommandTimeout = 90 };
         command.Parameters.AddWithValue("@exportTake", InteractiveExportRowLimit + 1);
         configure(command);
         await using var reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, cancellationToken);
@@ -683,16 +686,28 @@ public sealed partial class SqlFoundationDataStore
         string? recordType = null)
     {
         AddScopeParameters(command, user);
-        command.Parameters.AddWithValue("@academicYear", ToDbValue(filter.AcademicYear));
-        command.Parameters.AddWithValue("@facultyCode", ToDbValue(filter.FacultyCode));
-        command.Parameters.AddWithValue("@teamCode", ToDbValue(filter.TeamCode));
-        command.Parameters.AddWithValue("@fromDate", ToDbValue(filter.FromDate));
-        command.Parameters.AddWithValue("@toDate", ToDbValue(filter.ToDate));
-        command.Parameters.AddWithValue("@staffId", ToDbValue(filter.StaffId));
-        command.Parameters.AddWithValue("@reviewerId", ToDbValue(filter.ReviewerId));
-        command.Parameters.AddWithValue("@status", ToDbValue(filter.Status));
-        command.Parameters.AddWithValue("@recordType", ToDbValue(recordType ?? filter.RecordType));
+        AddNullableText(command, "@academicYear", filter.AcademicYear, 10);
+        AddNullableText(command, "@facultyCode", filter.FacultyCode, 50);
+        AddNullableText(command, "@teamCode", filter.TeamCode, 50);
+        AddNullableDate(command, "@fromDate", filter.FromDate);
+        AddNullableDate(command, "@toDate", filter.ToDate);
+        AddNullableGuid(command, "@staffId", filter.StaffId);
+        AddNullableGuid(command, "@reviewerId", filter.ReviewerId);
+        AddNullableText(command, "@status", filter.Status, 100);
+        AddNullableText(command, "@recordType", recordType ?? filter.RecordType, 100);
     }
+
+    private static void AddNullableText(SqlCommand command, string name, string? value, int size) =>
+        command.Parameters.Add(name, System.Data.SqlDbType.NVarChar, size).Value =
+            string.IsNullOrWhiteSpace(value) ? DBNull.Value : value.Trim();
+
+    private static void AddNullableDate(SqlCommand command, string name, DateOnly? value) =>
+        command.Parameters.Add(name, System.Data.SqlDbType.Date).Value =
+            value.HasValue ? value.Value.ToDateTime(TimeOnly.MinValue) : DBNull.Value;
+
+    private static void AddNullableGuid(SqlCommand command, string name, Guid? value) =>
+        command.Parameters.Add(name, System.Data.SqlDbType.UniqueIdentifier).Value =
+            value.HasValue ? value.Value : DBNull.Value;
 
     private static async Task<IReadOnlyList<T>> QueryOnConnectionAsync<T>(
         SqlConnection connection,

@@ -1719,7 +1719,7 @@ public sealed partial class SqlFoundationDataStore(
                     ))
                     OR (a.visibility_setting = 'management_only' AND @canViewScopedActivities = 1)
               )
-            OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
             """;
 
         var actions = await QueryAsync(
@@ -2119,7 +2119,7 @@ public sealed partial class SqlFoundationDataStore(
                     )
               )
             ORDER BY COALESCE(r.record_date, CONVERT(date, r.created_at)) DESC, r.created_at DESC
-            OPTION (FORCE ORDER, MAXDOP 1);
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE, MAX_GRANT_PERCENT = 1);
             """,
             command => AddScopeParameters(command, currentUser),
             reader => new ProcessDashboardRecordSummary(
@@ -2207,25 +2207,52 @@ public sealed partial class SqlFoundationDataStore(
     {
         const string sql = """
             SELECT
-                profile.staff_id,
-                profile.external_id,
-                profile.display_name,
-                profile.email,
-                profile.job_title,
-                profile.primary_org_code,
-                profile.cpd_sessions_attended,
-                profile.evidence_records,
-                profile.open_actions,
-                profile.overdue_actions
-            FROM reporting.v_staff_profile_summary profile
-            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = profile.staff_id
-            ORDER BY profile.display_name
-            OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);
+                staff.id,
+                staff.external_id,
+                staff.display_name,
+                staff.email,
+                staff.job_title,
+                org_unit.code,
+                COALESCE(cpd_totals.cpd_sessions_attended, 0),
+                COALESCE(evidence_totals.evidence_records, 0),
+                COALESCE(action_totals.open_actions, 0),
+                COALESCE(action_totals.overdue_actions, 0)
+            FROM people.staff staff
+            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = staff.id
+            LEFT JOIN org.org_units org_unit ON org_unit.id = staff.primary_org_unit_id
+            OUTER APPLY (
+                SELECT COUNT_BIG(*) AS cpd_sessions_attended
+                FROM cpd.cpd_attendance attendance
+                WHERE attendance.staff_id = staff.id
+                  AND attendance.archived_at IS NULL
+                  AND attendance.attendance_status = 'Attended'
+            ) cpd_totals
+            OUTER APPLY (
+                SELECT COUNT_BIG(*) AS evidence_records
+                FROM evidence.evidence_items evidence_item
+                WHERE evidence_item.staff_id = staff.id
+                  AND evidence_item.archived_at IS NULL
+            ) evidence_totals
+            OUTER APPLY (
+                SELECT
+                    COUNT_BIG(*) AS open_actions,
+                    SUM(CASE
+                        WHEN action_item.due_date < CONVERT(date, sysutcdatetime()) THEN CONVERT(bigint, 1)
+                        ELSE CONVERT(bigint, 0)
+                    END) AS overdue_actions
+                FROM quality.actions action_item
+                WHERE action_item.subject_staff_id = staff.id
+                  AND action_item.archived_at IS NULL
+                  AND action_item.completed_date IS NULL
+            ) action_totals
+            WHERE staff.archived_at IS NULL
+            ORDER BY staff.display_name
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
             """;
 
         return QueryAsync(
             sql,
-            command => command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId)),
+            command => command.Parameters.Add("@currentUserAccountId", System.Data.SqlDbType.UniqueIdentifier).Value = ToDbValue(currentUser.UserAccountId),
             reader => new StaffProfileSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -2732,6 +2759,17 @@ public sealed partial class SqlFoundationDataStore(
                     ?? throw new InvalidOperationException("Action insert did not return an id."));
             }
 
+            await InsertDomainEventAsync(
+                connection,
+                (SqlTransaction)transaction,
+                "action.assigned",
+                "action",
+                actionId,
+                request.SourceRecordId,
+                "{}",
+                currentUser.UserAccountId,
+                cancellationToken);
+
             await WriteAuditAsync(
                 connection,
                 transaction,
@@ -2938,6 +2976,19 @@ public sealed partial class SqlFoundationDataStore(
 
             var auditAction = completing ? "action.completed" : cancelling ? "action.cancelled" : reopening ? "action.reopened" : "action.updated";
             var auditVerb = completing ? "completed" : cancelling ? "cancelled" : reopening ? "reopened" : "updated";
+            if (completing)
+            {
+                await InsertDomainEventAsync(
+                    connection,
+                    (SqlTransaction)transaction,
+                    "action.completed",
+                    "action",
+                    actionId,
+                    action.SourceRecordId,
+                    "{}",
+                    currentUser.UserAccountId,
+                    cancellationToken);
+            }
             await WriteAuditAsync(
                 connection,
                 transaction,
@@ -3209,6 +3260,11 @@ public sealed partial class SqlFoundationDataStore(
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        if (!sourceRecordId.HasValue && !subjectStaffId.HasValue)
+        {
+            return true;
+        }
+
         var rows = await QueryAsync(
             """
             WITH visible_staff AS (
@@ -3260,6 +3316,7 @@ public sealed partial class SqlFoundationDataStore(
                     )
                 )
                 THEN 1 ELSE 0 END);
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
             """,
             command =>
             {
@@ -4126,6 +4183,20 @@ public sealed partial class SqlFoundationDataStore(
                 }
             }
 
+            if (!request.SaveAsDraft)
+            {
+                await InsertDomainEventAsync(
+                    connection,
+                    (SqlTransaction)transaction,
+                    "form.submitted",
+                    "record",
+                    recordId,
+                    recordId,
+                    "{}",
+                    currentUser.UserAccountId,
+                    cancellationToken);
+            }
+
             await WriteAuditAsync(
                 connection,
                 transaction,
@@ -4470,6 +4541,22 @@ public sealed partial class SqlFoundationDataStore(
                 archiveActionsCommand.Parameters.AddWithValue("@deletionReason", $"Source {submission.RecordType.Replace('_', ' ')} record archived.");
                 await archiveActionsCommand.ExecuteNonQueryAsync(cancellationToken);
             }
+
+            var domainEventType = action == SubmissionLifecycle.ActionSubmit
+                ? "form.submitted"
+                : action == SubmissionLifecycle.ActionReopen
+                    ? "record.reopened"
+                    : "record.status_changed";
+            await InsertDomainEventAsync(
+                connection,
+                (SqlTransaction)transaction,
+                domainEventType,
+                "record",
+                submission.RecordId,
+                submission.RecordId,
+                "{}",
+                currentUser.UserAccountId,
+                cancellationToken);
 
             await WriteAuditAsync(
                 connection,
@@ -6851,6 +6938,17 @@ public sealed partial class SqlFoundationDataStore(
                     throw new WorkflowValidationException("One of the selected action owners is not an active staff member.");
                 }
             }
+
+            await InsertDomainEventAsync(
+                connection,
+                (SqlTransaction)transaction,
+                "action.assigned",
+                "action",
+                actionId,
+                recordId,
+                "{}",
+                currentUser.UserAccountId,
+                cancellationToken);
 
             await WriteAuditAsync(
                 connection,

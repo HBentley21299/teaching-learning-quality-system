@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DataTable } from "../components/DataTable";
+import { ExportExcelButton } from "../components/ExportButtons";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -301,7 +302,10 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
     <div className="route-stack">
       <div className="route-header">
         <div><p className="eyebrow">Organisation-wide follow-up</p><h1>Actions</h1></div>
-        {canManageActions ? <Button icon={Plus} onClick={() => setIsCreating((current) => !current)} variant="primary">Create action</Button> : null}
+        <div className="toolbar">
+          {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear }} moduleKey="actions" /> : null}
+          {canManageActions ? <Button icon={Plus} onClick={() => setIsCreating((current) => !current)} variant="primary">Create action</Button> : null}
+        </div>
       </div>
 
       <div className="action-metrics" aria-label="Action totals">

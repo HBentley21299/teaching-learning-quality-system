@@ -13,6 +13,10 @@ Use this checklist whenever adding a new process such as Observation Management,
 7. Attach evidence through `evidence.evidence_items` and files through `evidence.file_assets`.
 8. Add reporting through read models/views and dashboard widgets.
 9. Add audit events for every meaningful create/update/status transition.
+10. Register a permission-scoped Excel read model when the module is reportable.
+11. Publish standard events such as `form.submitted`, `action.assigned` or
+    `record.status_changed` for configurable messaging. Do not send email in the
+    module workflow itself.
 
 ## Avoid
 
@@ -20,4 +24,6 @@ Use this checklist whenever adding a new process such as Observation Management,
 - Storing multiple faculty IDs in one text field.
 - Using staff names as keys.
 - Changing old form submissions when a template changes.
+- Reading unrestricted tables in exports, dashboards or recipient resolution.
+- Creating module-specific email queues or Graph clients.
 

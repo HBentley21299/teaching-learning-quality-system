@@ -138,7 +138,9 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\034_staff_profile_query_indexes.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\035_rename_liv.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\036_scalable_operations_and_org_alignment.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\037_scope_hardening_and_domain_events.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\037_scope_hardening_and_domain_events.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\038_domain_event_dispatch.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\039_staff_profile_summary_performance.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

@@ -23,13 +23,14 @@ public sealed class MessageOutboxWorker(
                     continue;
                 }
 
+                var dispatchedEvents = await store.DispatchDomainEventBatchAsync(20, _options, stoppingToken);
                 var ids = await store.ClaimMessageBatchAsync(10, stoppingToken);
                 foreach (var id in ids)
                 {
                     await DeliverAsync(id, stoppingToken);
                 }
 
-                if (ids.Count == 0)
+                if (ids.Count == 0 && dispatchedEvents == 0)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(_options.PollSeconds, 2, 300)), stoppingToken);
                 }

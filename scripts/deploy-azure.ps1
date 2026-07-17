@@ -23,6 +23,11 @@ param(
     [string] $EntraApiScope,
 
     [string] $EntraTenantId,
+    [switch] $EnableMessaging,
+    [string] $MessagingClientId,
+    [string] $MessagingSenderAddress,
+    [string] $MessagingReplyToAddress,
+    [string] $MessagingTestRecipient,
     [string] $BootstrapAdminObjectId,
     [string] $BootstrapAdminEmail,
     [ValidateSet("Group", "User")]
@@ -43,6 +48,13 @@ $apiArtifact = Join-Path $artifactRoot "api"
 $zipArtifact = Join-Path $artifactRoot "tlqs-v1.zip"
 $migrationAccessOpened = $false
 $sqlServerName = $null
+
+if ($EnableMessaging -and ([string]::IsNullOrWhiteSpace($MessagingClientId) -or [string]::IsNullOrWhiteSpace($MessagingSenderAddress))) {
+    throw "MessagingClientId and MessagingSenderAddress are required when EnableMessaging is selected."
+}
+if ($EnableMessaging -and $EnvironmentName -ne "prod" -and [string]::IsNullOrWhiteSpace($MessagingTestRecipient)) {
+    throw "MessagingTestRecipient is required when messaging is enabled outside production."
+}
 
 function Assert-Command {
     param([string] $Name)
@@ -278,6 +290,11 @@ try {
             sqlAdministratorPrincipalType=$SqlAdministratorPrincipalType `
             entraTenantId=$EntraTenantId `
             entraApiAudience=$EntraApiAudience `
+            messagingEnabled=$($EnableMessaging.IsPresent.ToString().ToLowerInvariant()) `
+            messagingClientId=$MessagingClientId `
+            messagingSenderAddress=$MessagingSenderAddress `
+            messagingReplyToAddress=$MessagingReplyToAddress `
+            messagingTestRecipient=$MessagingTestRecipient `
             enableSqlMigrationAccess=true `
             migrationClientIp=$migrationClientIp `
         --output json

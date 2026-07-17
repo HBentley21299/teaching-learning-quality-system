@@ -20,6 +20,7 @@ public sealed class MessagingOptions
     public string SenderDisplayName { get; set; } = "i-Elevate";
     public string ReplyToAddress { get; set; } = "";
     public string TestRecipient { get; set; } = "";
+    public string ApplicationUrl { get; set; } = "";
     public int PollSeconds { get; set; } = 10;
 }
 

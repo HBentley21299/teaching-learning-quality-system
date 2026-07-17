@@ -14,6 +14,7 @@ import {
   UsersRound
 } from "lucide-react";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
+import { ExportExcelButton } from "../components/ExportButtons";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -255,6 +256,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
     <div className="route-stack coaching-workspace">
       <div className="route-header">
         <div><p className="eyebrow">Professional development</p><h1>Coaching and Mentoring</h1></div>
+        {user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="coaching" /> : null}
       </div>
 
       {message ? <div className="notice-row">{message}</div> : null}

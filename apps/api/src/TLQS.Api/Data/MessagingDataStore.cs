@@ -30,8 +30,8 @@ public sealed partial class SqlFoundationDataStore
                    template.is_active, CONVERT(bit, CASE WHEN template.archived_at IS NULL THEN 0 ELSE 1 END),
                    version.version_number, version.subject_template, version.plain_text_template,
                    version.html_template, version.recipient_config_json,
-                   COALESCE(rule.event_type, N'manual'), COALESCE(rule.condition_config_json, N'{}'),
-                   COALESCE(rule.schedule_config_json, N'{"mode":"immediate"}'),
+                   COALESCE(latest_rule.event_type, N'manual'), COALESCE(latest_rule.condition_config_json, N'{}'),
+                   COALESCE(latest_rule.schedule_config_json, N'{"mode":"immediate"}'),
                    template.created_at, template.updated_at,
                    SUM(CASE WHEN outbox.status IN (N'pending', N'processing', N'retrying') THEN 1 ELSE 0 END),
                    SUM(CASE WHEN outbox.status = N'failed' THEN 1 ELSE 0 END),
@@ -45,14 +45,14 @@ public sealed partial class SqlFoundationDataStore
                 WHERE message_rule.message_template_id = template.id
                   AND message_rule.archived_at IS NULL
                 ORDER BY message_rule.created_at DESC
-            ) rule
+            ) latest_rule
             LEFT JOIN ops.message_outbox outbox ON outbox.template_version_id = version.id
             WHERE (@includeDeleted = 1 OR template.archived_at IS NULL)
             GROUP BY template.id, template.message_key, template.name, template.internal_description,
                      template.is_active, template.archived_at, version.version_number,
                      version.subject_template, version.plain_text_template, version.html_template,
-                     version.recipient_config_json, rule.event_type, rule.condition_config_json,
-                     rule.schedule_config_json, template.created_at, template.updated_at
+                     version.recipient_config_json, latest_rule.event_type, latest_rule.condition_config_json,
+                     latest_rule.schedule_config_json, template.created_at, template.updated_at
             ORDER BY template.name;
             """,
             command => command.Parameters.AddWithValue("@includeDeleted", includeDeleted),
@@ -143,6 +143,26 @@ public sealed partial class SqlFoundationDataStore
                     updated_by_user_account_id = @userId,
                     updated_at = sysutcdatetime()
                 WHERE id = @id;
+
+                IF @restore = 1
+                BEGIN
+                    UPDATE ops.message_rules
+                    SET is_active = 0,
+                        updated_at = sysutcdatetime()
+                    WHERE message_template_id = @id;
+
+                    UPDATE message_rule
+                    SET is_active = @isActive,
+                        archived_at = NULL,
+                        updated_at = sysutcdatetime()
+                    FROM ops.message_rules message_rule
+                    WHERE message_rule.id = (
+                        SELECT TOP (1) latest_rule.id
+                        FROM ops.message_rules latest_rule
+                        WHERE latest_rule.message_template_id = @id
+                        ORDER BY latest_rule.created_at DESC, latest_rule.id DESC
+                    );
+                END
                 """, connection, (SqlTransaction)transaction);
             command.Parameters.AddWithValue("@id", templateId);
             command.Parameters.AddWithValue("@isActive", request.IsActive);
@@ -644,24 +664,13 @@ public sealed partial class SqlFoundationDataStore
         var schedule = NormalizeJson(request.ScheduleConfigJson, "send schedule");
         var html = MessageTemplatePolicy.SanitizeHtml(request.HtmlTemplate);
         MessageTemplatePolicy.Validate(request.SubjectTemplate.Trim(), request.PlainTextTemplate.Trim(), html);
-        var attachments = (request.Attachments ?? []).Select(NormalizeAttachment).ToArray();
+        if (request.Attachments is { Count: > 0 })
+            throw new WorkflowValidationException("Message attachments are not enabled in V1.");
+        NormalizedMessageAttachment[] attachments = [];
         return new NormalizedMessageTemplate(
             key, name, string.IsNullOrWhiteSpace(request.InternalDescription) ? null : request.InternalDescription.Trim(),
             request.SubjectTemplate.Trim(), request.PlainTextTemplate.Trim(), html, recipients,
             eventType, conditions, schedule, request.IsActive, attachments);
-    }
-
-    private static NormalizedMessageAttachment NormalizeAttachment(SaveMessageAttachmentRequest item)
-    {
-        var type = item.AttachmentType.Trim().ToLowerInvariant();
-        if (type is not ("static" or "record" or "excel_export" or "word_report"))
-            throw new WorkflowValidationException("Select a supported attachment type.");
-        var name = item.DisplayName.Trim();
-        if (name.Length is < 1 or > 250) throw new WorkflowValidationException("Enter an attachment display name.");
-        if (type == "static" && !item.FileAssetId.HasValue) throw new WorkflowValidationException("Select a stored file for a static attachment.");
-        if (type is "excel_export" or "word_report" && string.IsNullOrWhiteSpace(item.ExportModuleKey))
-            throw new WorkflowValidationException("Select the module used to generate this attachment.");
-        return new NormalizedMessageAttachment(type, name, item.FileAssetId, item.ExportModuleKey?.Trim());
     }
 
     private static string NormalizeJson(string? json, string label)

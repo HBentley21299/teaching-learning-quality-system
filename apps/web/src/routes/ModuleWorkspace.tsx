@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import { Archive, Building2, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { CpdParticipantPicker } from "../components/CpdParticipantPicker";
+import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { RoomSearchSelect } from "../components/RoomSearchSelect";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { WorkScrutinyCreateForm } from "../components/WorkScrutinyCreateForm";
@@ -125,6 +126,12 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
   const canManageForms = user.permissions.includes("forms.manage");
   const canManageActions = user.permissions.includes("actions.manage");
+  const canExport = user.permissions.includes("exports.create");
+  const exportModuleKey = mode === "learning"
+    ? "learning-walks"
+    : mode === "scrutiny"
+      ? "work-scrutiny"
+      : mode === "elevate" ? "elevate-environments" : "cpd";
   const primaryIcon = mode === "cpd" ? CalendarPlus : mode === "elevate" ? Building2 : FilePlus2;
 
   const createSections = definition?.sections ?? [];
@@ -734,6 +741,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         </div>
         {mode !== "learning" ? (
           <div className="toolbar">
+            {canExport ? <ExportExcelButton filters={{ academicYear }} moduleKey={exportModuleKey} /> : null}
             {mode === "cpd" && canManageCpd ? (
               <div className="segmented-control" aria-label="CPD form">
                 <button
@@ -756,7 +764,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
               {config.createLabel}
             </Button>
           </div>
-        ) : null}
+        ) : canExport ? <ExportExcelButton filters={{ academicYear }} moduleKey={exportModuleKey} /> : null}
       </div>
 
       {mode === "learning" ? (
@@ -1096,6 +1104,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                 ))}
               </div>
               <div className="toolbar">
+                {canExport ? <ExportWordButton recordId={selectedDetail.id} /> : null}
                 {selectedDetail.canEdit ? (
                   <Button icon={Edit3} onClick={startEdit} variant="primary">Edit record</Button>
                 ) : null}

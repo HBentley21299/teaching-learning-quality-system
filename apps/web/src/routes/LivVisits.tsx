@@ -17,6 +17,7 @@ import {
   X
 } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { ExportExcelButton } from "../components/ExportButtons";
 import { KpiStrip } from "../components/KpiStrip";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { api } from "../services/api";
@@ -195,7 +196,7 @@ export function LivVisits({
 
   return (
     <div className="route-stack">
-      <div className="route-header"><div><p className="eyebrow">Learning, Innovation and Vision</p><h1>LIV</h1></div>{canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create LIV case</Button> : null}</div>
+      <div className="route-header"><div><p className="eyebrow">Learning, Innovation and Vision</p><h1>LIV</h1></div><div className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="liv" /> : null}{canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create LIV case</Button> : null}</div></div>
       {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
       {isCreating ? (
         <section className="panel liv-v2-create">

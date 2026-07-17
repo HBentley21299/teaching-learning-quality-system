@@ -110,6 +110,18 @@ export type ApiResult<T = never> = {
   data?: T;
 };
 
+export type ExportFilters = {
+  academicYear?: string;
+  facultyCode?: string;
+  teamCode?: string;
+  fromDate?: string;
+  toDate?: string;
+  staffId?: string;
+  reviewerId?: string;
+  status?: string;
+  recordType?: string;
+};
+
 async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> {
   const headers: Record<string, string> = {};
   const accessToken = await getAccessToken();
@@ -187,7 +199,49 @@ async function requestApi(url: string, init: RequestInit, externalSignal?: Abort
   }
 }
 
+async function downloadApiFile(url: string): Promise<ApiResult> {
+  try {
+    const response = await requestApi(url, { headers: await buildHeaders(false) });
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: response.status === 403
+          ? "You do not have permission to create this export."
+          : `The export could not be created (${response.status}).`
+      };
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    const fileName = encodedName ? decodeURIComponent(encodedName) : plainName ?? "i-elevate-export";
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return { ok: false, message: "The export took too long. Narrow the filters and try again." };
+    }
+    return { ok: false, message: "The API could not be reached. Check it is running." };
+  }
+}
+
 export const api = {
+  exportExcel: (moduleKey: string, filters: ExportFilters = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value) query.set(key, value); });
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    return downloadApiFile(`/api/v1/exports/excel/${encodeURIComponent(moduleKey)}${suffix}`);
+  },
+  exportRecordWord: (recordId: string) =>
+    downloadApiFile(`/api/v1/exports/word/records/${encodeURIComponent(recordId)}`),
   currentUser: () => getJson<CurrentUser>("/api/v1/me"),
   staffOnboardingOptions: () => getJson<StaffOnboardingOptions>("/api/v1/onboarding/options"),
   completeStaffOnboarding: (request: CompleteStaffOnboardingRequest) =>

@@ -119,8 +119,8 @@ public sealed class ExcelExportService
 
     private static S.Stylesheet CreateStylesheet() => new(
         new S.Fonts(
-            new S.Font(new S.FontName { Val = "Aptos" }, new S.FontSize { Val = 10D }),
-            new S.Font(new S.Bold(), new S.Color { Rgb = "FFFFFFFF" }, new S.FontName { Val = "Aptos" }, new S.FontSize { Val = 10D })),
+            new S.Font(new S.FontSize { Val = 10D }, new S.FontName { Val = "Aptos" }),
+            new S.Font(new S.Bold(), new S.FontSize { Val = 10D }, new S.Color { Rgb = "FFFFFFFF" }, new S.FontName { Val = "Aptos" })),
         new S.Fills(
             new S.Fill(new S.PatternFill { PatternType = S.PatternValues.None }),
             new S.Fill(new S.PatternFill { PatternType = S.PatternValues.Gray125 }),
@@ -176,11 +176,11 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
             var main = document.AddMainDocumentPart();
             main.Document = new W.Document(new W.Body());
             AddStyles(main);
-            AddHeader(main);
-            AddFooter(main);
+            var headerId = AddHeader(main);
+            var footerId = AddFooter(main);
             var body = main.Document.Body!;
             body.Append(Heading(data.Title, 1));
-            body.Append(Paragraph($"{Humanize(data.RecordType)} · {data.Status}", "Subtitle"));
+            body.Append(Paragraph($"{Humanize(data.RecordType)} | {data.Status}", "Subtitle"));
             body.Append(DetailsTable([
                 ("Staff member", data.StaffName),
                 ("Reviewer", data.ReviewerName),
@@ -209,6 +209,8 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
                 body.Append(ActionTable(data.Actions));
             }
             body.Append(new W.SectionProperties(
+                new W.HeaderReference { Type = W.HeaderFooterValues.Default, Id = headerId },
+                new W.FooterReference { Type = W.HeaderFooterValues.Default, Id = footerId },
                 new W.PageSize { Width = 11906U, Height = 16838U },
                 new W.PageMargin { Top = 1080, Right = 1080U, Bottom = 1080, Left = 1080U, Header = 500U, Footer = 500U }));
             main.Document.Save();
@@ -219,7 +221,7 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
             $"{SafeFileName(data.Title)}-{data.RecordDate?.ToString("yyyy-MM-dd") ?? DateTime.UtcNow.ToString("yyyy-MM-dd")}.docx");
     }
 
-    private void AddHeader(MainDocumentPart main)
+    private string AddHeader(MainDocumentPart main)
     {
         var part = main.AddNewPart<HeaderPart>();
         part.Header = new W.Header(
@@ -229,11 +231,10 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
                 new W.Run(new W.TabChar()),
                 new W.Run(new W.Text(_branding.OrganisationName))));
         part.Header.Save();
-        main.Document.Body!.Append(new W.SectionProperties(
-            new W.HeaderReference { Type = W.HeaderFooterValues.Default, Id = main.GetIdOfPart(part) }));
+        return main.GetIdOfPart(part);
     }
 
-    private void AddFooter(MainDocumentPart main)
+    private string AddFooter(MainDocumentPart main)
     {
         var part = main.AddNewPart<FooterPart>();
         part.Footer = new W.Footer(
@@ -241,8 +242,7 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
                 new W.ParagraphProperties(new W.ParagraphStyleId { Val = "Footer" }),
                 new W.Run(new W.Text(_branding.FooterText))));
         part.Footer.Save();
-        var properties = main.Document.Body!.Elements<W.SectionProperties>().First();
-        properties.Append(new W.FooterReference { Type = W.HeaderFooterValues.Default, Id = main.GetIdOfPart(part) });
+        return main.GetIdOfPart(part);
     }
 
     private static void AddStyles(MainDocumentPart main)
@@ -264,8 +264,10 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
     {
         var paragraph = new W.ParagraphProperties(new W.SpacingBetweenLines { After = id == "Normal" ? "120" : "180" });
         if (outline.HasValue) paragraph.Append(new W.OutlineLevel { Val = outline.Value - 1 });
-        var run = new W.RunProperties(new W.RunFonts { Ascii = "Aptos", HighAnsi = "Aptos" }, new W.FontSize { Val = halfPoints.ToString() }, new W.Color { Val = colour });
+        var run = new W.RunProperties(new W.RunFonts { Ascii = "Aptos", HighAnsi = "Aptos" });
         if (bold) run.Append(new W.Bold());
+        run.Append(new W.Color { Val = colour });
+        run.Append(new W.FontSize { Val = halfPoints.ToString() });
         return new W.Style(paragraph, run)
         {
             Type = W.StyleValues.Paragraph,
@@ -302,21 +304,22 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
             new W.TableWidth { Width = "5000", Type = W.TableWidthUnitValues.Pct },
             new W.TableBorders(
                 new W.TopBorder { Val = W.BorderValues.Single, Color = "D8E0DA", Size = 4U },
-                new W.BottomBorder { Val = W.BorderValues.Single, Color = "D8E0DA", Size = 4U },
                 new W.LeftBorder { Val = W.BorderValues.Single, Color = "D8E0DA", Size = 4U },
+                new W.BottomBorder { Val = W.BorderValues.Single, Color = "D8E0DA", Size = 4U },
                 new W.RightBorder { Val = W.BorderValues.Single, Color = "D8E0DA", Size = 4U },
                 new W.InsideHorizontalBorder { Val = W.BorderValues.Single, Color = "D8E0DA", Size = 4U },
-                new W.InsideVerticalBorder { Val = W.BorderValues.Single, Color = "D8E0DA", Size = 4U })));
+                new W.InsideVerticalBorder { Val = W.BorderValues.Single, Color = "D8E0DA", Size = 4U })),
+        new W.TableGrid());
 
     private static W.TableCell Cell(string value, bool bold = false)
     {
         var run = new W.Run(new W.Text(value) { Space = SpaceProcessingModeValues.Preserve });
         if (bold) run.RunProperties = new W.RunProperties(new W.Bold());
-        return new W.TableCell(new W.Paragraph(run), new W.TableCellProperties(new W.TableCellMargin(
+        return new W.TableCell(new W.TableCellProperties(new W.TableCellMargin(
             new W.TopMargin { Width = "80", Type = W.TableWidthUnitValues.Dxa },
-            new W.BottomMargin { Width = "80", Type = W.TableWidthUnitValues.Dxa },
             new W.TableCellLeftMargin { Width = 100, Type = W.TableWidthValues.Dxa },
-            new W.TableCellRightMargin { Width = 100, Type = W.TableWidthValues.Dxa })));
+            new W.BottomMargin { Width = "80", Type = W.TableWidthUnitValues.Dxa },
+            new W.TableCellRightMargin { Width = 100, Type = W.TableWidthValues.Dxa })), new W.Paragraph(run));
     }
 
     private static string Humanize(string value) => string.Join(' ', value.Split('_', '-', StringSplitOptions.RemoveEmptyEntries).Select(word => char.ToUpperInvariant(word[0]) + word[1..]));
