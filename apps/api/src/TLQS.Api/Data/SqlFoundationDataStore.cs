@@ -451,9 +451,10 @@ public sealed partial class SqlFoundationDataStore(
             reader => new RoomSummary(reader.GetGuid(0), reader.GetString(1), reader.GetString(2)),
             cancellationToken);
 
-    public Task<IReadOnlyList<ElevateEnvironmentPillarSummary>> GetElevateEnvironmentPillarsAsync(
-        CancellationToken cancellationToken) =>
-        QueryAsync(
+    public async Task<IReadOnlyList<ElevateEnvironmentPillarSummary>> GetElevateEnvironmentPillarsAsync(
+        CancellationToken cancellationToken)
+    {
+        var rows = await QueryAsync(
             """
             SELECT pillar.id,
                    pillar.pillar_key,
@@ -462,14 +463,32 @@ public sealed partial class SqlFoundationDataStore(
                    pillar.display_order,
                    CASE WHEN pillar.is_active = 1 AND asset.is_active = 1 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,
                    asset.asset_uri,
-                   asset.alt_text
+                   asset.alt_text,
+                   descriptor.id,
+                   descriptor.numerical_score,
+                   descriptor.judgement_key,
+                   descriptor.judgement_label,
+                   descriptor.descriptor,
+                   practice_colour.colour_hex
             FROM quality.elevate_environment_pillars pillar
             JOIN core.system_assets asset ON asset.id = pillar.system_asset_id
+            LEFT JOIN quality.elevate_environment_rubric_descriptors descriptor
+              ON descriptor.pillar_id = pillar.id
+             AND descriptor.archived_at IS NULL
+             AND descriptor.is_active = 1
+            OUTER APPLY (
+                SELECT TOP (1) practice_descriptor.colour_hex
+                FROM quality.elevate_practice_rubric_descriptors practice_descriptor
+                WHERE practice_descriptor.hidden_numeric_value = descriptor.numerical_score
+                  AND practice_descriptor.archived_at IS NULL
+                  AND practice_descriptor.is_active = 1
+                ORDER BY practice_descriptor.updated_at DESC, practice_descriptor.created_at DESC
+            ) practice_colour
             WHERE pillar.archived_at IS NULL
               AND asset.archived_at IS NULL
-            ORDER BY pillar.display_order, pillar.name;
+            ORDER BY pillar.display_order, pillar.name, descriptor.display_order;
             """,
-            reader => new ElevateEnvironmentPillarSummary(
+            reader => new ElevateEnvironmentPillarRow(
                 reader.GetGuid(0),
                 reader.GetString(1),
                 reader.GetString(2),
@@ -477,8 +496,50 @@ public sealed partial class SqlFoundationDataStore(
                 reader.GetInt32(4),
                 reader.GetBoolean(5),
                 reader.GetString(6),
-                reader.GetString(7)),
+                reader.GetString(7),
+                GetGuidOrNull(reader, 8),
+                reader.IsDBNull(9) ? null : Convert.ToInt32(reader.GetValue(9)),
+                GetStringOrNull(reader, 10),
+                GetStringOrNull(reader, 11),
+                GetStringOrNull(reader, 12),
+                GetStringOrNull(reader, 13)),
             cancellationToken);
+
+        return rows
+            .GroupBy(row => new
+            {
+                row.Id,
+                row.PillarKey,
+                row.Name,
+                row.Description,
+                row.DisplayOrder,
+                row.IsActive,
+                row.AssetUri,
+                row.AssetAltText
+            })
+            .Select(group => new ElevateEnvironmentPillarSummary(
+                group.Key.Id,
+                group.Key.PillarKey,
+                group.Key.Name,
+                group.Key.Description,
+                group.Key.DisplayOrder,
+                group.Key.IsActive,
+                group.Key.AssetUri,
+                group.Key.AssetAltText,
+                group
+                    .Where(row => row.DescriptorId.HasValue && row.Score.HasValue)
+                    .Select(row => new ElevateEnvironmentRubricDescriptorSummary(
+                        row.DescriptorId!.Value,
+                        row.Score!.Value,
+                        row.JudgementKey ?? "",
+                        row.Judgement ?? "",
+                        row.RubricDescriptor ?? "",
+                        row.ColorHex))
+                    .OrderBy(descriptor => descriptor.Score)
+                    .ToArray()))
+            .OrderBy(pillar => pillar.DisplayOrder)
+            .ToArray();
+    }
 
     public Task<IReadOnlyList<CourseSummary>> GetCoursesAsync(
         Guid orgUnitId,
@@ -1909,6 +1970,23 @@ public sealed partial class SqlFoundationDataStore(
                 owner_staff.display_name AS owner_display_name,
                 subject_staff.display_name AS subject_display_name,
                 CASE
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND elevate_assessment.barrier_count > 0 THEN 'Priority improvement present'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 4.5 THEN 'Leading practice'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 3.5 THEN 'Strong'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 2.5 THEN 'Secure'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 1.5 THEN 'Developing'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0 THEN 'Priority improvement'
                     WHEN r.record_type = 'elevate_environment' AND elevate_assessment.barrier_count > 0 THEN 'Barrier present'
                     WHEN r.record_type = 'elevate_environment'
                          AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 3 THEN 'Elevate'
@@ -1941,6 +2019,7 @@ public sealed partial class SqlFoundationDataStore(
                 COALESCE(elevate_assessment.total_score, 0) AS score_total,
                 COALESCE(elevate_assessment.scored_value_count, 0) AS score_count,
                 COALESCE(elevate_assessment.barrier_count, 0) AS barrier_count,
+                CASE WHEN environment_rating_metrics.rating_count > 0 THEN 5 ELSE 3 END AS score_maximum,
                 probation_metrics.linked_liv_source_record_id
             FROM core.records r
             LEFT JOIN people.staff owner_staff ON owner_staff.id = r.owner_staff_id
@@ -1952,6 +2031,11 @@ public sealed partial class SqlFoundationDataStore(
             LEFT JOIN quality.work_scrutiny_details scrutiny_detail ON scrutiny_detail.activity_id = activity.id
             LEFT JOIN quality.elevate_environment_assessments elevate_assessment ON elevate_assessment.record_id = r.id
             LEFT JOIN quality.rooms elevate_room ON elevate_room.id = elevate_assessment.room_id
+            OUTER APPLY (
+                SELECT COUNT_BIG(*) AS rating_count
+                FROM quality.elevate_environment_pillar_ratings pillar_rating
+                WHERE pillar_rating.record_id = r.id
+            ) environment_rating_metrics
             LEFT JOIN quality.coaching_sessions coaching_session ON coaching_session.record_id = r.id
                 AND coaching_session.archived_at IS NULL
             LEFT JOIN core.lookup_values coaching_focus ON coaching_focus.id = coaching_session.primary_focus_lookup_value_id
@@ -2146,7 +2230,8 @@ public sealed partial class SqlFoundationDataStore(
                 Convert.ToInt32(reader.GetValue(20)),
                 Convert.ToInt32(reader.GetValue(21)),
                 Convert.ToInt32(reader.GetValue(22)),
-                GetGuidOrNull(reader, 23)),
+                Convert.ToInt32(reader.GetValue(23)),
+                GetGuidOrNull(reader, 24)),
             cancellationToken);
 
     public Task<IReadOnlyList<LearningWalkRollupSummary>> GetLearningWalkRollupAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
@@ -4156,6 +4241,7 @@ public sealed partial class SqlFoundationDataStore(
                     request.RecordDate,
                     subjectStaffId,
                     valuesByFieldKey,
+                    fields.Values.Any(field => string.Equals(field.FieldType, "environment_rubric_1_5", StringComparison.OrdinalIgnoreCase)),
                     currentUser,
                     cancellationToken);
 
@@ -4381,6 +4467,7 @@ public sealed partial class SqlFoundationDataStore(
                     request.RecordDate,
                     subjectStaffId,
                     valuesByFieldKey,
+                    fields.Values.Any(field => string.Equals(field.FieldType, "environment_rubric_1_5", StringComparison.OrdinalIgnoreCase)),
                     currentUser,
                     cancellationToken);
             }
@@ -4486,6 +4573,7 @@ public sealed partial class SqlFoundationDataStore(
                     submission.RecordDate,
                     submission.SubjectStaffId,
                     stored,
+                    fields.Values.Any(field => string.Equals(field.FieldType, "environment_rubric_1_5", StringComparison.OrdinalIgnoreCase)),
                     currentUser,
                     cancellationToken);
             }
@@ -4725,7 +4813,7 @@ public sealed partial class SqlFoundationDataStore(
             .ToArray();
         var cpdRecords = await QueryAsync(
             """
-            SELECT ce.id, ce.event_title, ce.event_date, themes.response_text, ce.duration_minutes,
+            SELECT ce.id, ce.record_id, ce.event_title, ce.event_date, themes.response_text, ce.duration_minutes,
                    CASE WHEN template_info.template_key = N'cpd_core' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END
             FROM cpd.cpd_attendance ca
             JOIN cpd.cpd_events ce ON ce.id = ca.cpd_event_id
@@ -4764,11 +4852,12 @@ public sealed partial class SqlFoundationDataStore(
             },
             reader => new StaffCpdRecordSummary(
                 reader.GetGuid(0),
-                reader.GetString(1),
-                DateOnly.FromDateTime(reader.GetDateTime(2)),
-                GetStringOrNull(reader, 3),
-                GetIntOrNull(reader, 4),
-                reader.GetBoolean(5)),
+                reader.GetGuid(1),
+                reader.GetString(2),
+                DateOnly.FromDateTime(reader.GetDateTime(3)),
+                GetStringOrNull(reader, 4),
+                GetIntOrNull(reader, 5),
+                reader.GetBoolean(6)),
             cancellationToken);
 
         var actions = await QueryAsync(
@@ -7212,6 +7301,7 @@ public sealed partial class SqlFoundationDataStore(
         DateOnly? recordDate,
         Guid? subjectStaffId,
         Dictionary<string, string> valuesByFieldKey,
+        bool usesEnvironmentRubric,
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
@@ -7313,9 +7403,11 @@ public sealed partial class SqlFoundationDataStore(
             {
                 if (!valuesByFieldKey.TryGetValue($"{valueKey}_score", out var scoreValue)
                     || !int.TryParse(scoreValue, out var score)
-                    || score is < 0 or > 3)
+                    || (usesEnvironmentRubric ? score is < 1 or > 5 : score is < 0 or > 3))
                 {
-                    throw new WorkflowValidationException("Every Elevate value needs a score from 0 to 3.");
+                    throw new WorkflowValidationException(usesEnvironmentRubric
+                        ? "Every learning environment pillar needs a judgement from 1 to 5."
+                        : "Every Elevate value needs a score from 0 to 3.");
                 }
                 scores[valueKey] = score;
             }
@@ -7366,8 +7458,73 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@roomId", roomId);
                 command.Parameters.AddWithValue("@totalScore", scores.Values.Sum());
                 command.Parameters.AddWithValue("@scoreCount", scores.Count);
-                command.Parameters.AddWithValue("@barrierCount", scores.Values.Count(score => score == 0));
+                command.Parameters.AddWithValue("@barrierCount", scores.Values.Count(score => score == (usesEnvironmentRubric ? 1 : 0)));
                 await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (usesEnvironmentRubric)
+            {
+                await using var ratingsCommand = new SqlCommand(
+                    """
+                    WITH selected_ratings AS (
+                        SELECT source.pillar_key,
+                               descriptor.id AS rubric_descriptor_id,
+                               descriptor.numerical_score,
+                               descriptor.judgement_key,
+                               descriptor.judgement_label,
+                               descriptor.descriptor
+                        FROM (VALUES
+                            (N'aspirational', @aspirationalScore),
+                            (N'collaborative', @collaborativeScore),
+                            (N'respectful', @respectfulScore),
+                            (N'innovative', @innovativeScore),
+                            (N'inclusion', @inclusionScore)
+                        ) source(pillar_key, numerical_score)
+                        JOIN quality.elevate_environment_pillars pillar
+                          ON pillar.pillar_key = source.pillar_key
+                         AND pillar.archived_at IS NULL
+                        JOIN quality.elevate_environment_rubric_descriptors descriptor
+                          ON descriptor.pillar_id = pillar.id
+                         AND descriptor.numerical_score = source.numerical_score
+                         AND descriptor.is_active = 1
+                         AND descriptor.archived_at IS NULL
+                    )
+                    MERGE quality.elevate_environment_pillar_ratings AS target
+                    USING selected_ratings AS source
+                       ON target.record_id = @recordId
+                      AND target.pillar_key = source.pillar_key
+                    WHEN MATCHED THEN
+                        UPDATE SET rubric_descriptor_id = source.rubric_descriptor_id,
+                                   numerical_score = source.numerical_score,
+                                   judgement_key = source.judgement_key,
+                                   judgement_label_snapshot = source.judgement_label,
+                                   descriptor_snapshot = source.descriptor,
+                                   updated_at = sysutcdatetime()
+                    WHEN NOT MATCHED THEN
+                        INSERT (
+                            record_id, pillar_key, rubric_descriptor_id, numerical_score,
+                            judgement_key, judgement_label_snapshot, descriptor_snapshot
+                        )
+                        VALUES (
+                            @recordId, source.pillar_key, source.rubric_descriptor_id, source.numerical_score,
+                            source.judgement_key, source.judgement_label, source.descriptor
+                        )
+                    WHEN NOT MATCHED BY SOURCE AND target.record_id = @recordId THEN DELETE;
+
+                    IF (SELECT COUNT(*) FROM quality.elevate_environment_pillar_ratings WHERE record_id = @recordId) <> 5
+                    BEGIN
+                        THROW 51000, 'Every learning environment pillar rating must map to an active rubric descriptor.', 1;
+                    END;
+                    """,
+                    connection,
+                    (SqlTransaction)transaction);
+                ratingsCommand.Parameters.AddWithValue("@recordId", recordId);
+                ratingsCommand.Parameters.AddWithValue("@aspirationalScore", scores["aspirational"]);
+                ratingsCommand.Parameters.AddWithValue("@collaborativeScore", scores["collaborative"]);
+                ratingsCommand.Parameters.AddWithValue("@respectfulScore", scores["respectful"]);
+                ratingsCommand.Parameters.AddWithValue("@innovativeScore", scores["innovative"]);
+                ratingsCommand.Parameters.AddWithValue("@inclusionScore", scores["inclusion"]);
+                await ratingsCommand.ExecuteNonQueryAsync(cancellationToken);
             }
 
         }
@@ -7915,6 +8072,22 @@ public sealed partial class SqlFoundationDataStore(
         string? AssignedOrgCode,
         string? AssignedOrgName,
         int SubmissionCount);
+
+    private sealed record ElevateEnvironmentPillarRow(
+        Guid Id,
+        string PillarKey,
+        string Name,
+        string Description,
+        int DisplayOrder,
+        bool IsActive,
+        string AssetUri,
+        string AssetAltText,
+        Guid? DescriptorId,
+        int? Score,
+        string? JudgementKey,
+        string? Judgement,
+        string? RubricDescriptor,
+        string? ColorHex);
 
     private sealed record FormDefinitionRow(
         Guid TemplateId,

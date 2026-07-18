@@ -17,7 +17,7 @@ import {
   X
 } from "lucide-react";
 import { Button } from "../design-system/Button";
-import { ExportExcelButton } from "../components/ExportButtons";
+import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { KpiStrip } from "../components/KpiStrip";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { api } from "../services/api";
@@ -196,7 +196,7 @@ export function LivVisits({
 
   return (
     <div className="route-stack">
-      <div className="route-header"><div><p className="eyebrow">Learning, Innovation and Vision</p><h1>LIV</h1></div><div className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="liv" /> : null}{canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create LIV case</Button> : null}</div></div>
+      <div className="route-header"><div><p className="eyebrow">Learning, Innovation and Vision</p><h1>LIV</h1></div><div className="toolbar">{canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create LIV case</Button> : null}</div></div>
       {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
       {isCreating ? (
         <section className="panel liv-v2-create">
@@ -228,8 +228,8 @@ export function LivVisits({
         </tbody></table></div>
       </section>
 
-      <details className="panel liv-v2-records" open>
-        <summary><span><strong>Active LIV records</strong><small>{records.length} records in your scope</small></span><ChevronDown size={18} /></summary>
+      <details className="panel liv-v2-records">
+        <summary><span><strong>Active records</strong><small>{records.length} records in your scope</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="liv" orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
         <div className="filter-toolbar">
           <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setRecordSearch(event.target.value)} placeholder="Search records" value={recordSearch} /></label>
           <label><span>Status</span><select onChange={(event) => setRecordStatus(event.target.value)} value={recordStatus}><option value="all">All statuses</option><option value="in_progress">In progress</option><option value="closed">Closed</option></select></label>
@@ -293,7 +293,7 @@ export function LivCaseWorkspace({ record, configuration, actions, cycleId, staf
 
   return (
     <div className="route-stack">
-      {!embedded ? <div className="route-header"><div><Button icon={ArrowLeft} onClick={onBack}>Back to LIV</Button><p className="eyebrow">In-progress staff-visible record</p><h1>{record.subjectStaffName}</h1></div>{onOpenStaffProfile ? <Button icon={Eye} onClick={() => onOpenStaffProfile(record.subjectStaffId)}>Staff profile</Button> : null}</div> : null}
+      {!embedded ? <div className="route-header"><div><Button icon={ArrowLeft} onClick={onBack}>Back to LIV</Button><p className="eyebrow">In-progress staff-visible record</p><h1>{record.subjectStaffName}</h1></div><div className="toolbar"><ExportWordButton recordId={record.recordId} />{onOpenStaffProfile ? <Button icon={Eye} onClick={() => onOpenStaffProfile(record.subjectStaffId)}>Staff profile</Button> : null}</div></div> : null}
       {message ? <div className="notice-row">{message}</div> : null}
       <section className="panel liv-v2-header">
         <div className="panel-heading">

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using S = DocumentFormat.OpenXml.Spreadsheet;
@@ -162,6 +163,7 @@ public sealed class ExportBrandingOptions
     public string OrganisationName { get; set; } = "Oldham College";
     public string FooterText { get; set; } = "Teaching and Learning Quality System";
     public string LogoPath { get; set; } = "";
+    public string TemplateRoot { get; set; } = "";
 }
 
 public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<ExportBrandingOptions> configuredBranding)
@@ -169,6 +171,41 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
     private readonly ExportBrandingOptions _branding = configuredBranding.Value;
 
     public GeneratedExport CreateRecordReport(RecordReportData data)
+    {
+        var templateName = TemplateName(data.RecordType);
+        var templatePath = templateName is null ? null : FindTemplate(templateName);
+        return templatePath is null
+            ? CreateGenericRecordReport(data)
+            : CreateTemplateRecordReport(data, templatePath);
+    }
+
+    private GeneratedExport CreateTemplateRecordReport(RecordReportData data, string templatePath)
+    {
+        using var stream = new MemoryStream();
+        using (var source = File.OpenRead(templatePath)) source.CopyTo(stream);
+        stream.Position = 0;
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            var main = document.MainDocumentPart ?? throw new InvalidDataException("The export template has no main document part.");
+            var tables = main.Document.Body!.Descendants<W.Table>().ToArray();
+            switch (data.RecordType.Trim().ToLowerInvariant())
+            {
+                case "coaching_session": FillCoachingTemplate(data, tables); break;
+                case "elevate_environment": FillEnvironmentTemplate(data, tables); break;
+                case "learning_walk": FillLearningWalkTemplate(data, tables); break;
+                case "liv": FillLivTemplate(data, tables); break;
+                case "probation_case": FillProbationTemplate(data, tables); break;
+            }
+            AppendCompleteDetail(main.Document.Body!, data);
+            main.Document.Save();
+        }
+        return new GeneratedExport(
+            stream.ToArray(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            $"{SafeFileName(data.Title)}-{data.RecordDate?.ToString("yyyy-MM-dd") ?? DateTime.UtcNow.ToString("yyyy-MM-dd")}.docx");
+    }
+
+    private GeneratedExport CreateGenericRecordReport(RecordReportData data)
     {
         using var stream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document, true))
@@ -185,6 +222,7 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
                 ("Staff member", data.StaffName),
                 ("Reviewer", data.ReviewerName),
                 ("Organisation", data.Organisation),
+                ("Academic year", data.AcademicYear),
                 ("Record date", data.RecordDate?.ToString("dd MMM yyyy")),
                 ("Created by", data.CreatedBy),
                 ("Created at", data.CreatedAt.ToString("dd MMM yyyy HH:mm")),
@@ -220,6 +258,417 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             $"{SafeFileName(data.Title)}-{data.RecordDate?.ToString("yyyy-MM-dd") ?? DateTime.UtcNow.ToString("yyyy-MM-dd")}.docx");
     }
+
+    private string? FindTemplate(string templateName)
+    {
+        var candidates = new[]
+        {
+            string.IsNullOrWhiteSpace(_branding.TemplateRoot) ? null : Path.Combine(_branding.TemplateRoot, templateName),
+            Path.Combine(AppContext.BaseDirectory, "Templates", "Exports", templateName),
+            Path.Combine(Directory.GetCurrentDirectory(), "Templates", "Exports", templateName),
+            Path.Combine(Directory.GetCurrentDirectory(), "apps", "api", "src", "TLQS.Api", "Templates", "Exports", templateName)
+        };
+        return candidates.FirstOrDefault(path => path is not null && File.Exists(path));
+    }
+
+    private static string? TemplateName(string recordType) => recordType.Trim().ToLowerInvariant() switch
+    {
+        "coaching_session" => "01_Coaching_and_Mentoring_Template.docx",
+        "elevate_environment" => "02_Elevate_Learning_Environment_Audit_Template.docx",
+        "learning_walk" => "03_Learning_Walk_Template.docx",
+        "liv" => "04_LIV_Cycle_1_and_2_Combined_Template.docx",
+        "probation_case" => "05_Probationary_Observation_Template.docx",
+        _ => null
+    };
+
+    private static void FillCoachingTemplate(RecordReportData data, IReadOnlyList<W.Table> tables)
+    {
+        SetCell(tables, 2, 1, 0, data.StaffName);
+        SetCell(tables, 2, 1, 1, data.ReviewerName);
+        SetCell(tables, 2, 3, 0, DateValue(Value(data, "Session date") ?? data.RecordDate?.ToString("yyyy-MM-dd")));
+        SetCell(tables, 2, 3, 1, DisplayValue(Value(data, "Session type")));
+        SetCell(tables, 2, 5, 0, DisplayValue(Value(data, "Delivery method")));
+        SetCell(tables, 2, 5, 1, DurationValue(Value(data, "Duration minutes")));
+        SetCell(tables, 2, 7, 0, Value(data, "Qualification status"));
+        SetCell(tables, 2, 7, 1, Value(data, "Coaching cycle"));
+        SetCell(tables, 2, 9, 0, Value(data, "Session number"));
+        SetCell(tables, 2, 9, 1, data.AcademicYear);
+        SetCell(tables, 4, 1, 0, Value(data, "Primary focus"));
+        SetCell(tables, 4, 1, 1, Value(data, "Secondary focus", "Other focus"));
+        SetCell(tables, 5, 0, 0, Value(data, "Specific session focus"));
+        MarkRubric(tables, 6, ParseScore(Value(data, "Current practice score", "Current practice judgement")));
+        SetCell(tables, 7, 0, 0, Value(data, "Current practice evidence"));
+        MarkLabelCheckboxes(tables, 9, ParseSelections(Value(data, "Support provided")));
+        SetCell(tables, 10, 0, 0, Value(data, "Conversation summary"));
+        FillActionGrid(tables, 12, data.Actions);
+        var closeCycle = string.Equals(Value(data, "Close coaching cycle"), "Yes", StringComparison.OrdinalIgnoreCase);
+        SetLeadingCheckbox(tables, 13, 0, !closeCycle);
+        SetLeadingCheckbox(tables, 13, 1, closeCycle);
+        SetCell(tables, 14, 0, 0, Value(data, "Closure rationale or final reflection"));
+    }
+
+    private static void FillEnvironmentTemplate(RecordReportData data, IReadOnlyList<W.Table> tables)
+    {
+        SetCell(tables, 1, 1, 0, Value(data, "Room"));
+        SetCell(tables, 1, 1, 1, Value(data, "Building"));
+        SetCell(tables, 1, 3, 0, DateValue(data.RecordDate?.ToString("yyyy-MM-dd")));
+        SetCell(tables, 1, 3, 1, data.ReviewerName ?? data.CreatedBy);
+        SetCell(tables, 1, 5, 0, data.AcademicYear);
+        SetCell(tables, 1, 5, 1, DisplayValue(data.Status));
+        var pillars = new[]
+        {
+            ("Aspirational", 4, 5), ("Collaborative", 7, 8), ("Respectful", 10, 11),
+            ("Innovative", 13, 14), ("Inclusive", 16, 17)
+        };
+        foreach (var (pillar, rubricTable, evidenceTable) in pillars)
+        {
+            MarkRubric(tables, rubricTable, ParseScore(SectionValue(data, pillar, "Numerical score", "Judgement")));
+            SetCell(tables, evidenceTable, 0, 0,
+                SectionValue(data, pillar, "Evidence or notes", $"{pillar} evidence or notes")
+                ?? Value(data, $"{pillar} evidence or notes", $"{pillar} notes"));
+        }
+        SetCell(tables, 19, 0, 0, Value(data, "What is working", "What is Working"));
+        SetCell(tables, 20, 0, 0, Value(data, "What needs improvement", "What Needs Improvement"));
+        FillActionGrid(tables, 21, data.Actions);
+    }
+
+    private static void FillLearningWalkTemplate(RecordReportData data, IReadOnlyList<W.Table> tables)
+    {
+        SetCell(tables, 2, 1, 0, DateValue(Value(data, "Date of visit", "Visit date") ?? data.RecordDate?.ToString("yyyy-MM-dd")));
+        SetCell(tables, 2, 1, 1, data.ReviewerName ?? data.CreatedBy);
+        SetCell(tables, 2, 3, 0, Value(data, "Faculty area", "Faculty") ?? data.Organisation);
+        SetCell(tables, 2, 3, 1, Value(data, "Team level", "Team"));
+        SetCell(tables, 2, 5, 0, Value(data, "Agreed Learning Walk theme", "Agreed theme", "Theme"));
+        SetCell(tables, 2, 5, 1, data.AcademicYear);
+        MarkLabelCheckboxes(tables, 3, ParseSelections(Value(data, "Additional themes or context", "Additional themes")));
+        SetCell(tables, 4, 0, 0, Value(data, "Other theme or additional context", "Other theme"));
+        MarkRubric(tables, 6, ParseScore(Value(data, "Practice Observed", "Practice observed", "Practice observed score")));
+        SetCell(tables, 8, 0, 0, Value(data, "Areas of Good Practice Identified", "Good practice identified", "Good practice"));
+        SetCell(tables, 9, 0, 0, Value(data, "Areas for Development Identified", "Areas for development", "Development identified"));
+        FillActionGrid(tables, 11, data.Actions);
+        SetCell(tables, 12, 1, 0, DisplayValue(data.Status));
+        SetCell(tables, 12, 1, 1, data.Status.Contains("submit", StringComparison.OrdinalIgnoreCase)
+            ? DateValue(data.RecordDate?.ToString("yyyy-MM-dd")) : "");
+    }
+
+    private static void FillLivTemplate(RecordReportData data, IReadOnlyList<W.Table> tables)
+    {
+        SetCell(tables, 2, 1, 0, data.StaffName);
+        SetCell(tables, 2, 1, 1, data.ReviewerName ?? data.CreatedBy);
+        SetCell(tables, 2, 3, 0, Value(data, "Notice preference"));
+        SetCell(tables, 2, 3, 1, DateValue(Value(data, "Preferred month"), "MMMM yyyy"));
+        SetCell(tables, 2, 5, 0, Value(data, "Primary focus"));
+        SetCell(tables, 2, 5, 1, Value(data, "Secondary focus"));
+        SetCell(tables, 2, 7, 0, data.Organisation);
+        SetCell(tables, 2, 7, 1, data.AcademicYear);
+        SetCell(tables, 2, 9, 0, Value(data, "Linked ELI assessment / report", "Linked ELI report"));
+        SetCell(tables, 2, 9, 1, DisplayValue(Value(data, "Record visibility")));
+        SetCell(tables, 3, 0, 0, Value(data, "Desired outcome"));
+        FillLivCycle(data, tables, 1);
+        FillLivCycle(data, tables, 2);
+    }
+
+    private static void FillLivCycle(RecordReportData data, IReadOnlyList<W.Table> tables, int cycle)
+    {
+        var prefix = $"Cycle {cycle}";
+        if (cycle == 1)
+        {
+            SetCell(tables, 6, 0, 0, SectionValue(data, $"{prefix} — pre_discussion", "Context"));
+            SetCell(tables, 7, 0, 0, SectionValue(data, $"{prefix} — pre_discussion", "Aims and intended outcomes"));
+            SetCell(tables, 8, 0, 0, SectionValue(data, $"{prefix} — pre_discussion", "Planned learner activity"));
+            FillVisitDetails(data, tables, prefix, 10, 11, 12, 13);
+            SetCell(tables, 15, 0, 0, SectionValue(data, $"{prefix} — post_reflection", "Reflection"));
+            MarkLabelCheckboxes(tables, 16, ParseSelections(SectionValue(data, $"{prefix} — post_reflection", "Development opportunities")));
+            FillActionGrid(tables, 18, data.Actions.Where(action => ActionBelongsToCycle(action, cycle)).ToArray());
+            SetCell(tables, 20, 1, 0, DateValue(SectionValue(data, $"{prefix} — follow_up_review", "Intended follow-up date")));
+            SetCell(tables, 20, 1, 1, DisplayValue(SectionValue(data, $"{prefix} — follow_up_review", "Stage status")));
+        }
+        else
+        {
+            SetCell(tables, 23, 0, 0, SectionValue(data, $"{prefix} — distance_impact", "Distance travelled and impact"));
+            MarkLabelCheckboxes(tables, 24, ParseSelections(SectionValue(data, $"{prefix} — distance_impact", "Development opportunities")));
+            FillVisitDetails(data, tables, prefix, 26, 27, 28, 29);
+            SetCell(tables, 31, 0, 0, SectionValue(data, $"{prefix} — post_reflection", "Reflection"));
+            MarkLabelCheckboxes(tables, 32, ParseSelections(SectionValue(data, $"{prefix} — post_reflection", "Development opportunities")));
+            FillActionGrid(tables, 34, data.Actions.Where(action => ActionBelongsToCycle(action, cycle)).ToArray());
+            SetCell(tables, 36, 1, 0, DateValue(SectionValue(data, $"{prefix} — follow_up_review", "Intended follow-up date")));
+            SetCell(tables, 36, 1, 1, DisplayValue(SectionValue(data, $"{prefix} — follow_up_review", "Stage status")));
+        }
+    }
+
+    private static void FillVisitDetails(
+        RecordReportData data, IReadOnlyList<W.Table> tables, string prefix,
+        int detailsTable, int findingsTable, int rubricTable, int restrictedTable)
+    {
+        var section = $"{prefix} — Visit";
+        SetCell(tables, detailsTable, 1, 0, SectionValue(data, section, "Delivery area"));
+        SetCell(tables, detailsTable, 1, 1, DateValue(SectionValue(data, section, "Visit date")));
+        SetCell(tables, detailsTable, 3, 0, SectionValue(data, section, "Visit time"));
+        SetCell(tables, detailsTable, 3, 1, SectionValue(data, section, "Course name"));
+        SetCell(tables, detailsTable, 5, 0, SectionValue(data, section, "Course group"));
+        SetCell(tables, detailsTable, 5, 1, SectionValue(data, section, "Course level"));
+        SetCell(tables, findingsTable, 0, 0, SectionValue(data, section, "Discussion, observations and key points"));
+        MarkMatrixRubric(tables, rubricTable, data, $"{prefix} — Rubric");
+        SetCell(tables, restrictedTable, 0, 0, SectionValue(data, section, "Restricted practitioner information"));
+    }
+
+    private static void FillProbationTemplate(RecordReportData data, IReadOnlyList<W.Table> tables)
+    {
+        var currentText = Value(data, "Current observation") ?? "Observation 1";
+        var observation = ParseScore(currentText) ?? 1;
+        SetCell(tables, 2, 1, 0, data.AcademicYear);
+        SetCell(tables, 2, 1, 1, data.StaffName);
+        SetCell(tables, 2, 3, 0, SectionValue(data, "Reviewers", "teaching_learning"));
+        SetCell(tables, 2, 3, 1, SectionValue(data, "Reviewers", "leader") ?? data.ReviewerName);
+        SetCell(tables, 2, 5, 0, data.Organisation);
+        SetCell(tables, 2, 5, 1, DisplayValue(data.Status));
+        SetCell(tables, 2, 7, 0, Value(data, "Linked ELI report"));
+        SetCell(tables, 2, 7, 1, $"Observation {observation}");
+        for (var number = 1; number <= 3; number++)
+            SetCell(tables, 3, number, 2, DisplayValue(SectionValue(data, $"Observation {number} — Visit", "Observation status")
+                ?? SectionStatus(data, number)));
+
+        var prefix = $"Observation {observation}";
+        SetCell(tables, 5, 0, 0, SectionValue(data, $"{prefix} — professional_discussion", "Context"));
+        SetCell(tables, 6, 0, 0, SectionValue(data, $"{prefix} — professional_discussion", "Aims and intended outcomes"));
+        SetCell(tables, 7, 0, 0, SectionValue(data, $"{prefix} — professional_discussion", "Planned learner activity"));
+        SetCell(tables, 9, 1, 0, SectionValue(data, $"{prefix} — Visit", "Delivery area"));
+        SetCell(tables, 9, 1, 1, DateValue(SectionValue(data, $"{prefix} — Visit", "Observation date")));
+        SetCell(tables, 9, 3, 0, SectionValue(data, $"{prefix} — Visit", "Observation time"));
+        SetCell(tables, 9, 3, 1, SectionValue(data, $"{prefix} — Visit", "Course name"));
+        SetCell(tables, 9, 5, 0, SectionValue(data, $"{prefix} — Visit", "Course group"));
+        SetCell(tables, 9, 5, 1, SectionValue(data, $"{prefix} — Visit", "Course level"));
+        SetCell(tables, 10, 0, 0, SectionValue(data, $"{prefix} — Visit", "Key points"));
+        MarkMatrixRubric(tables, 11, data, $"{prefix} — Rubric");
+        SetCell(tables, 13, 0, 0, SectionValue(data, $"{prefix} — reflection_feedback", "Reflection and feedback"));
+        MarkLabelCheckboxes(tables, 14, ParseSelections(SectionValue(data, $"{prefix} — reflection_feedback", "Development opportunities")));
+        FillActionGrid(tables, 16, data.Actions);
+        SetCell(tables, 18, 1, 0, DateValue(SectionValue(data, $"{prefix} — next_observation", "Next observation date")));
+        SetCell(tables, 18, 1, 1, observation < 3 ? $"Observation {observation + 1}" : "Cycle complete");
+    }
+
+    private static void AppendCompleteDetail(W.Body body, RecordReportData data)
+    {
+        var anchor = body.Elements<W.SectionProperties>().LastOrDefault();
+        var elements = new List<OpenXmlElement>
+        {
+            new W.Paragraph(new W.Run(new W.Break { Type = W.BreakValues.Page })),
+            ExportHeading("Complete record detail", 30, "087F6F"),
+            ExportHeading("Record metadata", 24, "153F35"),
+            DetailsTable([
+                ("Record ID", data.RecordId.ToString()), ("Record type", Humanize(data.RecordType)),
+                ("Status", data.Status), ("Staff member", data.StaffName), ("Reviewer", data.ReviewerName),
+                ("Organisation", data.Organisation), ("Academic year", data.AcademicYear),
+                ("Record date", data.RecordDate?.ToString("dd MMM yyyy")), ("Created by", data.CreatedBy),
+                ("Created at", data.CreatedAt.ToString("dd MMM yyyy HH:mm"))
+            ])
+        };
+        foreach (var section in data.Sections)
+        {
+            var fields = section.Fields.Where(field => !string.IsNullOrWhiteSpace(field.Value)).ToArray();
+            if (fields.Length == 0) continue;
+            elements.Add(ExportHeading(section.Title, 23, "153F35"));
+            var table = BasicTable();
+            table.Append(new W.TableRow(Cell("Field", true), Cell("Recorded value", true)));
+            foreach (var field in fields) table.Append(new W.TableRow(Cell(field.Label, true), Cell(DisplayValue(field.Value))));
+            elements.Add(table);
+        }
+        if (data.Actions.Count > 0)
+        {
+            elements.Add(ExportHeading("Actions", 23, "153F35"));
+            elements.Add(ActionTable(data.Actions));
+        }
+        foreach (var element in elements)
+        {
+            if (anchor is null) body.Append(element);
+            else body.InsertBefore(element, anchor);
+        }
+    }
+
+    private static W.Paragraph ExportHeading(string text, int size, string colour) => new(
+        new W.ParagraphProperties(new W.KeepNext(), new W.SpacingBetweenLines { Before = "180", After = "100" }),
+        new W.Run(new W.RunProperties(new W.Bold(), new W.Color { Val = colour }, new W.FontSize { Val = size.ToString() }), new W.Text(text)));
+
+    private static void FillActionGrid(IReadOnlyList<W.Table> tables, int tableIndex, IReadOnlyList<RecordReportAction> actions)
+    {
+        if (tableIndex >= tables.Count) return;
+        var rows = tables[tableIndex].Elements<W.TableRow>().Skip(1).ToArray();
+        for (var index = 0; index < rows.Length; index++)
+        {
+            var action = index < actions.Count ? actions[index] : null;
+            var cells = rows[index].Elements<W.TableCell>().ToArray();
+            SetCell(cells, 0, action?.Action);
+            SetCell(cells, 1, action?.Owner);
+            SetCell(cells, 2, action?.DueDate?.ToString("dd/MM/yyyy"));
+            SetCell(cells, 3, action is null ? "" : DisplayValue(action.Status));
+            SetCell(cells, 4, action is null ? "" : action.CompletionNote ?? action.Detail);
+        }
+    }
+
+    private static void MarkRubric(IReadOnlyList<W.Table> tables, int tableIndex, int? score)
+    {
+        if (tableIndex >= tables.Count) return;
+        var rows = tables[tableIndex].Elements<W.TableRow>().Skip(1).ToArray();
+        for (var index = 0; index < rows.Length; index++)
+        {
+            var cell = rows[index].Elements<W.TableCell>().FirstOrDefault();
+            if (cell is not null) SetCell(cell, score == index + 1 ? "☒" : "☐");
+        }
+    }
+
+    private static void MarkMatrixRubric(IReadOnlyList<W.Table> tables, int tableIndex, RecordReportData data, string section)
+    {
+        if (tableIndex >= tables.Count) return;
+        foreach (var row in tables[tableIndex].Elements<W.TableRow>().Skip(1))
+        {
+            var cells = row.Elements<W.TableCell>().ToArray();
+            if (cells.Length < 2) continue;
+            var focus = CellText(cells[0]);
+            var value = SectionValue(data, section, focus);
+            var score = ParseScore(value);
+            var notApplicable = value?.Contains("N/A", StringComparison.OrdinalIgnoreCase) == true;
+            for (var column = 1; column < cells.Length; column++)
+            {
+                var selected = notApplicable ? column == cells.Length - 1 : score == column;
+                var current = CellText(cells[column]);
+                if (current.Contains('☐') || current.Contains('☒')) SetCell(cells[column], selected ? "☒" : "☐");
+            }
+        }
+    }
+
+    private static void MarkLabelCheckboxes(IReadOnlyList<W.Table> tables, int tableIndex, IReadOnlySet<string> selected)
+    {
+        if (tableIndex >= tables.Count) return;
+        foreach (var cell in tables[tableIndex].Descendants<W.TableCell>())
+        {
+            var text = CellText(cell);
+            if (!text.Contains('☐') && !text.Contains('☒')) continue;
+            var label = Normalize(text.Replace("☐", "").Replace("☒", ""));
+            var isSelected = selected.Any(value => label.Contains(value, StringComparison.OrdinalIgnoreCase)
+                || value.Contains(label, StringComparison.OrdinalIgnoreCase));
+            SetCell(cell, $"{(isSelected ? '☒' : '☐')} {text.Replace("☐", "").Replace("☒", "").Trim()}");
+        }
+    }
+
+    private static void SetLeadingCheckbox(IReadOnlyList<W.Table> tables, int tableIndex, int rowIndex, bool selected)
+    {
+        if (tableIndex >= tables.Count) return;
+        var row = tables[tableIndex].Elements<W.TableRow>().ElementAtOrDefault(rowIndex);
+        var cell = row?.Elements<W.TableCell>().FirstOrDefault();
+        if (cell is null) return;
+        var text = CellText(cell).Replace("☐", "").Replace("☒", "").Trim();
+        SetCell(cell, $"{(selected ? '☒' : '☐')} {text}");
+    }
+
+    private static string? Value(RecordReportData data, params string[] labels)
+    {
+        foreach (var label in labels)
+        {
+            var normalized = Normalize(label);
+            var exact = data.Sections.SelectMany(section => section.Fields)
+                .FirstOrDefault(field => Normalize(field.Label) == normalized && !string.IsNullOrWhiteSpace(field.Value));
+            if (exact is not null) return exact.Value;
+        }
+        foreach (var label in labels)
+        {
+            var normalized = Normalize(label);
+            var partial = data.Sections.SelectMany(section => section.Fields)
+                .FirstOrDefault(field => Normalize(field.Label).Contains(normalized, StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(field.Value));
+            if (partial is not null) return partial.Value;
+        }
+        return null;
+    }
+
+    private static string? SectionValue(RecordReportData data, string section, params string[] labels)
+    {
+        var matching = data.Sections.Where(item => Normalize(item.Title).Contains(Normalize(section), StringComparison.OrdinalIgnoreCase));
+        foreach (var label in labels)
+        {
+            var normalized = Normalize(label);
+            var value = matching.SelectMany(item => item.Fields)
+                .FirstOrDefault(field => Normalize(field.Label) == normalized && !string.IsNullOrWhiteSpace(field.Value));
+            if (value is not null) return value.Value;
+        }
+        return null;
+    }
+
+    private static string? SectionStatus(RecordReportData data, int observationNumber) =>
+        data.Sections.FirstOrDefault(section => Normalize(section.Title).Contains($"observation {observationNumber}", StringComparison.OrdinalIgnoreCase)) is null
+            ? null : "In progress";
+
+    private static bool ActionBelongsToCycle(RecordReportAction action, int cycle) =>
+        action.LivCycleNumber == cycle ||
+        (action.LivCycleNumber is null && action.Detail?.Contains($"cycle {cycle}", StringComparison.OrdinalIgnoreCase) == true) ||
+        (action.LivCycleNumber is null && cycle == 1);
+
+    private static IReadOnlySet<string> ParseSelections(string? value)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(value)) return result;
+        try
+        {
+            using var json = JsonDocument.Parse(value);
+            if (json.RootElement.ValueKind == JsonValueKind.Array)
+                foreach (var item in json.RootElement.EnumerateArray())
+                    if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString())) result.Add(Normalize(item.GetString()!));
+        }
+        catch (JsonException)
+        {
+            foreach (var item in value.Split([',', ';', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) result.Add(Normalize(item));
+        }
+        return result;
+    }
+
+    private static int? ParseScore(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var match = Regex.Match(value, "(?<!\\d)([1-5])(?!\\d)");
+        return match.Success ? int.Parse(match.Groups[1].Value) : null;
+    }
+
+    private static string DisplayValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        var selections = ParseSelections(value);
+        if ((value.TrimStart().StartsWith('[') || value.TrimStart().StartsWith('{')) && selections.Count > 0)
+            return string.Join(", ", selections.Select(DisplayValue));
+        var trimmed = value.Trim();
+        if (!Regex.IsMatch(trimmed, "^[A-Za-z0-9_-]+$")) return trimmed;
+        return string.Join(' ', trimmed.Replace('_', ' ').Replace('-', ' ').Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(word => word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..]));
+    }
+
+    private static string DateValue(string? value, string format = "dd/MM/yyyy") =>
+        DateTime.TryParse(value, out var date) ? date.ToString(format) : value ?? "";
+
+    private static string DurationValue(string? value) =>
+        int.TryParse(value, out var minutes) ? $"{minutes / 60}h {minutes % 60}m".Trim() : value ?? "";
+
+    private static string Normalize(string value) => Regex.Replace(value.Trim().ToLowerInvariant().Replace('_', ' '), "[^a-z0-9]+", " ").Trim();
+
+    private static void SetCell(IReadOnlyList<W.Table> tables, int tableIndex, int rowIndex, int cellIndex, string? value)
+    {
+        if (tableIndex >= tables.Count) return;
+        var row = tables[tableIndex].Elements<W.TableRow>().ElementAtOrDefault(rowIndex);
+        var cell = row?.Elements<W.TableCell>().ElementAtOrDefault(cellIndex);
+        if (cell is not null) SetCell(cell, value);
+    }
+
+    private static void SetCell(IReadOnlyList<W.TableCell> cells, int index, string? value)
+    {
+        if (index < cells.Count) SetCell(cells[index], value);
+    }
+
+    private static void SetCell(W.TableCell cell, string? value)
+    {
+        cell.RemoveAllChildren<W.Paragraph>();
+        cell.Append(new W.Paragraph(
+            new W.ParagraphProperties(new W.SpacingBetweenLines { After = "0" }),
+            new W.Run(new W.Text(value ?? "") { Space = SpaceProcessingModeValues.Preserve })));
+    }
+
+    private static string CellText(W.TableCell cell) => string.Concat(cell.Descendants<W.Text>().Select(text => text.Text)).Trim();
 
     private string AddHeader(MainDocumentPart main)
     {
@@ -293,9 +742,11 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
     private static W.Table ActionTable(IReadOnlyList<RecordReportAction> actions)
     {
         var table = BasicTable();
-        table.Append(new W.TableRow(Cell("Action", true), Cell("Owner", true), Cell("Due date", true), Cell("Status", true)));
+        table.Append(new W.TableRow(Cell("Action", true), Cell("Description", true), Cell("Owner", true), Cell("Due date", true), Cell("Status", true), Cell("Closure note", true)));
         foreach (var action in actions)
-            table.Append(new W.TableRow(Cell(action.Action), Cell(action.Owner ?? ""), Cell(action.DueDate?.ToString("dd MMM yyyy") ?? ""), Cell(action.Status)));
+            table.Append(new W.TableRow(
+                Cell(action.Action), Cell(action.Detail ?? ""), Cell(action.Owner ?? ""),
+                Cell(action.DueDate?.ToString("dd MMM yyyy") ?? ""), Cell(action.Status), Cell(action.CompletionNote ?? "")));
         return table;
     }
 

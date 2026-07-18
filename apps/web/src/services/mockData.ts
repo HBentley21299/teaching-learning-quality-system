@@ -29,6 +29,7 @@ export const mockUser: CurrentUser = {
     "learning_walk.submit",
     "work_scrutiny.submit",
     "cpd.manage",
+    "cpd.self_log",
     "evidence.submit",
     "evidence.review",
     "actions.manage",

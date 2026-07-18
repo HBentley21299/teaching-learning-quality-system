@@ -17,6 +17,7 @@ import {
   X
 } from "lucide-react";
 import { KpiStrip } from "../components/KpiStrip";
+import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -214,8 +215,8 @@ export function ProbationObservations({
         { label: "Completed Observation 3", value: completionCounts[2], tone: "green" }
       ]} />
 
-      <section className="panel">
-        <div className="panel-heading"><div><h2>Probation observation records</h2><span>Staff with no probation activity are intentionally excluded.</span></div><span>{filteredCases.length} records</span></div>
+      <details className="panel liv-v2-records">
+        <summary><span><strong>Active records</strong><small>{filteredCases.length} records in your scope</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: yearFilter === "all" ? undefined : yearFilter }} moduleKey="probation" orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
         <div className="filter-toolbar probation-filter-toolbar">
           <label className="search-box"><Search size={16} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff or area" value={search} /></label>
           <label><span>Academic year</span><select onChange={(event) => setYearFilter(event.target.value)} value={yearFilter}><option value="all">All years</option>{years.map((year) => <option key={year}>{year}</option>)}</select></label>
@@ -226,7 +227,7 @@ export function ProbationObservations({
         <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty / team</th><th>Academic year</th><th>Progress</th><th>Reviewers</th><th>Open</th></tr></thead><tbody>
           {filteredCases.length === 0 ? <tr><td colSpan={6}>No probation records match these filters.</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => { setSelectedCaseId(item.id); setSelectedObservationNumber(item.currentObservationNumber); }} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
         </tbody></table></div>
-      </section>
+      </details>
     </div>
   );
 }
@@ -280,7 +281,7 @@ function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRe
     <div className="route-stack probation-workspace">
       <div className="route-header probation-case-header">
         <div><Button icon={ArrowLeft} onClick={onBack}>Back to probation records</Button><p className="eyebrow">{record.academicYear} probation cycle</p><h1>{record.subjectStaffName}</h1></div>
-        <Button disabled={!record.sourceElevateRecordId} icon={ClipboardCheck} onClick={() => record.sourceElevateRecordId && onOpenEliReport(record.subjectStaffId, record.sourceElevateRecordId)} variant="primary">{record.sourceElevateRecordId ? "Open ELI report" : "No submitted ELI report"}</Button>
+        <div className="toolbar"><ExportWordButton recordId={record.recordId} /><Button disabled={!record.sourceElevateRecordId} icon={ClipboardCheck} onClick={() => record.sourceElevateRecordId && onOpenEliReport(record.subjectStaffId, record.sourceElevateRecordId)} variant="primary">{record.sourceElevateRecordId ? "Open ELI report" : "No submitted ELI report"}</Button></div>
       </div>
       {message ? <div className="notice-row">{message}</div> : null}
       <section className="panel probation-case-summary">

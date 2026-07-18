@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Award, ChevronDown, ExternalLink, Plus, Save } from "lucide-react";
+import { Award, ChevronDown, ExternalLink, Eye, Plus, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { CollapsibleSection, Pagination } from "../components/CollapsibleSection";
 import { api } from "../services/api";
@@ -10,11 +10,14 @@ import type {
   StaffProfileSummary,
   StaffReflectionSummary,
   SaveStaffReflectionRequest,
-  ElevateStatusLevelSummary
-  ,StaffProfileSectionSummary
+  ElevateStatusLevelSummary,
+  StaffProfileLivSummary,
+  StaffProfileProbationSummary,
+  StaffProfileSectionSummary
 } from "../services/types";
 
 type StaffReflectionDraft = SaveStaffReflectionRequest;
+export type StaffProfileRecordLinkHandler = (recordType: string, recordId: string, staffId: string) => void;
 
 /**
  * Full staff profile view assembled from its source records (Elevate Your
@@ -29,7 +32,9 @@ export function StaffProfilePanel({
   user,
   profiles = [],
   openElevateResult = false,
-  elevateRecordId = ""
+  elevateRecordId = "",
+  onOpenRecord,
+  onOpenActionDetails
 }: {
   academicYear: string;
   staffId: string;
@@ -37,6 +42,8 @@ export function StaffProfilePanel({
   profiles?: StaffProfileSummary[];
   openElevateResult?: boolean;
   elevateRecordId?: string;
+  onOpenRecord?: StaffProfileRecordLinkHandler;
+  onOpenActionDetails?: (actionId: string, staffId: string) => void;
 }) {
   const [detail, setDetail] = useState<StaffProfileDetail | null>(null);
   const [drafts, setDrafts] = useState<Record<string, StaffReflectionDraft>>({});
@@ -45,6 +52,7 @@ export function StaffProfilePanel({
   const [isCreatingReflection, setIsCreatingReflection] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [showElevateResult, setShowElevateResult] = useState(openElevateResult);
+  const [activeElevateRecordId, setActiveElevateRecordId] = useState(elevateRecordId);
   const [activeProfileTab, setActiveProfileTab] = useState<"overview" | "cpd">("overview");
   const [elevateEvidenceEventId, setElevateEvidenceEventId] = useState("");
   const [elevateImplementationImpact, setElevateImplementationImpact] = useState("");
@@ -55,10 +63,13 @@ export function StaffProfilePanel({
   const [loadingSection, setLoadingSection] = useState<string | null>(null);
   const [sectionErrors, setSectionErrors] = useState<Record<string, string>>({});
   const [sectionPages, setSectionPages] = useState<Record<string, { page: number; totalPages: number }>>({});
+  const [livRecords, setLivRecords] = useState<StaffProfileLivSummary[]>([]);
+  const [probationRecords, setProbationRecords] = useState<StaffProfileProbationSummary[]>([]);
   const sectionRequests = useRef<Record<string, AbortController>>({});
 
   useEffect(() => {
     setShowElevateResult(openElevateResult);
+    setActiveElevateRecordId(elevateRecordId);
     if (!staffId) {
       setDetail(null);
       setIsLoading(false);
@@ -72,6 +83,8 @@ export function StaffProfilePanel({
     setLoadedSections({});
     setSectionErrors({});
     setSectionPages({});
+    setLivRecords([]);
+    setProbationRecords([]);
     Object.values(sectionRequests.current).forEach((controller) => controller.abort());
     sectionRequests.current = {};
     Promise.all([api.staffProfile(staffId, academicYear), api.staffProfileSectionSummary(staffId, academicYear)])
@@ -126,6 +139,8 @@ export function StaffProfilePanel({
       if (loadedSections.reflections) await loadProfileSection("reflections", sectionPages.reflections?.page ?? 1, nextDetail);
       if (loadedSections.cpd) await loadProfileSection("cpd", sectionPages.cpd?.page ?? 1, nextDetail);
       if (loadedSections.coaching) await loadProfileSection("coaching", sectionPages.coaching?.page ?? 1, nextDetail);
+      if (loadedSections.liv) await loadProfileSection("liv", sectionPages.liv?.page ?? 1, nextDetail);
+      if (loadedSections.probation) await loadProfileSection("probation", sectionPages.probation?.page ?? 1, nextDetail);
       if (loadedSections.actions) await loadProfileSection("actions", sectionPages.actions?.page ?? 1, nextDetail);
     } catch {
       setStatusMessage("The Staff Profile could not be reloaded from the API.");
@@ -133,7 +148,7 @@ export function StaffProfilePanel({
   }
 
   async function loadProfileSection(
-    section: "reflections" | "cpd" | "coaching" | "actions",
+    section: "reflections" | "cpd" | "coaching" | "liv" | "probation" | "actions",
     page = 1,
     shell = detail
   ) {
@@ -157,6 +172,14 @@ export function StaffProfilePanel({
         const result = await api.staffProfileCoaching(staffId, academicYear, page, 20, controller.signal);
         setDetail((current) => current ? { ...current, coachingRecords: result.items } : current);
         setSectionPages((current) => ({ ...current, coaching: { page: result.page, totalPages: result.totalPages } }));
+      } else if (section === "liv") {
+        const result = await api.staffProfileLiv(staffId, academicYear, page, 20, controller.signal);
+        setLivRecords(result.items);
+        setSectionPages((current) => ({ ...current, liv: { page: result.page, totalPages: result.totalPages } }));
+      } else if (section === "probation") {
+        const result = await api.staffProfileProbation(staffId, page, 20, controller.signal);
+        setProbationRecords(result.items);
+        setSectionPages((current) => ({ ...current, probation: { page: result.page, totalPages: result.totalPages } }));
       } else {
         const result = await api.staffProfileActions(staffId, academicYear, page, 20, controller.signal);
         setDetail((current) => current ? { ...current, actions: result.items } : current);
@@ -174,7 +197,7 @@ export function StaffProfilePanel({
     }
   }
 
-  function handleSectionExpansion(section: "reflections" | "coaching" | "actions", expanded: boolean) {
+  function handleSectionExpansion(section: "reflections" | "coaching" | "liv" | "probation" | "actions", expanded: boolean) {
     if (expanded && !loadedSections[section]) void loadProfileSection(section);
     if (!expanded) sectionRequests.current[section]?.abort();
   }
@@ -186,7 +209,7 @@ export function StaffProfilePanel({
     setControlledLevelDrafts(Object.fromEntries(
       nextDetail.elevateStatus.levels
         .filter((level) => level.levelNumber > 1)
-        .map((level) => [level.levelNumber, level.isAwarded])
+        .map((level) => [level.levelNumber, level.isConfirmed])
     ));
   }
 
@@ -282,7 +305,7 @@ export function StaffProfilePanel({
   }
 
   if (showElevateResult) {
-    return <ElevatePracticeResultPage onBack={() => setShowElevateResult(false)} recordId={elevateRecordId || detail.elevatePractice?.recordId} staffId={detail.staffId} />;
+    return <ElevatePracticeResultPage onBack={() => setShowElevateResult(false)} recordId={activeElevateRecordId || detail.elevatePractice?.recordId} staffId={detail.staffId} />;
   }
 
   return (
@@ -323,8 +346,12 @@ export function StaffProfilePanel({
             <small>{detail.academicYear}</small>
           </div>
           <div className="elevate-status-badges">
-            {detail.elevateStatus.levels.filter((level) => level.isAwarded).map((level) => (
-              <img alt={`Elevate ${level.name}`} key={level.levelNumber} src={elevateStatusAsset(level.levelKey)} />
+            {detail.elevateStatus.levels.map((level) => (
+              level.isAwarded ? (
+                <img alt={`Elevate ${level.name}`} key={level.levelNumber} src={elevateStatusAsset(level.levelKey)} />
+              ) : (
+                <span aria-hidden="true" className="elevate-status-badge-placeholder" key={level.levelNumber} />
+              )
             ))}
           </div>
         </section>
@@ -420,7 +447,7 @@ export function StaffProfilePanel({
                   <label className="elevate-confirmation-check">
                     <input
                       checked={Boolean(controlledLevelDrafts[level.levelNumber])}
-                      disabled={savingElevateLevel !== null || (!level.isEligible && !level.isAwarded)}
+                      disabled={savingElevateLevel !== null}
                       onChange={(event) => setControlledLevelDrafts((current) => ({ ...current, [level.levelNumber]: event.target.checked }))}
                       type="checkbox"
                     />
@@ -428,8 +455,7 @@ export function StaffProfilePanel({
                   </label>
                   <Button
                     disabled={savingElevateLevel !== null
-                      || (!level.isEligible && !level.isAwarded)
-                      || Boolean(controlledLevelDrafts[level.levelNumber]) === level.isAwarded}
+                      || Boolean(controlledLevelDrafts[level.levelNumber]) === level.isConfirmed}
                     icon={Save}
                     onClick={() => void saveElevateLevel(level)}
                   >
@@ -452,10 +478,8 @@ export function StaffProfilePanel({
           <strong>{detail.evidenceSubmitted}</strong>
         </div>
         <div className="kpi kpi-amber">
-          <span>Reflections</span>
-          <strong>
-              {submittedReflectionCount}/{sectionSummary?.reflectionCount ?? 0}
-          </strong>
+          <span>Reflections completed</span>
+          <strong>{submittedReflectionCount}</strong>
         </div>
         <div className="kpi kpi-red">
           <span>Open actions</span>
@@ -497,7 +521,10 @@ export function StaffProfilePanel({
               <span>Current Elevate Learning and Innovation outcome</span>
             </div>
             {detail.elevatePractice?.status === "submitted" ? (
-              <Button icon={ExternalLink} onClick={() => setShowElevateResult(true)} variant="primary">View report</Button>
+              <Button icon={ExternalLink} onClick={() => {
+                setActiveElevateRecordId(detail.elevatePractice?.recordId ?? "");
+                setShowElevateResult(true);
+              }} variant="primary">View report</Button>
             ) : null}
           </div>
           <p className="muted-copy">
@@ -555,12 +582,13 @@ export function StaffProfilePanel({
                 <th>Themes</th>
                 <th>Type</th>
                 <th>Duration</th>
+                <th>Record</th>
               </tr>
             </thead>
             <tbody>
               {detail.cpdRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No CPD attendance has been recorded yet.</td>
+                  <td colSpan={6}>No CPD attendance has been recorded yet.</td>
                 </tr>
               ) : (
                 detail.cpdRecords.map((record) => (
@@ -570,6 +598,13 @@ export function StaffProfilePanel({
                     <td>{formatThemes(record.themes)}</td>
                     <td>{record.isInternal ? "Internal" : "External"}</td>
                     <td>{record.durationMinutes ? formatDuration(record.durationMinutes) : "Not recorded"}</td>
+                    <td>
+                      {onOpenRecord ? (
+                        <button className="icon-button" onClick={() => onOpenRecord("cpd_event", record.recordId, detail.staffId)} title={`Open full CPD record for ${record.title}`} type="button">
+                          <ExternalLink aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
+                    </td>
                   </tr>
                 ))
               )}
@@ -578,6 +613,133 @@ export function StaffProfilePanel({
         </div> : null}
         <Pagination page={sectionPages.cpd?.page ?? 1} totalPages={sectionPages.cpd?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("cpd", page)} />
       </section>
+
+      <div hidden={activeProfileTab !== "overview"}>
+      <CollapsibleSection
+        count={sectionSummary?.livCount ?? 0}
+        defaultExpanded={false}
+        emptyMessage="No active LIV records are associated with this staff member."
+        error={sectionErrors.liv}
+        isEmpty={(sectionSummary?.livCount ?? 0) === 0}
+        isLoading={loadingSection === "liv"}
+        onExpandedChange={(expanded) => handleSectionExpansion("liv", expanded)}
+        statusSummary="Active LIV record history"
+        storageKey={`staff-profile:${staffId}:${academicYear}:liv`}
+        title="LIV records"
+      >
+        <div className="table-shell">
+          <table>
+            <thead>
+              <tr>
+                <th>Record</th>
+                <th>Date</th>
+                <th>Reviewer</th>
+                <th>Faculty / team</th>
+                <th>Current stage</th>
+                <th>Status</th>
+                <th>Full record</th>
+              </tr>
+            </thead>
+            <tbody>
+              {livRecords.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>No active LIV records are associated with this staff member.</td>
+                </tr>
+              ) : (
+                livRecords.map((record) => (
+                  <tr key={record.id}>
+                    <td><strong>{record.title}</strong></td>
+                    <td>{record.recordDate ? formatDate(record.recordDate) : formatDateTime(record.createdAt)}</td>
+                    <td>{record.reviewerName ?? "Not assigned"}</td>
+                    <td>{[record.parentOrgUnitCode, record.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td>
+                    <td>{formatLivStage(record.currentStage)}</td>
+                    <td>
+                      <span className={`status-pill ${record.status === "closed" ? "status-complete" : "status-draft"}`}>
+                        {record.status === "closed" ? "Closed" : "In progress"}
+                      </span>
+                    </td>
+                    <td>
+                      {onOpenRecord ? (
+                        <button
+                          className="icon-button"
+                          onClick={() => onOpenRecord("liv", record.recordId, detail.staffId)}
+                          title={`Open full LIV record for ${detail.displayName}`}
+                          type="button"
+                        >
+                          <ExternalLink aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <Pagination page={sectionPages.liv?.page ?? 1} totalPages={sectionPages.liv?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("liv", page)} />
+      </CollapsibleSection>
+      </div>
+
+      {(sectionSummary?.probationCount ?? 0) > 0 ? (
+        <div hidden={activeProfileTab !== "overview"}>
+          <CollapsibleSection
+            count={sectionSummary?.probationCount ?? 0}
+            defaultExpanded={false}
+            error={sectionErrors.probation}
+            isEmpty={probationRecords.length === 0 && loadedSections.probation}
+            isLoading={loadingSection === "probation"}
+            onExpandedChange={(expanded) => handleSectionExpansion("probation", expanded)}
+            statusSummary="Visible probationary observation history"
+            storageKey={`staff-profile:${staffId}:probation`}
+            title="Probationary Records"
+          >
+            <div className="table-shell">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Record</th>
+                    <th>Academic year</th>
+                    <th>Faculty / team</th>
+                    <th>Progress</th>
+                    <th>Status</th>
+                    <th>Full details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {probationRecords.map((record) => (
+                    <tr key={record.id}>
+                      <td>
+                        <strong>{record.title}</strong>
+                        <small className="table-subline">Created {formatDateTime(record.createdAt)}</small>
+                      </td>
+                      <td>{record.academicYear}</td>
+                      <td>{[record.parentOrgUnitCode, record.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td>
+                      <td>Observation {record.currentObservationNumber} of 3</td>
+                      <td>
+                        <span className={`status-pill ${record.status === "in_progress" ? "status-draft" : "status-complete"}`}>
+                          {formatProbationStatus(record.status)}
+                        </span>
+                      </td>
+                      <td>
+                        {onOpenRecord ? (
+                          <Button
+                            icon={ExternalLink}
+                            onClick={() => onOpenRecord("probation_case", record.recordId, detail.staffId)}
+                            variant="secondary"
+                          >
+                            View Full Details
+                          </Button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination page={sectionPages.probation?.page ?? 1} totalPages={sectionPages.probation?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("probation", page)} />
+          </CollapsibleSection>
+        </div>
+      ) : null}
 
       <div hidden={activeProfileTab !== "overview"}>
       <CollapsibleSection
@@ -600,12 +762,13 @@ export function StaffProfilePanel({
                 <th>Coach or mentor</th>
                 <th>Focus</th>
                 <th>Status</th>
+                <th>Report</th>
               </tr>
             </thead>
             <tbody>
               {detail.coachingRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No coaching or mentoring sessions have been recorded yet.</td>
+                  <td colSpan={6}>No coaching or mentoring sessions have been recorded yet.</td>
                 </tr>
               ) : (
                 detail.coachingRecords.map((record) => (
@@ -624,6 +787,18 @@ export function StaffProfilePanel({
                       <span className={`status-pill ${record.status === "completed" ? "status-complete" : "status-draft"}`}>
                         {record.status === "completed" ? "Completed" : "Draft"}
                       </span>
+                    </td>
+                    <td>
+                      {onOpenRecord ? (
+                        <button
+                          className="icon-button"
+                          onClick={() => onOpenRecord("coaching_session", record.recordId, detail.staffId)}
+                          title={record.status === "completed" ? "Open full completed coaching report" : "Open full coaching record"}
+                          type="button"
+                        >
+                          <ExternalLink aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))
@@ -756,16 +931,28 @@ export function StaffProfilePanel({
                         ? `Updated ${formatDateTime(reflection.updatedAt)}${reflection.updatedByName ? ` by ${reflection.updatedByName}` : ""}`
                         : `Created ${formatDateTime(reflection.createdAt)}${reflection.createdByName ? ` by ${reflection.createdByName}` : ""}`}
                     </small>
-                    {canEditReflections ? (
+                    <div className="profile-record-actions">
                       <Button
-                        disabled={isSaving || !hasChanges}
-                        icon={Save}
-                        onClick={() => void saveReflection(reflection)}
-                        variant="primary"
+                        icon={ExternalLink}
+                        onClick={() => {
+                          setActiveElevateRecordId(reflection.elevatePracticeRecordId);
+                          setShowElevateResult(true);
+                        }}
+                        variant="secondary"
                       >
-                        {isSaving ? "Saving..." : "Save reflection"}
+                        Open linked report
                       </Button>
-                    ) : null}
+                      {canEditReflections ? (
+                        <Button
+                          disabled={isSaving || !hasChanges}
+                          icon={Save}
+                          onClick={() => void saveReflection(reflection)}
+                          variant="primary"
+                        >
+                          {isSaving ? "Saving..." : "Save reflection"}
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               </details>
@@ -797,12 +984,13 @@ export function StaffProfilePanel({
                 <th>Source</th>
                 <th>Due</th>
                 <th>Status</th>
+                <th>Details</th>
               </tr>
             </thead>
             <tbody>
               {detail.actions.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No actions are connected to this staff member.</td>
+                  <td colSpan={6}>No actions are connected to this staff member.</td>
                 </tr>
               ) : (
                 detail.actions.map((action) => (
@@ -815,6 +1003,15 @@ export function StaffProfilePanel({
                     <td>
                       {formatActionSource(action.sourceModuleName, action.sourceRecordType)}
                       {action.sourceRecordTitle ? <small className="table-subline">{action.sourceRecordTitle}</small> : null}
+                      {action.sourceRecordId && action.sourceRecordType && onOpenRecord ? (
+                        <button
+                          className="profile-inline-record-link"
+                          onClick={() => onOpenRecord(action.sourceRecordType!, action.sourceRecordId!, detail.staffId)}
+                          type="button"
+                        >
+                          Open source record
+                        </button>
+                      ) : null}
                     </td>
                     <td>{action.dueDate ? formatDate(action.dueDate) : "No due date"}</td>
                     <td>
@@ -823,6 +1020,13 @@ export function StaffProfilePanel({
                       >
                         {action.completedDate ? "Closed" : action.isOverdue ? "Overdue" : "Open"}
                       </span>
+                    </td>
+                    <td>
+                      {onOpenActionDetails ? (
+                        <button className="icon-button" onClick={() => onOpenActionDetails(action.id, detail.staffId)} title={`Open full action details for ${action.title}`} type="button">
+                          <Eye aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))
@@ -899,6 +1103,20 @@ function formatDate(value: string) {
     month: "short",
     year: "numeric"
   });
+}
+
+function formatLivStage(value: string) {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function formatProbationStatus(value: StaffProfileProbationSummary["status"]) {
+  if (value === "in_progress") return "In progress";
+  if (value === "completed") return "Completed";
+  return "Closed";
 }
 
 function formatActionSource(moduleName?: string, recordType?: string) {

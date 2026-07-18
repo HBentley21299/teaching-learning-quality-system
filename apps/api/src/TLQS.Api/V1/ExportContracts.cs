@@ -29,6 +29,7 @@ public sealed record RecordReportData(
     string? StaffName,
     string? ReviewerName,
     string? Organisation,
+    string? AcademicYear,
     DateOnly? RecordDate,
     DateTimeOffset CreatedAt,
     string CreatedBy,
@@ -37,4 +38,12 @@ public sealed record RecordReportData(
 
 public sealed record RecordReportSection(string Title, IReadOnlyList<RecordReportField> Fields);
 public sealed record RecordReportField(string Label, string? Value);
-public sealed record RecordReportAction(string Action, string? Owner, DateOnly? DueDate, string Status);
+public sealed record RecordReportAction(
+    string Action,
+    string? Detail,
+    string? Owner,
+    DateOnly? DueDate,
+    string Status,
+    DateOnly? CompletedDate,
+    string? CompletionNote,
+    int? LivCycleNumber);

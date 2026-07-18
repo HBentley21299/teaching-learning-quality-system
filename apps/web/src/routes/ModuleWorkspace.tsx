@@ -9,6 +9,7 @@ import { WorkScrutinyCreateForm } from "../components/WorkScrutinyCreateForm";
 import { api } from "../services/api";
 import type {
   ActionSummary,
+  CoachingRubricOption,
   CurrentUser,
   ElevateEnvironmentPillarSummary,
   FormDefinition,
@@ -68,14 +69,14 @@ const workspaceConfig: Record<WorkspaceMode, {
     templateKey: "cpd_core",
     recordType: "cpd_event",
     recordLabel: "CPD event",
-    createLabel: "Create event",
+    createLabel: "Log a CPD Event",
     submitLabel: "Submit event"
   },
   elevate: {
     templateKey: "elevate_learning_environments_core",
     recordType: "elevate_environment",
     recordLabel: "Elevate environment check",
-    createLabel: "Start room check",
+    createLabel: "Start Audit",
     submitLabel: "Complete check"
   }
 };
@@ -84,7 +85,7 @@ const externalCpdConfig = {
   templateKey: "cpd_external_self_log",
   recordType: "cpd_event",
   recordLabel: "external CPD record",
-  createLabel: "Log external CPD",
+  createLabel: "Log External CPD",
   submitLabel: "Submit CPD"
 };
 
@@ -92,6 +93,11 @@ type CpdWorkspaceView = "managed" | "external";
 
 export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "" }: ModuleWorkspaceProps) {
   const canManageCpd = user.permissions.includes("cpd.manage");
+  const canLogCpdEvent = mode === "cpd" && canManageCpd;
+  const canLogExternalCpd = mode === "cpd"
+    && Boolean(user.staffId)
+    && user.permissions.includes("cpd.self_log");
+  const cpdCreateOptionCount = Number(canLogCpdEvent) + Number(canLogExternalCpd);
   const [cpdWorkspaceView, setCpdWorkspaceView] = useState<CpdWorkspaceView>(canManageCpd ? "managed" : "external");
   const isExternalCpd = mode === "cpd" && (!canManageCpd || cpdWorkspaceView === "external");
   const config = isExternalCpd ? externalCpdConfig : workspaceConfig[mode];
@@ -105,10 +111,11 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const [environmentPillars, setEnvironmentPillars] = useState<ElevateEnvironmentPillarSummary[]>([]);
   const [themeMappings, setThemeMappings] = useState<LearningWalkThemeMappingSummary[]>([]);
   const [learningWalkThemeGroups, setLearningWalkThemeGroups] = useState<LearningWalkThemeGroup[]>([]);
+  const [practiceRubric, setPracticeRubric] = useState<CoachingRubricOption[]>([]);
   const [draftActions, setDraftActions] = useState<DraftLinkedAction[]>([]);
   const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
-  const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(true);
+  const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(false);
   const [recordSearch, setRecordSearch] = useState("");
   const [recordStatusFilter, setRecordStatusFilter] = useState("all");
   const [recordAreaFilter, setRecordAreaFilter] = useState("all");
@@ -223,18 +230,20 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   useEffect(() => {
     let cancelled = false;
     setSelectedDetail(null);
-    setIsCreating(false);
+    if (mode !== "cpd") {
+      setIsCreating(false);
+    }
     setIsEditing(false);
     setDefinition(null);
     setDefinitionError("");
-    setIsActiveRecordsOpen(true);
+    setIsActiveRecordsOpen(false);
     setRecordSearch("");
     setRecordStatusFilter("all");
     setRecordAreaFilter("all");
     setRecordSort("newest");
     setStatusMessage("");
     void refreshData();
-    if (mode === "scrutiny") {
+    if (mode === "scrutiny" || (mode === "cpd" && cpdCreateOptionCount === 0)) {
       return;
     }
     api.formDefinition(config.templateKey)
@@ -254,7 +263,11 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [academicYear, config.templateKey, mode]);
+  }, [academicYear, config.templateKey, cpdCreateOptionCount, mode]);
+
+  useEffect(() => {
+    setIsCreating(false);
+  }, [academicYear, mode]);
 
   useEffect(() => {
     if (initialRecordId && openedInitialRecord.current !== initialRecordId) {
@@ -295,12 +308,18 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       setEnvironmentPillars(nextEnvironmentPillars);
 
       if (mode === "learning") {
-        const [nextMappings, nextThemeGroups] = await Promise.all([
+        const [nextMappings, nextThemeGroups, coachingConfiguration] = await Promise.all([
           api.learningWalkThemeMappings(),
-          api.learningWalkThemes()
+          api.learningWalkThemes(),
+          api.coachingConfiguration()
         ]);
         setThemeMappings(nextMappings);
         setLearningWalkThemeGroups(nextThemeGroups);
+        setPracticeRubric(
+          coachingConfiguration.currentPracticeRubric
+            .filter((option) => option.displayOrder >= 1 && option.displayOrder <= 5)
+            .slice(0, 5)
+        );
       }
     } catch {
       setStatusMessage("Data could not be loaded from the API.");
@@ -678,12 +697,18 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     setRecordSort("newest");
   }
 
-  function changeCpdWorkspaceView(nextView: CpdWorkspaceView) {
+  function startCpdForm(nextView: CpdWorkspaceView) {
+    if ((nextView === "managed" && !canLogCpdEvent) || (nextView === "external" && !canLogExternalCpd)) {
+      return;
+    }
+    const isChangingForm = cpdWorkspaceView !== nextView;
     setCpdWorkspaceView(nextView);
-    setIsCreating(false);
+    setIsCreating(true);
     setIsEditing(false);
     setSelectedDetail(null);
-    setResponses({});
+    if (isChangingForm) {
+      setResponses({});
+    }
     setStatusMessage("");
   }
 
@@ -741,31 +766,29 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         </div>
         {mode !== "learning" ? (
           <div className="toolbar">
-            {canExport ? <ExportExcelButton filters={{ academicYear }} moduleKey={exportModuleKey} /> : null}
-            {mode === "cpd" && canManageCpd ? (
-              <div className="segmented-control" aria-label="CPD form">
-                <button
-                  className={cpdWorkspaceView === "managed" ? "is-active" : ""}
-                  onClick={() => changeCpdWorkspaceView("managed")}
-                  type="button"
-                >
-                  Manage CPD events
-                </button>
-                <button
-                  className={cpdWorkspaceView === "external" ? "is-active" : ""}
-                  onClick={() => changeCpdWorkspaceView("external")}
-                  type="button"
-                >
-                  Log external CPD
-                </button>
-              </div>
+            {mode !== "cpd" ? (
+              <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
+                {config.createLabel}
+              </Button>
             ) : null}
-            <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
-              {config.createLabel}
-            </Button>
           </div>
-        ) : canExport ? <ExportExcelButton filters={{ academicYear }} moduleKey={exportModuleKey} /> : null}
+        ) : null}
       </div>
+
+      {mode === "cpd" && cpdCreateOptionCount > 0 ? (
+        <div className={`cpd-create-actions${cpdCreateOptionCount === 1 ? " is-single" : ""}`}>
+          {canLogCpdEvent ? (
+            <Button icon={CalendarPlus} onClick={() => startCpdForm("managed")} variant="primary">
+              Log a CPD Event
+            </Button>
+          ) : null}
+          {canLogExternalCpd ? (
+            <Button icon={FilePlus2} onClick={() => startCpdForm("external")} variant="primary">
+              Log External CPD
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {mode === "learning" ? (
         <div className="learning-create-action">
@@ -811,13 +834,14 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
               {mode === "elevate" ? (
                 <div className="elevate-rubric-guide">
                   <strong>Fit for purpose is the core test</strong>
-                  <span>2 is the expected secure standard. Use 3 only where the environment clearly adds value.</span>
-                  <span>A serious safety or access barrier requires an immediate action.</span>
+                  <span>Select the complete descriptor that best reflects each pillar.</span>
+                  <span>A Priority improvement judgement should be supported by an action.</span>
                   <div className="elevate-score-legend" aria-label="Elevate score guide">
-                    <span><b>0</b> Barrier</span>
-                    <span><b>1</b> Emerging</span>
-                    <span><b>2</b> Secure</span>
-                    <span><b>3</b> Elevate</span>
+                    <span><b>1</b> Priority improvement</span>
+                    <span><b>2</b> Developing</span>
+                    <span><b>3</b> Secure</span>
+                    <span><b>4</b> Strong</span>
+                    <span><b>5</b> Leading practice</span>
                   </div>
                   <small>Created by {user.displayName}</small>
                 </div>
@@ -832,11 +856,13 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                       .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
+                        environmentPillars={environmentPillars}
                         field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
                         learningWalkThemeGroups={learningWalkThemeGroups}
                         onChange={(value) => setResponses((current) => updateResponseMap(createSections, current, field, value, rooms))}
                         orgUnits={orgUnits}
+                        practiceRubric={practiceRubric}
                         rooms={rooms}
                         selectedFacultyId={selectedFacultyId}
                         staff={staff}
@@ -853,7 +879,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                       <h3>Actions</h3>
                       <small>
                         {mode === "elevate"
-                          ? "Actions are assigned through the central action engine when the check is completed."
+                          ? "Create actions linked to this learning environment audit through the central action engine."
                           : "Actions are assigned through the central action engine when the walk is submitted."}
                       </small>
                     </div>
@@ -924,32 +950,31 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
       <section className="panel">
         <div className="panel-heading">
-          {mode === "learning" ? (
-            <h2>
-              <button
-                aria-controls="learning-walk-active-records"
-                aria-expanded={isActiveRecordsOpen}
-                className={`panel-collapse-button${isActiveRecordsOpen ? " is-open" : ""}`}
-                onClick={() => setIsActiveRecordsOpen((current) => !current)}
-                type="button"
-              >
-                <ChevronDown aria-hidden="true" size={18} />
-                Active records
-              </button>
-            </h2>
-          ) : (
-            <h2>{mode === "cpd" && !canManageCpd ? "My CPD records" : "Active records"}</h2>
-          )}
-          <span>
-            {mode === "learning" && displayedRecords.length !== records.length
-              ? `${displayedRecords.length} of ${records.length}`
-              : records.length}{" "}
-            {config.recordLabel}{records.length === 1 ? "" : "s"}
-          </span>
+          <h2>
+            <button
+              aria-controls={`${mode}-active-records`}
+              aria-expanded={isActiveRecordsOpen}
+              className={`panel-collapse-button${isActiveRecordsOpen ? " is-open" : ""}`}
+              onClick={() => setIsActiveRecordsOpen((current) => !current)}
+              type="button"
+            >
+              <ChevronDown aria-hidden="true" size={18} />
+              Active records
+            </button>
+          </h2>
+          <div className="toolbar">
+            <span>
+              {mode === "learning" && displayedRecords.length !== records.length
+                ? `${displayedRecords.length} of ${records.length}`
+                : records.length}{" "}
+              {config.recordLabel}{records.length === 1 ? "" : "s"}
+            </span>
+            {canExport ? <ExportExcelButton filters={{ academicYear }} moduleKey={exportModuleKey} orgUnits={orgUnits} /> : null}
+          </div>
         </div>
 
-        {mode !== "learning" || isActiveRecordsOpen ? (
-          <div id={mode === "learning" ? "learning-walk-active-records" : undefined}>
+        {isActiveRecordsOpen ? (
+          <div id={`${mode}-active-records`}>
             {mode === "learning" ? (
               <div className="record-filter-bar">
                 <label className="record-filter-field record-filter-search">
@@ -1064,11 +1089,13 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                       .map((field) => (
                       <FieldInput
                         cpdThemes={cpdThemes}
+                        environmentPillars={environmentPillars}
                         field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
                         learningWalkThemeGroups={learningWalkThemeGroups}
                         onChange={(value) => setEditResponses((current) => updateResponseMap(editSections, current, field, value, rooms))}
                         orgUnits={orgUnits}
+                        practiceRubric={practiceRubric}
                         rooms={rooms}
                         selectedFacultyId={editFacultyId}
                         staff={staff}
@@ -1096,7 +1123,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                         .map((field) => (
                         <div className={isWideEntryField(field.fieldType) ? "answer-item answer-item-wide" : "answer-item"} key={field.id}>
                           <span>{field.label}</span>
-                          <strong>{formatAnswer(field.value, field.fieldType, orgUnits, staff)}</strong>
+                          <strong>{formatAnswer(field.value, field.fieldType, field.fieldKey, environmentPillars, orgUnits, staff)}</strong>
                         </div>
                       ))}
                     </div>
@@ -1104,7 +1131,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                 ))}
               </div>
               <div className="toolbar">
-                {canExport ? <ExportWordButton recordId={selectedDetail.id} /> : null}
+                <ExportWordButton recordId={selectedDetail.id} />
                 {selectedDetail.canEdit ? (
                   <Button icon={Edit3} onClick={startEdit} variant="primary">Edit record</Button>
                 ) : null}
@@ -1194,10 +1221,13 @@ function FieldInput({
   selectedFacultyId,
   staff,
   cpdThemes,
+  environmentPillars,
   learningWalkThemeGroups,
+  practiceRubric,
   value
 }: {
   cpdThemes: string[];
+  environmentPillars: ElevateEnvironmentPillarSummary[];
   field: FormFieldDefinition;
   onChange: (value: string) => void;
   orgUnits: OrgUnitSummary[];
@@ -1205,6 +1235,7 @@ function FieldInput({
   selectedFacultyId?: string;
   staff: StaffSummary[];
   learningWalkThemeGroups: LearningWalkThemeGroup[];
+  practiceRubric: CoachingRubricOption[];
   value: string;
 }) {
   const faculties = orgUnits.filter((orgUnit) => orgUnit.orgUnitType === "faculty");
@@ -1284,6 +1315,76 @@ function FieldInput({
         </div>
         {field.helpText ? <small>{field.helpText}</small> : null}
       </div>
+    );
+  }
+
+  if (field.fieldType === "practice_rubric_1_5") {
+    return (
+      <fieldset className="coaching-wording-rubric entry-field-wide practice-observed-rubric">
+        <legend>
+          {field.label}
+          {field.isRequired ? <strong>Required</strong> : null}
+        </legend>
+        {practiceRubric.length > 0 ? (
+          <div>
+            {practiceRubric.map((option) => {
+              const optionValue = formatPracticeRubricValue(option);
+              return (
+                <button
+                  aria-pressed={value === optionValue}
+                  className={value === optionValue ? "is-selected" : ""}
+                  key={option.id}
+                  onClick={() => onChange(optionValue)}
+                  type="button"
+                >
+                  <i aria-hidden="true" style={{ backgroundColor: option.colorHex ?? "#60736b" }} />
+                  <span>
+                    <strong>{optionValue}</strong>
+                    <small>{option.guidanceText}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : <div className="empty-row">The Elevate practice rubric is unavailable.</div>}
+        {field.helpText ? <small>{field.helpText}</small> : null}
+      </fieldset>
+    );
+  }
+
+  if (field.fieldType === "environment_rubric_1_5") {
+    const pillarKey = field.fieldKey.replace(/_score$/, "");
+    const rubric = environmentPillars.find((pillar) => pillar.pillarKey === pillarKey)?.rubric ?? [];
+    return (
+      <fieldset className="coaching-wording-rubric entry-field-wide practice-observed-rubric environment-pillar-rubric">
+        <legend>
+          {field.label}
+          {field.isRequired ? <strong>Required</strong> : null}
+        </legend>
+        {rubric.length > 0 ? (
+          <div>
+            {rubric.map((option) => {
+              const optionValue = String(option.score);
+              return (
+                <button
+                  aria-pressed={value === optionValue}
+                  className={value === optionValue ? "is-selected" : ""}
+                  key={option.id}
+                  onClick={() => onChange(optionValue)}
+                  type="button"
+                >
+                  <i aria-hidden="true" style={{ backgroundColor: option.colorHex ?? "#60736b" }} />
+                  <span>
+                    <strong>{option.score} - {option.judgement}</strong>
+                    <small>{option.descriptor}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : <div className="empty-row">The learning environment rubric is unavailable.</div>}
+        {field.helpText ? <small>{field.helpText}</small> : null}
+      </fieldset>
     );
   }
 
@@ -1535,8 +1636,12 @@ function orderEnvironmentSections<T extends EnvironmentSectionLike>(
   return [...sections].sort((left, right) => {
     const leftPillar = byKey.get(left.sectionKey);
     const rightPillar = byKey.get(right.sectionKey);
-    const leftOrder = leftPillar ? 1000 + leftPillar.displayOrder : left.displayOrder;
-    const rightOrder = rightPillar ? 1000 + rightPillar.displayOrder : right.displayOrder;
+    const leftOrder = left.sectionKey === "room_context"
+      ? 0
+      : leftPillar ? 1000 + leftPillar.displayOrder : 2000 + left.displayOrder;
+    const rightOrder = right.sectionKey === "room_context"
+      ? 0
+      : rightPillar ? 1000 + rightPillar.displayOrder : 2000 + right.displayOrder;
     return leftOrder - rightOrder;
   });
 }
@@ -1588,7 +1693,7 @@ function getRecordTimestamp(record: RecordSummary) {
 }
 
 function isWideEntryField(fieldType: string) {
-  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add", "learning_walk_theme_group"].includes(
+  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add", "learning_walk_theme_group", "practice_rubric_1_5", "environment_rubric_1_5"].includes(
     fieldType
   );
 }
@@ -1774,6 +1879,8 @@ function getResponseValue(
 function formatAnswer(
   value: string | undefined,
   fieldType: string,
+  fieldKey: string,
+  environmentPillars: ElevateEnvironmentPillarSummary[],
   orgUnits: OrgUnitSummary[],
   staff: StaffSummary[]
 ) {
@@ -1792,6 +1899,14 @@ function formatAnswer(
 
   if (fieldType === "score_0_3") {
     return elevateScoreLabels[value] ?? value;
+  }
+
+  if (fieldType === "environment_rubric_1_5") {
+    const pillarKey = fieldKey.replace(/_score$/, "");
+    const selected = environmentPillars
+      .find((pillar) => pillar.pillarKey === pillarKey)
+      ?.rubric.find((option) => option.score === Number(value));
+    return selected ? `${selected.score} - ${selected.judgement}` : value;
   }
 
   if (fieldType === "staff_multi_select") {
@@ -1820,6 +1935,10 @@ function formatAnswer(
   }
 
   return value;
+}
+
+function formatPracticeRubricValue(option: CoachingRubricOption) {
+  return `${option.displayOrder} – ${option.visibleWording}`;
 }
 
 const elevateScoreLabels: Record<string, string> = {

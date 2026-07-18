@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { LucideProps } from "lucide-react";
 import { useMemo, useState, type ComponentType } from "react";
+import { CollapsibleSection } from "../components/CollapsibleSection";
 import { DataTable } from "../components/DataTable";
 import { KpiStrip } from "../components/KpiStrip";
 import { Button } from "../design-system/Button";
@@ -294,28 +295,28 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
       <KpiStrip items={kpis} />
 
       <div className="dashboard-visual-grid">
-        <DashboardBars title="Activity over time" subtitle="Records by month" data={trendData} />
-        <DashboardBars
+        <ActivityOverTimeChart data={trendData} />
+        <DashboardPie
           title="Organisation breakdown"
           subtitle={selectedProcess === "cpd_event" ? "Participants by area" : selectedProcess === "elevate_environment" ? "Checks by building" : "Records by area"}
           data={areaData}
         />
         {selectedProcess === "work_scrutiny" ? (
           <DashboardBars title="Action status" subtitle="Actions linked to scrutinies" data={actionStatusData} />
-        ) : (
-          <DashboardBars
+        ) : selectedProcess !== "probation_case" ? (
+          <DashboardPie
             title={selectedProcess === "elevate_environment" ? "Overall standards" : selectedProcess === "coaching_session" ? "Session focus" : "Themes and focus"}
             subtitle="Frequency in the current view"
             data={themeData}
           />
-        )}
+        ) : null}
         <section className="panel dashboard-attention-panel">
           <div className="panel-heading">
-            <h2>Needs attention</h2>
+            <h2>Upcoming Actions</h2>
             <span>{attentionActions.length} due or overdue</span>
           </div>
           {attentionActions.length === 0 ? (
-            <div className="empty-row">No linked actions need immediate attention.</div>
+            <div className="empty-row">No linked actions are due soon or overdue.</div>
           ) : (
             <div className="dashboard-attention-list">
               {attentionActions.map((action) => (
@@ -334,12 +335,17 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
         </section>
       </div>
 
-      <section className="panel dashboard-record-panel">
-        <div className="panel-heading dashboard-record-heading">
-          <div>
-            <h2>{selectedDefinition.label} records</h2>
-            <span>{visibleRecords.length} shown</span>
-          </div>
+      <CollapsibleSection
+        className="dashboard-record-panel"
+        count={visibleRecords.length}
+        defaultExpanded={false}
+        isEmpty={visibleRecords.length === 0}
+        emptyMessage={`No ${selectedDefinition.label.toLocaleLowerCase()} match the current filters.`}
+        statusSummary={`${visibleRecords.length} shown · search, filter and sort available`}
+        storageKey={`dashboard-records-${selectedProcess}`}
+        title={`${selectedDefinition.label} records`}
+      >
+        <div className="dashboard-record-heading">
           <div className="dashboard-record-tools">
             <label className="search-box dashboard-record-search">
               <Search size={16} aria-hidden="true" />
@@ -362,38 +368,34 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
             </label>
           </div>
         </div>
-        {visibleRecords.length === 0 ? (
-          <div className="empty-row">No {selectedDefinition.label.toLocaleLowerCase()} match the current filters.</div>
-        ) : (
-          <DataTable
-            rows={visibleRecords}
-            rowKey={(record) => record.id}
-            columns={[
-              { key: "title", header: "Record", render: (record) => <strong>{record.title}</strong> },
-              { key: "date", header: "Date", render: (record) => formatDate(getRecordDate(record)) },
-              { key: "area", header: "Area", render: (record) => formatArea(record) },
-              {
-                key: "focus",
-                header: selectedProcess === "work_scrutiny" ? "Courses sampled" : selectedProcess === "elevate_environment" ? "Overall standard" : selectedProcess === "coaching_session" ? "Focus / session" : "Theme / detail",
-                render: (record) => formatRecordFocus(record)
-              },
-              {
-                key: "measure",
-                header: getMeasureHeader(selectedProcess),
-                render: (record) => selectedProcess === "work_scrutiny"
-                  ? actions.filter((action) => action.sourceRecordId === record.id).length
-                  : getRecordMeasure(record, selectedProcess, areaFilter)
-              },
-              { key: "status", header: "Status", render: (record) => <span className="status-pill">{formatLabel(record.status)}</span> },
-              {
-                key: "actions",
-                header: "Open actions",
-                render: (record) => actions.filter((action) => action.sourceRecordId === record.id && !action.completedDate).length
-              }
-            ]}
-          />
-        )}
-      </section>
+        <DataTable
+          rows={visibleRecords}
+          rowKey={(record) => record.id}
+          columns={[
+            { key: "title", header: "Record", render: (record) => <strong>{record.title}</strong> },
+            { key: "date", header: "Date", render: (record) => formatDate(getRecordDate(record)) },
+            { key: "area", header: "Area", render: (record) => formatArea(record) },
+            {
+              key: "focus",
+              header: selectedProcess === "work_scrutiny" ? "Courses sampled" : selectedProcess === "elevate_environment" ? "Overall standard" : selectedProcess === "coaching_session" ? "Focus / session" : "Theme / detail",
+              render: (record) => formatRecordFocus(record)
+            },
+            {
+              key: "measure",
+              header: getMeasureHeader(selectedProcess),
+              render: (record) => selectedProcess === "work_scrutiny"
+                ? actions.filter((action) => action.sourceRecordId === record.id).length
+                : getRecordMeasure(record, selectedProcess, areaFilter)
+            },
+            { key: "status", header: "Status", render: (record) => <span className="status-pill">{formatLabel(record.status)}</span> },
+            {
+              key: "actions",
+              header: "Open actions",
+              render: (record) => actions.filter((action) => action.sourceRecordId === record.id && !action.completedDate).length
+            }
+          ]}
+        />
+      </CollapsibleSection>
     </div>
   );
 }
@@ -425,6 +427,121 @@ function DashboardBars({ title, subtitle, data }: { title: string; subtitle: str
   );
 }
 
+function ActivityOverTimeChart({ data }: { data: Array<{ label: string; value: number }> }) {
+  const maximum = Math.max(...data.map((item) => item.value), 1);
+  const tickStep = Math.max(1, Math.ceil(maximum / 4));
+  const axisMaximum = tickStep * 4;
+  const ticks = Array.from({ length: 5 }, (_, index) => axisMaximum - index * tickStep);
+  const plotLeft = 66;
+  const plotRight = 624;
+  const plotTop = 16;
+  const plotBottom = 204;
+  const plotHeight = plotBottom - plotTop;
+  const slotWidth = (plotRight - plotLeft) / Math.max(data.length, 1);
+  const barWidth = Math.min(slotWidth * 0.58, 48);
+
+  return (
+    <section className="panel dashboard-chart-panel">
+      <div className="panel-heading">
+        <h2>Activity over time</h2>
+        <span>Events / records per month</span>
+      </div>
+      {data.length === 0 ? (
+        <div className="empty-row">No data in the current view.</div>
+      ) : (
+        <svg
+          aria-label={`Activity over time. ${data.map((item) => `${item.label}: ${item.value}`).join(", ")}.`}
+          className="dashboard-activity-chart"
+          role="img"
+          viewBox="0 0 640 258"
+        >
+          <text className="dashboard-axis-title" textAnchor="middle" transform="translate(16 110) rotate(-90)">Number of events / records</text>
+          {ticks.map((tick, index) => {
+            const y = plotTop + (index / 4) * plotHeight;
+            return (
+              <g key={tick}>
+                <line className="dashboard-chart-gridline" x1={plotLeft} x2={plotRight} y1={y} y2={y} />
+                <text className="dashboard-axis-tick" textAnchor="end" x={plotLeft - 10} y={y + 4}>{tick}</text>
+              </g>
+            );
+          })}
+          <line className="dashboard-chart-axis" x1={plotLeft} x2={plotLeft} y1={plotTop} y2={plotBottom} />
+          <line className="dashboard-chart-axis" x1={plotLeft} x2={plotRight} y1={plotBottom} y2={plotBottom} />
+          {data.map((item, index) => {
+            const height = (item.value / axisMaximum) * plotHeight;
+            const x = plotLeft + index * slotWidth + (slotWidth - barWidth) / 2;
+            const y = plotBottom - height;
+            return (
+              <g key={item.label}>
+                <rect className="dashboard-activity-bar" height={height} rx="4" width={barWidth} x={x} y={y} />
+                <text className="dashboard-bar-value" textAnchor="middle" x={x + barWidth / 2} y={Math.max(y - 6, plotTop + 11)}>{item.value}</text>
+                <text className="dashboard-month-label" textAnchor="middle" x={x + barWidth / 2} y="224">{item.label}</text>
+              </g>
+            );
+          })}
+          <text className="dashboard-axis-title" textAnchor="middle" x={(plotLeft + plotRight) / 2} y="252">Month</text>
+        </svg>
+      )}
+    </section>
+  );
+}
+
+const pieColours = ["#0f766e", "#2563a8", "#d97706", "#6d4aa2", "#228b5a", "#c2416c", "#64748b", "#8a6a20"];
+
+function DashboardPie({ title, subtitle, data }: { title: string; subtitle: string; data: Array<{ label: string; value: number }> }) {
+  const slices = consolidatePieData(data);
+  const total = slices.reduce((sum, item) => sum + item.value, 0);
+  let cumulativePercent = 0;
+  const gradient = slices.map((item, index) => {
+    const start = cumulativePercent;
+    cumulativePercent += total ? (item.value / total) * 100 : 0;
+    return `${pieColours[index % pieColours.length]} ${start}% ${cumulativePercent}%`;
+  }).join(", ");
+
+  return (
+    <section className="panel dashboard-chart-panel">
+      <div className="panel-heading">
+        <h2>{title}</h2>
+        <span>{subtitle}</span>
+      </div>
+      {total === 0 ? (
+        <div className="empty-row">No data in the current view.</div>
+      ) : (
+        <div className="dashboard-pie-layout">
+          <div
+            aria-label={`${title}. ${slices.map((item) => `${item.label}: ${item.value}`).join(", ")}.`}
+            className="dashboard-pie"
+            role="img"
+            style={{ background: `conic-gradient(${gradient})` }}
+          >
+            <span>{total}</span>
+          </div>
+          <div className="dashboard-pie-legend">
+            {slices.map((item, index) => (
+              <div key={item.label}>
+                <i aria-hidden="true" style={{ background: pieColours[index % pieColours.length] }} />
+                <span title={item.label}>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function consolidatePieData(data: Array<{ label: string; value: number }>) {
+  const positiveData = data.filter((item) => item.value > 0);
+  if (positiveData.length <= 8) {
+    return positiveData;
+  }
+  return [
+    ...positiveData.slice(0, 7),
+    { label: "Other", value: positiveData.slice(7).reduce((sum, item) => sum + item.value, 0) }
+  ];
+}
+
 function buildKpis(
   processKey: ProcessKey,
   records: ProcessDashboardRecordSummary[],
@@ -439,14 +556,14 @@ function buildKpis(
     const scoredRecords = records.filter((record) => record.scoreCount > 0);
     const scoreCount = scoredRecords.reduce((total, record) => total + record.scoreCount, 0);
     const averageScore = scoreCount
-      ? scoredRecords.reduce((total, record) => total + record.scoreTotal, 0) / scoreCount
+      ? scoredRecords.reduce((total, record) => total + (getEnvironmentScoreOnFivePointScale(record) * record.scoreCount), 0) / scoreCount
       : 0;
     return [
       { label: "Completed checks", value: records.length, tone: "blue" as const },
       { label: "Rooms checked", value: new Set(records.map((record) => record.areaCode).filter(Boolean)).size, tone: "green" as const },
       { label: "Buildings covered", value: new Set(records.map((record) => record.parentAreaCode).filter(Boolean)).size, tone: "blue" as const },
-      { label: "Average score", value: averageScore.toFixed(1), tone: averageScore >= 2 ? "green" as const : "amber" as const },
-      { label: "Barrier findings", value: records.reduce((total, record) => total + record.barrierCount, 0), tone: records.some((record) => record.barrierCount > 0) ? "red" as const : "green" as const }
+      { label: "Average score", value: averageScore.toFixed(1), tone: averageScore >= 3 ? "green" as const : "amber" as const },
+      { label: "Priority improvement findings", value: records.reduce((total, record) => total + record.barrierCount, 0), tone: records.some((record) => record.barrierCount > 0) ? "red" as const : "green" as const }
     ];
   }
 
@@ -512,7 +629,9 @@ function buildKpis(
 function getTileSupportingMetric(processKey: ProcessKey, records: ProcessDashboardRecordSummary[], areaFilter: string) {
   if (processKey === "elevate_environment") {
     const scoreCount = records.reduce((total, record) => total + record.scoreCount, 0);
-    const average = scoreCount ? records.reduce((total, record) => total + record.scoreTotal, 0) / scoreCount : 0;
+    const average = scoreCount
+      ? records.reduce((total, record) => total + (getEnvironmentScoreOnFivePointScale(record) * record.scoreCount), 0) / scoreCount
+      : 0;
     return scoreCount ? `${average.toFixed(1)} average score` : "No scored checks";
   }
   if (processKey === "cpd_event") {
@@ -747,7 +866,7 @@ function getRecordMeasure(record: ProcessDashboardRecordSummary, processKey: Pro
     return record.sampleSize;
   }
   if (processKey === "elevate_environment") {
-    return record.scoreCount ? `${(record.scoreTotal / record.scoreCount).toFixed(1)} / 3` : "Not scored";
+    return record.scoreCount ? `${getEnvironmentScoreOnFivePointScale(record).toFixed(1)} / 5` : "Not scored";
   }
   if (processKey === "coaching_session") {
     return record.ownerDisplayName ?? "Not recorded";
@@ -756,6 +875,14 @@ function getRecordMeasure(record: ProcessDashboardRecordSummary, processKey: Pro
     return record.sampleSize > 0 ? `Observation ${record.sampleSize}` : "Started";
   }
   return record.ownerDisplayName ?? "Not recorded";
+}
+
+function getEnvironmentScoreOnFivePointScale(record: ProcessDashboardRecordSummary) {
+  if (!record.scoreCount) {
+    return 0;
+  }
+  const average = record.scoreTotal / record.scoreCount;
+  return record.scoreMaximum === 5 ? average : 1 + ((average * 4) / 3);
 }
 
 function getMeasureHeader(processKey: ProcessKey) {

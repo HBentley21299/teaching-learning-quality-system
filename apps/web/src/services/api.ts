@@ -78,6 +78,8 @@ import type {
   StaffProfileDetail,
   StaffProfileActionSummary,
   StaffProfileCoachingSummary,
+  StaffProfileLivSummary,
+  StaffProfileProbationSummary,
   StaffProfileRecordSummary,
   StaffProfileSectionSummary,
   StaffProfileSummary,
@@ -103,6 +105,7 @@ const configuredTimeout = Number.parseInt(import.meta.env.VITE_API_TIMEOUT_MS ??
 const apiRequestTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout >= 1000
   ? configuredTimeout
   : 30000;
+const exportRequestTimeoutMs = Math.max(apiRequestTimeoutMs, 180000);
 
 export type ApiResult<T = never> = {
   ok: boolean;
@@ -181,9 +184,9 @@ async function sendJson<TRequest, TResponse = never>(url: string, method: "POST"
   }
 }
 
-async function requestApi(url: string, init: RequestInit, externalSignal?: AbortSignal): Promise<Response> {
+async function requestApi(url: string, init: RequestInit, externalSignal?: AbortSignal, timeoutMs = apiRequestTimeoutMs): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), apiRequestTimeoutMs);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   const abortFromCaller = () => controller.abort();
   externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
@@ -201,7 +204,7 @@ async function requestApi(url: string, init: RequestInit, externalSignal?: Abort
 
 async function downloadApiFile(url: string): Promise<ApiResult> {
   try {
-    const response = await requestApi(url, { headers: await buildHeaders(false) });
+    const response = await requestApi(url, { headers: await buildHeaders(false) }, undefined, exportRequestTimeoutMs);
     if (!response.ok) {
       return {
         ok: false,
@@ -393,6 +396,16 @@ export const api = {
   staffProfileCoaching: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
     getJson<PagedResult<StaffProfileCoachingSummary>>(
       `/api/v1/staff-profiles/${staffId}/coaching?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileLiv: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffProfileLivSummary>>(
+      `/api/v1/staff-profiles/${staffId}/liv?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileProbation: (staffId: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffProfileProbationSummary>>(
+      `/api/v1/staff-profiles/${staffId}/probation?page=${page}&pageSize=${pageSize}`,
       signal
     ),
   staffProfileActions: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>

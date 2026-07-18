@@ -83,8 +83,7 @@ export function MyTeam({ onOpenActions, onOpenProfile }: MyTeamProps) {
   const totals = {
     staff: members.length,
     open: members.reduce((total, member) => total + member.openActionCount, 0),
-    overdue: members.reduce((total, member) => total + member.overdueActionCount, 0),
-    faculties: faculties.length
+    overdue: members.reduce((total, member) => total + member.overdueActionCount, 0)
   };
   const pageCount = Math.max(1, Math.ceil(visibleMembers.length / pageSize));
   const pageMembers = visibleMembers.slice((page - 1) * pageSize, page * pageSize);
@@ -107,7 +106,6 @@ export function MyTeam({ onOpenActions, onOpenProfile }: MyTeamProps) {
         <button onClick={() => setActionFilter("all")} type="button"><strong>{totals.staff}</strong><span>Team members</span></button>
         <button onClick={() => setActionFilter("open")} type="button"><strong>{totals.open}</strong><span>Open actions</span></button>
         <button onClick={() => setActionFilter("overdue")} type="button"><strong>{totals.overdue}</strong><span>Overdue</span></button>
-        <div><strong>{totals.faculties}</strong><span>Faculties</span></div>
       </section>
 
       <section className="panel my-team-panel">

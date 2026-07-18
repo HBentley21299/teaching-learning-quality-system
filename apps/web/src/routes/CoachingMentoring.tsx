@@ -14,7 +14,7 @@ import {
   UsersRound
 } from "lucide-react";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
-import { ExportExcelButton } from "../components/ExportButtons";
+import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -31,12 +31,14 @@ import type {
   CoachingSessionSummary,
   CoachingSessionType,
   CurrentUser,
+  OrgUnitSummary,
   SaveCoachingSessionRequest,
   StaffSummary
 } from "../services/types";
 
 type CoachingMentoringProps = {
   staff: StaffSummary[];
+  orgUnits: OrgUnitSummary[];
   user: CurrentUser;
   onActionsChanged: () => void;
   initialRecordId?: string;
@@ -61,7 +63,7 @@ const reviewOutcomes: Array<[CoachingReviewOutcome, string]> = [
   ["closed_without_completion", "Closed without completion"]
 ];
 
-export function CoachingMentoring({ staff, user, onActionsChanged, initialRecordId = "" }: CoachingMentoringProps) {
+export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, initialRecordId = "" }: CoachingMentoringProps) {
   const canCreate = user.permissions.includes("coaching.submit") || user.permissions.includes("coaching.manage");
   const [configuration, setConfiguration] = useState<CoachingConfiguration | null>(null);
   const [sessions, setSessions] = useState<CoachingSessionSummary[]>([]);
@@ -77,7 +79,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [sort, setSort] = useState("date_desc");
-  const [historyOpen, setHistoryOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const openedInitialRecord = useRef("");
 
   useEffect(() => {
@@ -256,7 +258,6 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
     <div className="route-stack coaching-workspace">
       <div className="route-header">
         <div><p className="eyebrow">Professional development</p><h1>Coaching and Mentoring</h1></div>
-        {user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="coaching" /> : null}
       </div>
 
       {message ? <div className="notice-row">{message}</div> : null}
@@ -275,10 +276,13 @@ export function CoachingMentoring({ staff, user, onActionsChanged, initialRecord
       ) : null}
 
       <section className="panel coaching-history-panel">
-        <button className="collapsible-heading" onClick={() => setHistoryOpen((current) => !current)} type="button">
-          <span>{historyOpen ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}Session history</span>
-          <strong>{sessions.length}</strong>
-        </button>
+        <div className="panel-heading">
+          <button className="collapsible-heading" onClick={() => setHistoryOpen((current) => !current)} type="button">
+            <span>{historyOpen ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}Active records</span>
+            <strong>{sessions.length}</strong>
+          </button>
+          {user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="coaching" orgUnits={orgUnits} /> : null}
+        </div>
         {historyOpen ? (
           <>
             <div className="coaching-filter-bar">
@@ -516,6 +520,7 @@ function CoachingSessionEditor({
 
       <div className="coaching-save-bar">
         <div><span>{cycleNumber ? `Cycle ${cycleNumber}` : "New coaching cycle"}</span><strong>Session {sessionNumber}</strong></div>
+        {detail ? <ExportWordButton recordId={detail.recordId} /> : null}
         {editable ? (
           isCompleted ? (
             <div><Button disabled={isSaving} icon={Save} onClick={() => onSave("completed")} variant="primary">Save changes</Button></div>

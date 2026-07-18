@@ -484,7 +484,7 @@ public sealed partial class SqlFoundationDataStore
             ) THEN 1 ELSE 0 END;
 
             SELECT @canCreate,
-                   CASE WHEN @canCreate = 1 AND EXISTS (
+                   CAST(CASE WHEN @canCreate = 1 AND EXISTS (
                        SELECT 1
                        FROM people.staff staff
                        WHERE staff.id = @subjectStaffId
@@ -498,7 +498,7 @@ public sealed partial class SqlFoundationDataStore
                                  WHERE visible.staff_id = staff.id
                              )
                          )
-                   ) THEN 1 ELSE 0 END;
+                   ) THEN 1 ELSE 0 END AS bit);
             """,
             connection,
             (SqlTransaction)transaction);

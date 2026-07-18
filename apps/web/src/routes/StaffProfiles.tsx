@@ -1,7 +1,7 @@
 import { Search, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { ExportExcelButton } from "../components/ExportButtons";
-import { StaffProfilePanel } from "../features/StaffProfilePanel";
+import { StaffProfilePanel, type StaffProfileRecordLinkHandler } from "../features/StaffProfilePanel";
 import type { CurrentUser, StaffProfileSummary, StaffSummary } from "../services/types";
 
 const MAX_RESULTS = 8;
@@ -15,12 +15,16 @@ export function StaffProfiles({
   academicYear,
   profiles,
   staff,
-  user
+  user,
+  onOpenRecord,
+  onOpenActionDetails
 }: {
   academicYear: string;
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   user: CurrentUser;
+  onOpenRecord: StaffProfileRecordLinkHandler;
+  onOpenActionDetails: (actionId: string, staffId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [isResultsOpen, setIsResultsOpen] = useState(false);
@@ -164,7 +168,14 @@ export function StaffProfiles({
       </section>
 
       {selectedStaff ? (
-        <StaffProfilePanel academicYear={academicYear} profiles={profiles} staffId={selectedStaff.id} user={user} />
+        <StaffProfilePanel
+          academicYear={academicYear}
+          onOpenActionDetails={onOpenActionDetails}
+          onOpenRecord={onOpenRecord}
+          profiles={profiles}
+          staffId={selectedStaff.id}
+          user={user}
+        />
       ) : (
         <section className="panel">
           <div className="panel-heading">

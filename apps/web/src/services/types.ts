@@ -577,6 +577,7 @@ export type ProcessDashboardRecordSummary = {
   scoreTotal: number;
   scoreCount: number;
   barrierCount: number;
+  scoreMaximum: number;
   relatedRecordId?: string;
 };
 
@@ -645,6 +646,7 @@ export type SaveStaffReflectionRequest = {
 
 export type StaffCpdRecordSummary = {
   id: string;
+  recordId: string;
   title: string;
   eventDate: string;
   themes?: string;
@@ -665,6 +667,7 @@ export type ElevateStatusLevelSummary = {
   requiredSessions: number;
   requirementLabel?: string;
   isEligible: boolean;
+  isConfirmed: boolean;
   isAwarded: boolean;
   evidenceCpdEventId?: string;
   implementationImpact?: string;
@@ -808,6 +811,35 @@ export type StaffProfileSectionSummary = {
   openActionCount: number;
   completedActionCount: number;
   overdueActionCount: number;
+  livCount: number;
+  probationCount: number;
+};
+
+export type StaffProfileLivSummary = {
+  id: string;
+  recordId: string;
+  title: string;
+  recordDate?: string;
+  reviewerName?: string;
+  parentOrgUnitCode?: string;
+  orgUnitCode?: string;
+  currentStage: string;
+  status: "in_progress" | "closed";
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type StaffProfileProbationSummary = {
+  id: string;
+  recordId: string;
+  title: string;
+  academicYear: string;
+  status: "in_progress" | "completed" | "closed";
+  currentObservationNumber: number;
+  parentOrgUnitCode?: string;
+  orgUnitCode?: string;
+  createdAt: string;
+  updatedAt?: string;
 };
 
 export type ElevateLookupOption = { key: string; name: string; displayOrder: number; isOther?: boolean };
@@ -1431,6 +1463,16 @@ export type ElevateEnvironmentPillarSummary = {
   isActive: boolean;
   assetUri: string;
   assetAltText: string;
+  rubric: ElevateEnvironmentRubricDescriptorSummary[];
+};
+
+export type ElevateEnvironmentRubricDescriptorSummary = {
+  id: string;
+  score: number;
+  judgementKey: string;
+  judgement: string;
+  descriptor: string;
+  colorHex?: string;
 };
 
 export type CourseSummary = {

@@ -47,6 +47,7 @@ public sealed partial class SqlFoundationDataStore
     public async Task<StaffProfileSectionSummary> GetStaffProfileSectionSummaryAsync(
         Guid staffId,
         string academicYear,
+        CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
         var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
@@ -98,7 +99,26 @@ public sealed partial class SqlFoundationDataStore
                    AND action_row.archived_at IS NULL AND action_row.completed_date IS NULL
                    AND action_row.due_date < CONVERT(date, sysutcdatetime())
                    AND ((record_row.id IS NOT NULL AND record_row.academic_year_key = @academicYear)
-                     OR (record_row.id IS NULL AND CONVERT(date, action_row.created_at) BETWEEN @startDate AND @endDate)));
+                     OR (record_row.id IS NULL AND CONVERT(date, action_row.created_at) BETWEEN @startDate AND @endDate))),
+                (SELECT COUNT(*) FROM quality.liv_records liv
+                 JOIN core.records record_row ON record_row.id = liv.record_id AND record_row.archived_at IS NULL
+                 WHERE liv.subject_staff_id = @staffId AND liv.archived_at IS NULL
+                   AND record_row.academic_year_key = @academicYear),
+                (SELECT COUNT(*) FROM quality.probation_cases probation
+                 WHERE probation.subject_staff_id = @staffId AND probation.archived_at IS NULL
+                   AND (
+                       @canViewAllProbation = 1
+                       OR probation.subject_staff_id = @currentStaffId
+                       OR probation.created_by_user_account_id = @currentUserAccountId
+                       OR EXISTS (
+                           SELECT 1 FROM quality.probation_case_reviewers reviewer
+                           WHERE reviewer.probation_case_id = probation.id AND reviewer.staff_id = @currentStaffId
+                       )
+                       OR (@canViewScopedProbation = 1 AND (
+                           EXISTS (SELECT 1 FROM org.fn_visible_staff(@currentUserAccountId) visible WHERE visible.staff_id = probation.subject_staff_id)
+                           OR EXISTS (SELECT 1 FROM org.fn_visible_org_units(@currentUserAccountId) visible WHERE visible.org_unit_id = probation.org_unit_id)
+                       ))
+                   ));
             """,
             command =>
             {
@@ -106,11 +126,15 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@academicYear", academicYear);
                 command.Parameters.AddWithValue("@startDate", startDate.ToDateTime(TimeOnly.MinValue));
                 command.Parameters.AddWithValue("@endDate", endDate.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@canViewAllProbation", currentUser.HasPermission(PermissionKeys.ProbationManage) || currentUser.HasPermission(PermissionKeys.ReportsViewAll));
+                command.Parameters.AddWithValue("@canViewScopedProbation", currentUser.HasPermission(PermissionKeys.ProbationSubmit) || currentUser.HasPermission(PermissionKeys.ReportsViewScoped));
+                command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
+                command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
             },
             reader => new StaffProfileSectionSummary(
                 reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3),
                 reader.GetInt32(4), reader.GetInt32(5), reader.GetInt32(6), reader.GetInt32(7),
-                reader.GetInt32(8), reader.GetInt32(9)),
+                reader.GetInt32(8), reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11)),
             cancellationToken);
         return rows[0];
     }
@@ -197,7 +221,7 @@ public sealed partial class SqlFoundationDataStore
             """, staffId, academicYear, startDate, endDate, cancellationToken);
         var items = await QueryAsync(
             """
-            SELECT event_row.id, event_row.event_title, event_row.event_date, themes.response_text, event_row.duration_minutes,
+            SELECT event_row.id, event_row.record_id, event_row.event_title, event_row.event_date, themes.response_text, event_row.duration_minutes,
                    CASE WHEN template_info.template_key = N'cpd_core' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END
             FROM cpd.cpd_attendance attendance
             JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
@@ -214,7 +238,7 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY event_row.event_date DESC, event_row.id OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
             """,
             command => AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize),
-            reader => new StaffCpdRecordSummary(reader.GetGuid(0), reader.GetString(1), DateOnly.FromDateTime(reader.GetDateTime(2)), GetStringOrNull(reader, 3), GetIntOrNull(reader, 4), reader.GetBoolean(5)),
+            reader => new StaffCpdRecordSummary(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), DateOnly.FromDateTime(reader.GetDateTime(3)), GetStringOrNull(reader, 4), GetIntOrNull(reader, 5), reader.GetBoolean(6)),
             cancellationToken);
         return CreatePage(items, page, pageSize, total);
     }
@@ -246,6 +270,101 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 8), GetStringOrNull(reader, 9)),
             cancellationToken);
         return CreatePage(items, page, pageSize, total);
+    }
+
+    public async Task<PagedResult<StaffProfileLivSummary>> GetStaffProfileLivPageAsync(
+        Guid staffId, string academicYear, int page, int pageSize, CancellationToken cancellationToken)
+    {
+        (page, pageSize) = NormalizePage(page, pageSize);
+        var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
+        const string whereClause = """
+            liv.subject_staff_id = @staffId
+            AND liv.archived_at IS NULL
+            AND record_row.archived_at IS NULL
+            AND record_row.academic_year_key = @academicYear
+            """;
+        var total = await CountAsync(
+            $"SELECT COUNT(*) FROM quality.liv_records liv JOIN core.records record_row ON record_row.id=liv.record_id WHERE {whereClause};",
+            staffId, academicYear, startDate, endDate, cancellationToken);
+        var items = await QueryAsync(
+            $"""
+            SELECT liv.id, liv.record_id, record_row.title, record_row.record_date,
+                   reviewer.display_name, parent.code, area.code, liv.current_stage,
+                   liv.status, liv.created_at, liv.updated_at
+            FROM quality.liv_records liv
+            JOIN core.records record_row ON record_row.id = liv.record_id
+            LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
+            LEFT JOIN org.org_units area ON area.id = liv.org_unit_id
+            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id
+            WHERE {whereClause}
+            ORDER BY COALESCE(liv.updated_at, liv.created_at) DESC, liv.id
+            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
+            """,
+            command => AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize),
+            reader => new StaffProfileLivSummary(
+                reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), GetDateOnlyOrNull(reader, 3),
+                GetStringOrNull(reader, 4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6),
+                GetStringOrNull(reader, 7) ?? "case_created", reader.GetString(8),
+                reader.GetFieldValue<DateTimeOffset>(9), GetDateTimeOffsetOrNull(reader, 10)),
+            cancellationToken);
+        return CreatePage(items, page, pageSize, total);
+    }
+
+    public async Task<PagedResult<StaffProfileProbationSummary>> GetStaffProfileProbationPageAsync(
+        Guid staffId, int page, int pageSize, CurrentUser currentUser, CancellationToken cancellationToken)
+    {
+        (page, pageSize) = NormalizePage(page, pageSize);
+        var canViewAll = currentUser.HasPermission(PermissionKeys.ProbationManage)
+            || currentUser.HasPermission(PermissionKeys.ReportsViewAll);
+        var canViewScoped = currentUser.HasPermission(PermissionKeys.ProbationSubmit)
+            || currentUser.HasPermission(PermissionKeys.ReportsViewScoped);
+        const string whereClause = """
+            probation.subject_staff_id = @staffId
+            AND probation.archived_at IS NULL
+            AND (
+                @canViewAll = 1
+                OR probation.subject_staff_id = @currentStaffId
+                OR probation.created_by_user_account_id = @currentUserAccountId
+                OR EXISTS (
+                    SELECT 1 FROM quality.probation_case_reviewers reviewer
+                    WHERE reviewer.probation_case_id = probation.id AND reviewer.staff_id = @currentStaffId
+                )
+                OR (@canViewScoped = 1 AND (
+                    EXISTS (SELECT 1 FROM org.fn_visible_staff(@currentUserAccountId) visible WHERE visible.staff_id = probation.subject_staff_id)
+                    OR EXISTS (SELECT 1 FROM org.fn_visible_org_units(@currentUserAccountId) visible WHERE visible.org_unit_id = probation.org_unit_id)
+                ))
+            )
+            """;
+        var totalRows = await QueryAsync(
+            $"SELECT COUNT(*) FROM quality.probation_cases probation WHERE {whereClause};",
+            command => AddProbationProfileParameters(command, staffId, currentUser, canViewAll, canViewScoped),
+            reader => reader.GetInt32(0),
+            cancellationToken);
+        var items = await QueryAsync(
+            $"""
+            SELECT probation.id, probation.record_id, record_row.title, probation.academic_year,
+                   probation.status, probation.current_observation_number, parent.code, area.code,
+                   probation.created_at, probation.updated_at
+            FROM quality.probation_cases probation
+            JOIN core.records record_row ON record_row.id = probation.record_id AND record_row.archived_at IS NULL
+            LEFT JOIN org.org_units area ON area.id = probation.org_unit_id
+            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id
+            WHERE {whereClause}
+            ORDER BY COALESCE(probation.updated_at, probation.created_at) DESC, probation.id
+            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
+            """,
+            command =>
+            {
+                AddProbationProfileParameters(command, staffId, currentUser, canViewAll, canViewScoped);
+                command.Parameters.AddWithValue("@offset", (page - 1) * pageSize);
+                command.Parameters.AddWithValue("@pageSize", pageSize);
+            },
+            reader => new StaffProfileProbationSummary(
+                reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3),
+                reader.GetString(4), reader.GetByte(5), GetStringOrNull(reader, 6), GetStringOrNull(reader, 7),
+                reader.GetFieldValue<DateTimeOffset>(8), GetDateTimeOffsetOrNull(reader, 9)),
+            cancellationToken);
+        return CreatePage(items, page, pageSize, totalRows[0]);
     }
 
     public async Task<PagedResult<StaffProfileActionSummary>> GetStaffProfileActionsPageAsync(
@@ -310,6 +429,20 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@endDate", endDate.ToDateTime(TimeOnly.MinValue));
         command.Parameters.AddWithValue("@offset", (page - 1) * pageSize);
         command.Parameters.AddWithValue("@pageSize", pageSize);
+    }
+
+    private static void AddProbationProfileParameters(
+        Microsoft.Data.SqlClient.SqlCommand command,
+        Guid staffId,
+        CurrentUser currentUser,
+        bool canViewAll,
+        bool canViewScoped)
+    {
+        command.Parameters.AddWithValue("@staffId", staffId);
+        command.Parameters.AddWithValue("@canViewAll", canViewAll);
+        command.Parameters.AddWithValue("@canViewScoped", canViewScoped);
+        command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
+        command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
     }
 
     private static (int Page, int PageSize) NormalizePage(int page, int pageSize) => (Math.Max(1, page), Math.Clamp(pageSize, 1, 100));

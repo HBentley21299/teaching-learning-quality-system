@@ -34,6 +34,7 @@ type ActionsViewProps = {
   user: CurrentUser;
   onChanged: () => Promise<void>;
   initialStaffId?: string;
+  initialActionId?: string;
   onOpenSource?: (action: ActionSummary) => void;
 };
 
@@ -76,7 +77,7 @@ function formatDateTime(value?: string) {
   return value ? new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "Not recorded";
 }
 
-export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", onOpenSource }: ActionsViewProps) {
+export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", initialActionId = "", onOpenSource }: ActionsViewProps) {
   const [localActions, setLocalActions] = useState(actions);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -138,6 +139,12 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
       setOwnershipFilter("all");
     }
   }, [initialStaffId]);
+
+  useEffect(() => {
+    if (!initialActionId) return;
+    const action = localActions.find((candidate) => candidate.id === initialActionId);
+    if (action) void showDetail(action);
+  }, [initialActionId, localActions]);
 
   useEffect(() => {
     void api.actionOwnerOptions(undefined, subjectStaffId || undefined)

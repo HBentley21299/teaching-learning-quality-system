@@ -100,7 +100,7 @@ public static class PlatformOperationsEndpoints
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
             if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
             return Results.Ok(await store.GetStaffProfileSectionSummaryAsync(
-                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), cancellationToken));
+                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), user, cancellationToken));
         });
 
         api.MapGet("/staff-profiles/{staffId:guid}/reflections", async (
@@ -131,6 +131,26 @@ public static class PlatformOperationsEndpoints
             if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
             return Results.Ok(await store.GetStaffProfileCoachingPageAsync(
                 staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken));
+        });
+
+        api.MapGet("/staff-profiles/{staffId:guid}/liv", async (
+            Guid staffId, string? academicYear, int page, int pageSize,
+            ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
+            if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
+            return Results.Ok(await store.GetStaffProfileLivPageAsync(
+                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken));
+        });
+
+        api.MapGet("/staff-profiles/{staffId:guid}/probation", async (
+            Guid staffId, int page, int pageSize,
+            ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
+            if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
+            return Results.Ok(await store.GetStaffProfileProbationPageAsync(
+                staffId, page, pageSize, user, cancellationToken));
         });
 
         api.MapGet("/staff-profiles/{staffId:guid}/actions", async (
@@ -341,7 +361,6 @@ public static class PlatformOperationsEndpoints
             CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
-            if (!user.HasPermission(PermissionKeys.ExportsCreate)) return Results.Forbid();
             var report = await store.GetRecordReportAsync(recordId, user, cancellationToken);
             if (report is null) return Results.NotFound();
             var result = exporter.CreateRecordReport(report);

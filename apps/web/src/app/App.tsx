@@ -50,6 +50,7 @@ export function App() {
   const [loadError, setLoadError] = useState("");
   const [profileStaffId, setProfileStaffId] = useState("");
   const [actionStaffId, setActionStaffId] = useState("");
+  const [actionDetailId, setActionDetailId] = useState("");
   const [sourceRecordId, setSourceRecordId] = useState("");
 
   const loadCoreData = useCallback(async () => {
@@ -135,6 +136,7 @@ export function App() {
   function navigate(nextRoute: AppRoute) {
     setProfileStaffId("");
     setActionStaffId("");
+    setActionDetailId("");
     setSourceRecordId("");
     setRoute(nextRoute);
   }
@@ -142,12 +144,14 @@ export function App() {
   function openTeamProfile(staffId: string) {
     setProfileStaffId(staffId);
     setActionStaffId("");
+    setActionDetailId("");
     setSourceRecordId("");
     setRoute("profile");
   }
 
   function openTeamActions(staffId: string) {
     setActionStaffId(staffId);
+    setActionDetailId("");
     setProfileStaffId("");
     setSourceRecordId("");
     setRoute("actions");
@@ -156,6 +160,7 @@ export function App() {
   function openElevateReport(staffId: string, elevateRecordId: string) {
     setProfileStaffId(staffId);
     setActionStaffId("");
+    setActionDetailId("");
     setSourceRecordId(elevateRecordId);
     setRoute("profile");
   }
@@ -164,6 +169,7 @@ export function App() {
     if (!action.sourceRecordId) return;
     setSourceRecordId(action.sourceRecordId);
     setActionStaffId("");
+    setActionDetailId("");
     if (action.sourceFormType === "elevate_practice" && action.subjectStaffId) {
       setProfileStaffId(action.subjectStaffId);
       setRoute("profile");
@@ -184,6 +190,7 @@ export function App() {
   function openAdminRecord(record: AdminRecord) {
     setSourceRecordId(record.recordId);
     setActionStaffId("");
+    setActionDetailId("");
     if (["elevate_practice", "elevate_practice_assessment"].includes(record.recordType) && record.subjectStaffId) {
       setProfileStaffId(record.subjectStaffId);
       setRoute("profile");
@@ -200,6 +207,36 @@ export function App() {
       work_scrutiny: "scrutiny"
     };
     setRoute(recordRoutes[record.recordType] ?? "dashboard");
+  }
+
+  function openStaffRecord(recordType: string, recordId: string, staffId: string) {
+    setSourceRecordId(recordId);
+    setActionStaffId("");
+    setActionDetailId("");
+    if (["elevate_practice", "elevate_practice_assessment"].includes(recordType)) {
+      setProfileStaffId(staffId);
+      setRoute("profile");
+      return;
+    }
+    setProfileStaffId("");
+    const recordRoutes: Partial<Record<string, AppRoute>> = {
+      coaching_session: "coaching",
+      cpd_event: "cpd",
+      elevate_environment: "elevate",
+      learning_walk: "learning",
+      liv: "liv",
+      probation_case: "probation",
+      work_scrutiny: "scrutiny"
+    };
+    setRoute(recordRoutes[recordType] ?? "dashboard");
+  }
+
+  function openActionDetails(actionId: string, staffId: string) {
+    setActionDetailId(actionId);
+    setActionStaffId(staffId);
+    setProfileStaffId("");
+    setSourceRecordId("");
+    setRoute("actions");
   }
 
   if (!isLoading && !loadError && !user.userAccountId) {
@@ -219,11 +256,7 @@ export function App() {
     <div className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
         <div className="brand-block">
-          <div className="brand-mark">iE</div>
-          <div>
-            <strong>i-Elevate</strong>
-            <span>Teaching & Learning</span>
-          </div>
+          <img className="brand-logo" src="/system-assets/i-elevate-logo.png" alt="i-Elevate" />
         </div>
         <nav>
           {visibleNavigationItems.map((item) => {
@@ -316,7 +349,7 @@ export function App() {
                   onRefresh={loadCoreData}
                 />
               ) : null}
-              {route === "staff" ? <StaffProfiles academicYear={academicYear} staff={staff} profiles={profiles} user={user} /> : null}
+              {route === "staff" ? <StaffProfiles academicYear={academicYear} staff={staff} profiles={profiles} user={user} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} /> : null}
               {route === "team" ? <MyTeam onOpenActions={openTeamActions} onOpenProfile={openTeamProfile} /> : null}
               {route === "admin" ? <AdminCentre user={user} modules={modules} profiles={profiles} staff={staff} onOpenRecord={openAdminRecord} /> : null}
               {route === "learning" ? (
@@ -346,7 +379,7 @@ export function App() {
               {route === "elevate" ? (
                 <ModuleWorkspace
                   academicYear={academicYear}
-                  title="Elevate Learning Environments"
+                  title="Elevate Your Learning Environment"
                   eyebrow="Learning environment quality"
                   initialRecordId={sourceRecordId}
                   mode="elevate"
@@ -357,17 +390,17 @@ export function App() {
               ) : null}
               {route === "practice" ? <ElevatePractice user={user} onActionsChanged={refreshActions} /> : null}
               {route === "coaching" ? (
-                <CoachingMentoring initialRecordId={sourceRecordId} staff={staff} user={user} onActionsChanged={refreshActions} />
+                <CoachingMentoring initialRecordId={sourceRecordId} orgUnits={orgUnits} staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
               {route === "scrutiny" ? (
                 <ModuleWorkspace academicYear={academicYear} title="Work Scrutiny" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
               {route === "cpd" ? (
-                <ModuleWorkspace academicYear={academicYear} title="CPD Management" eyebrow="Professional learning" mode="cpd" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace academicYear={academicYear} title="CPD Management" eyebrow="Professional learning" initialRecordId={sourceRecordId} mode="cpd" staff={staff} user={user} onActionsChanged={refreshActions} />
               ) : null}
-              {route === "profile" ? <StaffProfileWorkspace academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} profiles={profiles} staff={staff} user={user} /> : null}
+              {route === "profile" ? <StaffProfileWorkspace academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} profiles={profiles} staff={staff} user={user} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} /> : null}
               {route === "actions" ? (
-                <ActionsView academicYear={academicYear} actions={yearActions} initialStaffId={actionStaffId} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} onChanged={refreshActions} />
+                <ActionsView academicYear={academicYear} actions={yearActions} initialActionId={actionDetailId} initialStaffId={actionStaffId} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} onChanged={refreshActions} />
               ) : null}
             </Suspense>
           )}

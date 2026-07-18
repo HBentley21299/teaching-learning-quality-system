@@ -78,13 +78,15 @@ public sealed partial class SqlFoundationDataStore
         var canManage = ElevateStatusAccessPolicy.CanManageControlledLevels(currentUser);
         var canSubmitExplorer = ElevateStatusAccessPolicy.CanUpdateLevel(currentUser, staffId, 1);
         var awardsByLevel = awards.ToDictionary(award => award.LevelNumber);
-        var completedPreviousLevel = true;
+        var previousLevelAwarded = true;
         var levelSummaries = new List<ElevateStatusLevelSummary>(ElevateStatusLevels.Length);
 
         foreach (var definition in ElevateStatusLevels)
         {
             awardsByLevel.TryGetValue(definition.LevelNumber, out var award);
-            var isEligible = eligibleCpd.Count >= definition.RequiredSessions && completedPreviousLevel;
+            var isEligible = eligibleCpd.Count >= definition.RequiredSessions && previousLevelAwarded;
+            var isConfirmed = award is not null;
+            var isAwarded = isEligible && isConfirmed;
             levelSummaries.Add(new ElevateStatusLevelSummary(
                 definition.LevelNumber,
                 definition.LevelKey,
@@ -92,13 +94,14 @@ public sealed partial class SqlFoundationDataStore
                 definition.RequiredSessions,
                 definition.LevelNumber == 1 || canManage ? definition.RequirementLabel : null,
                 isEligible,
-                award is not null,
+                isConfirmed,
+                isAwarded,
                 definition.LevelNumber == 1 ? award?.EvidenceCpdEventId : null,
                 definition.LevelNumber == 1 ? award?.ImplementationImpact : null,
                 canManage || definition.LevelNumber == 1 ? award?.QualifyingAttendanceCount : null,
                 canManage || definition.LevelNumber == 1 ? award?.ConfirmedAt : null,
                 canManage || definition.LevelNumber == 1 ? award?.ConfirmedByName : null));
-            completedPreviousLevel = award is not null;
+            previousLevelAwarded = isAwarded;
         }
 
         return new ElevateStatusSummary(
@@ -195,16 +198,10 @@ public sealed partial class SqlFoundationDataStore
                 return await GetElevateStatusAsync(staffId, request.AcademicYear, currentUser, cancellationToken);
             }
 
-            if (eligibleCpd.Count < definition.RequiredSessions)
+            if (levelNumber == 1 && eligibleCpd.Count < definition.RequiredSessions)
             {
                 throw new WorkflowValidationException(
                     $"{definition.Name} requires {definition.RequiredSessions} completed internal CPD sessions in {request.AcademicYear}.");
-            }
-
-            var requiredPreviousLevels = Enumerable.Range(1, levelNumber - 1);
-            if (requiredPreviousLevels.Any(required => existingAwards.All(award => award.LevelNumber != required)))
-            {
-                throw new WorkflowValidationException("Elevate Status levels must be completed in sequence.");
             }
 
             Guid? evidenceCpdEventId = null;

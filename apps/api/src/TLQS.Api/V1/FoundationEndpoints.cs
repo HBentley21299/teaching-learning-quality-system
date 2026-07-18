@@ -1572,7 +1572,15 @@ public sealed record ElevateEnvironmentPillarSummary(
     int DisplayOrder,
     bool IsActive,
     string AssetUri,
-    string AssetAltText);
+    string AssetAltText,
+    IReadOnlyList<ElevateEnvironmentRubricDescriptorSummary> Rubric);
+public sealed record ElevateEnvironmentRubricDescriptorSummary(
+    Guid Id,
+    int Score,
+    string JudgementKey,
+    string Judgement,
+    string Descriptor,
+    string? ColorHex);
 public sealed record CourseSummary(Guid Id, string CourseCode, string CourseName, Guid OrgUnitId, string? AcademicYear);
 public sealed record RoleSummary(string RoleKey, string Name, bool IsOrganisationManaged = false);
 public sealed record PermissionSummary(string PermissionKey, string Name, string Category);
@@ -1614,6 +1622,7 @@ public sealed record ProcessDashboardRecordSummary(
     int ScoreTotal,
     int ScoreCount,
     int BarrierCount,
+    int ScoreMaximum,
     Guid? RelatedRecordId = null);
 public sealed record LearningWalkRollupSummary(Guid? FacultyOrgUnitId, string? FacultyCode, string? FacultyName, Guid? ChildOrgUnitId, string? ChildCode, string? ChildName, long RecordCount, DateOnly? LatestRecordDate);
 public sealed record RecordDetailSummary(
@@ -1973,7 +1982,7 @@ public sealed record StaffReflectionMutationResult(
     StaffReflectionSummary? Reflection,
     string? Message);
 
-public sealed record StaffCpdRecordSummary(Guid Id, string Title, DateOnly EventDate, string? Themes, int? DurationMinutes, bool IsInternal);
+public sealed record StaffCpdRecordSummary(Guid Id, Guid RecordId, string Title, DateOnly EventDate, string? Themes, int? DurationMinutes, bool IsInternal);
 
 public sealed record StaffProfileActionSummary(
     Guid Id,

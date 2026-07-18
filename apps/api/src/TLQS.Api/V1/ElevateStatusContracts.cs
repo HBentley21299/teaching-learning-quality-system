@@ -19,6 +19,7 @@ public sealed record ElevateStatusLevelSummary(
     int RequiredSessions,
     string? RequirementLabel,
     bool IsEligible,
+    bool IsConfirmed,
     bool IsAwarded,
     Guid? EvidenceCpdEventId,
     string? ImplementationImpact,
