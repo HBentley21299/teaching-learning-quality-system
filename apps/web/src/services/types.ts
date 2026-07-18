@@ -78,6 +78,8 @@ export type RecordSummary = {
   title: string;
   subjectStaffId?: string;
   ownerStaffId?: string;
+  reviewerStaffId?: string;
+  practiceObserved?: string;
   orgUnitId?: string;
   recordDate?: string;
   createdAt: string;
@@ -144,6 +146,7 @@ export type RecordDetail = {
   submittedAt?: string;
   canEdit: boolean;
   sections: RecordDetailSection[];
+  auditHistory: AuditHistory[];
 };
 
 export type RecordDetailSection = {
@@ -195,6 +198,7 @@ export type ProcessDashboardRecordSummary = {
   subjectDisplayName?: string;
   theme?: string;
   detail?: string;
+  focus?: string;
   practiceObserved?: string;
   participantAreaBreakdown?: string;
   participantCount: number;
@@ -552,6 +556,7 @@ export type StaffProfileDetail = {
   reflections: StaffReflectionSummary[];
   reflectionRecords: StaffReflectionRecordSummary[];
   cpdRecords: StaffCpdRecordSummary[];
+  actions: ActionSummary[];
   livActions: StaffLivActionSummary[];
   associatedRecords: StaffAssociatedRecordSummary[];
   elevatePractice?: StaffElevatePracticeSummary;

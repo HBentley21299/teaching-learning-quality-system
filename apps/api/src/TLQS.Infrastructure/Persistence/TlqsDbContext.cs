@@ -40,6 +40,8 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
     public DbSet<LearningWalkDetail> LearningWalkDetails => Set<LearningWalkDetail>();
     public DbSet<WorkScrutinyDetail> WorkScrutinyDetails => Set<WorkScrutinyDetail>();
     public DbSet<WorkScrutinyCourseSample> WorkScrutinyCourseSamples => Set<WorkScrutinyCourseSample>();
+    public DbSet<ElevateEnvironmentAssessment> ElevateEnvironmentAssessments => Set<ElevateEnvironmentAssessment>();
+    public DbSet<StaffProfileReflection> StaffProfileReflections => Set<StaffProfileReflection>();
     public DbSet<Course> Courses => Set<Course>();
     public DbSet<ActionItem> Actions => Set<ActionItem>();
     public DbSet<CpdEvent> CpdEvents => Set<CpdEvent>();
@@ -80,6 +82,8 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
         modelBuilder.Entity<LearningWalkDetail>().ToTable("learning_walk_details", "quality");
         modelBuilder.Entity<WorkScrutinyDetail>().ToTable("work_scrutiny_details", "quality");
         modelBuilder.Entity<WorkScrutinyCourseSample>().ToTable("work_scrutiny_course_samples", "quality");
+        modelBuilder.Entity<ElevateEnvironmentAssessment>().ToTable("elevate_environment_assessments", "quality");
+        modelBuilder.Entity<StaffProfileReflection>().ToTable("staff_profile_reflections", "quality");
         modelBuilder.Entity<Course>().ToTable("courses", "curriculum");
         modelBuilder.Entity<ActionItem>().ToTable("actions", "quality");
         modelBuilder.Entity<CpdEvent>().ToTable("cpd_events", "cpd");
@@ -97,6 +101,7 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
         modelBuilder.Entity<LearningWalkDetail>().HasKey(x => x.ActivityId);
         modelBuilder.Entity<WorkScrutinyDetail>().HasKey(x => x.ActivityId);
         modelBuilder.Entity<WorkScrutinyCourseSample>().HasKey(x => new { x.RecordId, x.CourseId });
+        modelBuilder.Entity<ElevateEnvironmentAssessment>().HasKey(x => x.RecordId);
         modelBuilder.Entity<FileAsset>().HasKey(x => x.Id);
         modelBuilder.Entity<FileAttachment>().HasKey(x => x.Id);
         modelBuilder.Entity<AuditLog>().HasKey(x => x.Id);

@@ -6,6 +6,7 @@ import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
 import type {
+  ActionSummary,
   CurrentUser,
   StaffProfileDetail,
   StaffProfileSummary,
@@ -103,7 +104,8 @@ export function StaffProfilePanel({
     detail?.reflections.filter((reflection) => reflection.status === "completed").length ?? 0;
   const reflectionTotal = getReflectionTotal(completedReflectionCount, detail?.reflectionRecords.length ?? 0);
   const overdueReflection = detail?.reflections.find((reflection) => reflection.status === "overdue");
-  const openActionCount = detail?.livActions.filter((action) => !action.completedDate).length ?? 0;
+  const staffActions = useMemo<ActionSummary[]>(() => detail?.actions ?? [], [detail]);
+  const openActionCount = staffActions.filter((action) => !action.completedDate).length;
   const filteredAssociatedRecords = useMemo(() => {
     if (!detail) return [];
     const query = recordSearch.trim().toLocaleLowerCase();
@@ -238,7 +240,7 @@ export function StaffProfilePanel({
           <strong>{reflectionTotal}</strong>
         </div>
         <div className="kpi kpi-red">
-          <span>Open LIV actions</span>
+          <span>Open actions</span>
           <strong>{openActionCount}</strong>
         </div>
       </section>
@@ -446,7 +448,7 @@ export function StaffProfilePanel({
 
       <section className="panel">
         <div className="panel-heading">
-          <h2>Learning and Innovation Visit actions</h2>
+          <h2>Actions</h2>
           <span>{openActionCount} open</span>
         </div>
         <div className="table-shell">
@@ -454,7 +456,8 @@ export function StaffProfilePanel({
             <thead>
               <tr>
                 <th>Action</th>
-                <th>Created</th>
+                <th>Assigned staff</th>
+                <th>Owner</th>
                 <th>Source</th>
                 <th>Due</th>
                 <th>Status</th>
@@ -462,16 +465,17 @@ export function StaffProfilePanel({
               </tr>
             </thead>
             <tbody>
-              {detail.livActions.length === 0 ? (
+              {staffActions.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>No LIV actions have been assigned to this staff member.</td>
+                  <td colSpan={7}>No permitted actions have been assigned to this staff member.</td>
                 </tr>
               ) : (
-                detail.livActions.map((action) => (
+                staffActions.map((action) => (
                   <tr key={action.id}>
                     <td>{action.title}</td>
-                    <td>{action.createdAt.slice(0, 10)}</td>
-                    <td>{action.sourceRecordTitle ?? "LIV record"}</td>
+                    <td>{action.subjectStaffName ?? "Not recorded"}</td>
+                    <td>{action.ownerStaffName ?? "Not recorded"}</td>
+                    <td>{action.sourceRecordTitle ?? "No source record"}</td>
                     <td>{action.dueDate ?? "No due date"}</td>
                     <td>
                       <span
@@ -483,8 +487,8 @@ export function StaffProfilePanel({
                     <td>
                       <div className="record-link-stack">
                         <ActionDetailLink actionId={action.id} label="View details" />
-                        {action.sourceRecordId ? (
-                          <FullRecordLink label="Open source" recordId={action.sourceRecordId} recordType="liv_record" />
+                        {action.sourceRecordId && action.sourceRecordType ? (
+                          <FullRecordLink label="Open source" recordId={action.sourceRecordId} recordType={action.sourceRecordType} />
                         ) : null}
                       </div>
                     </td>

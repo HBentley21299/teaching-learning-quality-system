@@ -17,6 +17,8 @@ public sealed partial class SqlFoundationDataStore
         string? areaCode,
         string? status,
         string? theme,
+        string? focus,
+        string? recordType,
         string? practiceObserved,
         CancellationToken cancellationToken)
     {
@@ -24,31 +26,27 @@ public sealed partial class SqlFoundationDataStore
             .Where(record => string.Equals(record.ProcessKey, processKey, StringComparison.OrdinalIgnoreCase))
             .Where(record => string.IsNullOrWhiteSpace(status) || string.Equals(record.Status, status, StringComparison.OrdinalIgnoreCase))
             .Where(record => string.IsNullOrWhiteSpace(theme) || SplitDashboardValues(record.Theme).Contains(theme, StringComparer.OrdinalIgnoreCase))
+            .Where(record => string.IsNullOrWhiteSpace(focus) || SplitDashboardValues(record.Focus).Contains(focus, StringComparer.OrdinalIgnoreCase))
+            .Where(record => string.IsNullOrWhiteSpace(recordType) || string.Equals(record.RecordType, recordType, StringComparison.OrdinalIgnoreCase))
             .Where(record => string.IsNullOrWhiteSpace(practiceObserved)
                 || string.Equals(ParseRubricLabel(record.PracticeObserved) ?? record.PracticeObserved, practiceObserved, StringComparison.OrdinalIgnoreCase))
             .Where(record => string.IsNullOrWhiteSpace(areaCode) || DashboardRecordMatchesArea(record, areaCode))
             .ToArray();
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var resolvedEnd = endDate ?? (permitted.Length > 0
-            ? permitted.Max(record => record.RecordDate ?? DateOnly.FromDateTime(record.CreatedAt.UtcDateTime))
-            : today);
-        var resolvedStart = startDate ?? (permitted.Length > 0
-            ? permitted.Min(record => record.RecordDate ?? DateOnly.FromDateTime(record.CreatedAt.UtcDateTime))
-            : resolvedEnd.AddMonths(-11));
-
-        // Keep the default chart readable while explicit reporting periods are
-        // returned in full.
-        if (!startDate.HasValue && resolvedStart < resolvedEnd.AddMonths(-23))
-        {
-            resolvedStart = resolvedEnd.AddMonths(-23);
-        }
+        var recordDates = permitted
+            .Select(record => record.RecordDate ?? DateOnly.FromDateTime(record.CreatedAt.UtcDateTime))
+            .ToArray();
+        var period = ActivityReportingPeriodResolver.Resolve(
+            recordDates,
+            startDate,
+            endDate,
+            DateOnly.FromDateTime(DateTime.UtcNow));
 
         var inputs = permitted.Select(record => new MonthlyActivityInput(
             record.RecordDate ?? DateOnly.FromDateTime(record.CreatedAt.UtcDateTime),
             record.RecordType));
         return MonthlyActivityAggregator
-            .Aggregate(inputs, resolvedStart, resolvedEnd, processKey)
+            .Aggregate(inputs, period.Start, period.End, processKey)
             .Select(point => new ActivityOverTimePointSummary(point.Month, point.Count, point.RecordType))
             .ToArray();
     }
@@ -58,19 +56,24 @@ public sealed partial class SqlFoundationDataStore
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
-        if (!(await GetActionsAsync(currentUser, cancellationToken)).Any(action => action.Id == actionId))
+        var permittedAction = (await GetActionsAsync(currentUser, cancellationToken))
+            .FirstOrDefault(action => action.Id == actionId);
+        if (permittedAction is null)
         {
             return null;
         }
 
         var rows = await QueryAsync(
             """
-            SELECT a.id, a.source_record_id, source.title, source.record_type,
+            SELECT a.id,
+                   CASE WHEN source.id IS NULL THEN NULL ELSE a.source_record_id END,
+                   source.title, source.record_type,
                    a.subject_staff_id, subject.display_name, a.owner_staff_id, owner.display_name,
                    a.title, a.detail, status_value.value_key, priority_value.value_key,
                    a.due_date, a.completed_date, a.completion_note, a.created_at, a.updated_at
             FROM quality.actions a
             LEFT JOIN core.records source ON source.id = a.source_record_id
+                AND source.archived_at IS NULL
             LEFT JOIN people.staff subject ON subject.id = a.subject_staff_id
             LEFT JOIN people.staff owner ON owner.id = a.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
@@ -105,8 +108,12 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 3), reader.GetFieldValue<DateTimeOffset>(4)),
             cancellationToken);
         var row = rows[0];
+        var canLinkSource = permittedAction.SourceRecordId.HasValue;
         return new ActionDetailSummary(
-            row.Id, row.SourceRecordId, row.SourceRecordTitle, row.SourceRecordType,
+            row.Id,
+            canLinkSource ? row.SourceRecordId : null,
+            canLinkSource ? row.SourceRecordTitle : null,
+            canLinkSource ? row.SourceRecordType : null,
             row.SubjectStaffId, row.SubjectStaffName, row.OwnerStaffId, row.OwnerStaffName,
             row.Title, row.Detail, row.StatusKey, row.PriorityKey, row.DueDate,
             row.CompletedDate, row.CompletionNote, row.CreatedAt, row.UpdatedAt, audit);

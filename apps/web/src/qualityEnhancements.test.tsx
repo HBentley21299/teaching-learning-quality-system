@@ -1,14 +1,35 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import qualityEnhancementMigration from "../../../database/migrations/014_quality_ui_data_linking.sql?raw";
+import exactEnvironmentRubricMigration from "../../../database/migrations/015_exact_environment_rubrics.sql?raw";
+// @ts-expect-error This test-only virtual module is supplied by vitest.config.ts.
+import applicationStyles from "virtual:application-styles";
 import { CollapsibleSection } from "./components/CollapsibleSection";
 import { AccessiblePieChart, MonthlyActivityChart } from "./components/DashboardCharts";
-import { FullRecordLink } from "./components/FullRecordLink";
+import { ActionDetailLink, FullRecordLink } from "./components/FullRecordLink";
 import { ElevateStatusTiles, getReflectionTotal } from "./features/StaffProfilePanel";
 import { buildMonthlyTrend } from "./routes/Dashboard";
-import { getCpdEntryPermissions } from "./routes/ModuleWorkspace";
-import type { ProcessDashboardRecordSummary } from "./services/types";
+import { getCpdEntryPermissions, ModuleWorkspace } from "./routes/ModuleWorkspace";
+import type { CurrentUser, ProcessDashboardRecordSummary } from "./services/types";
+
+vi.mock("./services/api", () => ({
+  api: {
+    actions: () => Promise.resolve([]),
+    formDefinition: (templateKey: string) => Promise.resolve({
+      templateId: `${templateKey}-template`,
+      versionId: `${templateKey}-version`,
+      templateKey,
+      name: templateKey === "external_cpd_core" ? "External CPD" : "CPD event",
+      version: "1.0",
+      sections: []
+    }),
+    lookups: () => Promise.resolve([]),
+    orgUnits: () => Promise.resolve([]),
+    records: () => Promise.resolve([])
+  }
+}));
 
 afterEach(cleanup);
 
@@ -46,13 +67,54 @@ describe("quality UI enhancements", () => {
   });
 
   it("builds permanent full-record links", () => {
-    render(<FullRecordLink recordId="record-123" recordType="coaching_session" />);
-    expect(screen.getByRole("link", { name: /Open record/i })).toHaveAttribute("href", "#/records/coaching_session/record-123");
+    render(<FullRecordLink recordId="7a303c60-cb51-4607-81fc-1c989452c057" recordType="coaching/session" />);
+    expect(screen.getByRole("link", { name: /Open record/i })).toHaveAttribute(
+      "href",
+      "#/records/coaching%2Fsession/7a303c60-cb51-4607-81fc-1c989452c057"
+    );
+  });
+
+  it("builds encoded action-detail links with consistent wording", () => {
+    render(<ActionDetailLink actionId="action/id?revision=2" />);
+    expect(screen.getByRole("link", { name: "View details" })).toHaveAttribute(
+      "href",
+      "#/actions/action%2Fid%3Frevision%3D2"
+    );
   });
 
   it("calculates permission-aware CPD entry actions", () => {
     expect(getCpdEntryPermissions({ permissions: ["cpd.manage", "cpd.external.submit"] })).toEqual({ canCreateCpdEvent: true, canCreateExternalCpd: true });
     expect(getCpdEntryPermissions({ permissions: ["cpd.external.submit"] })).toEqual({ canCreateCpdEvent: false, canCreateExternalCpd: true });
+  });
+
+  it("renders only the CPD entry actions granted to the current user", () => {
+    const { unmount } = render(
+      <ModuleWorkspace
+        eyebrow="Professional development"
+        mode="cpd"
+        title="CPD"
+        user={currentUser(["cpd.external.submit"])}
+      />
+    );
+
+    const externalOnly = screen.getByRole("button", { name: "Log External CPD" });
+    expect(screen.queryByRole("button", { name: "Log a CPD Event" })).not.toBeInTheDocument();
+    expect(externalOnly.closest(".cpd-entry-actions")).toHaveClass("cpd-entry-actions-single");
+
+    unmount();
+    render(
+      <ModuleWorkspace
+        eyebrow="Professional development"
+        mode="cpd"
+        title="CPD"
+        user={currentUser(["cpd.manage", "cpd.external.submit"])}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Log a CPD Event" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Log External CPD" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Log External CPD" }).closest(".cpd-entry-actions"))
+      .not.toHaveClass("cpd-entry-actions-single");
   });
 
   it("reports reflection totals without an expected maximum", () => {
@@ -65,4 +127,91 @@ describe("quality UI enhancements", () => {
     expect(screen.getByLabelText("Level 1 achieved")).toHaveClass("elevate-status-slot-active");
     expect(screen.getByLabelText("Level 5 not achieved")).toBeEmptyDOMElement();
   });
+
+  it("keeps the Elevate status container and slots at fixed dimensions", () => {
+    expect(cssRule("elevate-status-panel")).toMatch(/height:\s*168px;/);
+    expect(cssRule("elevate-status-slots")).toMatch(/grid-auto-columns:\s*112px;/);
+    expect(cssRule("elevate-status-slots")).toMatch(/overflow-x:\s*auto;/);
+    expect(cssRule("elevate-status-slot")).toMatch(/height:\s*80px;/);
+    expect(cssRule("elevate-status-slot")).toMatch(/width:\s*112px;/);
+  });
+
+  it("stacks rubric and CPD action grids at the mobile breakpoint", () => {
+    const mobileRules = applicationStyles.slice(applicationStyles.indexOf("@media (max-width: 760px)"));
+    expect(mobileRules).toMatch(/\.cpd-entry-actions,[\s\S]*?\.rubric-option-grid,[\s\S]*?grid-template-columns:\s*1fr;/);
+    expect(cssRule("cpd-entry-actions-single")).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+  });
 });
+
+describe("quality data-linking migration contracts", () => {
+  const rubricFields = [
+    ["aspirational_score", "consistently communicates exceptional ambition and authenticity"],
+    ["collaborative_score", "supports seamless movement between different forms of learning"],
+    ["respectful_score", "A strong culture of care and shared ownership is evident"],
+    ["innovative_score", "demonstrates exemplary integration of specialist resources"],
+    ["inclusion_score", "Inclusion is embedded throughout the environment"]
+  ] as const;
+
+  it("defines five pillar-specific 1-5 rubrics with distinct exact descriptors", () => {
+    const rubricDefinitions = rubricFields.map(([fieldKey, exactDescriptor], index) => {
+      const start = exactEnvironmentRubricMigration.indexOf(`WHEN '${fieldKey}'`);
+      const nextKey = rubricFields[index + 1]?.[0];
+      const end = nextKey
+        ? exactEnvironmentRubricMigration.indexOf(`WHEN '${nextKey}'`, start + 1)
+        : exactEnvironmentRubricMigration.indexOf("ELSE field_row.configuration_json", start + 1);
+      const definition = exactEnvironmentRubricMigration.slice(start, end);
+
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      expect(definition).toContain(exactDescriptor);
+      for (const judgement of ["Emerging", "Developing", "Secure", "Strong", "Leading"]) {
+        expect(definition).toContain(`${judgement} Practice`);
+      }
+      return definition;
+    });
+
+    expect(new Set(rubricDefinitions).size).toBe(5);
+  });
+
+  it("defines whole-audit commentary fields without reintroducing per-pillar working fields", () => {
+    expect(qualityEnhancementMigration).toContain("'overall_working', 'What is Working', 'long_text'");
+    expect(qualityEnhancementMigration).toContain("'overall_improvement', 'What Needs Improvement', 'long_text'");
+    for (const legacyKey of [
+      "aspirational_working",
+      "collaborative_working",
+      "respectful_working",
+      "innovative_working",
+      "inclusion_working"
+    ]) {
+      expect(qualityEnhancementMigration).not.toContain(`'${legacyKey}'`);
+    }
+  });
+
+  it("guards schema and seeded form additions so migration 014 can be reapplied", () => {
+    expect(qualityEnhancementMigration).toContain("IF OBJECT_ID('quality.staff_profile_reflections', 'U') IS NULL");
+    expect(qualityEnhancementMigration).toContain("IF COL_LENGTH('quality.learning_walk_details', 'practice_observed_score') IS NULL");
+    expect(qualityEnhancementMigration).toContain("IF COL_LENGTH('quality.learning_walk_details', 'practice_observed_label') IS NULL");
+    expect(qualityEnhancementMigration).toContain("IF COL_LENGTH('quality.elevate_environment_assessments', 'below_secure_count') IS NULL");
+    expect(qualityEnhancementMigration.match(/WHERE NOT EXISTS/g)?.length ?? 0).toBeGreaterThanOrEqual(8);
+    expect(exactEnvironmentRubricMigration).toContain("UPDATE field_row");
+    expect(exactEnvironmentRubricMigration).toContain("WHERE section_row.form_template_version_id = @environmentVersion");
+    expect(exactEnvironmentRubricMigration).toMatch(/IF @learningWalkContext IS NOT NULL\s+AND NOT EXISTS/);
+  });
+});
+
+function currentUser(permissions: string[]): CurrentUser {
+  return {
+    userAccountId: "user-1",
+    staffId: "staff-1",
+    displayName: "Test Tutor",
+    email: "test.tutor@example.test",
+    permissions,
+    scopes: []
+  };
+}
+
+function cssRule(className: string) {
+  const match = applicationStyles.match(new RegExp(`\\.${className}\\s*\\{([^}]*)\\}`));
+  expect(match, `Expected .${className} CSS rule`).not.toBeNull();
+  return match?.[1] ?? "";
+}

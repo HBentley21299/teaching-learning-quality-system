@@ -9,7 +9,8 @@ import {
   Save,
   Search,
   Send,
-  Sparkles
+  Sparkles,
+  X
 } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -548,6 +549,7 @@ function ElevatePracticeProgressView() {
       && (faculty === "all" || record.facultyCode === faculty)
       && (!query || `${record.staffName} ${record.externalId} ${record.email}`.toLowerCase().includes(query));
   });
+  const hasFilters = Boolean(search) || status !== "all" || faculty !== "all";
 
   if (resultStaffId) {
     return <ElevatePracticeResultPage onBack={() => setResultStaffId("")} staffId={resultStaffId} />;
@@ -562,11 +564,15 @@ function ElevatePracticeProgressView() {
         <div className="kpi kpi-green"><span>Submitted</span><strong>{records.filter((record) => record.status === "submitted").length}</strong></div>
       </section>
       <section className="panel">
-        <div className="panel-heading"><h2>Completion overview</h2><span>{records[0]?.academicYear ?? "Current academic year"}</span></div>
+        <div className="panel-heading">
+          <h2>Completion overview</h2>
+          <span>{filtered.length} of {records.length} matching · {records[0]?.academicYear ?? "Current academic year"}</span>
+        </div>
         <div className="filter-toolbar">
           <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff" value={search} /></label>
           <label><span>Status</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="all">All statuses</option><option value="not_started">Not started</option><option value="draft">Draft</option><option value="submitted">Submitted</option></select></label>
           <label><span>Faculty</span><select onChange={(event) => setFaculty(event.target.value)} value={faculty}><option value="all">All faculties</option>{faculties.map(([code, name]) => <option key={code} value={code}>{code} - {name}</option>)}</select></label>
+          {hasFilters ? <Button icon={X} onClick={() => { setSearch(""); setStatus("all"); setFaculty("all"); }} variant="quiet">Clear filters</Button> : null}
         </div>
         <div className="table-shell">
           <table>

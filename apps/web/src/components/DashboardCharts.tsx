@@ -14,22 +14,31 @@ export function MonthlyActivityChart({
   recordType: string;
 }) {
   const maximum = Math.max(...data.map((item) => item.value), 1);
-  const width = 640;
+  const width = Math.max(640, data.length * 58 + 90);
   const height = 250;
   const plotLeft = 58;
   const plotTop = 18;
-  const plotWidth = 550;
+  const plotWidth = width - 90;
   const plotHeight = 176;
-  const barGap = 8;
-  const barWidth = data.length ? Math.max((plotWidth - barGap * data.length) / data.length, 3) : 0;
+  const barGap = data.length > 18 ? 6 : 8;
+  const slotWidth = data.length ? plotWidth / data.length : 0;
+  const barWidth = data.length
+    ? Math.max(Math.min(slotWidth - barGap, 44), 3)
+    : 0;
   const tickValues = Array.from(new Set([0, Math.ceil(maximum / 2), maximum])).sort((a, b) => a - b);
 
   return (
     <section className="panel dashboard-chart-panel">
       <div className="panel-heading"><h2>{title}</h2><span>{subtitle}</span></div>
       {data.length === 0 ? <div className="empty-row">No data in the current view.</div> : (
-        <div className="chart-shell">
-          <svg aria-labelledby="activity-chart-title activity-chart-desc" className="activity-chart" role="img" viewBox={`0 0 ${width} ${height}`}>
+        <div className="chart-shell" role="region" aria-label={`${title} chart. Scroll horizontally to view every month when needed.`} tabIndex={0}>
+          <svg
+            aria-labelledby="activity-chart-title activity-chart-desc"
+            className="activity-chart"
+            role="img"
+            style={{ minWidth: `${width}px` }}
+            viewBox={`0 0 ${width} ${height}`}
+          >
             <title id="activity-chart-title">{title}</title>
             <desc id="activity-chart-desc">Calendar month on the horizontal axis and record count on the vertical axis for {recordType}.</desc>
             {tickValues.map((tick) => {
@@ -39,7 +48,7 @@ export function MonthlyActivityChart({
             <line className="chart-axis" x1={plotLeft} x2={plotLeft} y1={plotTop} y2={plotTop + plotHeight} />
             <line className="chart-axis" x1={plotLeft} x2={plotLeft + plotWidth} y1={plotTop + plotHeight} y2={plotTop + plotHeight} />
             {data.map((item, index) => {
-              const x = plotLeft + index * (barWidth + barGap) + barGap / 2;
+              const x = plotLeft + index * slotWidth + (slotWidth - barWidth) / 2;
               const renderedHeight = (item.value / maximum) * plotHeight;
               return (
                 <g aria-label={`${item.label}: ${item.value} ${recordType} records`} key={item.label} role="graphics-symbol" tabIndex={0}>

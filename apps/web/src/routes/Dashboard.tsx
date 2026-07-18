@@ -62,7 +62,9 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
   const [areaFilter, setAreaFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [themeFilter, setThemeFilter] = useState("all");
+  const [focusFilter, setFocusFilter] = useState("all");
   const [practiceFilter, setPracticeFilter] = useState("all");
+  const [recordTypeFilter, setRecordTypeFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date_desc");
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -106,8 +108,16 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     () => uniqueValues(processRecordsInScope.flatMap((record) => splitValues(record.theme))),
     [processRecordsInScope]
   );
+  const focusOptions = useMemo(
+    () => uniqueValues(processRecordsInScope.flatMap((record) => splitValues(getRecordFocus(record)))),
+    [processRecordsInScope]
+  );
   const practiceOptions = useMemo(
     () => uniqueValues(processRecordsInScope.map((record) => record.practiceObserved ?? "")),
+    [processRecordsInScope]
+  );
+  const recordTypeOptions = useMemo(
+    () => uniqueValues(processRecordsInScope.map((record) => record.recordType)),
     [processRecordsInScope]
   );
 
@@ -116,14 +126,17 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
       processRecordsInScope.filter((record) => {
         const matchesStatus = statusFilter === "all" || record.status === statusFilter;
         const matchesTheme = themeFilter === "all" || splitValues(record.theme).includes(themeFilter);
+        const matchesFocus = focusFilter === "all" || splitValues(getRecordFocus(record)).includes(focusFilter);
         const matchesPractice = practiceFilter === "all" || record.practiceObserved === practiceFilter;
-        return matchesStatus && matchesTheme && matchesPractice;
+        const matchesRecordType = recordTypeFilter === "all" || record.recordType === recordTypeFilter;
+        return matchesStatus && matchesTheme && matchesFocus && matchesPractice && matchesRecordType;
       }),
-    [practiceFilter, processRecordsInScope, statusFilter, themeFilter]
+    [focusFilter, practiceFilter, processRecordsInScope, recordTypeFilter, statusFilter, themeFilter]
   );
 
   useEffect(() => {
     let cancelled = false;
+    setActivityPoints([]);
     api.activityOverTime({
       processKey: selectedProcess,
       startDate: startDate || undefined,
@@ -131,6 +144,8 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
       areaCode: areaFilter === "all" ? undefined : areaFilter,
       status: statusFilter === "all" ? undefined : statusFilter,
       theme: themeFilter === "all" ? undefined : themeFilter,
+      focus: focusFilter === "all" ? undefined : focusFilter,
+      recordType: recordTypeFilter === "all" ? undefined : recordTypeFilter,
       practiceObserved: practiceFilter === "all" ? undefined : practiceFilter
     }).then((points) => {
       if (!cancelled) setActivityPoints(points);
@@ -138,7 +153,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
       if (!cancelled) setActivityPoints([]);
     });
     return () => { cancelled = true; };
-  }, [areaFilter, endDate, practiceFilter, selectedProcess, startDate, statusFilter, themeFilter]);
+  }, [areaFilter, endDate, focusFilter, practiceFilter, recordTypeFilter, selectedProcess, startDate, statusFilter, themeFilter]);
 
   const visibleRecords = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase();
@@ -155,6 +170,7 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
         record.subjectDisplayName,
         record.theme,
         record.detail,
+        record.focus,
         record.status
       ].some((value) => value?.toLocaleLowerCase().includes(query));
     });
@@ -190,7 +206,11 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     () => buildAreaBreakdown(analysisRecords, selectedProcess, areaFilter),
     [analysisRecords, areaFilter, selectedProcess]
   );
-  const themeData = useMemo(() => buildThemeBreakdown(analysisRecords), [analysisRecords]);
+  const themeData = useMemo(
+    () => buildThemeBreakdown(analysisRecords, selectedProcess),
+    [analysisRecords, selectedProcess]
+  );
+  const focusData = useMemo(() => buildFocusBreakdown(analysisRecords), [analysisRecords]);
   const kpis = buildKpis(selectedProcess, analysisRecords, linkedActions, areaFilter);
 
   async function refresh() {
@@ -203,7 +223,9 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     setSelectedProcess(processKey);
     setStatusFilter("all");
     setThemeFilter("all");
+    setFocusFilter("all");
     setPracticeFilter("all");
+    setRecordTypeFilter("all");
     setSearchTerm("");
     setSortKey("date_desc");
   }
@@ -214,7 +236,9 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
     setAreaFilter("all");
     setStatusFilter("all");
     setThemeFilter("all");
+    setFocusFilter("all");
     setPracticeFilter("all");
+    setRecordTypeFilter("all");
     setSearchTerm("");
     setSortKey("date_desc");
   }
@@ -307,7 +331,16 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
               <span>{selectedProcess === "elevate_environment" ? "Overall standard" : selectedProcess === "coaching_session" ? "Focus" : "Theme"}</span>
               <select onChange={(event) => setThemeFilter(event.target.value)} value={themeFilter}>
                 <option value="all">All {selectedProcess === "elevate_environment" ? "standards" : selectedProcess === "coaching_session" ? "focus areas" : "themes"}</option>
-                {themeOptions.map((theme) => <option key={theme} value={theme}>{theme}</option>)}
+                {themeOptions.map((theme) => <option key={theme} value={theme}>{formatDashboardTheme(theme, selectedProcess)}</option>)}
+              </select>
+            </label>
+          ) : null}
+          {selectedProcess === "learning_walk" ? (
+            <label className="record-filter-field">
+              <span>Focus</span>
+              <select onChange={(event) => setFocusFilter(event.target.value)} value={focusFilter}>
+                <option value="all">All focus areas</option>
+                {focusOptions.map((focus) => <option key={focus} value={focus}>{focus}</option>)}
               </select>
             </label>
           ) : null}
@@ -317,6 +350,17 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
               <select onChange={(event) => setPracticeFilter(event.target.value)} value={practiceFilter}>
                 <option value="all">All judgements</option>
                 {practiceOptions.map((practice) => <option key={practice} value={practice}>{practice}</option>)}
+              </select>
+            </label>
+          ) : null}
+          {selectedProcess === "cpd_event" && recordTypeOptions.length > 1 ? (
+            <label className="record-filter-field">
+              <span>Record type</span>
+              <select onChange={(event) => setRecordTypeFilter(event.target.value)} value={recordTypeFilter}>
+                <option value="all">All CPD records</option>
+                {recordTypeOptions.map((recordType) => (
+                  <option key={recordType} value={recordType}>{formatRecordTypeLabel(recordType)}</option>
+                ))}
               </select>
             </label>
           ) : null}
@@ -348,11 +392,20 @@ export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }
         {selectedProcess === "work_scrutiny" ? (
           <DashboardBars title="Action status" subtitle="Actions linked to scrutinies" data={actionStatusData} />
         ) : (
-          <AccessiblePieChart
-            title={selectedProcess === "elevate_environment" ? "Overall standards" : selectedProcess === "coaching_session" ? "Session focus" : "Themes and focus"}
-            subtitle="Frequency in the current view"
-            data={themeData}
-          />
+          <>
+            <AccessiblePieChart
+              title={selectedProcess === "elevate_environment" ? "Overall standards" : selectedProcess === "coaching_session" ? "Session focus" : "Themes"}
+              subtitle="Frequency in the current view"
+              data={themeData}
+            />
+            {selectedProcess === "learning_walk" ? (
+              <AccessiblePieChart
+                title="Focus"
+                subtitle="Additional focus in the current view"
+                data={focusData}
+              />
+            ) : null}
+          </>
         )}
         <section className="panel dashboard-attention-panel">
           <div className="panel-heading">
@@ -755,10 +808,24 @@ function buildAreaBreakdown(records: ProcessDashboardRecordSummary[], processKey
     .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
 }
 
-function buildThemeBreakdown(records: ProcessDashboardRecordSummary[]) {
+function buildThemeBreakdown(records: ProcessDashboardRecordSummary[], processKey: ProcessKey) {
   const counts = new Map<string, number>();
   for (const record of records) {
     const values = splitValues(record.theme);
+    for (const value of values.length ? values : ["Not recorded"]) {
+      const label = formatDashboardTheme(value, processKey);
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([label, value]) => ({ label, value }))
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
+}
+
+function buildFocusBreakdown(records: ProcessDashboardRecordSummary[]) {
+  const counts = new Map<string, number>();
+  for (const record of records) {
+    const values = splitValues(getRecordFocus(record));
     for (const value of values.length ? values : ["Not recorded"]) {
       counts.set(value, (counts.get(value) ?? 0) + 1);
     }
@@ -818,10 +885,34 @@ function getMeasureHeader(processKey: ProcessKey) {
 
 function formatRecordFocus(record: ProcessDashboardRecordSummary) {
   const theme = splitValues(record.theme).join(", ");
-  if (theme && record.detail) {
-    return `${theme} · ${record.detail}`;
+  const displayTheme = theme ? formatDashboardTheme(theme, record.processKey) : "";
+  const focus = record.processKey === "learning_walk" ? getRecordFocus(record) : record.detail;
+  if (displayTheme && focus) {
+    return `${displayTheme} · ${focus}`;
   }
-  return theme || record.detail || record.summary || "Not recorded";
+  return displayTheme || focus || record.summary || "Not recorded";
+}
+
+function getRecordFocus(record: ProcessDashboardRecordSummary) {
+  if (record.focus) {
+    return record.focus;
+  }
+  if (record.processKey !== "learning_walk" || !record.detail) {
+    return undefined;
+  }
+  return /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(record.detail) ? undefined : record.detail;
+}
+
+function formatDashboardTheme(value: string, processKey: ProcessKey) {
+  return processKey === "elevate_environment" && value === "Exceptional Practice"
+    ? "Leading Practice"
+    : value;
+}
+
+function formatRecordTypeLabel(recordType: string) {
+  if (recordType === "cpd_event") return "CPD event";
+  if (recordType === "external_cpd") return "External CPD";
+  return formatLabel(recordType);
 }
 
 function formatArea(record: ProcessDashboardRecordSummary) {
@@ -881,7 +972,7 @@ function exportProcessRecords(records: ProcessDashboardRecordSummary[], label: s
       record.subjectDisplayName ?? "",
       record.status,
       record.theme ?? "",
-      record.detail ?? "",
+      getRecordFocus(record) ?? record.detail ?? "",
       record.practiceObserved ?? ""
     ])
   ];

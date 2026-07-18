@@ -152,6 +152,8 @@ export const api = {
     areaCode?: string;
     status?: string;
     theme?: string;
+    focus?: string;
+    recordType?: string;
     practiceObserved?: string;
   }) => {
     const query = new URLSearchParams({ processKey: filters.processKey });

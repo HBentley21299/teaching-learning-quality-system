@@ -22,6 +22,8 @@ public sealed class LearningWalkDetail
     public Guid ActivityId { get; set; }
     public string? VisitFocus { get; set; }
     public int? LearnersPresent { get; set; }
+    public byte? PracticeObservedScore { get; set; }
+    public string? PracticeObservedLabel { get; set; }
     public bool PublishToStaff { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }
@@ -45,6 +47,29 @@ public sealed class WorkScrutinyCourseSample
     public Guid RecordId { get; set; }
     public Guid CourseId { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class ElevateEnvironmentAssessment
+{
+    public Guid RecordId { get; set; }
+    public Guid RoomId { get; set; }
+    public int TotalScore { get; set; }
+    public byte ScoredValueCount { get; set; }
+    public byte BarrierCount { get; set; }
+    public byte BelowSecureCount { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? UpdatedAt { get; set; }
+    public byte[] RowVersion { get; set; } = [];
+}
+
+public sealed class StaffProfileReflection : AuditableEntity
+{
+    public Guid RecordId { get; set; }
+    public Guid StaffId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string ReflectionText { get; set; } = string.Empty;
+    public DateOnly ReflectionDate { get; set; }
+    public Guid? CreatedByUserAccountId { get; set; }
 }
 
 public sealed class ActionItem : AuditableEntity

@@ -11,7 +11,8 @@ import {
   Search,
   Send,
   Trash2,
-  UsersRound
+  UsersRound,
+  X
 } from "lucide-react";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { FullRecordLink } from "../components/FullRecordLink";
@@ -124,6 +125,8 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [startDateFilter, setStartDateFilter] = useState("");
+  const [endDateFilter, setEndDateFilter] = useState("");
   const [sort, setSort] = useState("date_desc");
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -258,7 +261,9 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
         .some((value) => value.toLowerCase().includes(query));
       return matchesSearch
         && (statusFilter === "all" || session.status === statusFilter)
-        && (typeFilter === "all" || session.sessionType === typeFilter);
+        && (typeFilter === "all" || session.sessionType === typeFilter)
+        && (!startDateFilter || session.sessionDate >= startDateFilter)
+        && (!endDateFilter || session.sessionDate <= endDateFilter);
     });
     return [...filtered].sort((left, right) => {
       if (sort === "staff") return left.staffName.localeCompare(right.staffName);
@@ -267,7 +272,19 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
         ? left.sessionDate.localeCompare(right.sessionDate)
         : right.sessionDate.localeCompare(left.sessionDate);
     });
-  }, [search, sessions, sort, statusFilter, typeFilter]);
+  }, [endDateFilter, search, sessions, sort, startDateFilter, statusFilter, typeFilter]);
+
+  const hasHistoryFilters = Boolean(search || startDateFilter || endDateFilter)
+    || statusFilter !== "all" || typeFilter !== "all" || sort !== "date_desc";
+
+  function clearHistoryFilters() {
+    setSearch("");
+    setStatusFilter("all");
+    setTypeFilter("all");
+    setStartDateFilter("");
+    setEndDateFilter("");
+    setSort("date_desc");
+  }
 
   if (view === "form" && form) {
     return (
@@ -321,7 +338,13 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
       ) : null}
 
       <section className="panel coaching-history-panel">
-        <button className="collapsible-heading" onClick={() => setHistoryOpen((current) => !current)} type="button">
+        <button
+          aria-controls="coaching-session-history"
+          aria-expanded={historyOpen}
+          className="collapsible-heading"
+          onClick={() => setHistoryOpen((current) => !current)}
+          type="button"
+        >
           <span>
             {historyOpen ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}
             Session history
@@ -329,7 +352,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
           <strong>{filteredSessions.length} of {sessions.length}</strong>
         </button>
         {historyOpen ? (
-          <>
+          <div id="coaching-session-history">
             <div className="coaching-filter-bar">
               <label className="search-box">
                 <Search size={16} aria-hidden="true" />
@@ -351,6 +374,14 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
                 </select>
               </label>
               <label>
+                <span>From</span>
+                <input onChange={(event) => setStartDateFilter(event.target.value)} type="date" value={startDateFilter} />
+              </label>
+              <label>
+                <span>To</span>
+                <input onChange={(event) => setEndDateFilter(event.target.value)} type="date" value={endDateFilter} />
+              </label>
+              <label>
                 <span>Sort by</span>
                 <select onChange={(event) => setSort(event.target.value)} value={sort}>
                   <option value="date_desc">Newest first</option>
@@ -359,6 +390,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
                   <option value="cycle">Cycle and session</option>
                 </select>
               </label>
+              {hasHistoryFilters ? <Button icon={X} onClick={clearHistoryFilters} variant="quiet">Clear filters</Button> : null}
             </div>
             <div className="table-wrap">
               <table>
@@ -383,7 +415,7 @@ export function CoachingMentoring({ staff, user, onActionsChanged }: CoachingMen
                 </tbody>
               </table>
             </div>
-          </>
+          </div>
         ) : null}
       </section>
     </div>

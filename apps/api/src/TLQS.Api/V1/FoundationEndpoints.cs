@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using TLQS.Api.Data;
+using TLQS.Application.Forms;
 using TLQS.Application.Security;
 using TLQS.Application.Workflows;
 
@@ -202,6 +203,14 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
+            if (!FormSubmissionRules.IsKnownTemplateRecordTypePair(request.TemplateKey, request.RecordType))
+            {
+                return Results.BadRequest(new
+                {
+                    Message = "The selected form template cannot create that record type."
+                });
+            }
+
             if (string.Equals(request.RecordType, "external_cpd", StringComparison.OrdinalIgnoreCase)
                 && (!currentUser.StaffId.HasValue || request.SubjectStaffId != currentUser.StaffId))
             {
@@ -252,7 +261,20 @@ public static class FoundationEndpoints
         api.MapPost("/records", async (CreateRecordRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanCreateRecord(currentUser, request.RecordType))
+            if (string.IsNullOrWhiteSpace(request.RecordType))
+            {
+                return Results.BadRequest(new { Message = "A record type is required." });
+            }
+
+            if (FormSubmissionRules.RequiresDedicatedWorkflow(request.RecordType))
+            {
+                return Results.BadRequest(new
+                {
+                    Message = "This record type must be created through its complete form or dedicated workflow."
+                });
+            }
+
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage))
             {
                 return Results.Forbid();
             }
@@ -434,6 +456,8 @@ public static class FoundationEndpoints
             string? areaCode,
             string? status,
             string? theme,
+            string? focus,
+            string? recordType,
             string? practiceObserved,
             ClaimsPrincipal principal,
             SqlFoundationDataStore store,
@@ -447,7 +471,7 @@ public static class FoundationEndpoints
             }
 
             return Results.Ok(await store.GetActivityOverTimeAsync(
-                currentUser, processKey, startDate, endDate, areaCode, status, theme, practiceObserved, cancellationToken));
+                currentUser, processKey, startDate, endDate, areaCode, status, theme, focus, recordType, practiceObserved, cancellationToken));
         });
 
         api.MapGet("/reports/learning-walk-rollup", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -482,7 +506,7 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            var detail = await store.GetStaffProfileDetailAsync(staffId, cancellationToken);
+            var detail = await store.GetStaffProfileDetailAsync(staffId, currentUser, cancellationToken);
             return detail is null ? Results.NotFound() : Results.Ok(detail);
         });
 
@@ -877,6 +901,7 @@ public sealed record ProcessDashboardRecordSummary(
     string? SubjectDisplayName,
     string? Theme,
     string? Detail,
+    string? Focus,
     string? PracticeObserved,
     string? ParticipantAreaBreakdown,
     int ParticipantCount,
@@ -909,7 +934,8 @@ public sealed record RecordDetailSummary(
     string SubmissionStatus,
     DateTimeOffset? SubmittedAt,
     bool CanEdit,
-    IReadOnlyList<RecordDetailSectionSummary> Sections);
+    IReadOnlyList<RecordDetailSectionSummary> Sections,
+    IReadOnlyList<AuditHistorySummary> AuditHistory);
 public sealed record RecordDetailSectionSummary(Guid Id, string SectionKey, string Title, int DisplayOrder, IReadOnlyList<RecordDetailFieldSummary> Fields);
 public sealed record RecordDetailFieldSummary(Guid Id, string FieldKey, string Label, string FieldType, bool IsRequired, int DisplayOrder, string? HelpText, IReadOnlyList<string> Options, string? Value);
 
@@ -1013,6 +1039,7 @@ public sealed record StaffProfileDetail(
     IReadOnlyList<StaffReflectionRecordSummary> ReflectionRecords,
     IReadOnlyList<StaffCpdRecordSummary> CpdRecords,
     IReadOnlyList<StaffLivActionSummary> LivActions,
+    IReadOnlyList<ActionSummary> Actions,
     IReadOnlyList<StaffAssociatedRecordSummary> AssociatedRecords,
     StaffElevatePracticeSummary? ElevatePractice);
 

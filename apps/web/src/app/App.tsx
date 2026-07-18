@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, LogOut, PanelLeftClose, Search } from "lucide-react";
 import { navigationItems, type AppRoute } from "./navigation";
 import { api } from "../services/api";
@@ -34,6 +34,7 @@ const emptyUser: CurrentUser = {
 export function App() {
   const [route, setRoute] = useState<AppRoute>("dashboard");
   const [detailRoute, setDetailRoute] = useState<DetailRoute | null>(() => parseDetailRoute(window.location.hash));
+  const detailOpenedInApp = useRef(false);
   const [user, setUser] = useState<CurrentUser>(emptyUser);
   const [modules, setModules] = useState<ModuleSummary[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
@@ -49,6 +50,7 @@ export function App() {
     try {
       const nextUser = await api.currentUser();
       setUser(nextUser);
+      setRoute((currentRoute) => currentRoute === "dashboard" ? getDefaultHomeRoute(nextUser) : currentRoute);
       if (!nextUser.userAccountId) {
         setModules([]);
         setOrgUnits([]);
@@ -87,7 +89,15 @@ export function App() {
   }, [loadCoreData]);
 
   useEffect(() => {
-    const handleHashChange = () => setDetailRoute(parseDetailRoute(window.location.hash));
+    const handleHashChange = (event: HashChangeEvent) => {
+      const nextDetailRoute = parseDetailRoute(window.location.hash);
+      if (nextDetailRoute) {
+        detailOpenedInApp.current = detailOpenedInApp.current || new URL(event.oldURL).hash.length === 0;
+      } else {
+        detailOpenedInApp.current = false;
+      }
+      setDetailRoute(nextDetailRoute);
+    };
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
@@ -106,12 +116,13 @@ export function App() {
     if (window.location.hash) {
       window.history.pushState(null, "", `${window.location.pathname}${window.location.search}`);
       setDetailRoute(null);
+      detailOpenedInApp.current = false;
     }
     setRoute(nextRoute);
   };
 
   const returnFromDetail = () => {
-    if (window.history.length > 1) {
+    if (detailOpenedInApp.current) {
       window.history.back();
     } else {
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
@@ -122,7 +133,12 @@ export function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
-        <button className="brand-block" onClick={() => navigateTo("dashboard")} title="Go to dashboard" type="button">
+        <button
+          className="brand-block"
+          onClick={() => navigateTo(getDefaultHomeRoute(user))}
+          title={getDefaultHomeRoute(user) === "dashboard" ? "Go to dashboard" : "Go to Staff Profile"}
+          type="button"
+        >
           <img alt="iElevate" className="brand-logo" src="/assets/elevate-logo.png" />
         </button>
         <nav>
@@ -241,6 +257,12 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function getDefaultHomeRoute(user: Pick<CurrentUser, "permissions">): AppRoute {
+  return user.permissions.includes("reports.view_all") || user.permissions.includes("reports.view_scoped")
+    ? "dashboard"
+    : "profile";
 }
 
 function parseDetailRoute(hash: string): DetailRoute | null {

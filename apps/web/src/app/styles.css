@@ -904,7 +904,9 @@ td {
 
 .brand-logo {
   display: block;
-  height: 62px;
+  height: auto;
+  max-height: 62px;
+  max-width: 100%;
   object-fit: contain;
   width: auto;
 }
@@ -913,6 +915,7 @@ td {
 .record-link:focus-visible,
 .rubric-option:focus-visible,
 .panel-collapse-button:focus-visible,
+.chart-shell:focus-visible,
 .activity-chart [tabindex="0"]:focus-visible,
 .pie-chart [tabindex="0"]:focus-visible {
   outline: 3px solid #5eead4;
@@ -975,7 +978,8 @@ td {
 
 .chart-shell {
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   width: 100%;
 }
 
@@ -1283,7 +1287,8 @@ td {
   }
 
   .brand-logo {
-    height: 42px;
+    height: auto;
+    max-height: 42px;
   }
 
   .rubric-option-grid,
@@ -1299,7 +1304,8 @@ td {
   }
 
   .brand-logo {
-    height: 40px;
+    height: auto;
+    max-height: 40px;
   }
 
   .dashboard-record-heading,
@@ -1877,7 +1883,7 @@ td {
   align-items: end;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(220px, 1fr) minmax(150px, 220px) minmax(180px, 280px);
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 220px) minmax(180px, 280px) auto;
   margin: 16px 0;
 }
 
@@ -3112,11 +3118,11 @@ td {
   align-items: end;
   display: grid;
   gap: 10px;
-  grid-template-columns: 145px 145px minmax(175px, 1fr) minmax(130px, 0.7fr) minmax(150px, 0.9fr) auto;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
 }
 
 .dashboard-filter-grid-work-scrutiny {
-  grid-template-columns: 145px 145px minmax(175px, 1fr) minmax(130px, 0.7fr) auto;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
 }
 
 .dashboard-filter-grid > .button {
@@ -3887,6 +3893,7 @@ td {
 }
 
 .coaching-filter-bar select,
+.coaching-filter-bar input[type="date"],
 .coaching-previous-actions select,
 .coaching-previous-actions input {
   background: #ffffff;

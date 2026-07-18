@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using TLQS.Api.V1;
+using TLQS.Application.Forms;
 using TLQS.Application.Security;
 using TLQS.Application.Workflows;
 
@@ -1094,7 +1095,6 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         var canViewScoped = CanViewScopedActivities(currentUser);
         var hasLineManagedScope = currentUser.Scopes.Any(scope =>
             string.Equals(scope.ScopeType, "line_managed_staff", StringComparison.OrdinalIgnoreCase));
-
         return records
             .Select(record =>
             {
@@ -1490,7 +1490,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
         if (rows.Count == 0)
         {
-            return null;
+            return await GetCoreRecordDetailAsync(id, currentUser, cancellationToken);
         }
 
         var first = rows[0];
@@ -1521,6 +1521,24 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             .OrderBy(section => section.DisplayOrder)
             .ToArray();
 
+        var auditHistory = await QueryAsync(
+            """
+            SELECT log.id, log.action, log.summary, staff.display_name, log.created_at
+            FROM ops.audit_logs log
+            LEFT JOIN auth.user_accounts account ON account.id = log.user_account_id
+            LEFT JOIN people.staff staff ON staff.id = account.staff_id
+            WHERE log.record_id = @recordId
+            ORDER BY log.created_at DESC;
+            """,
+            command => command.Parameters.AddWithValue("@recordId", id),
+            reader => new AuditHistorySummary(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                GetStringOrNull(reader, 2),
+                GetStringOrNull(reader, 3),
+                reader.GetFieldValue<DateTimeOffset>(4)),
+            cancellationToken);
+
         return new RecordDetailSummary(
             first.Id,
             first.ModuleKey,
@@ -1545,7 +1563,85 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 first.SubmissionStatus,
                 first.OwnerStaffId.HasValue && currentUser.StaffId == first.OwnerStaffId.Value,
                 currentUser.HasPermission(PermissionKeys.FormsManage)),
-            sections);
+            sections,
+            auditHistory);
+    }
+
+    private async Task<RecordDetailSummary?> GetCoreRecordDetailAsync(
+        Guid id,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        var permittedRecord = (await GetRecordsAsync(currentUser, cancellationToken))
+            .FirstOrDefault(record => record.Id == id);
+        if (permittedRecord is null)
+        {
+            return null;
+        }
+
+        var metadata = await QueryAsync(
+            """
+            SELECT r.id, module.module_key, module.name, r.record_type, r.title, r.summary,
+                   r.org_unit_id, org_unit.code, org_unit.name, parent_org.code,
+                   r.record_date, r.created_at, owner.display_name
+            FROM core.records r
+            JOIN core.modules module ON module.id = r.module_id
+            LEFT JOIN people.staff owner ON owner.id = r.owner_staff_id
+            LEFT JOIN org.org_units org_unit ON org_unit.id = r.org_unit_id
+            LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+            WHERE r.id = @recordId AND r.archived_at IS NULL;
+            """,
+            command => command.Parameters.AddWithValue("@recordId", id),
+            reader => new CoreRecordDetailRow(
+                reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.GetString(4), GetStringOrNull(reader, 5), GetGuidOrNull(reader, 6),
+                GetStringOrNull(reader, 7), GetStringOrNull(reader, 8), GetStringOrNull(reader, 9),
+                GetDateOnlyOrNull(reader, 10), reader.GetFieldValue<DateTimeOffset>(11), GetStringOrNull(reader, 12)),
+            cancellationToken);
+        if (metadata.Count == 0)
+        {
+            return null;
+        }
+
+        var auditHistory = await QueryAsync(
+            """
+            SELECT log.id, log.action, log.summary, staff.display_name, log.created_at
+            FROM ops.audit_logs log
+            LEFT JOIN auth.user_accounts account ON account.id = log.user_account_id
+            LEFT JOIN people.staff staff ON staff.id = account.staff_id
+            WHERE log.record_id = @recordId
+            ORDER BY log.created_at DESC;
+            """,
+            command => command.Parameters.AddWithValue("@recordId", id),
+            reader => new AuditHistorySummary(
+                reader.GetGuid(0), reader.GetString(1), GetStringOrNull(reader, 2),
+                GetStringOrNull(reader, 3), reader.GetFieldValue<DateTimeOffset>(4)),
+            cancellationToken);
+
+        var record = metadata[0];
+        return new RecordDetailSummary(
+            record.Id,
+            record.ModuleKey,
+            record.ModuleName,
+            record.RecordType,
+            record.Title,
+            record.Summary,
+            record.OrgUnitId,
+            record.OrgUnitCode,
+            record.OrgUnitName,
+            record.ParentOrgUnitCode,
+            record.RecordDate,
+            record.CreatedAt,
+            record.OwnerDisplayName,
+            Guid.Empty,
+            "core_record",
+            "Core record",
+            "1.0",
+            permittedRecord.SubmissionStatus,
+            null,
+            false,
+            [],
+            auditHistory);
     }
 
     public async Task<bool> ActiveRecordExistsAsync(Guid id, CancellationToken cancellationToken) =>
@@ -1566,7 +1662,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     {
         var rows = await QueryAsync(
             """
-            SELECT a.id, a.source_record_id, a.subject_staff_id, a.owner_staff_id, a.title, a.detail,
+            SELECT a.id,
+                   CASE WHEN source_record.id IS NULL THEN NULL ELSE a.source_record_id END,
+                   a.subject_staff_id, a.owner_staff_id, a.title, a.detail,
                    a.due_date, a.completed_date, source_record.title, source_record.record_type,
                    subject_staff.display_name, owner_staff.display_name, status_value.value_key,
                    priority_value.value_key, a.completion_note, source_record.org_unit_id,
@@ -1574,6 +1672,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                    owner_staff.primary_org_unit_id, owner_staff.line_manager_staff_id, a.created_at
             FROM quality.actions a
             LEFT JOIN core.records source_record ON source_record.id = a.source_record_id
+                AND source_record.archived_at IS NULL
             LEFT JOIN people.staff subject_staff ON subject_staff.id = a.subject_staff_id
             LEFT JOIN people.staff owner_staff ON owner_staff.id = a.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
@@ -1594,6 +1693,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         var canViewScoped = CanViewScopedActivities(currentUser);
         var hasLineManagedScope = currentUser.Scopes.Any(scope =>
             string.Equals(scope.ScopeType, "line_managed_staff", StringComparison.OrdinalIgnoreCase));
+        var visibleRecordIds = (await GetRecordsAsync(currentUser, cancellationToken))
+            .Select(record => record.Id)
+            .ToHashSet();
 
         return rows
             .Where(row => canViewAll
@@ -1608,11 +1710,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             .OrderBy(row => row.CompletedDate.HasValue)
             .ThenBy(row => row.DueDate)
             .ThenByDescending(row => row.CreatedAt)
-            .Select(row => new ActionSummary(
+            .Select(row =>
+            {
+                var canLinkSource = row.SourceRecordId.HasValue && visibleRecordIds.Contains(row.SourceRecordId.Value);
+                return new ActionSummary(
                 row.Id,
-                row.SourceRecordId,
-                row.SourceRecordTitle,
-                row.SourceRecordType,
+                canLinkSource ? row.SourceRecordId : null,
+                canLinkSource ? row.SourceRecordTitle : null,
+                canLinkSource ? row.SourceRecordType : null,
                 row.SubjectStaffId,
                 row.SubjectStaffName,
                 row.OwnerStaffId,
@@ -1624,7 +1729,8 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 row.DueDate,
                 row.CompletedDate,
                 row.CompletionNote,
-                row.DueDate.HasValue && row.CompletedDate is null && row.DueDate.Value < DateOnly.FromDateTime(DateTime.UtcNow)))
+                row.DueDate.HasValue && row.CompletedDate is null && row.DueDate.Value < DateOnly.FromDateTime(DateTime.UtcNow));
+            })
             .ToArray();
     }
 
@@ -1645,7 +1751,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 JOIN scoped_org_units parent_scope ON parent_scope.org_unit_id = child.parent_org_unit_id
                 WHERE child.archived_at IS NULL
             )
-            SELECT a.id, a.source_record_id, a.subject_staff_id, a.owner_staff_id, a.title, a.detail, a.due_date, a.completed_date,
+            SELECT a.id,
+                   CASE WHEN r.id IS NULL THEN NULL ELSE a.source_record_id END,
+                   a.subject_staff_id, a.owner_staff_id, a.title, a.detail, a.due_date, a.completed_date,
                    r.title AS source_record_title,
                    r.record_type AS source_record_type,
                    subject_staff.display_name AS subject_staff_name,
@@ -1655,6 +1763,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                    a.completion_note
             FROM quality.actions a
             LEFT JOIN core.records r ON r.id = a.source_record_id
+                AND r.archived_at IS NULL
             LEFT JOIN people.staff subject_staff ON subject_staff.id = a.subject_staff_id
             LEFT JOIN people.staff owner_staff ON owner_staff.id = a.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
@@ -1949,7 +2058,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             WHERE ranked.row_number = 1
               AND field.field_key IN (
                   'learning_walk_theme', 'finding_tag', 'cpd_themes', 'course_or_unit', 'delivery_mode',
-                  'external_provider', 'intended_purpose', 'staff_id', 'practice_observed'
+                  'external_provider', 'intended_purpose', 'staff_id', 'practice_observed', 'additional_focus_context'
               );
             """,
             reader => new DashboardResponseRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), GetStringOrNull(reader, 3)),
@@ -2023,6 +2132,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             var participantBreakdown = areaRows.Length == 0 ? null : string.Join('|', areaRows.Select(area =>
                 $"{area.ParentAreaCode ?? ""}~{area.AreaCode ?? "Unassigned"}~{area.ParticipantCount}~{area.AttendanceCredits}"));
             var practice = meta?.PracticeObservedLabel ?? ParseRubricLabel(responseSet?.GetValue("practice_observed"));
+            var focus = record.RecordType == "learning_walk"
+                ? responseSet?.GetValue("additional_focus_context")
+                : null;
 
             return new ProcessDashboardRecordSummary(
                 record.Id,
@@ -2041,6 +2153,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 meta?.SubjectDisplayName,
                 theme,
                 detail,
+                focus,
                 practice,
                 participantBreakdown,
                 areaRows.Sum(area => area.ParticipantCount),
@@ -2168,7 +2281,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     WHEN r.record_type = 'elevate_environment' AND latest_submission.version_label = '1.0' THEN 'Emerging'
                     WHEN r.record_type = 'elevate_environment' AND elevate_assessment.below_secure_count > 0 THEN 'Below Secure Practice'
                     WHEN r.record_type = 'elevate_environment'
-                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 4.5 THEN 'Exceptional Practice'
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 4.5 THEN 'Leading Practice'
                     WHEN r.record_type = 'elevate_environment'
                          AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 3.5 THEN 'Strong Practice'
                     WHEN r.record_type = 'elevate_environment'
@@ -2285,6 +2398,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 GetStringOrNull(reader, 13),
                 GetStringOrNull(reader, 14),
                 GetStringOrNull(reader, 15),
+                null,
                 GetStringOrNull(reader, 16),
                 GetStringOrNull(reader, 17),
                 Convert.ToInt32(reader.GetValue(18)),
@@ -2522,6 +2636,16 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
     public async Task<Guid> CreateRecordAsync(CreateRecordRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
+        if (!currentUser.HasPermission(PermissionKeys.FormsManage))
+        {
+            throw new WorkflowValidationException("You do not have permission to create this record.");
+        }
+
+        if (FormSubmissionRules.RequiresDedicatedWorkflow(request.RecordType))
+        {
+            throw new WorkflowValidationException("This record type must be created through its complete workflow.");
+        }
+
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = new SqlCommand(
             """
@@ -2567,6 +2691,28 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
     public async Task<Guid> CreateActionAsync(CreateActionRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
+        if (!currentUser.HasPermission(PermissionKeys.ActionsManage))
+        {
+            throw new WorkflowValidationException("You do not have permission to create actions.");
+        }
+
+        if (request.SourceRecordId.HasValue)
+        {
+            var sourceIsVisible = (await GetRecordsAsync(currentUser, cancellationToken))
+                .Any(record => record.Id == request.SourceRecordId.Value);
+            if (!sourceIsVisible)
+            {
+                throw new WorkflowValidationException("The selected source record is unavailable.");
+            }
+        }
+
+        var permittedStaff = await GetStaffAsync(currentUser, cancellationToken);
+        if (!IsActivePermittedStaff(permittedStaff, request.OwnerStaffId)
+            || (request.SubjectStaffId.HasValue && !IsActivePermittedStaff(permittedStaff, request.SubjectStaffId.Value)))
+        {
+            throw new WorkflowValidationException("The selected staff member is unavailable.");
+        }
+
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
@@ -3360,6 +3506,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             var template = await GetLatestTemplateVersionAsync(connection, transaction, request.TemplateKey, cancellationToken);
             var fields = await GetFieldInfoAsync(connection, transaction, template.VersionId, cancellationToken);
 
+            ValidateFormSubmissionAuthorization(template, request, currentUser);
+            ValidateRubricResponses(fields, request.Responses, request.RecordType, template.VersionLabel);
+
             if (string.Equals(request.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase))
             {
                 if (request.SaveAsDraft)
@@ -3476,6 +3625,11 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             if (!request.SaveAsDraft)
             {
                 var valuesByFieldKey = MapResponsesByFieldKey(fields, request.Responses);
+                await ValidateActionOwnerScopeAsync(
+                    (request.Actions ?? []).Select(action => action.OwnerStaffId)
+                        .Concat(GetEmbeddedActionOwnerIds(request.RecordType, valuesByFieldKey)),
+                    currentUser,
+                    cancellationToken);
                 await ApplyModuleSideEffectsAsync(connection, transaction, recordId, request.RecordType, request.OrgUnitId, request.RecordDate, request.SubjectStaffId, valuesByFieldKey, currentUser, cancellationToken);
 
                 if (string.Equals(request.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase))
@@ -3545,7 +3699,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 return FormSubmissionUpdateResult.Forbidden;
             }
 
+            if (string.Equals(submission.RecordType, "external_cpd", StringComparison.OrdinalIgnoreCase)
+                && (!currentUser.StaffId.HasValue || request.SubjectStaffId != currentUser.StaffId.Value))
+            {
+                throw new WorkflowValidationException("External CPD can only be logged for your own staff record.");
+            }
+
             var fields = await GetFieldInfoAsync(connection, transaction, submission.VersionId, cancellationToken);
+            ValidateRubricResponses(fields, request.Responses, submission.RecordType, submission.VersionLabel);
 
             // A record that is already submitted must stay complete when edited.
             if (submission.Status == SubmissionLifecycle.Submitted)
@@ -3602,7 +3763,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             }
 
             var valuesByFieldKey = MapResponsesByFieldKey(fields, request.Responses);
-            await ApplyModuleSideEffectsAsync(connection, transaction, submission.RecordId, submission.RecordType, request.OrgUnitId, request.RecordDate, request.SubjectStaffId, valuesByFieldKey, currentUser, cancellationToken);
+            if (submission.Status == SubmissionLifecycle.Submitted)
+            {
+                await ValidateActionOwnerScopeAsync(
+                    GetEmbeddedActionOwnerIds(submission.RecordType, valuesByFieldKey),
+                    currentUser,
+                    cancellationToken);
+                await ApplyModuleSideEffectsAsync(connection, transaction, submission.RecordId, submission.RecordType, request.OrgUnitId, request.RecordDate, request.SubjectStaffId, valuesByFieldKey, currentUser, cancellationToken);
+            }
 
             await WriteAuditAsync(
                 connection,
@@ -3672,6 +3840,23 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     throw new WorkflowValidationException(
                         $"Complete the required fields before submitting: {string.Join(", ", missing)}.");
                 }
+
+                ValidateStoredRubricResponses(fields, stored, submission.RecordType, submission.VersionLabel);
+                await ValidateActionOwnerScopeAsync(
+                    GetEmbeddedActionOwnerIds(submission.RecordType, stored),
+                    currentUser,
+                    cancellationToken);
+                await ApplyModuleSideEffectsAsync(
+                    connection,
+                    transaction,
+                    submission.RecordId,
+                    submission.RecordType,
+                    submission.OrgUnitId,
+                    submission.RecordDate,
+                    submission.SubjectStaffId,
+                    stored,
+                    currentUser,
+                    cancellationToken);
             }
 
             await using (var command = new SqlCommand(
@@ -3814,7 +3999,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 (SELECT COUNT(*)
                  FROM quality.reflection_points rp
                  WHERE rp.archived_at IS NULL AND rp.is_active = 1) AS reflection_point_count,
-                (SELECT COUNT(*)
+                ((SELECT COUNT(*)
                  FROM quality.reflection_points rp
                  WHERE rp.archived_at IS NULL
                    AND rp.is_active = 1
@@ -3825,7 +4010,12 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                          AND ev.milestone_lookup_value_id = rp.milestone_lookup_value_id
                          AND ev.pillar_or_theme = 'reflection'
                          AND ev.archived_at IS NULL
-                   )) AS completed_reflections,
+                   ))
+                 +
+                 (SELECT COUNT(*)
+                  FROM quality.staff_profile_reflections reflection
+                  WHERE reflection.staff_id = s.id
+                    AND reflection.archived_at IS NULL)) AS completed_reflections,
                 (SELECT COUNT(*)
                  FROM quality.reflection_points rp
                  WHERE rp.archived_at IS NULL
@@ -3891,8 +4081,18 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
     public async Task<StaffProfileDetail?> GetStaffProfileDetailAsync(
         Guid staffId,
+        CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var canViewProfile = currentUser.StaffId == staffId
+            || CanViewAllStaffProfiles(currentUser)
+            || (currentUser.HasPermission(PermissionKeys.ReportsViewScoped)
+                && await IsStaffProfileInScopeAsync(staffId, currentUser, cancellationToken));
+        if (!canViewProfile)
+        {
+            return null;
+        }
+
         var headers = await QueryAsync(
             """
             SELECT
@@ -3936,6 +4136,17 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             return null;
         }
 
+        var visibleRecordIds = (await GetRecordsAsync(currentUser, cancellationToken))
+            .Select(record => record.Id)
+            .ToHashSet();
+        visibleRecordIds.UnionWith((await GetLivRecordsAsync(currentUser, cancellationToken))
+            .Select(record => record.RecordId));
+        var permittedActions = await GetActionsAsync(currentUser, cancellationToken);
+        var staffActions = permittedActions
+            .Where(action => action.SubjectStaffId == staffId || action.OwnerStaffId == staffId)
+            .ToArray();
+        var permittedActionIds = permittedActions.Select(action => action.Id).ToHashSet();
+
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var reflections = await QueryAsync(
             """
@@ -3978,7 +4189,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             },
             cancellationToken);
 
-        var cpdRecords = await QueryAsync(
+        var cpdRecords = (await QueryAsync(
             """
             SELECT ce.record_id, ce.event_title, ce.event_date, themes.response_text, record_row.record_type
             FROM cpd.cpd_attendance ca
@@ -4008,7 +4219,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 DateOnly.FromDateTime(reader.GetDateTime(2)),
                 GetStringOrNull(reader, 3),
                 reader.GetString(4)),
-            cancellationToken);
+            cancellationToken))
+            .Where(record => visibleRecordIds.Contains(record.RecordId))
+            .ToArray();
 
         var attendanceCredits = (await QueryAsync(
             """
@@ -4025,11 +4238,22 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             cancellationToken)).FirstOrDefault();
 
         var reflectionRecords = await GetStaffReflectionRecordsAsync(staffId, cancellationToken);
-        var associatedRecords = await GetStaffAssociatedRecordsAsync(staffId, cancellationToken);
+        visibleRecordIds.UnionWith(reflectionRecords.Select(record => record.RecordId));
+        var elevatePractice = await GetElevatePracticeProfileSummaryAsync(staffId, cancellationToken);
+        if (elevatePractice is not null)
+        {
+            visibleRecordIds.Add(elevatePractice.RecordId);
+        }
+        var associatedRecords = (await GetStaffAssociatedRecordsAsync(staffId, cancellationToken))
+            .Where(record => visibleRecordIds.Contains(record.RecordId))
+            .ToArray();
 
-        var livActions = await QueryAsync(
+        var livActions = (await QueryAsync(
             """
-            SELECT a.id, a.title, a.created_at, a.source_record_id, r.title, a.due_date, a.completed_date
+            SELECT a.id, a.title, a.created_at,
+                   CASE WHEN r.archived_at IS NULL THEN a.source_record_id ELSE NULL END,
+                   CASE WHEN r.archived_at IS NULL THEN r.title ELSE NULL END,
+                   a.due_date, a.completed_date
             FROM quality.actions a
             JOIN core.records r ON r.id = a.source_record_id
                 AND r.record_type IN ('liv', 'liv_record')
@@ -4055,10 +4279,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                     completedDate,
                     dueDate.HasValue && completedDate is null && dueDate.Value < today);
             },
-            cancellationToken);
+            cancellationToken))
+            .Where(action => permittedActionIds.Contains(action.Id))
+            .Select(action => action.SourceRecordId.HasValue && visibleRecordIds.Contains(action.SourceRecordId.Value)
+                ? action
+                : action with { SourceRecordId = null, SourceRecordTitle = null })
+            .ToArray();
 
         var header = headers[0];
-        var elevatePractice = await GetElevatePracticeProfileSummaryAsync(staffId, cancellationToken);
         return new StaffProfileDetail(
             header.StaffId,
             header.ExternalId,
@@ -4074,6 +4302,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             reflectionRecords,
             cpdRecords,
             livActions,
+            staffActions,
             associatedRecords,
             elevatePractice);
     }
@@ -5573,9 +5802,13 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             SELECT TOP (1)
                 ft.id,
                 ft.module_id,
+                ft.template_key,
+                module.module_key,
                 ftv.id,
+                ftv.version_label,
                 ftv.is_published
             FROM forms.form_templates ft
+            JOIN core.modules module ON module.id = ft.module_id
             JOIN forms.form_template_versions ftv ON ftv.form_template_id = ft.id
             WHERE ft.template_key = @templateKey
               AND ft.archived_at IS NULL
@@ -5593,7 +5826,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             throw new InvalidOperationException($"Template '{templateKey}' was not found.");
         }
 
-        return new TemplateVersionInfo(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetBoolean(3));
+        return new TemplateVersionInfo(
+            reader.GetGuid(0),
+            reader.GetGuid(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetGuid(4),
+            reader.GetString(5),
+            reader.GetBoolean(6));
     }
 
     private static async Task<Dictionary<Guid, FormFieldInfo>> GetFieldInfoAsync(
@@ -5604,7 +5844,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     {
         await using var command = new SqlCommand(
             """
-            SELECT ff.id, ff.field_type, ff.field_key, ff.is_required, ff.label
+            SELECT ff.id, ff.field_type, ff.field_key, ff.is_required, ff.label, ff.configuration_json
             FROM forms.form_sections fs
             JOIN forms.form_fields ff ON ff.form_section_id = fs.id
             WHERE fs.form_template_version_id = @versionId
@@ -5625,10 +5865,96 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetBoolean(3),
-                reader.GetString(4));
+                reader.GetString(4),
+                GetStringOrNull(reader, 5));
         }
 
         return fields;
+    }
+
+    private static void ValidateFormSubmissionAuthorization(
+        TemplateVersionInfo template,
+        SubmitFormRequest request,
+        CurrentUser currentUser)
+    {
+        var canCreate = request.RecordType?.Trim().ToLowerInvariant() switch
+        {
+            "learning_walk" => currentUser.HasPermission(PermissionKeys.LearningWalkSubmit),
+            "work_scrutiny" => currentUser.HasPermission(PermissionKeys.WorkScrutinySubmit),
+            "cpd_event" => currentUser.HasPermission(PermissionKeys.CpdManage),
+            "external_cpd" => currentUser.HasPermission(PermissionKeys.CpdExternalSubmit),
+            "elevate_environment" => currentUser.HasPermission(PermissionKeys.ElevateSubmit)
+                || currentUser.HasPermission(PermissionKeys.ElevateManage),
+            _ => currentUser.HasPermission(PermissionKeys.FormsManage)
+        };
+
+        if (!canCreate)
+        {
+            throw new WorkflowValidationException("You do not have permission to create this record.");
+        }
+
+        if (!FormSubmissionRules.IsTemplateModuleRecordTypePair(
+                template.TemplateKey,
+                template.ModuleKey,
+                request.RecordType))
+        {
+            throw new WorkflowValidationException("The selected form template cannot create that record type.");
+        }
+
+        if (string.Equals(request.RecordType, "external_cpd", StringComparison.OrdinalIgnoreCase)
+            && (!currentUser.StaffId.HasValue || request.SubjectStaffId != currentUser.StaffId.Value))
+        {
+            throw new WorkflowValidationException("External CPD can only be logged for your own staff record.");
+        }
+    }
+
+    private static void ValidateRubricResponses(
+        Dictionary<Guid, FormFieldInfo> fields,
+        IReadOnlyList<SubmitFormResponseRequest> responses,
+        string recordType,
+        string templateVersion)
+    {
+        foreach (var response in responses.Where(response => !string.IsNullOrWhiteSpace(response.Value)))
+        {
+            if (!fields.TryGetValue(response.FieldId, out var field))
+            {
+                continue;
+            }
+
+            ValidateRubricResponse(field, response.Value!, recordType, templateVersion);
+        }
+    }
+
+    private static void ValidateStoredRubricResponses(
+        Dictionary<Guid, FormFieldInfo> fields,
+        IReadOnlyDictionary<string, string> responses,
+        string recordType,
+        string templateVersion)
+    {
+        foreach (var field in fields.Values)
+        {
+            if (responses.TryGetValue(field.FieldKey, out var value))
+            {
+                ValidateRubricResponse(field, value, recordType, templateVersion);
+            }
+        }
+    }
+
+    private static void ValidateRubricResponse(
+        FormFieldInfo field,
+        string value,
+        string recordType,
+        string templateVersion)
+    {
+        if (!RubricSubmissionRules.IsValidValue(
+                field.FieldType,
+                value,
+                ParseFieldOptions(field.ConfigurationJson),
+                recordType,
+                templateVersion))
+        {
+            throw new WorkflowValidationException($"Select a valid configured judgement for {field.Label}.");
+        }
     }
 
     private static void ValidateRequiredFields(
@@ -6540,9 +6866,12 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
                 r.title,
                 r.summary,
                 r.org_unit_id,
-                r.record_date
+                r.record_date,
+                r.subject_staff_id,
+                version.version_label
             FROM forms.form_submissions fsub
             JOIN core.records r ON r.id = fsub.record_id
+            JOIN forms.form_template_versions version ON version.id = fsub.form_template_version_id
             WHERE fsub.id = @submissionId
               AND fsub.archived_at IS NULL
               AND r.archived_at IS NULL;
@@ -6566,7 +6895,9 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
             reader.GetString(5),
             GetStringOrNull(reader, 6),
             GetGuidOrNull(reader, 7),
-            GetDateOnlyOrNull(reader, 8));
+            GetDateOnlyOrNull(reader, 8),
+            GetGuidOrNull(reader, 9),
+            reader.GetString(10));
     }
 
     private static async Task<Dictionary<string, string>> GetResponsesByFieldKeyAsync(
@@ -6724,7 +7055,7 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
 
             return (metadata?.BelowSecureCount ?? 0) > 0
                 ? "Below Secure Practice"
-                : average >= 4.5m ? "Exceptional Practice"
+                : average >= 4.5m ? "Leading Practice"
                 : average >= 3.5m ? "Strong Practice"
                 : average >= 2.5m ? "Secure Practice"
                 : average >= 1.5m ? "Developing Practice"
@@ -6882,6 +7213,52 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         || currentUser.HasPermission(PermissionKeys.CoachingManage)
         || currentUser.HasPermission(PermissionKeys.ActionsManage);
 
+    private static bool IsActivePermittedStaff(IReadOnlyList<StaffSummary> staff, Guid staffId) =>
+        staff.Any(candidate => candidate.Id == staffId
+            && string.Equals(candidate.AccountStatus, "active", StringComparison.OrdinalIgnoreCase));
+
+    private async Task ValidateActionOwnerScopeAsync(
+        IEnumerable<Guid> ownerStaffIds,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        var distinctOwnerIds = ownerStaffIds.Where(id => id != Guid.Empty).Distinct().ToArray();
+        if (distinctOwnerIds.Length == 0)
+        {
+            return;
+        }
+
+        var permittedStaff = await GetStaffAsync(currentUser, cancellationToken);
+        if (distinctOwnerIds.Any(ownerId => !IsActivePermittedStaff(permittedStaff, ownerId)))
+        {
+            throw new WorkflowValidationException("One of the selected action owners is unavailable.");
+        }
+    }
+
+    private static IReadOnlyList<Guid> GetEmbeddedActionOwnerIds(
+        string recordType,
+        IReadOnlyDictionary<string, string> valuesByFieldKey)
+    {
+        if (!string.Equals(recordType, "elevate_environment", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var owners = new List<Guid>();
+        foreach (var valueKey in new[] { "aspirational", "collaborative", "respectful", "innovative", "inclusion" })
+        {
+            if (valuesByFieldKey.TryGetValue($"{valueKey}_action", out var actionText)
+                && !string.IsNullOrWhiteSpace(actionText)
+                && valuesByFieldKey.TryGetValue($"{valueKey}_owner", out var ownerValue)
+                && Guid.TryParse(ownerValue, out var ownerId))
+            {
+                owners.Add(ownerId);
+            }
+        }
+
+        return owners;
+    }
+
     private async Task<SqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var connection = new SqlConnection(_connectionString);
@@ -6949,7 +7326,14 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
     }
 
     private sealed record LookupRow(string LookupKey, string Name, string? Value);
-    private sealed record TemplateVersionInfo(Guid TemplateId, Guid ModuleId, Guid VersionId, bool IsPublished);
+    private sealed record TemplateVersionInfo(
+        Guid TemplateId,
+        Guid ModuleId,
+        string TemplateKey,
+        string ModuleKey,
+        Guid VersionId,
+        string VersionLabel,
+        bool IsPublished);
 
     private sealed record RecordVisibilityRow(
         Guid Id,
@@ -7146,6 +7530,21 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         string? ConfigurationJson,
         string? ResponseValue);
 
+    private sealed record CoreRecordDetailRow(
+        Guid Id,
+        string ModuleKey,
+        string ModuleName,
+        string RecordType,
+        string Title,
+        string? Summary,
+        Guid? OrgUnitId,
+        string? OrgUnitCode,
+        string? OrgUnitName,
+        string? ParentOrgUnitCode,
+        DateOnly? RecordDate,
+        DateTimeOffset CreatedAt,
+        string? OwnerDisplayName);
+
     private sealed record SubmissionEditInfo(
         Guid RecordId,
         Guid VersionId,
@@ -7155,9 +7554,16 @@ public sealed partial class SqlFoundationDataStore(IConfiguration configuration)
         string Title,
         string? Summary,
         Guid? OrgUnitId,
-        DateOnly? RecordDate);
+        DateOnly? RecordDate,
+        Guid? SubjectStaffId,
+        string VersionLabel);
 
-    private sealed record FormFieldInfo(string FieldType, string FieldKey, bool IsRequired, string Label);
+    private sealed record FormFieldInfo(
+        string FieldType,
+        string FieldKey,
+        bool IsRequired,
+        string Label,
+        string? ConfigurationJson);
 
     private sealed record ActionEditInfo(
         Guid OwnerStaffId,

@@ -96,6 +96,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
   const [recordStatusFilter, setRecordStatusFilter] = useState("all");
   const [recordAreaFilter, setRecordAreaFilter] = useState("all");
   const [recordTypeFilter, setRecordTypeFilter] = useState("all");
+  const [recordStaffFilter, setRecordStaffFilter] = useState("all");
+  const [recordReviewerFilter, setRecordReviewerFilter] = useState("all");
+  const [recordPracticeFilter, setRecordPracticeFilter] = useState("all");
   const [recordStartDate, setRecordStartDate] = useState("");
   const [recordEndDate, setRecordEndDate] = useState("");
   const [recordSort, setRecordSort] = useState<"newest" | "oldest" | "area" | "status">("newest");
@@ -162,22 +165,40 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     () => Array.from(new Set(records.map((record) => record.submissionStatus))).sort(),
     [records]
   );
+  const recordStaffOptions = useMemo(
+    () => staff.filter((member) => records.some((record) => record.subjectStaffId === member.id)),
+    [records, staff]
+  );
+  const recordReviewerOptions = useMemo(
+    () => staff.filter((member) => records.some((record) => (record.reviewerStaffId ?? record.ownerStaffId) === member.id)),
+    [records, staff]
+  );
+  const recordPracticeOptions = useMemo(
+    () => Array.from(new Set(records.map((record) => record.practiceObserved).filter((value): value is string => Boolean(value)))).sort(),
+    [records]
+  );
 
   const displayedRecords = useMemo(() => {
     const query = recordSearch.trim().toLocaleLowerCase();
     const filtered = records.filter((record) => {
       const areaLabel = getRecordAreaLabel(record, orgUnits);
+      const subjectName = staff.find((member) => member.id === record.subjectStaffId)?.displayName ?? "";
+      const reviewerId = record.reviewerStaffId ?? record.ownerStaffId;
+      const reviewerName = staff.find((member) => member.id === reviewerId)?.displayName ?? "";
       const matchesSearch =
         !query ||
-        [record.title, areaLabel, formatStatus(record.submissionStatus), record.recordDate ?? ""]
+        [record.title, areaLabel, subjectName, reviewerName, record.practiceObserved ?? "", formatStatus(record.submissionStatus), record.recordDate ?? ""]
           .some((value) => value.toLocaleLowerCase().includes(query));
       const matchesStatus = recordStatusFilter === "all" || record.submissionStatus === recordStatusFilter;
       const matchesArea = recordAreaFilter === "all" || record.orgUnitId === recordAreaFilter;
       const matchesType = recordTypeFilter === "all" || record.recordType === recordTypeFilter;
+      const matchesStaff = recordStaffFilter === "all" || record.subjectStaffId === recordStaffFilter;
+      const matchesReviewer = recordReviewerFilter === "all" || reviewerId === recordReviewerFilter;
+      const matchesPractice = recordPracticeFilter === "all" || record.practiceObserved === recordPracticeFilter;
       const date = (record.recordDate ?? record.createdAt).slice(0, 10);
       const matchesStart = !recordStartDate || date >= recordStartDate;
       const matchesEnd = !recordEndDate || date <= recordEndDate;
-      return matchesSearch && matchesStatus && matchesArea && matchesType && matchesStart && matchesEnd;
+      return matchesSearch && matchesStatus && matchesArea && matchesType && matchesStaff && matchesReviewer && matchesPractice && matchesStart && matchesEnd;
     });
 
     return [...filtered].sort((left, right) => {
@@ -192,11 +213,12 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
       }
       return getRecordTimestamp(right) - getRecordTimestamp(left);
     });
-  }, [orgUnits, recordAreaFilter, recordEndDate, recordSearch, recordSort, recordStartDate, recordStatusFilter, recordTypeFilter, records]);
+  }, [orgUnits, recordAreaFilter, recordEndDate, recordPracticeFilter, recordReviewerFilter, recordSearch, recordSort, recordStaffFilter, recordStartDate, recordStatusFilter, recordTypeFilter, records, staff]);
 
   const hasRecordFilters =
     recordSearch.trim().length > 0 || recordStatusFilter !== "all" || recordAreaFilter !== "all" ||
-    recordTypeFilter !== "all" || Boolean(recordStartDate) || Boolean(recordEndDate) || recordSort !== "newest";
+    recordTypeFilter !== "all" || recordStaffFilter !== "all" || recordReviewerFilter !== "all" ||
+    recordPracticeFilter !== "all" || Boolean(recordStartDate) || Boolean(recordEndDate) || recordSort !== "newest";
 
   useEffect(() => {
     setSelectedDetail(null);
@@ -207,6 +229,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     setRecordStatusFilter("all");
     setRecordAreaFilter("all");
     setRecordTypeFilter("all");
+    setRecordStaffFilter("all");
+    setRecordReviewerFilter("all");
+    setRecordPracticeFilter("all");
     setRecordStartDate("");
     setRecordEndDate("");
     setRecordSort("newest");
@@ -258,9 +283,10 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
         mode === "elevate" ? api.rooms() : Promise.resolve([] as RoomSummary[]),
         mode === "cpd" ? api.lookups() : Promise.resolve([])
       ]);
-      setRecords(nextRecords.filter((record) => mode === "cpd"
+      const recordsForMode = nextRecords.filter((record) => mode === "cpd"
         ? ["cpd_event", "external_cpd"].includes(record.recordType)
-        : record.recordType === config.recordType));
+        : record.recordType === config.recordType);
+      setRecords(mode === "learning" ? await enrichLearningWalkRecords(recordsForMode) : recordsForMode);
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
       setActions(nextActions);
       setRooms(nextRooms);
@@ -545,6 +571,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
     setRecordStatusFilter("all");
     setRecordAreaFilter("all");
     setRecordTypeFilter("all");
+    setRecordStaffFilter("all");
+    setRecordReviewerFilter("all");
+    setRecordPracticeFilter("all");
     setRecordStartDate("");
     setRecordEndDate("");
     setRecordSort("newest");
@@ -675,7 +704,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                     <span><b>2</b> Developing</span>
                     <span><b>3</b> Secure</span>
                     <span><b>4</b> Strong</span>
-                    <span><b>5</b> Exceptional</span>
+                    <span><b>5</b> Leading Practice</span>
                   </div>
                   <small>Created by {user.displayName}</small>
                 </div>
@@ -744,7 +773,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                   <span>Search records</span>
                   <input
                     onChange={(event) => setRecordSearch(event.target.value)}
-                    placeholder="Title, area, status or date"
+                    placeholder={mode === "learning" ? "Title, staff, reviewer, judgement or area" : "Title, area, status or date"}
                     type="search"
                     value={recordSearch}
                   />
@@ -758,15 +787,44 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                     ))}
                   </select>
                 </label>
-                <label className="record-filter-field">
-                  <span>Faculty / team</span>
-                  <select onChange={(event) => setRecordAreaFilter(event.target.value)} value={recordAreaFilter}>
-                    <option value="all">All areas</option>
-                    {recordAreaOptions.map((area) => (
-                      <option key={area.id} value={area.id}>{area.label}</option>
-                    ))}
-                  </select>
-                </label>
+                {mode === "learning" || mode === "scrutiny" ? (
+                  <label className="record-filter-field">
+                    <span>Faculty / team</span>
+                    <select onChange={(event) => setRecordAreaFilter(event.target.value)} value={recordAreaFilter}>
+                      <option value="all">All areas</option>
+                      {recordAreaOptions.map((area) => (
+                        <option key={area.id} value={area.id}>{area.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {mode === "learning" && recordStaffOptions.length > 0 ? (
+                  <label className="record-filter-field">
+                    <span>Staff member</span>
+                    <select onChange={(event) => setRecordStaffFilter(event.target.value)} value={recordStaffFilter}>
+                      <option value="all">All staff</option>
+                      {recordStaffOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}
+                    </select>
+                  </label>
+                ) : null}
+                {mode === "learning" && recordReviewerOptions.length > 0 ? (
+                  <label className="record-filter-field">
+                    <span>Reviewer</span>
+                    <select onChange={(event) => setRecordReviewerFilter(event.target.value)} value={recordReviewerFilter}>
+                      <option value="all">All reviewers</option>
+                      {recordReviewerOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}
+                    </select>
+                  </label>
+                ) : null}
+                {mode === "learning" && recordPracticeOptions.length > 0 ? (
+                  <label className="record-filter-field">
+                    <span>Practice observed</span>
+                    <select onChange={(event) => setRecordPracticeFilter(event.target.value)} value={recordPracticeFilter}>
+                      <option value="all">All judgements</option>
+                      {recordPracticeOptions.map((practice) => <option key={practice} value={practice}>{practice}</option>)}
+                    </select>
+                  </label>
+                ) : null}
                 {mode === "cpd" ? (
                   <label className="record-filter-field">
                     <span>Record type</span>
@@ -800,7 +858,7 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                 <Button
                   disabled={displayedRecords.length === 0}
                   icon={Download}
-                  onClick={() => exportRecordSummaries(displayedRecords, orgUnits, title)}
+                  onClick={() => exportRecordSummaries(displayedRecords, orgUnits, staff, title)}
                   variant="secondary"
                 >
                   Export filtered CSV
@@ -827,6 +885,9 @@ export function ModuleWorkspace({ title, eyebrow, mode, staff = [], user, onActi
                             ? "Learning environment audit"
                             : parent?.code ? `${parent.code} / ${orgUnit?.code ?? "No team"}` : orgUnit?.code ?? "No team"}
                         </span>
+                        {mode === "learning" && record.practiceObserved ? (
+                          <small className="muted-copy">Practice observed: {record.practiceObserved}</small>
+                        ) : null}
                       </div>
                       <span className={`status-pill status-${record.submissionStatus}`}>{formatStatus(record.submissionStatus)}</span>
                       <span>{record.recordDate ?? "No date"}</span>
@@ -1299,18 +1360,40 @@ function getRecordTimestamp(record: RecordSummary) {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
+async function enrichLearningWalkRecords(records: RecordSummary[]) {
+  return Promise.all(records.map(async (record) => {
+    if (record.practiceObserved && record.subjectStaffId) {
+      return { ...record, reviewerStaffId: record.reviewerStaffId ?? record.ownerStaffId };
+    }
+    const detail = await api.recordDetail(record.id).catch(() => null);
+    const practiceValue = findDetailFieldValue(detail, "practice_observed");
+    return {
+      ...record,
+      subjectStaffId: record.subjectStaffId ?? findDetailFieldValue(detail, "staff_id"),
+      reviewerStaffId: record.reviewerStaffId ?? record.ownerStaffId,
+      practiceObserved: record.practiceObserved ?? (practiceValue ? parseRubricOption(practiceValue).label : undefined)
+    };
+  }));
+}
+
+function findDetailFieldValue(detail: RecordDetail | null, fieldKey: string) {
+  return detail?.sections.flatMap((section) => section.fields).find((field) => field.fieldKey === fieldKey)?.value;
+}
+
 function isWideEntryField(fieldType: string) {
   return isRubricField(fieldType) || ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add"].includes(
     fieldType
   );
 }
 
-function exportRecordSummaries(records: RecordSummary[], orgUnits: OrgUnitSummary[], title: string) {
+function exportRecordSummaries(records: RecordSummary[], orgUnits: OrgUnitSummary[], staff: StaffSummary[], title: string) {
   const rows = [
-    ["Record ID", "Record type", "Title", "Date", "Faculty", "Team", "Status"],
+    ["Record ID", "Record type", "Title", "Date", "Faculty", "Team", "Staff member", "Reviewer", "Status", "Practice Observed"],
     ...records.map((record) => {
       const team = orgUnits.find((unit) => unit.id === record.orgUnitId);
       const faculty = orgUnits.find((unit) => unit.id === team?.parentOrgUnitId) ?? team;
+      const subject = staff.find((member) => member.id === record.subjectStaffId);
+      const reviewer = staff.find((member) => member.id === (record.reviewerStaffId ?? record.ownerStaffId));
       return [
         record.id,
         record.recordType,
@@ -1318,7 +1401,10 @@ function exportRecordSummaries(records: RecordSummary[], orgUnits: OrgUnitSummar
         record.recordDate ?? "",
         faculty?.code ?? "",
         team?.code ?? "",
-        record.submissionStatus
+        subject?.displayName ?? "",
+        reviewer?.displayName ?? "",
+        record.submissionStatus,
+        record.practiceObserved ?? ""
       ];
     })
   ];

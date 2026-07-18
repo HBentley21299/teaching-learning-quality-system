@@ -1,9 +1,10 @@
 import { ArrowLeft, Download } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { FullRecordLink } from "../components/FullRecordLink";
+import { ActionDetailLink, FullRecordLink } from "../components/FullRecordLink";
 import { Button } from "../design-system/Button";
 import { api, ApiRequestError } from "../services/api";
 import type {
+  ActionSummary,
   ActionDetail,
   CoachingSessionDetail,
   ElevatePracticeWorkspace,
@@ -17,12 +18,12 @@ export type DetailRoute =
   | { kind: "action"; actionId: string };
 
 type LoadedDetail =
-  | { kind: "form"; value: RecordDetail }
-  | { kind: "coaching"; value: CoachingSessionDetail }
-  | { kind: "liv"; value: LivRecordSummary }
-  | { kind: "reflection"; value: StaffReflectionDetail }
-  | { kind: "practice"; value: ElevatePracticeWorkspace }
-  | { kind: "action"; value: ActionDetail };
+  | { kind: "form"; value: RecordDetail; linkedActions: ActionSummary[] }
+  | { kind: "coaching"; value: CoachingSessionDetail; linkedActions: ActionSummary[] }
+  | { kind: "liv"; value: LivRecordSummary; linkedActions: ActionSummary[] }
+  | { kind: "reflection"; value: StaffReflectionDetail; linkedActions: ActionSummary[] }
+  | { kind: "practice"; value: ElevatePracticeWorkspace; linkedActions: ActionSummary[] }
+  | { kind: "action"; value: ActionDetail; linkedActions: [] };
 
 export function RecordDetailPage({ route, onBack }: { route: DetailRoute; onBack: () => void }) {
   const [detail, setDetail] = useState<LoadedDetail | null>(null);
@@ -73,17 +74,32 @@ export function RecordDetailPage({ route, onBack }: { route: DetailRoute; onBack
       {detail?.kind === "reflection" ? <ReflectionRecordDetail detail={detail.value} /> : null}
       {detail?.kind === "practice" ? <PracticeRecordDetail detail={detail.value} /> : null}
       {detail?.kind === "action" ? <ActionRecordDetail detail={detail.value} /> : null}
+      {detail && detail.kind !== "action" ? <LinkedActions actions={detail.linkedActions} /> : null}
     </div>
   );
 }
 
 async function loadDetail(route: DetailRoute): Promise<LoadedDetail> {
-  if (route.kind === "action") return { kind: "action", value: await api.actionDetail(route.actionId) };
-  if (route.recordType === "coaching_session") return { kind: "coaching", value: await api.coachingRecord(route.recordId) };
-  if (["liv", "liv_record"].includes(route.recordType)) return { kind: "liv", value: await api.livRecordByRecordId(route.recordId) };
-  if (route.recordType === "reflection") return { kind: "reflection", value: await api.reflectionRecord(route.recordId) };
-  if (["elevate_practice", "elevate_practice_assessment"].includes(route.recordType)) return { kind: "practice", value: await api.elevatePracticeRecord(route.recordId) };
-  return { kind: "form", value: await api.recordDetail(route.recordId) };
+  if (route.kind === "action") return { kind: "action", value: await api.actionDetail(route.actionId), linkedActions: [] };
+  const actionsPromise = api.actions().then((actions) => actions.filter((action) => action.sourceRecordId === route.recordId));
+  if (route.recordType === "coaching_session") {
+    const [value, linkedActions] = await Promise.all([api.coachingRecord(route.recordId), actionsPromise]);
+    return { kind: "coaching", value, linkedActions };
+  }
+  if (["liv", "liv_record"].includes(route.recordType)) {
+    const [value, linkedActions] = await Promise.all([api.livRecordByRecordId(route.recordId), actionsPromise]);
+    return { kind: "liv", value, linkedActions };
+  }
+  if (route.recordType === "reflection") {
+    const [value, linkedActions] = await Promise.all([api.reflectionRecord(route.recordId), actionsPromise]);
+    return { kind: "reflection", value, linkedActions };
+  }
+  if (["elevate_practice", "elevate_practice_assessment"].includes(route.recordType)) {
+    const [value, linkedActions] = await Promise.all([api.elevatePracticeRecord(route.recordId), actionsPromise]);
+    return { kind: "practice", value, linkedActions };
+  }
+  const [value, linkedActions] = await Promise.all([api.recordDetail(route.recordId), actionsPromise]);
+  return { kind: "form", value, linkedActions };
 }
 
 function AccessState({ title, copy }: { title: string; copy: string }) {
@@ -97,7 +113,7 @@ function FormRecordDetail({ detail }: { detail: RecordDetail }) {
         ["Record type", formatRecordType(detail.recordType)], ["Date", detail.recordDate],
         ["Owner", detail.ownerDisplayName], ["Status", detail.submissionStatus],
         ["Organisation", [detail.parentOrgUnitCode, detail.orgUnitCode].filter(Boolean).join(" / ")],
-        ["Template", `${detail.templateName} v${detail.templateVersion}`]
+        ["Template", `${detail.templateName} v${detail.templateVersion}`], ["Summary", detail.summary]
       ]} />
       {detail.sections.map((section) => (
         <section className="panel" key={section.id}>
@@ -120,6 +136,7 @@ function FormRecordDetail({ detail }: { detail: RecordDetail }) {
           </div>
         </section>
       ))}
+      <AuditHistoryPanel entries={detail.auditHistory} />
     </>
   );
 }
@@ -201,15 +218,42 @@ function ActionRecordDetail({ detail }: { detail: ActionDetail }) {
           <FullRecordLink label="Open source record" recordId={detail.sourceRecordId} recordType={detail.sourceRecordType} />
         </section>
       ) : null}
-      <section className="panel">
-        <div className="panel-heading"><h2>Audit history</h2><span>{detail.auditHistory.length} entries</span></div>
-        {detail.auditHistory.length === 0 ? <div className="empty-row">No audit entries are available for this action.</div> : (
-          <ol className="audit-history-list">
-            {detail.auditHistory.map((entry) => <li key={entry.id}><strong>{formatRecordType(entry.action)}</strong><span>{entry.summary ?? "No summary"}</span><small>{entry.userDisplayName ?? "System"} - {formatDateTime(entry.createdAt)}</small></li>)}
-          </ol>
-        )}
-      </section>
+      <AuditHistoryPanel entries={detail.auditHistory} />
     </>
+  );
+}
+
+function AuditHistoryPanel({ entries }: { entries: ActionDetail["auditHistory"] }) {
+  return (
+    <section className="panel">
+      <div className="panel-heading"><h2>Audit history</h2><span>{entries.length} entries</span></div>
+      {entries.length === 0 ? <div className="empty-row">No permitted audit entries are available for this record.</div> : (
+        <ol className="audit-history-list">
+          {entries.map((entry) => <li key={entry.id}><strong>{formatRecordType(entry.action)}</strong><span>{entry.summary ?? "No summary"}</span><small>{entry.userDisplayName ?? "System"} - {formatDateTime(entry.createdAt)}</small></li>)}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function LinkedActions({ actions }: { actions: ActionSummary[] }) {
+  return (
+    <section className="panel">
+      <div className="panel-heading"><h2>Resulting actions</h2><span>{actions.length} linked</span></div>
+      {actions.length === 0 ? <div className="empty-row">No permitted actions are linked to this record.</div> : (
+        <div className="record-list">
+          {actions.map((action) => (
+            <div className="record-row" key={action.id}>
+              <div><strong>{action.title}</strong><span>{action.detail ?? "No additional description"}</span></div>
+              <span>{action.ownerStaffName ?? "Unassigned"}</span>
+              <span>{action.dueDate ?? "No due date"}</span>
+              <span className="status-pill">{action.completedDate ? "Complete" : action.isOverdue ? "Overdue" : "Open"}</span>
+              <ActionDetailLink actionId={action.id} />
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -274,10 +318,47 @@ function exportDetail(detail: LoadedDetail) {
 }
 
 function detailToRows(detail: LoadedDetail): string[][] {
-  if (detail.kind === "form") return [["Section", "Field", "Value"], ...detail.value.sections.flatMap((section) => section.fields.map((field) => [section.title, field.label, field.value ?? ""]))];
-  if (detail.kind === "action") return [["Field", "Value"], ["Title", detail.value.title], ["Description", detail.value.detail ?? ""], ["Owner", detail.value.ownerStaffName ?? ""], ["Due date", detail.value.dueDate ?? ""], ["Status", detail.value.completedDate ? "Complete" : detail.value.statusKey ?? ""], ["Closure", detail.value.completionNote ?? ""]];
+  if (detail.kind === "form") return [
+    ["Section", "Field", "Value"],
+    ["Record", "Summary", detail.value.summary ?? ""],
+    ...detail.value.sections.flatMap((section) => section.fields.map((field) => [section.title, field.label, formatExportValue(field.value)])),
+    ...detail.linkedActions.flatMap((action, index) => [
+      [`Resulting action ${index + 1}`, "Description", action.detail || action.title],
+      [`Resulting action ${index + 1}`, "Owner", action.ownerStaffName ?? ""],
+      [`Resulting action ${index + 1}`, "Due date", action.dueDate ?? ""],
+      [`Resulting action ${index + 1}`, "Status", action.completedDate ? "Complete" : action.isOverdue ? "Overdue" : "Open"]
+    ]),
+    ...detail.value.auditHistory.flatMap((entry, index) => [
+      ["Audit history", `Entry ${index + 1}`, `${entry.action}: ${entry.summary ?? ""}`],
+      ["Audit history", `Entry ${index + 1} metadata`, `${entry.userDisplayName ?? "System"} - ${entry.createdAt}`]
+    ])
+  ];
+  if (detail.kind === "action") return [
+    ["Field", "Value"], ["Title", detail.value.title], ["Description", detail.value.detail ?? ""],
+    ["Assigned staff member", detail.value.subjectStaffName ?? ""], ["Owner", detail.value.ownerStaffName ?? ""],
+    ["Source record", detail.value.sourceRecordTitle ?? ""], ["Due date", detail.value.dueDate ?? ""],
+    ["Status", detail.value.completedDate ? "Complete" : detail.value.statusKey ?? ""],
+    ["Closure", detail.value.completionNote ?? ""],
+    ...detail.value.auditHistory.flatMap((entry, index) => [
+      [`Audit ${index + 1}`, `${entry.action}: ${entry.summary ?? ""}`],
+      [`Audit ${index + 1} by`, entry.userDisplayName ?? "System"],
+      [`Audit ${index + 1} at`, entry.createdAt]
+    ])
+  ];
   const object = detail.value as unknown as Record<string, unknown>;
-  return [["Field", "Value"], ...Object.entries(object).map(([key, value]) => [formatRecordType(key), typeof value === "object" ? JSON.stringify(value) : formatUnknown(value)])];
+  return [
+    ["Field", "Value"],
+    ...Object.entries(object).map(([key, value]) => [formatRecordType(key), typeof value === "object" ? JSON.stringify(value) : formatUnknown(value)]),
+    ...detail.linkedActions.flatMap((action, index) => [
+      [`Linked action ${index + 1}`, action.title],
+      [`Linked action ${index + 1} status`, action.completedDate ? "Complete" : action.isOverdue ? "Overdue" : "Open"]
+    ])
+  ];
+}
+
+export function formatExportValue(value?: string) {
+  const rubric = parseRubricValue(value);
+  return rubric ? `${rubric.label} (${rubric.score}/5): ${rubric.descriptor}` : value ?? "";
 }
 
 function csvCell(value: string) {
