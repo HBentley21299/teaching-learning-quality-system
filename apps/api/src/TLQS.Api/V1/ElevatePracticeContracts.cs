@@ -19,7 +19,8 @@ public sealed record ElevatePracticeWorkspaceSummary(
     IReadOnlyList<string> DevelopmentAreaKeys,
     IReadOnlyList<string> SuggestedStrengthAreaKeys,
     IReadOnlyList<string> SuggestedDevelopmentAreaKeys,
-    IReadOnlyList<ElevatePracticePlanSummary> DevelopmentPlans);
+    IReadOnlyList<ElevatePracticePlanSummary> DevelopmentPlans,
+    ElevateLivInformationSummary LivInformation);
 
 public sealed record ElevatePracticeRatingScaleSummary(
     Guid Id,
@@ -38,6 +39,7 @@ public sealed record ElevatePracticeAreaSummary(
     string Name,
     string ReflectionPrompt,
     int DisplayOrder,
+    Guid? DescriptorId,
     string? Judgement,
     string? Reflection,
     IReadOnlyList<ElevatePracticeStatementSummary> Statements);
@@ -54,11 +56,12 @@ public sealed record ElevatePracticePlanSummary(
 public sealed record SaveElevatePracticeAssessmentRequest(
     IReadOnlyList<ElevatePracticeRatingRequest>? Ratings,
     IReadOnlyList<ElevatePracticeReflectionRequest>? Reflections,
-    IReadOnlyList<string>? StrengthAreaKeys,
-    IReadOnlyList<string>? DevelopmentAreaKeys,
-    IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans,
-    bool Submit = false);
-public sealed record ElevatePracticeRatingRequest(Guid StatementId, Guid DescriptorId);
+    SaveElevateLivInformationRequest? LivInformation,
+    bool Submit = false,
+    IReadOnlyList<string>? StrengthAreaKeys = null,
+    IReadOnlyList<string>? DevelopmentAreaKeys = null,
+    IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans = null);
+public sealed record ElevatePracticeRatingRequest(Guid AreaId, Guid DescriptorId, Guid StatementId);
 public sealed record ElevatePracticeReflectionRequest(string AreaKey, string? Text);
 public sealed record ElevatePracticePlanRequest(
     string AreaKey,
@@ -87,10 +90,31 @@ public sealed record ElevatePracticeProgressSummary(
 public sealed record AdminSaveElevatePracticeAssessmentRequest(
     IReadOnlyList<ElevatePracticeRatingRequest>? Ratings,
     IReadOnlyList<ElevatePracticeReflectionRequest>? Reflections,
-    IReadOnlyList<string>? StrengthAreaKeys,
-    IReadOnlyList<string>? DevelopmentAreaKeys,
-    IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans,
-    string Status);
+    SaveElevateLivInformationRequest? LivInformation,
+    string Status,
+    IReadOnlyList<string>? StrengthAreaKeys = null,
+    IReadOnlyList<string>? DevelopmentAreaKeys = null,
+    IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans = null);
+
+public sealed record ElevateLookupOptionSummary(string Key, string Name, int DisplayOrder, bool IsOther = false);
+
+public sealed record ElevateLivInformationSummary(
+    string? NoticePreferenceKey,
+    string? PreferredVisitMonth,
+    string? PrimaryFocusKey,
+    string? SecondaryFocusKey,
+    string? SecondaryFocusOther,
+    string? DesiredOutcome,
+    IReadOnlyList<ElevateLookupOptionSummary> NoticeOptions,
+    IReadOnlyList<ElevateLookupOptionSummary> FocusOptions);
+
+public sealed record SaveElevateLivInformationRequest(
+    string? NoticePreferenceKey,
+    string? PreferredVisitMonth,
+    string? PrimaryFocusKey,
+    string? SecondaryFocusKey,
+    string? SecondaryFocusOther,
+    string? DesiredOutcome);
 
 public sealed record ElevatePracticeAuditSummary(
     Guid Id,
@@ -108,19 +132,10 @@ public sealed record StaffElevatePracticeSummary(
     string Status,
     string? Judgement,
     DateTimeOffset? SubmittedAt,
-    IReadOnlyList<StaffElevateDevelopmentAreaSummary> DevelopmentAreas,
-    IReadOnlyList<StaffElevateReflectionSummary> Reflections);
+    IReadOnlyList<StaffElevateFocusAreaSummary> FocusAreas);
 
-public sealed record StaffElevateDevelopmentAreaSummary(
-    string AreaKey,
-    string AreaName,
-    string? DevelopmentApproach,
-    string? SupportDetails,
-    string? SuccessEvidence,
-    string? IntendedImpact,
-    Guid? ActionId);
-
-public sealed record StaffElevateReflectionSummary(
-    string AreaKey,
-    string AreaName,
-    string Reflection);
+public sealed record StaffElevateFocusAreaSummary(
+    string FocusKey,
+    string FocusName,
+    string FocusType,
+    int DisplayOrder);

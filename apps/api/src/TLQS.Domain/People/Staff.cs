@@ -13,6 +13,9 @@ public sealed class Staff : AuditableEntity
     public Guid? LineManagerStaffId { get; set; }
     public Guid? PrimaryOrgUnitId { get; set; }
     public string AccountStatus { get; set; } = "active";
+    public string? StaffCategory { get; set; }
+    public string OnboardingSource { get; set; } = "manual";
+    public DateTimeOffset? OnboardedAt { get; set; }
     public DateOnly? StartDate { get; set; }
     public DateOnly? EndDate { get; set; }
     public string? Notes { get; set; }

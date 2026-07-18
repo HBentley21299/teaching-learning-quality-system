@@ -8,6 +8,14 @@ export type ModuleSummary = {
   isEnabled: boolean;
 };
 
+export type AcademicYearSummary = {
+  academicYear: string;
+  startDate: string;
+  endDate: string;
+  isCurrent: boolean;
+  isFuture: boolean;
+};
+
 export type StaffSummary = {
   id: string;
   externalId: string;
@@ -97,6 +105,13 @@ export type ActionSummary = {
   extensionCount: number;
   lastExtensionReason?: string;
   livVisitId?: string;
+  livCycleId?: string;
+  reviewDate?: string;
+  intendedEvidence?: string;
+  intendedImpact?: string;
+  progressStatus?: CoachingActionStatus;
+  parentActionId?: string;
+  academicYear: string;
   isDeleted: boolean;
 };
 
@@ -113,6 +128,7 @@ export type CreateActionRequest = {
   dueDate?: string;
   publishedToStaff: boolean;
   livVisitId?: string;
+  livCycleId?: string;
   sourceFormType?: string;
   sourceSubRecordType?: string;
   sourceSubRecordId?: string;
@@ -164,6 +180,7 @@ export type RecordSummary = {
   recordDate?: string;
   createdAt: string;
   submissionStatus: string;
+  academicYear: string;
 };
 
 export type LivVisitSummary = {
@@ -180,6 +197,60 @@ export type LivVisitSummary = {
   visitStatus: "in_progress" | "completed";
   createdAt: string;
   updatedAt?: string;
+  cycleId?: string;
+  ratings: LivVisitRating[];
+  deliveryAreaKey?: string;
+  deliveryAreaName?: string;
+};
+
+export type LivLookupOption = { key: string; name: string; displayOrder: number; isOther?: boolean };
+export type LivVisitRating = { focusKey: string; focusName: string; descriptorId?: string; descriptor?: string; isNotApplicable: boolean };
+export type LivStage = {
+  id: string;
+  stageType: "pre_discussion" | "distance_impact" | "visit" | "post_reflection" | "actions" | "follow_up_review";
+  stageOrder: number;
+  stageStatus: "in_progress" | "completed";
+  contextText?: string;
+  aimsText?: string;
+  learnerActivityText?: string;
+  reflectionText?: string;
+  intendedFollowUpDate?: string;
+  distanceImpactText?: string;
+  developmentOpportunityKeys: string[];
+  visitId?: string;
+  canEdit: boolean;
+};
+export type LivCycle = {
+  id: string;
+  cycleNumber: number;
+  status: "in_progress" | "completed";
+  startedAt: string;
+  completedAt?: string;
+  isFollowUp: boolean;
+  stages: LivStage[];
+};
+export type LivConfiguration = {
+  deliveryAreas: LivLookupOption[];
+  focusAreas: LivLookupOption[];
+  developmentOpportunities: LivLookupOption[];
+  rubric: ElevatePracticeRatingScale[];
+};
+export type LivStaffContext = {
+  staffId: string;
+  staffName: string;
+  assessmentId?: string;
+  academicYear?: string;
+  primaryFocusKey?: string;
+  primaryFocus?: string;
+  desiredOutcome?: string;
+  existingLivRecordId?: string;
+  existingLivSourceRecordId?: string;
+  noticePreferenceKey?: string;
+  noticePreference?: string;
+  preferredVisitMonth?: string;
+  secondaryFocusKey?: string;
+  secondaryFocus?: string;
+  secondaryFocusOther?: string;
 };
 
 export type LivRecordSummary = {
@@ -206,6 +277,21 @@ export type LivRecordSummary = {
   areaOfPracticeThemeIds: string[];
   areaOfPracticeOther?: string;
   visits: LivVisitSummary[];
+  deliveryAreaKey?: string;
+  deliveryAreaName?: string;
+  sourceElevateAssessmentId?: string;
+  eliPrimaryFocusKey?: string;
+  eliPrimaryFocus?: string;
+  eliDesiredOutcome?: string;
+  cycles: LivCycle[];
+  eliNoticePreferenceKey?: string;
+  eliNoticePreference?: string;
+  eliPreferredVisitMonth?: string;
+  eliSecondaryFocusKey?: string;
+  eliSecondaryFocus?: string;
+  eliSecondaryFocusOther?: string;
+  linkedProbationCaseId?: string;
+  probationObservationNumber?: number;
 };
 
 export type SaveLivVisitRequest = {
@@ -216,17 +302,158 @@ export type SaveLivVisitRequest = {
   courseLevel?: string;
   reflectionNotes?: string;
   findings?: string;
+  deliveryAreaKey?: string;
+  ratings?: Array<{ focusKey: string; descriptorId?: string; isNotApplicable: boolean }>;
 };
 
 export type SaveLivRecordRequest = {
   subjectStaffId: string;
   orgUnitId?: string;
+  deliveryAreaKey?: string;
   preConversation?: string;
-  initialVisit: SaveLivVisitRequest;
+  initialVisit?: SaveLivVisitRequest;
   isElevatePractitioner?: boolean;
   areaOfPracticeKeys: string[];
   areaOfPracticeThemeIds: string[];
   areaOfPracticeOther?: string;
+};
+
+export type SaveLivStageRequest = {
+  stageType: LivStage["stageType"];
+  contextText?: string;
+  aimsText?: string;
+  learnerActivityText?: string;
+  reflectionText?: string;
+  intendedFollowUpDate?: string;
+  distanceImpactText?: string;
+  developmentOpportunityKeys: string[];
+  stageStatus?: LivStage["stageStatus"];
+};
+
+export type ProbationReviewerOption = {
+  staffId: string;
+  displayName: string;
+  email: string;
+  reviewerType: "teaching_learning" | "leader";
+};
+
+export type ProbationConfiguration = LivConfiguration & {
+  teachingLearningReviewers: ProbationReviewerOption[];
+  eligibleStaff: StaffSummary[];
+  canCreateCase: boolean;
+};
+
+export type ProbationStaffContext = {
+  staffId: string;
+  staffName: string;
+  assessmentId?: string;
+  assessmentRecordId?: string;
+  academicYear?: string;
+  primaryFocus?: string;
+  secondaryFocus?: string;
+  desiredOutcome?: string;
+  hasActiveProbationCase: boolean;
+};
+
+export type ProbationReviewer = {
+  staffId: string;
+  displayName: string;
+  reviewerRole: "teaching_learning" | "leader";
+};
+
+export type ProbationRating = {
+  focusKey: string;
+  focusName: string;
+  descriptorId: string;
+  descriptor: string;
+  evidenceOfPractice?: string;
+};
+
+export type ProbationVisit = {
+  deliveryAreaKey?: string;
+  deliveryAreaName?: string;
+  observationDate?: string;
+  observationTime?: string;
+  courseName?: string;
+  courseGroup?: string;
+  courseLevel?: string;
+  keyPoints?: string;
+  ratings: ProbationRating[];
+};
+
+export type ProbationStage = {
+  id: string;
+  stageType: "professional_discussion" | "visit_rubric" | "reflection_feedback" | "actions" | "next_observation";
+  stageOrder: number;
+  stageStatus: "in_progress" | "completed";
+  contextText?: string;
+  aimsText?: string;
+  learnerActivityText?: string;
+  reflectionText?: string;
+  developmentOpportunityKeys: string[];
+  intendedNextObservationDate?: string;
+  canEdit: boolean;
+};
+
+export type ProbationObservation = {
+  id: string;
+  observationNumber: 1 | 2 | 3;
+  observationType: "probation" | "liv";
+  status: "not_started" | "in_progress" | "completed";
+  linkedLivRecordId?: string;
+  linkedLivSourceRecordId?: string;
+  startedAt?: string;
+  completedAt?: string;
+  stages: ProbationStage[];
+  visit?: ProbationVisit;
+};
+
+export type ProbationCase = {
+  id: string;
+  recordId: string;
+  subjectStaffId: string;
+  subjectStaffName: string;
+  orgUnitId?: string;
+  orgUnitCode?: string;
+  parentOrgUnitCode?: string;
+  academicYear: string;
+  status: "in_progress" | "completed";
+  currentObservationNumber: 1 | 2 | 3;
+  sourceElevateAssessmentId?: string;
+  sourceElevateRecordId?: string;
+  createdAt: string;
+  updatedAt?: string;
+  canEdit: boolean;
+  reviewers: ProbationReviewer[];
+  observations: ProbationObservation[];
+};
+
+export type CreateProbationCaseRequest = {
+  subjectStaffId: string;
+  teachingLearningReviewerStaffId?: string;
+  orgUnitId?: string;
+};
+
+export type SaveProbationStageRequest = {
+  contextText?: string;
+  aimsText?: string;
+  learnerActivityText?: string;
+  reflectionText?: string;
+  developmentOpportunityKeys: string[];
+  intendedNextObservationDate?: string;
+  stageStatus?: "in_progress" | "completed";
+};
+
+export type SaveProbationVisitRequest = {
+  deliveryAreaKey?: string;
+  observationDate?: string;
+  observationTime?: string;
+  courseName?: string;
+  courseGroup?: string;
+  courseLevel?: string;
+  keyPoints?: string;
+  ratings: Array<{ focusKey: string; descriptorId: string; evidenceOfPractice?: string }>;
+  stageStatus?: "in_progress" | "completed";
 };
 
 export type RecordDetail = {
@@ -328,7 +555,7 @@ export type DashboardSummary = {
 
 export type ProcessDashboardRecordSummary = {
   id: string;
-  processKey: "learning_walk" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session";
+  processKey: "learning_walk" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session" | "probation_case";
   title: string;
   summary?: string;
   recordDate?: string;
@@ -345,10 +572,13 @@ export type ProcessDashboardRecordSummary = {
   participantAreaBreakdown?: string;
   participantCount: number;
   attendanceCredits: number;
+  learningMinutes: number;
   sampleSize: number;
   scoreTotal: number;
   scoreCount: number;
   barrierCount: number;
+  scoreMaximum: number;
+  relatedRecordId?: string;
 };
 
 export type StaffProfileSummary = {
@@ -378,9 +608,11 @@ export type StaffProfileRecordSummary = {
   openActions: number;
 };
 
-export type StaffReflectionDevelopmentAreaSummary = {
-  developmentAreaId: string;
+export type StaffReflectionFocusAreaSummary = {
+  focusLookupValueId?: string;
+  focusKeySnapshot: string;
   textSnapshot: string;
+  focusType: "primary" | "secondary";
   displayOrder: number;
 };
 
@@ -395,7 +627,7 @@ export type StaffReflectionSummary = {
   impact?: string;
   examples?: string;
   status: "draft" | "submitted";
-  developmentAreas: StaffReflectionDevelopmentAreaSummary[];
+  focusAreas: StaffReflectionFocusAreaSummary[];
   createdByUserAccountId?: string;
   createdByName?: string;
   createdAt: string;
@@ -414,9 +646,51 @@ export type SaveStaffReflectionRequest = {
 
 export type StaffCpdRecordSummary = {
   id: string;
+  recordId: string;
   title: string;
   eventDate: string;
   themes?: string;
+  durationMinutes?: number;
+  isInternal: boolean;
+};
+
+export type ElevateStatusCpdSummary = {
+  cpdEventId: string;
+  title: string;
+  eventDate: string;
+};
+
+export type ElevateStatusLevelSummary = {
+  levelNumber: number;
+  levelKey: "explorer" | "storyteller" | "champion" | "trailblazer" | "changemaker";
+  name: string;
+  requiredSessions: number;
+  requirementLabel?: string;
+  isEligible: boolean;
+  isConfirmed: boolean;
+  isAwarded: boolean;
+  evidenceCpdEventId?: string;
+  implementationImpact?: string;
+  attendanceCountAtAward?: number;
+  awardedAt?: string;
+  awardedByName?: string;
+};
+
+export type ElevateStatusSummary = {
+  staffId: string;
+  academicYear: string;
+  internalCpdSessionsAttended: number;
+  canSubmitExplorerEvidence: boolean;
+  canManageControlledLevels: boolean;
+  eligibleInternalCpd: ElevateStatusCpdSummary[];
+  levels: ElevateStatusLevelSummary[];
+};
+
+export type SaveElevateStatusLevelRequest = {
+  academicYear: string;
+  confirmed: boolean;
+  evidenceCpdEventId?: string;
+  implementationImpact?: string;
 };
 
 export type StaffProfileActionSummary = {
@@ -444,8 +718,8 @@ export type StaffProfileCoachingSummary = {
   sessionType: CoachingSessionType;
   status: "draft" | "completed";
   coachName: string;
-  mainFocus?: string;
-  keyTakeaway?: string;
+  primaryFocus?: string;
+  specificSessionFocus?: string;
 };
 
 export type ElevatePracticeRatingScale = {
@@ -479,6 +753,7 @@ export type ElevatePracticeArea = {
   name: string;
   reflectionPrompt: string;
   displayOrder: number;
+  descriptorId?: string;
   judgement?: string;
   reflection?: string;
   statements: ElevatePracticeStatement[];
@@ -514,21 +789,75 @@ export type ElevatePracticeWorkspace = {
   suggestedStrengthAreaKeys: string[];
   suggestedDevelopmentAreaKeys: string[];
   developmentPlans: ElevatePracticePlan[];
+  livInformation: ElevateLivInformation;
+};
+
+export type PagedResult<T> = {
+  items: T[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+};
+
+export type StaffProfileSectionSummary = {
+  reflectionCount: number;
+  submittedReflectionCount: number;
+  coachingCount: number;
+  cpdCount: number;
+  internalCpdCount: number;
+  externalCpdCount: number;
+  totalCpdMinutes: number;
+  openActionCount: number;
+  completedActionCount: number;
+  overdueActionCount: number;
+  livCount: number;
+  probationCount: number;
+};
+
+export type StaffProfileLivSummary = {
+  id: string;
+  recordId: string;
+  title: string;
+  recordDate?: string;
+  reviewerName?: string;
+  parentOrgUnitCode?: string;
+  orgUnitCode?: string;
+  currentStage: string;
+  status: "in_progress" | "closed";
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type StaffProfileProbationSummary = {
+  id: string;
+  recordId: string;
+  title: string;
+  academicYear: string;
+  status: "in_progress" | "completed" | "closed";
+  currentObservationNumber: number;
+  parentOrgUnitCode?: string;
+  orgUnitCode?: string;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type ElevateLookupOption = { key: string; name: string; displayOrder: number; isOther?: boolean };
+export type ElevateLivInformation = {
+  noticePreferenceKey?: string;
+  preferredVisitMonth?: string;
+  primaryFocusKey?: string;
+  secondaryFocusKey?: string;
+  secondaryFocusOther?: string;
+  desiredOutcome?: string;
+  noticeOptions: ElevateLookupOption[];
+  focusOptions: ElevateLookupOption[];
 };
 
 export type SaveElevatePracticeAssessmentRequest = {
-  ratings: Array<{ statementId: string; descriptorId: string }>;
+  ratings: Array<{ areaId: string; statementId: string; descriptorId: string }>;
   reflections: Array<{ areaKey: string; text: string }>;
-  strengthAreaKeys: string[];
-  developmentAreaKeys: string[];
-  developmentPlans: Array<{
-    areaKey: string;
-    developmentApproach: string;
-    supportKeys: string[];
-    supportDetails: string;
-    successEvidence: string;
-    intendedImpact: string;
-  }>;
+  livInformation: Omit<ElevateLivInformation, "noticeOptions" | "focusOptions">;
   submit: boolean;
 };
 
@@ -578,11 +907,15 @@ export type CoachingCycleSummary = {
 export type CoachingPreviousActionSummary = {
   actionId: string;
   title: string;
-  targetDate?: string;
-  status: CoachingPreviousActionStatus;
-  latestUpdate?: string;
-  extensionCount: number;
-  lastExtensionReason?: string;
+  ownerType: CoachingActionOwner;
+  ownerName: string;
+  dueDate?: string;
+  reviewDate?: string;
+  status: CoachingActionStatus;
+  intendedEvidence?: string;
+  intendedImpact?: string;
+  latestProgressUpdate?: string;
+  latestImpactObserved?: string;
 };
 
 export type CoachingLookupOption = {
@@ -603,10 +936,11 @@ export type CoachingRubricOption = {
 };
 
 export type CoachingConfiguration = {
-  developmentStages: CoachingLookupOption[];
+  qualificationStatuses: CoachingLookupOption[];
   focusAreas: CoachingLookupOption[];
   supportTypes: CoachingLookupOption[];
-  intendedImpactRubric: CoachingRubricOption[];
+  currentPracticeRubric: CoachingRubricOption[];
+  maxActionsPerSession: number;
 };
 
 export type CoachingContext = {
@@ -621,8 +955,10 @@ export type CoachingContext = {
   previousActions: CoachingPreviousActionSummary[];
 };
 
-export type CoachingSessionType = "coaching" | "mentoring" | "combined";
-export type CoachingPreviousActionStatus = "not_started" | "in_progress" | "completed" | "not_applicable";
+export type CoachingSessionType = "coaching" | "mentoring";
+export type CoachingActionOwner = "staff" | "coach" | "joint";
+export type CoachingActionStatus = "not_started" | "in_progress" | "completed" | "closed";
+export type CoachingReviewOutcome = "completed" | "continue" | "revised" | "closed_without_completion";
 
 export type CoachingSessionSummary = {
   id: string;
@@ -637,7 +973,7 @@ export type CoachingSessionSummary = {
   sessionDate: string;
   sessionType: CoachingSessionType;
   status: "draft" | "completed";
-  mainFocus?: string;
+  primaryFocus?: string;
   createdAt: string;
   updatedAt?: string;
   canEdit: boolean;
@@ -645,18 +981,24 @@ export type CoachingSessionSummary = {
 
 export type CoachingSessionAction = {
   id?: string;
-  actionId?: string;
-  actionOrder?: number;
+  actionOrder: number;
   actionText: string;
-  ownerType: "staff" | "coach" | "joint";
-  targetDate: string;
-  evidenceText?: string;
+  ownerType: CoachingActionOwner;
+  ownerName?: string;
+  dueDate?: string;
+  intendedEvidence?: string;
+  intendedImpact?: string;
+  reviewDate?: string;
+  status: CoachingActionStatus;
+  parentActionId?: string;
 };
 
-export type CoachingPreviousActionUpdate = {
+export type CoachingActionReview = {
   actionId: string;
-  status: CoachingPreviousActionStatus;
-  updateText?: string;
+  reviewOutcome?: CoachingReviewOutcome;
+  progressUpdate?: string;
+  impactObserved?: string;
+  revisedAction?: CoachingSessionAction;
 };
 
 export type CoachingSessionDetail = {
@@ -674,42 +1016,22 @@ export type CoachingSessionDetail = {
   deliveryMethod?: "in_person" | "online" | "telephone";
   durationMinutes?: number;
   status: "draft" | "completed";
-  developmentStageKey?: string;
-  focusAreas: string[];
-  additionalFocus?: string;
-  progressReflection?: string;
-  mainFocus?: string;
-  additionalFocusAreas?: string[];
-  sessionReason?: string;
-  goal?: string;
-  whyThisMatters?: string;
-  intendedImpact?: string;
-  intendedImpactDescriptorId?: string;
-  intendedImpactWording?: string;
-  confidenceBefore?: number;
-  currentSituation?: string;
-  whatsWorking?: string;
-  challenges?: string;
-  keyDiscussionPoints?: string;
+  qualificationStatusKey?: string;
+  primaryFocusKey?: string;
+  secondaryFocusKey?: string;
+  focusOtherText?: string;
+  specificSessionFocus?: string;
+  currentPracticeDescriptorId?: string;
+  currentPracticeWording?: string;
+  currentPracticeEvidence?: string;
   supportTypes: string[];
-  supportResources?: string;
-  mentorComments?: string;
-  intendedImpactAreas?: string[];
-  impactStatement?: string;
-  confidenceToComplete?: number;
-  supportNeeded?: string[];
-  additionalSupportDetails?: string;
-  keyTakeaway?: string;
-  sessionSummary?: string;
-  staffAgrees?: boolean;
-  coachAgrees?: boolean;
-  anotherSessionRequired?: "yes" | "no" | "to_be_confirmed";
-  nextSessionDate?: string;
-  nextFocus?: string;
+  supportOtherText?: string;
+  conversationSummary?: string;
+  closesCycle: boolean;
   completedAt?: string;
   canEdit: boolean;
   previousActions: CoachingPreviousActionSummary[];
-  previousActionUpdates: CoachingPreviousActionUpdate[];
+  actionReviews: CoachingActionReview[];
   actions: CoachingSessionAction[];
 };
 
@@ -722,38 +1044,18 @@ export type SaveCoachingSessionRequest = {
   deliveryMethod?: "in_person" | "online" | "telephone";
   durationMinutes?: number;
   status: "draft" | "completed";
-  developmentStageKey?: string;
-  focusAreas: string[];
-  additionalFocus?: string;
-  progressReflection?: string;
-  mainFocus?: string;
-  additionalFocusAreas?: string[];
-  sessionReason?: string;
-  goal?: string;
-  whyThisMatters?: string;
-  intendedImpact?: string;
-  intendedImpactDescriptorId?: string;
-  confidenceBefore?: number;
-  currentSituation?: string;
-  whatsWorking?: string;
-  challenges?: string;
-  keyDiscussionPoints?: string;
+  qualificationStatusKey?: string;
+  primaryFocusKey?: string;
+  secondaryFocusKey?: string;
+  focusOtherText?: string;
+  specificSessionFocus?: string;
+  currentPracticeDescriptorId?: string;
+  currentPracticeEvidence?: string;
   supportTypes: string[];
-  supportResources?: string;
-  mentorComments?: string;
-  intendedImpactAreas?: string[];
-  impactStatement?: string;
-  confidenceToComplete?: number;
-  supportNeeded?: string[];
-  additionalSupportDetails?: string;
-  keyTakeaway?: string;
-  sessionSummary?: string;
-  staffAgrees?: boolean;
-  coachAgrees?: boolean;
-  anotherSessionRequired?: "yes" | "no" | "to_be_confirmed";
-  nextSessionDate?: string;
-  nextFocus?: string;
-  previousActionUpdates: CoachingPreviousActionUpdate[];
+  supportOtherText?: string;
+  conversationSummary?: string;
+  closeCycle: boolean;
+  actionReviews: CoachingActionReview[];
   actions: CoachingSessionAction[];
 };
 
@@ -773,24 +1075,14 @@ export type StaffElevatePracticeSummary = {
   status: "draft" | "submitted";
   judgement?: string;
   submittedAt?: string;
-  developmentAreas: StaffElevateDevelopmentAreaSummary[];
-  reflections: StaffElevateReflectionSummary[];
+  focusAreas: StaffElevateFocusAreaSummary[];
 };
 
-export type StaffElevateDevelopmentAreaSummary = {
-  areaKey: string;
-  areaName: string;
-  developmentApproach?: string;
-  supportDetails?: string;
-  successEvidence?: string;
-  intendedImpact?: string;
-  actionId?: string;
-};
-
-export type StaffElevateReflectionSummary = {
-  areaKey: string;
-  areaName: string;
-  reflection: string;
+export type StaffElevateFocusAreaSummary = {
+  focusKey: string;
+  focusName: string;
+  focusType: "primary" | "secondary";
+  displayOrder: number;
 };
 
 export type StaffProfileDetail = {
@@ -800,6 +1092,7 @@ export type StaffProfileDetail = {
   email: string;
   primaryOrgCode?: string;
   accountStatus: string;
+  academicYear: string;
   evidenceSubmitted: number;
   milestonesCompleted: number;
   reflections: StaffReflectionSummary[];
@@ -807,6 +1100,7 @@ export type StaffProfileDetail = {
   actions: StaffProfileActionSummary[];
   coachingRecords: StaffProfileCoachingSummary[];
   elevatePractice?: StaffElevatePracticeSummary;
+  elevateStatus: ElevateStatusSummary;
 };
 
 export type AdminUserScopeSummary = {
@@ -903,6 +1197,24 @@ export type CurrentUser = {
   scopes: Array<{ scopeType: string; orgUnitId?: string; staffId?: string }>;
 };
 
+export type StaffOnboardingCategory = {
+  key: string;
+  name: string;
+  displayOrder: number;
+};
+
+export type StaffOnboardingOptions = {
+  faculties: OrgUnitSummary[];
+  teams: OrgUnitSummary[];
+  categories: StaffOnboardingCategory[];
+};
+
+export type CompleteStaffOnboardingRequest = {
+  facultyOrgUnitId: string;
+  teamOrgUnitId: string;
+  staffCategory: string;
+};
+
 export type OrgUnitSummary = {
   id: string;
   parentOrgUnitId?: string;
@@ -958,6 +1270,7 @@ export type AdminOrganisationStaff = {
   displayName: string;
   email: string;
   accountStatus: string;
+  staffCategory?: string;
   effectivePermissionLevel: string;
   roleNames: string[];
   memberships: AdminOrganisationMembership[];
@@ -981,10 +1294,14 @@ export type AdminOrganisationUnit = {
   orgUnitType: "faculty" | "team";
   code: string;
   name: string;
+  description?: string;
   directStaffCount: number;
   totalStaffCount: number;
   childTeamCount: number;
   managedTeamCount: number;
+  isActive: boolean;
+  legacyCodes: string[];
+  alignedFacultyCodes: string[];
   manager?: AdminOrganisationManager;
   parentManager?: AdminOrganisationManager;
 };
@@ -994,6 +1311,7 @@ export type AdminOrganisationStaffOption = {
   externalId: string;
   displayName: string;
   email: string;
+  staffCategory?: string;
   effectivePermissionLevel: string;
   primaryOrgCode?: string;
 };
@@ -1006,6 +1324,54 @@ export type AdminOrganisationStructure = {
 export type SaveOrgUnitManagerRequest = {
   managerStaffId: string;
   reason?: string;
+};
+
+export type SaveOrganisationUnitRequest = {
+  orgUnitType: "faculty" | "team";
+  code: string;
+  name: string;
+  description?: string;
+  parentOrgUnitId?: string;
+};
+
+export type OrganisationChangeImpact = {
+  orgUnitId: string;
+  activeMemberships: number;
+  activeLeaderships: number;
+  activePermissionScopes: number;
+  childUnits: number;
+  historicalRecords: number;
+  draftRecords: number;
+  openActions: number;
+  warnings: string[];
+};
+
+export type MembershipChangeImpact = {
+  membershipId: string;
+  staffId: string;
+  staffName: string;
+  orgUnitCode: string;
+  isPrimary: boolean;
+  permissionScopes: number;
+  directReports: number;
+  assignedOpenActions: number;
+  draftRecords: number;
+  activeReviews: number;
+  warnings: string[];
+};
+
+export type OrganisationMigrationReview = {
+  id: string;
+  migrationKey: string;
+  itemType: string;
+  sourceCode?: string;
+  proposedCode?: string;
+  staffId?: string;
+  staffName?: string;
+  details: string;
+  status: "open" | "resolved" | "ignored";
+  resolutionNote?: string;
+  createdAt: string;
 };
 
 export type SaveOrganisationMembershipRequest = {
@@ -1097,6 +1463,16 @@ export type ElevateEnvironmentPillarSummary = {
   isActive: boolean;
   assetUri: string;
   assetAltText: string;
+  rubric: ElevateEnvironmentRubricDescriptorSummary[];
+};
+
+export type ElevateEnvironmentRubricDescriptorSummary = {
+  id: string;
+  score: number;
+  judgementKey: string;
+  judgement: string;
+  descriptor: string;
+  colorHex?: string;
 };
 
 export type CourseSummary = {
@@ -1213,4 +1589,77 @@ export type UpdateFormSubmissionRequest = {
   recordDate?: string;
   responses: Array<{ fieldId: string; value?: string }>;
   courseIds?: string[];
+};
+
+export type MessageAttachmentRequest = {
+  attachmentType: "static" | "record" | "excel_export" | "word_report";
+  displayName: string;
+  fileAssetId?: string;
+  exportModuleKey?: string;
+};
+
+export type SaveMessageTemplateRequest = {
+  messageKey: string;
+  name: string;
+  internalDescription?: string;
+  subjectTemplate: string;
+  plainTextTemplate: string;
+  htmlTemplate?: string;
+  recipientConfigJson: string;
+  eventType: string;
+  conditionConfigJson: string;
+  scheduleConfigJson: string;
+  isActive: boolean;
+  attachments?: MessageAttachmentRequest[];
+};
+
+export type MessageTemplateSummary = SaveMessageTemplateRequest & {
+  id: string;
+  isDeleted: boolean;
+  versionNumber: number;
+  createdAt: string;
+  updatedAt?: string;
+  pendingCount: number;
+  failedCount: number;
+  sentCount: number;
+};
+
+export type MessageTemplateVersionSummary = {
+  id: string;
+  versionNumber: number;
+  subjectTemplate: string;
+  plainTextTemplate: string;
+  htmlTemplate?: string;
+  recipientConfigJson: string;
+  createdAt: string;
+  createdBy?: string;
+};
+
+export type MessagingParameter = {
+  key: string;
+  label: string;
+  category: string;
+  sampleValue: string;
+};
+
+export type MessagePreview = {
+  subject: string;
+  plainTextBody: string;
+  htmlBody?: string;
+  recipients: string[];
+};
+
+export type MessageDeliverySummary = {
+  id: string;
+  templateName: string;
+  templateVersion: number;
+  triggeringEvent: string;
+  status: "pending" | "processing" | "sent" | "failed" | "retrying" | "cancelled";
+  recipients: string;
+  attemptCount: number;
+  queuedAt: string;
+  deliveredAt?: string;
+  failedAt?: string;
+  lastError?: string;
+  providerResponseId?: string;
 };

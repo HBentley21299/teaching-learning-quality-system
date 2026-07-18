@@ -1,10 +1,11 @@
 namespace TLQS.Api.V1;
 
 public sealed record CoachingConfigurationSummary(
-    IReadOnlyList<CoachingLookupOptionSummary> DevelopmentStages,
+    IReadOnlyList<CoachingLookupOptionSummary> QualificationStatuses,
     IReadOnlyList<CoachingLookupOptionSummary> FocusAreas,
     IReadOnlyList<CoachingLookupOptionSummary> SupportTypes,
-    IReadOnlyList<CoachingRubricOptionSummary> IntendedImpactRubric);
+    IReadOnlyList<CoachingRubricOptionSummary> CurrentPracticeRubric,
+    int MaxActionsPerSession);
 
 public sealed record CoachingLookupOptionSummary(
     Guid Id,
@@ -46,11 +47,15 @@ public sealed record CoachingCycleSummary(
 public sealed record CoachingPreviousActionSummary(
     Guid ActionId,
     string Title,
-    DateOnly? TargetDate,
+    string OwnerType,
+    string OwnerName,
+    DateOnly? DueDate,
+    DateOnly? ReviewDate,
     string Status,
-    string? LatestUpdate,
-    int ExtensionCount,
-    string? LastExtensionReason);
+    string? IntendedEvidence,
+    string? IntendedImpact,
+    string? LatestProgressUpdate,
+    string? LatestImpactObserved);
 
 public sealed record CoachingSessionSummary(
     Guid Id,
@@ -65,7 +70,7 @@ public sealed record CoachingSessionSummary(
     DateOnly SessionDate,
     string SessionType,
     string Status,
-    string? MainFocus,
+    string? PrimaryFocus,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
     bool CanEdit);
@@ -85,57 +90,43 @@ public sealed record CoachingSessionDetail(
     string? DeliveryMethod,
     int? DurationMinutes,
     string Status,
-    string? DevelopmentStageKey,
-    IReadOnlyList<string> FocusAreas,
-    string? AdditionalFocus,
-    string? ProgressReflection,
-    string? MainFocus,
-    IReadOnlyList<string> AdditionalFocusAreas,
-    string? SessionReason,
-    string? Goal,
-    string? WhyThisMatters,
-    string? IntendedImpact,
-    Guid? IntendedImpactDescriptorId,
-    string? IntendedImpactWording,
-    int? ConfidenceBefore,
-    string? CurrentSituation,
-    string? WhatsWorking,
-    string? Challenges,
-    string? KeyDiscussionPoints,
+    string? QualificationStatusKey,
+    string? PrimaryFocusKey,
+    string? SecondaryFocusKey,
+    string? FocusOtherText,
+    string? SpecificSessionFocus,
+    Guid? CurrentPracticeDescriptorId,
+    string? CurrentPracticeWording,
+    string? CurrentPracticeEvidence,
     IReadOnlyList<string> SupportTypes,
-    string? SupportResources,
-    string? MentorComments,
-    IReadOnlyList<string> IntendedImpactAreas,
-    string? ImpactStatement,
-    int? ConfidenceToComplete,
-    IReadOnlyList<string> SupportNeeded,
-    string? AdditionalSupportDetails,
-    string? KeyTakeaway,
-    string? SessionSummary,
-    bool StaffAgrees,
-    bool CoachAgrees,
-    string? AnotherSessionRequired,
-    DateOnly? NextSessionDate,
-    string? NextFocus,
+    string? SupportOtherText,
+    string? ConversationSummary,
+    bool ClosesCycle,
     DateTimeOffset? CompletedAt,
     bool CanEdit,
     IReadOnlyList<CoachingPreviousActionSummary> PreviousActions,
-    IReadOnlyList<CoachingPreviousActionUpdateSummary> PreviousActionUpdates,
+    IReadOnlyList<CoachingActionReviewSummary> ActionReviews,
     IReadOnlyList<CoachingSessionActionSummary> Actions);
 
-public sealed record CoachingPreviousActionUpdateSummary(
+public sealed record CoachingActionReviewSummary(
     Guid ActionId,
-    string Status,
-    string? UpdateText);
+    string? ReviewOutcome,
+    string? ProgressUpdate,
+    string? ImpactObserved,
+    CoachingSessionActionSummary? RevisedAction);
 
 public sealed record CoachingSessionActionSummary(
     Guid? Id,
-    Guid? ActionId,
     int ActionOrder,
     string ActionText,
     string OwnerType,
-    DateOnly TargetDate,
-    string? EvidenceText);
+    string OwnerName,
+    DateOnly? DueDate,
+    string? IntendedEvidence,
+    string? IntendedImpact,
+    DateOnly? ReviewDate,
+    string Status,
+    Guid? ParentActionId);
 
 public sealed record SaveCoachingSessionRequest(
     Guid StaffId,
@@ -146,51 +137,36 @@ public sealed record SaveCoachingSessionRequest(
     string? DeliveryMethod,
     int? DurationMinutes,
     string Status,
-    string? DevelopmentStageKey,
-    IReadOnlyList<string>? FocusAreas,
-    string? AdditionalFocus,
-    string? ProgressReflection,
-    string? MainFocus,
-    IReadOnlyList<string>? AdditionalFocusAreas,
-    string? SessionReason,
-    string? Goal,
-    string? WhyThisMatters,
-    string? IntendedImpact,
-    Guid? IntendedImpactDescriptorId,
-    int? ConfidenceBefore,
-    string? CurrentSituation,
-    string? WhatsWorking,
-    string? Challenges,
-    string? KeyDiscussionPoints,
+    string? QualificationStatusKey,
+    string? PrimaryFocusKey,
+    string? SecondaryFocusKey,
+    string? FocusOtherText,
+    string? SpecificSessionFocus,
+    Guid? CurrentPracticeDescriptorId,
+    string? CurrentPracticeEvidence,
     IReadOnlyList<string>? SupportTypes,
-    string? SupportResources,
-    string? MentorComments,
-    IReadOnlyList<string>? IntendedImpactAreas,
-    string? ImpactStatement,
-    int? ConfidenceToComplete,
-    IReadOnlyList<string>? SupportNeeded,
-    string? AdditionalSupportDetails,
-    string? KeyTakeaway,
-    string? SessionSummary,
-    bool StaffAgrees,
-    bool CoachAgrees,
-    string? AnotherSessionRequired,
-    DateOnly? NextSessionDate,
-    string? NextFocus,
-    IReadOnlyList<CoachingPreviousActionUpdateRequest>? PreviousActionUpdates,
+    string? SupportOtherText,
+    string? ConversationSummary,
+    bool CloseCycle,
+    IReadOnlyList<CoachingActionReviewRequest>? ActionReviews,
     IReadOnlyList<CoachingSessionActionRequest>? Actions);
 
-public sealed record CoachingPreviousActionUpdateRequest(
+public sealed record CoachingActionReviewRequest(
     Guid ActionId,
-    string Status,
-    string? UpdateText);
+    string? ReviewOutcome,
+    string? ProgressUpdate,
+    string? ImpactObserved,
+    CoachingSessionActionRequest? RevisedAction);
 
 public sealed record CoachingSessionActionRequest(
     Guid? Id,
     string ActionText,
     string OwnerType,
-    DateOnly TargetDate,
-    string? EvidenceText);
+    DateOnly? DueDate,
+    string? IntendedEvidence,
+    string? IntendedImpact,
+    DateOnly? ReviewDate,
+    string Status);
 
 public sealed record CoachingSessionSaveSummary(
     Guid Id,
@@ -199,3 +175,5 @@ public sealed record CoachingSessionSaveSummary(
     int CycleNumber,
     int SessionNumber,
     string Status);
+
+public sealed record UpdateCoachingConfigurationRequest(int MaxActionsPerSession);

@@ -48,6 +48,11 @@ For the SPA registration:
 
 Authentication and MFA stay in Entra. The application stores no staff passwords.
 
+For email delivery, create a separate confidential Entra application and grant
+Microsoft Graph **application** permission `Mail.Send` with administrator consent.
+Restrict that application's use to the approved sender mailbox using the college's
+Exchange Online application-access policy. Do not reuse the SPA or API registration.
+
 ## 3. First Deployment
 
 Run from the repository root with a clean, committed working tree:
@@ -177,3 +182,27 @@ Before importing live activity data:
 
 Custom DNS can be added after the default App Service URL is accepted. Register
 the final DNS URL in Entra before switching users to it.
+
+## Optional Graph Messaging
+
+Deploy once with messaging disabled so Key Vault exists. Then store the Graph
+application secret without placing it in source control or command history:
+
+```powershell
+$secret = Read-Host "Graph client secret" -AsSecureString
+$credential = [pscredential]::new("unused", $secret)
+az keyvault secret set `
+  --vault-name "<bicep-output-keyVaultName>" `
+  --name "messaging-graph-client-secret" `
+  --value $credential.GetNetworkCredential().Password `
+  --output none
+```
+
+Redeploy with `-EnableMessaging`, `-MessagingClientId` and
+`-MessagingSenderAddress`. In development or test, also provide
+`-MessagingTestRecipient`; all recipients are redirected to that safe address.
+Start with one inactive template, preview it, queue a test, inspect Delivery
+History, and only then activate an event rule.
+
+If Graph delivery fails repeatedly, disable `Messaging__Enabled` immediately.
+Queued items remain auditable and can be retried after configuration is corrected.

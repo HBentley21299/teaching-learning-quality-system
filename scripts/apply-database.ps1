@@ -124,7 +124,25 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\022_organisation_admin_and_shared_governance.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\004_seed_elevate_rooms.sql"),
     (Join-Path -Path $root -ChildPath "database\seed\005_seed_official_curriculum_staff.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\023_org_unit_management.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\023_org_unit_management.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\024_trusted_self_onboarding.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\025_learning_environment_central_actions.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\026_cpd_self_log_and_duration.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\027_elevate_learning_innovation_and_liv_cycles.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\028_eli_statement_ratings_and_liv_visit_delivery.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\029_staff_reflection_liv_focus_links.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\030_coaching_cycle_workflow_refactor.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\031_probationary_observations.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\032_probation_liv_link_uniqueness.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\033_academic_years_and_elevate_status.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\034_staff_profile_query_indexes.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\035_rename_liv.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\036_scalable_operations_and_org_alignment.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\037_scope_hardening_and_domain_events.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\038_domain_event_dispatch.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\039_staff_profile_summary_performance.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\040_learning_walk_practice_observed_rubric.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\041_elevate_learning_environment_audit_rubric.sql")
 )
 
 if ($ExcludeOfficialStaffData) {
@@ -162,13 +180,25 @@ if ($BaselineExistingDatabase) {
         throw "Cannot baseline because the database does not contain the final V1 organisation schema."
     }
 
+    $baselineCutoff = "023_org_unit_management.sql"
+    $baselineScripts = @()
     foreach ($script in $scripts) {
+        $baselineScripts += $script
+        if ([System.IO.Path]::GetFileName($script) -eq $baselineCutoff) {
+            break
+        }
+    }
+    if ($baselineScripts.Count -eq 0 -or [System.IO.Path]::GetFileName($baselineScripts[-1]) -ne $baselineCutoff) {
+        throw "The baseline cutoff migration '$baselineCutoff' was not found."
+    }
+
+    foreach ($script in $baselineScripts) {
         $migrationKey = $script.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
         $checksum = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
         $escapedKey = $migrationKey.Replace("'", "''")
         Invoke-DatabaseQuery -Query "INSERT dbo.schema_migrations (migration_key, checksum_sha256) VALUES (N'$escapedKey', '$checksum');" | Out-Null
     }
-    Write-Host "Existing database baselined with $($scripts.Count) migration entries."
+    Write-Host "Existing V1 database baselined through $baselineCutoff with $($baselineScripts.Count) migration entries."
 }
 
 foreach ($script in $scripts) {

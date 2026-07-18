@@ -68,7 +68,7 @@ Invoke-Native -FilePath $localDb -Arguments @("start", $Instance)
 Invoke-Native -FilePath $localDb -Arguments @("info", $Instance)
 
 $server = "(localdb)\$Instance"
-$sqlOptions = @("-No", "-C")
+$sqlOptions = @("-No", "-C", "-l", "60")
 
 Write-Host "Creating database $Database if needed..."
 $databaseCheckArguments = @(
@@ -84,6 +84,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 $databaseExists = ($databaseCheckOutput -join "`n") -match "(^|\s)1(\s|$)"
 $applyScripts = $false
+$baselineExistingDatabase = $false
 
 if ($Reset) {
     Write-Host "Resetting local development database $Database..."
@@ -97,14 +98,35 @@ elseif (!$databaseExists) {
 }
 else {
     Write-Host "Database $Database already exists; keeping its data and schema."
+    $baselineCheckArguments = @(
+        "-S", $server,
+        "-d", $Database,
+        "-E",
+        "-b",
+        "-h", "-1",
+        "-W"
+    ) + $sqlOptions + @(
+        "-Q",
+        "SET NOCOUNT ON; SELECT CASE WHEN OBJECT_ID(N'org.org_unit_leaderships', N'U') IS NOT NULL AND COALESCE((SELECT SUM(row_count) FROM sys.dm_db_partition_stats WHERE object_id = OBJECT_ID(N'dbo.schema_migrations', N'U') AND index_id IN (0, 1)), 0) = 0 THEN 1 ELSE 0 END;"
+    )
+    $baselineCheckOutput = & $sqlCmd @baselineCheckArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$sqlCmd failed while checking migration history for database $Database."
+    }
+    $baselineExistingDatabase = ($baselineCheckOutput -join "`n") -match "(^|\s)1(\s|$)"
 }
 
 if ($applyScripts) {
     $createDatabaseArguments = @("-S", $server, "-E", "-b") + $sqlOptions + @("-Q", $databaseSql)
     Invoke-Native -FilePath $sqlCmd -Arguments $createDatabaseArguments
-
-    Write-Host "Applying TLQS database scripts..."
-    & (Join-Path $PSScriptRoot "apply-database.ps1") -Server $server -Database $Database -SqlCmd $sqlCmd -SqlCmdOptions $sqlOptions
 }
+
+Write-Host "Applying pending TLQS database scripts..."
+& (Join-Path $PSScriptRoot "apply-database.ps1") `
+    -Server $server `
+    -Database $Database `
+    -SqlCmd $sqlCmd `
+    -SqlCmdOptions $sqlOptions `
+    -BaselineExistingDatabase:$baselineExistingDatabase
 
 Write-Host "Local database is ready: $server / $Database"

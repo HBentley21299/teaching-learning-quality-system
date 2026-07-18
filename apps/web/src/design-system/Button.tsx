@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import type { ComponentType, MouseEventHandler } from "react";
 import type { LucideProps } from "lucide-react";
 
 type ButtonProps = {
@@ -6,7 +6,7 @@ type ButtonProps = {
   disabled?: boolean;
   icon?: ComponentType<LucideProps>;
   variant?: "primary" | "secondary" | "quiet" | "danger";
-  onClick?: () => void;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
   title?: string;
 };
 

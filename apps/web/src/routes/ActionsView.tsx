@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DataTable } from "../components/DataTable";
+import { ExportExcelButton } from "../components/ExportButtons";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -26,12 +27,14 @@ import type {
 } from "../services/types";
 
 type ActionsViewProps = {
+  academicYear: string;
   actions: ActionSummary[];
   staff: StaffSummary[];
   orgUnits: OrgUnitSummary[];
   user: CurrentUser;
   onChanged: () => Promise<void>;
   initialStaffId?: string;
+  initialActionId?: string;
   onOpenSource?: (action: ActionSummary) => void;
 };
 
@@ -43,7 +46,7 @@ type SortMode = "due" | "newest" | "owner" | "source" | "title";
 const sourceLabels: Record<string, string> = {
   coaching_mentoring: "Coaching and Mentoring",
   elevate_environment: "Learning Environment",
-  elevate_practice: "Elevate Your Practice",
+  elevate_practice: "Elevate Learning and Innovation",
   learning_walk: "Learning Walk",
   liv: "LIV",
   standalone: "Standalone",
@@ -74,7 +77,7 @@ function formatDateTime(value?: string) {
   return value ? new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "Not recorded";
 }
 
-export function ActionsView({ actions, staff, orgUnits, user, onChanged, initialStaffId = "", onOpenSource }: ActionsViewProps) {
+export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", initialActionId = "", onOpenSource }: ActionsViewProps) {
   const [localActions, setLocalActions] = useState(actions);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -120,8 +123,15 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
     || user.permissions.includes("reports.view_all");
 
   useEffect(() => {
-    if (!includeDeleted) setLocalActions(actions);
-  }, [actions, includeDeleted]);
+    if (!includeDeleted) {
+      setLocalActions(actions);
+      return;
+    }
+
+    void api.actions(true)
+      .then((nextActions) => setLocalActions(nextActions.filter((action) => action.academicYear === academicYear)))
+      .catch(() => setLocalActions(actions));
+  }, [academicYear, actions, includeDeleted]);
 
   useEffect(() => {
     setStaffFilter(initialStaffId);
@@ -129,6 +139,12 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
       setOwnershipFilter("all");
     }
   }, [initialStaffId]);
+
+  useEffect(() => {
+    if (!initialActionId) return;
+    const action = localActions.find((candidate) => candidate.id === initialActionId);
+    if (action) void showDetail(action);
+  }, [initialActionId, localActions]);
 
   useEffect(() => {
     void api.actionOwnerOptions(undefined, subjectStaffId || undefined)
@@ -190,7 +206,8 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
 
   async function refresh() {
     await onChanged();
-    setLocalActions(await api.actions(includeDeleted));
+    const nextActions = await api.actions(includeDeleted);
+    setLocalActions(nextActions.filter((action) => action.academicYear === academicYear));
   }
 
   async function createAction() {
@@ -292,7 +309,10 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
     <div className="route-stack">
       <div className="route-header">
         <div><p className="eyebrow">Organisation-wide follow-up</p><h1>Actions</h1></div>
-        {canManageActions ? <Button icon={Plus} onClick={() => setIsCreating((current) => !current)} variant="primary">Create action</Button> : null}
+        <div className="toolbar">
+          {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear }} moduleKey="actions" /> : null}
+          {canManageActions ? <Button icon={Plus} onClick={() => setIsCreating((current) => !current)} variant="primary">Create action</Button> : null}
+        </div>
       </div>
 
       <div className="action-metrics" aria-label="Action totals">
@@ -333,7 +353,7 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
           <label className="mini-filter"><span>Source form</span><select onChange={(event) => setSourceFilter(event.target.value)} value={sourceFilter}><option value="">All sources</option>{sourceOptions.map((source) => <option key={source} value={source}>{sourceLabel(source)}</option>)}</select></label>
           <label className="mini-filter"><span>Due date</span><select onChange={(event) => setDueFilter(event.target.value as DueFilter)} value={dueFilter}><option value="all">Any date</option><option value="overdue">Overdue</option><option value="next_7">Next 7 days</option><option value="next_30">Next 30 days</option><option value="no_date">No date</option></select></label>
           <label className="mini-filter"><span>Sort by</span><select onChange={(event) => setSortMode(event.target.value as SortMode)} value={sortMode}><option value="due">Date due</option><option value="newest">Newest created</option><option value="owner">Owner</option><option value="source">Source</option><option value="title">Action</option></select></label>
-          {canManageActions ? <label className="action-deleted-toggle"><input checked={includeDeleted} onChange={(event) => { const checked = event.target.checked; setIncludeDeleted(checked); void api.actions(checked).then(setLocalActions); }} type="checkbox" /><span>Include deleted</span></label> : null}
+          {canManageActions ? <label className="action-deleted-toggle"><input checked={includeDeleted} onChange={(event) => setIncludeDeleted(event.target.checked)} type="checkbox" /><span>Include deleted</span></label> : null}
         </div>
 
         {visibleActions.length === 0 ? <div className="empty-row">No actions match the current filters.</div> : (
@@ -364,6 +384,10 @@ export function ActionsView({ actions, staff, orgUnits, user, onChanged, initial
           <dl className="action-detail-grid">
             <div><dt>Owner</dt><dd>{selectedAction.ownerStaffName}</dd></div><div><dt>Staff member</dt><dd>{selectedAction.subjectStaffName ?? "Not staff-specific"}</dd></div>
             <div><dt>Original date</dt><dd>{selectedAction.originalDueDate ?? "No date"}</dd></div><div><dt>Current date</dt><dd>{selectedAction.dueDate ?? "No date"}</dd></div>
+            {selectedAction.reviewDate ? <div><dt>Review date</dt><dd>{selectedAction.reviewDate}</dd></div> : null}
+            {selectedAction.progressStatus ? <div><dt>Coaching progress</dt><dd>{selectedAction.progressStatus.replaceAll("_", " ")}</dd></div> : null}
+            {selectedAction.intendedEvidence ? <div><dt>Intended evidence</dt><dd>{selectedAction.intendedEvidence}</dd></div> : null}
+            {selectedAction.intendedImpact ? <div><dt>Intended impact</dt><dd>{selectedAction.intendedImpact}</dd></div> : null}
             <div><dt>Visibility</dt><dd>{visibilityLabels[selectedAction.visibilitySetting]}</dd></div><div><dt>Faculty / team</dt><dd>{[selectedAction.facultyName, selectedAction.teamName].filter(Boolean).join(" / ") || "Organisation"}</dd></div>
             <div><dt>Created</dt><dd>{formatDateTime(selectedAction.createdAt)} by {selectedAction.createdByName ?? "System"}</dd></div><div><dt>Last updated</dt><dd>{formatDateTime(selectedAction.updatedAt)}{selectedAction.updatedByName ? ` by ${selectedAction.updatedByName}` : ""}</dd></div>
             {selectedAction.completedDate ? <div><dt>Closure</dt><dd>{selectedAction.completedDate} by {selectedAction.completedByName ?? "Unknown"}<br />{selectedAction.completionNote}</dd></div> : null}

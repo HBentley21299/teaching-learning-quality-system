@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { ExternalLink, Plus, Save } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Award, ChevronDown, ExternalLink, Eye, Plus, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { CollapsibleSection, Pagination } from "../components/CollapsibleSection";
 import { api } from "../services/api";
 import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
 import type {
@@ -8,30 +9,41 @@ import type {
   StaffProfileDetail,
   StaffProfileSummary,
   StaffReflectionSummary,
-  SaveStaffReflectionRequest
+  SaveStaffReflectionRequest,
+  ElevateStatusLevelSummary,
+  StaffProfileLivSummary,
+  StaffProfileProbationSummary,
+  StaffProfileSectionSummary
 } from "../services/types";
 
 type StaffReflectionDraft = SaveStaffReflectionRequest;
+export type StaffProfileRecordLinkHandler = (recordType: string, recordId: string, staffId: string) => void;
 
 /**
  * Full staff profile view assembled from its source records (Elevate Your
- * Practice, reflections, CPD, actions and coaching) and backed by
+ * Practice, staff reflections, CPD, actions and coaching) and backed by
  * GET /staff-profiles/{staffId}. Reflections are editable when the viewer is
  * the staff member themselves or holds staff.manage - the API enforces the
  * same rule on save.
  */
 export function StaffProfilePanel({
+  academicYear,
   staffId,
   user,
   profiles = [],
   openElevateResult = false,
-  elevateRecordId = ""
+  elevateRecordId = "",
+  onOpenRecord,
+  onOpenActionDetails
 }: {
+  academicYear: string;
   staffId: string;
   user: CurrentUser;
   profiles?: StaffProfileSummary[];
   openElevateResult?: boolean;
   elevateRecordId?: string;
+  onOpenRecord?: StaffProfileRecordLinkHandler;
+  onOpenActionDetails?: (actionId: string, staffId: string) => void;
 }) {
   const [detail, setDetail] = useState<StaffProfileDetail | null>(null);
   const [drafts, setDrafts] = useState<Record<string, StaffReflectionDraft>>({});
@@ -40,9 +52,24 @@ export function StaffProfilePanel({
   const [isCreatingReflection, setIsCreatingReflection] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [showElevateResult, setShowElevateResult] = useState(openElevateResult);
+  const [activeElevateRecordId, setActiveElevateRecordId] = useState(elevateRecordId);
+  const [activeProfileTab, setActiveProfileTab] = useState<"overview" | "cpd">("overview");
+  const [elevateEvidenceEventId, setElevateEvidenceEventId] = useState("");
+  const [elevateImplementationImpact, setElevateImplementationImpact] = useState("");
+  const [controlledLevelDrafts, setControlledLevelDrafts] = useState<Record<number, boolean>>({});
+  const [savingElevateLevel, setSavingElevateLevel] = useState<number | null>(null);
+  const [sectionSummary, setSectionSummary] = useState<StaffProfileSectionSummary | null>(null);
+  const [loadedSections, setLoadedSections] = useState<Record<string, boolean>>({});
+  const [loadingSection, setLoadingSection] = useState<string | null>(null);
+  const [sectionErrors, setSectionErrors] = useState<Record<string, string>>({});
+  const [sectionPages, setSectionPages] = useState<Record<string, { page: number; totalPages: number }>>({});
+  const [livRecords, setLivRecords] = useState<StaffProfileLivSummary[]>([]);
+  const [probationRecords, setProbationRecords] = useState<StaffProfileProbationSummary[]>([]);
+  const sectionRequests = useRef<Record<string, AbortController>>({});
 
   useEffect(() => {
     setShowElevateResult(openElevateResult);
+    setActiveElevateRecordId(elevateRecordId);
     if (!staffId) {
       setDetail(null);
       setIsLoading(false);
@@ -52,19 +79,29 @@ export function StaffProfilePanel({
     let cancelled = false;
     setIsLoading(true);
     setStatusMessage("");
-    api
-      .staffProfile(staffId)
-      .then((nextDetail) => {
+    setActiveProfileTab("overview");
+    setLoadedSections({});
+    setSectionErrors({});
+    setSectionPages({});
+    setLivRecords([]);
+    setProbationRecords([]);
+    Object.values(sectionRequests.current).forEach((controller) => controller.abort());
+    sectionRequests.current = {};
+    Promise.all([api.staffProfile(staffId, academicYear), api.staffProfileSectionSummary(staffId, academicYear)])
+      .then(([nextDetail, nextSummary]) => {
         if (cancelled) {
           return;
         }
 
         setDetail(nextDetail);
+        setSectionSummary(nextSummary);
         setDrafts(buildReflectionDrafts(nextDetail.reflections));
+        syncElevateStatusDrafts(nextDetail);
       })
       .catch(() => {
         if (!cancelled) {
           setDetail(null);
+          setSectionSummary(null);
           setStatusMessage("The Staff Profile could not be loaded from the API.");
         }
       })
@@ -76,25 +113,125 @@ export function StaffProfilePanel({
 
     return () => {
       cancelled = true;
+      Object.values(sectionRequests.current).forEach((controller) => controller.abort());
     };
-  }, [openElevateResult, staffId]);
+  }, [academicYear, openElevateResult, staffId]);
 
   const canEditReflections =
     Boolean(detail) && (detail?.staffId === user.staffId || user.permissions.includes("staff.manage"));
 
-  const submittedReflectionCount =
-    detail?.reflections.filter((reflection) => reflection.status === "submitted").length ?? 0;
-  const openActionCount = detail?.actions.filter((action) => !action.completedDate).length ?? 0;
-  const completedActionCount = detail?.actions.filter((action) => Boolean(action.completedDate)).length ?? 0;
+  const submittedReflectionCount = sectionSummary?.submittedReflectionCount ?? 0;
+  const openActionCount = sectionSummary?.openActionCount ?? 0;
+  const completedActionCount = sectionSummary?.completedActionCount ?? 0;
+  const totalCpdMinutes = sectionSummary?.totalCpdMinutes ?? 0;
+  const internalCpdCount = sectionSummary?.internalCpdCount ?? 0;
+  const externalCpdCount = sectionSummary?.externalCpdCount ?? 0;
 
   async function reloadDetail() {
     try {
-      const nextDetail = await api.staffProfile(staffId);
+      const [nextDetail, nextSummary] = await Promise.all([
+        api.staffProfile(staffId, academicYear),
+        api.staffProfileSectionSummary(staffId, academicYear)
+      ]);
       setDetail(nextDetail);
-      setDrafts(buildReflectionDrafts(nextDetail.reflections));
+      setSectionSummary(nextSummary);
+      syncElevateStatusDrafts(nextDetail);
+      if (loadedSections.reflections) await loadProfileSection("reflections", sectionPages.reflections?.page ?? 1, nextDetail);
+      if (loadedSections.cpd) await loadProfileSection("cpd", sectionPages.cpd?.page ?? 1, nextDetail);
+      if (loadedSections.coaching) await loadProfileSection("coaching", sectionPages.coaching?.page ?? 1, nextDetail);
+      if (loadedSections.liv) await loadProfileSection("liv", sectionPages.liv?.page ?? 1, nextDetail);
+      if (loadedSections.probation) await loadProfileSection("probation", sectionPages.probation?.page ?? 1, nextDetail);
+      if (loadedSections.actions) await loadProfileSection("actions", sectionPages.actions?.page ?? 1, nextDetail);
     } catch {
       setStatusMessage("The Staff Profile could not be reloaded from the API.");
     }
+  }
+
+  async function loadProfileSection(
+    section: "reflections" | "cpd" | "coaching" | "liv" | "probation" | "actions",
+    page = 1,
+    shell = detail
+  ) {
+    if (!shell) return;
+    sectionRequests.current[section]?.abort();
+    const controller = new AbortController();
+    sectionRequests.current[section] = controller;
+    setLoadingSection(section);
+    setSectionErrors((current) => ({ ...current, [section]: "" }));
+    try {
+      if (section === "reflections") {
+        const result = await api.staffProfileReflections(staffId, academicYear, page, 20, controller.signal);
+        setDetail((current) => current ? { ...current, reflections: result.items } : current);
+        setDrafts(buildReflectionDrafts(result.items));
+        setSectionPages((current) => ({ ...current, reflections: { page: result.page, totalPages: result.totalPages } }));
+      } else if (section === "cpd") {
+        const result = await api.staffProfileCpd(staffId, academicYear, page, 20, controller.signal);
+        setDetail((current) => current ? { ...current, cpdRecords: result.items } : current);
+        setSectionPages((current) => ({ ...current, cpd: { page: result.page, totalPages: result.totalPages } }));
+      } else if (section === "coaching") {
+        const result = await api.staffProfileCoaching(staffId, academicYear, page, 20, controller.signal);
+        setDetail((current) => current ? { ...current, coachingRecords: result.items } : current);
+        setSectionPages((current) => ({ ...current, coaching: { page: result.page, totalPages: result.totalPages } }));
+      } else if (section === "liv") {
+        const result = await api.staffProfileLiv(staffId, academicYear, page, 20, controller.signal);
+        setLivRecords(result.items);
+        setSectionPages((current) => ({ ...current, liv: { page: result.page, totalPages: result.totalPages } }));
+      } else if (section === "probation") {
+        const result = await api.staffProfileProbation(staffId, page, 20, controller.signal);
+        setProbationRecords(result.items);
+        setSectionPages((current) => ({ ...current, probation: { page: result.page, totalPages: result.totalPages } }));
+      } else {
+        const result = await api.staffProfileActions(staffId, academicYear, page, 20, controller.signal);
+        setDetail((current) => current ? { ...current, actions: result.items } : current);
+        setSectionPages((current) => ({ ...current, actions: { page: result.page, totalPages: result.totalPages } }));
+      }
+      setLoadedSections((current) => ({ ...current, [section]: true }));
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      setSectionErrors((current) => ({ ...current, [section]: "These records could not be loaded." }));
+    } finally {
+      if (sectionRequests.current[section] === controller) {
+        delete sectionRequests.current[section];
+        setLoadingSection((current) => current === section ? null : current);
+      }
+    }
+  }
+
+  function handleSectionExpansion(section: "reflections" | "coaching" | "liv" | "probation" | "actions", expanded: boolean) {
+    if (expanded && !loadedSections[section]) void loadProfileSection(section);
+    if (!expanded) sectionRequests.current[section]?.abort();
+  }
+
+  function syncElevateStatusDrafts(nextDetail: StaffProfileDetail) {
+    const explorer = nextDetail.elevateStatus.levels.find((level) => level.levelNumber === 1);
+    setElevateEvidenceEventId(explorer?.evidenceCpdEventId ?? "");
+    setElevateImplementationImpact(explorer?.implementationImpact ?? "");
+    setControlledLevelDrafts(Object.fromEntries(
+      nextDetail.elevateStatus.levels
+        .filter((level) => level.levelNumber > 1)
+        .map((level) => [level.levelNumber, level.isConfirmed])
+    ));
+  }
+
+  async function saveElevateLevel(level: ElevateStatusLevelSummary) {
+    if (!detail) return;
+
+    setSavingElevateLevel(level.levelNumber);
+    setStatusMessage("");
+    const result = await api.saveElevateStatusLevel(detail.staffId, level.levelNumber, {
+      academicYear: detail.academicYear,
+      confirmed: level.levelNumber === 1 ? true : Boolean(controlledLevelDrafts[level.levelNumber]),
+      evidenceCpdEventId: level.levelNumber === 1 ? elevateEvidenceEventId : undefined,
+      implementationImpact: level.levelNumber === 1 ? elevateImplementationImpact : undefined
+    });
+    setSavingElevateLevel(null);
+    if (!result.ok) {
+      setStatusMessage(result.message ?? "The Elevate Status level could not be saved.");
+      return;
+    }
+
+    setStatusMessage(`${level.name} ${level.levelNumber === 1 || controlledLevelDrafts[level.levelNumber] ? "saved" : "revoked"}.`);
+    await reloadDetail();
   }
 
   async function createReflection() {
@@ -111,7 +248,7 @@ export function StaffProfilePanel({
       return;
     }
 
-    setStatusMessage("Reflection draft created from the current Elevate Your Practice assessment.");
+    setStatusMessage("Reflection draft created from the current Elevate Learning and Innovation assessment.");
     await reloadDetail();
   }
 
@@ -168,31 +305,181 @@ export function StaffProfilePanel({
   }
 
   if (showElevateResult) {
-    return <ElevatePracticeResultPage onBack={() => setShowElevateResult(false)} recordId={elevateRecordId || detail.elevatePractice?.recordId} staffId={detail.staffId} />;
+    return <ElevatePracticeResultPage onBack={() => setShowElevateResult(false)} recordId={activeElevateRecordId || detail.elevatePractice?.recordId} staffId={detail.staffId} />;
   }
 
   return (
     <>
       {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
 
-      <section className="kpi-strip" aria-label="Staff Profile summary">
+      <div className="segmented-control" aria-label="Staff Profile section" role="tablist">
+        <button
+          aria-selected={activeProfileTab === "overview"}
+          className={activeProfileTab === "overview" ? "is-active" : ""}
+          onClick={() => setActiveProfileTab("overview")}
+          role="tab"
+          type="button"
+        >
+          Overview
+        </button>
+        <button
+          aria-selected={activeProfileTab === "cpd"}
+          className={activeProfileTab === "cpd" ? "is-active" : ""}
+          onClick={() => {
+            setActiveProfileTab("cpd");
+            if (!loadedSections.cpd) void loadProfileSection("cpd");
+          }}
+          role="tab"
+          type="button"
+        >
+          CPD
+        </button>
+      </div>
+
+      {detail.elevateStatus.levels.some((level) => level.isAwarded) ? (
+        <section className="elevate-status-banner" hidden={activeProfileTab !== "overview"} aria-label={`Elevate Status badges for ${detail.academicYear}`}>
+          <div className="elevate-status-banner-heading">
+            <div>
+              <span>Elevate Status</span>
+              <strong>{detail.displayName}</strong>
+            </div>
+            <small>{detail.academicYear}</small>
+          </div>
+          <div className="elevate-status-badges">
+            {detail.elevateStatus.levels.map((level) => (
+              level.isAwarded ? (
+                <img alt={`Elevate ${level.name}`} key={level.levelNumber} src={elevateStatusAsset(level.levelKey)} />
+              ) : (
+                <span aria-hidden="true" className="elevate-status-badge-placeholder" key={level.levelNumber} />
+              )
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <details className="panel elevate-status-panel" hidden={activeProfileTab !== "overview"}>
+        <summary className="elevate-status-summary">
+          <div className="elevate-status-summary-icon"><Award aria-hidden="true" size={20} /></div>
+          <div>
+            <h2>Elevate Status</h2>
+            <span>{detail.elevateStatus.internalCpdSessionsAttended} of 15 internal CPD sessions recorded in {detail.academicYear}</span>
+          </div>
+          <span>{detail.elevateStatus.levels.filter((level) => level.isAwarded).length} of 5 levels</span>
+          <ChevronDown aria-hidden="true" size={19} />
+        </summary>
+        <div className="elevate-status-body">
+          <div className="elevate-level-track" aria-label="Elevate Status progress">
+            {detail.elevateStatus.levels.map((level) => (
+              <div className={level.isAwarded ? "is-awarded" : level.isEligible ? "is-eligible" : ""} key={level.levelNumber}>
+                <span>Level {level.levelNumber}</span>
+                <strong>{level.name}</strong>
+                <small>{level.requiredSessions} sessions</small>
+              </div>
+            ))}
+          </div>
+
+          {detail.elevateStatus.levels.filter((level) => level.levelNumber === 1).map((level) => (
+            <section className="elevate-level-editor" key={level.levelNumber}>
+              <div className="elevate-level-editor-heading">
+                <div>
+                  <span>Level 1</span>
+                  <h3>Explorer evidence</h3>
+                </div>
+                <span className={`status-pill ${level.isAwarded ? "status-complete" : level.isEligible ? "status-open" : "status-draft"}`}>
+                  {level.isAwarded ? "Awarded" : level.isEligible ? "Ready for evidence" : `${level.requiredSessions} sessions required`}
+                </span>
+              </div>
+              <div className="elevate-explorer-fields">
+                <label className="entry-field">
+                  <span>Internal CPD session</span>
+                  <select
+                    disabled={!detail.elevateStatus.canSubmitExplorerEvidence || (!level.isEligible && !level.isAwarded)}
+                    onChange={(event) => setElevateEvidenceEventId(event.target.value)}
+                    value={elevateEvidenceEventId}
+                  >
+                    <option value="">Select attended CPD</option>
+                    {detail.elevateStatus.eligibleInternalCpd.map((record) => (
+                      <option key={record.cpdEventId} value={record.cpdEventId}>
+                        {formatDate(record.eventDate)} - {record.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="entry-field">
+                  <span>Implementation and impact</span>
+                  <textarea
+                    disabled={!detail.elevateStatus.canSubmitExplorerEvidence || (!level.isEligible && !level.isAwarded)}
+                    onChange={(event) => setElevateImplementationImpact(event.target.value)}
+                    placeholder="Describe what you implemented and the impact it had."
+                    rows={4}
+                    value={elevateImplementationImpact}
+                  />
+                </label>
+              </div>
+              {detail.elevateStatus.canSubmitExplorerEvidence ? (
+                <div className="elevate-level-editor-footer">
+                  <Button
+                    disabled={savingElevateLevel !== null || (!level.isEligible && !level.isAwarded) || !elevateEvidenceEventId || !elevateImplementationImpact.trim()}
+                    icon={Save}
+                    onClick={() => void saveElevateLevel(level)}
+                    variant="primary"
+                  >
+                    {savingElevateLevel === 1 ? "Saving..." : level.isAwarded ? "Update Explorer evidence" : "Save Explorer evidence"}
+                  </Button>
+                </div>
+              ) : null}
+            </section>
+          ))}
+
+          {detail.elevateStatus.canManageControlledLevels ? (
+            <section className="elevate-controlled-levels">
+              <div className="elevate-controlled-heading">
+                <h3>Teaching and Learning confirmations</h3>
+                <span>T&L and Admin only</span>
+              </div>
+              {detail.elevateStatus.levels.filter((level) => level.levelNumber > 1).map((level) => (
+                <article className="elevate-controlled-row" key={level.levelNumber}>
+                  <div>
+                    <span>Level {level.levelNumber} - {level.requiredSessions} sessions</span>
+                    <strong>{level.name}</strong>
+                    <p>{level.requirementLabel}</p>
+                  </div>
+                  <label className="elevate-confirmation-check">
+                    <input
+                      checked={Boolean(controlledLevelDrafts[level.levelNumber])}
+                      disabled={savingElevateLevel !== null}
+                      onChange={(event) => setControlledLevelDrafts((current) => ({ ...current, [level.levelNumber]: event.target.checked }))}
+                      type="checkbox"
+                    />
+                    <span>Confirmed</span>
+                  </label>
+                  <Button
+                    disabled={savingElevateLevel !== null
+                      || Boolean(controlledLevelDrafts[level.levelNumber]) === level.isConfirmed}
+                    icon={Save}
+                    onClick={() => void saveElevateLevel(level)}
+                  >
+                    {savingElevateLevel === level.levelNumber ? "Saving..." : "Save"}
+                  </Button>
+                </article>
+              ))}
+            </section>
+          ) : null}
+        </div>
+      </details>
+
+      <section className="kpi-strip" aria-label="Staff Profile summary" hidden={activeProfileTab !== "overview"}>
         <div className="kpi kpi-blue">
           <span>CPD sessions</span>
-          <strong>{detail.cpdRecords.length}</strong>
+          <strong>{sectionSummary?.cpdCount ?? 0}</strong>
         </div>
         <div className="kpi kpi-green">
           <span>Evidence submitted</span>
           <strong>{detail.evidenceSubmitted}</strong>
         </div>
-        <div className="kpi">
-          <span>Milestones completed</span>
-          <strong>{detail.milestonesCompleted}</strong>
-        </div>
         <div className="kpi kpi-amber">
-          <span>Reflections</span>
-          <strong>
-            {submittedReflectionCount}/{detail.reflections.length}
-          </strong>
+          <span>Reflections completed</span>
+          <strong>{submittedReflectionCount}</strong>
         </div>
         <div className="kpi kpi-red">
           <span>Open actions</span>
@@ -200,7 +487,7 @@ export function StaffProfilePanel({
         </div>
       </section>
 
-      <div className="staff-profile-layout">
+      <div className="staff-profile-layout" hidden={activeProfileTab !== "overview"}>
         <section className="panel">
           <div className="panel-heading">
             <h2>{detail.displayName}</h2>
@@ -218,7 +505,7 @@ export function StaffProfilePanel({
 
         <section className="panel">
           <div className="panel-heading">
-            <h2>Elevate Your Practice</h2>
+            <h2>Elevate Learning and Innovation</h2>
             <span>{detail.elevatePractice?.academicYear ?? "Current year"}</span>
           </div>
           <div className="profile-practice-tile">
@@ -227,77 +514,81 @@ export function StaffProfilePanel({
                 {detail.elevatePractice?.status === "submitted" ? "Submitted" : detail.elevatePractice?.status === "draft" ? "Draft" : "Not started"}
               </span>
               <strong className="profile-practice-judgement">
-                {detail.elevatePractice?.judgement ?? "No current judgement"}
+                {detail.elevatePractice?.status === "submitted"
+                  ? detail.elevatePractice.judgement ?? "Submitted"
+                  : "Not yet submitted"}
               </strong>
-              <span>Current rubric judgement</span>
+              <span>Current Elevate Learning and Innovation outcome</span>
             </div>
             {detail.elevatePractice?.status === "submitted" ? (
-              <Button icon={ExternalLink} onClick={() => setShowElevateResult(true)} variant="primary">View report</Button>
+              <Button icon={ExternalLink} onClick={() => {
+                setActiveElevateRecordId(detail.elevatePractice?.recordId ?? "");
+                setShowElevateResult(true);
+              }} variant="primary">View report</Button>
             ) : null}
           </div>
           <p className="muted-copy">
             {detail.elevatePractice?.status === "submitted"
               ? "The submitted assessment is locked. Development plans are available in Actions."
               : detail.elevatePractice?.status === "draft"
-                ? "The annual assessment is in progress and has not been submitted."
-                : "No annual self-assessment has been started yet."}
+                ? "The assessment is in progress and has not been submitted."
+                : "No self-assessment has been started yet."}
           </p>
-          {detail.elevatePractice?.developmentAreas.length ? (
+          {detail.elevatePractice?.focusAreas.length ? (
             <div className="profile-development-list">
-              <h3>Current development areas</h3>
-              {detail.elevatePractice.developmentAreas.map((area) => (
-                <article key={area.areaKey}>
+              <h3>Current LIV focus areas</h3>
+              {detail.elevatePractice.focusAreas.map((focus) => (
+                <article key={`${focus.focusType}-${focus.focusKey}`}>
                   <div>
-                    <strong>{area.areaName}</strong>
+                    <span>{focus.focusType === "primary" ? "Primary focus" : "Secondary focus"}</span>
+                    <strong>{focus.focusName}</strong>
                   </div>
-                  {area.developmentApproach ? <p>{area.developmentApproach}</p> : null}
-                  {area.intendedImpact ? <small>Intended impact: {area.intendedImpact}</small> : null}
                 </article>
               ))}
             </div>
           ) : (
-            <p className="muted-copy">No current development areas have been selected.</p>
+            <p className="muted-copy">No LIV focus areas have been selected.</p>
           )}
         </section>
       </div>
 
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Elevate Your Practice reflections</h2>
-          <span>{detail.elevatePractice?.reflections.length ?? 0} recorded</span>
-        </div>
-        {detail.elevatePractice?.reflections.length ? (
-          <div className="profile-source-reflections">
-            {detail.elevatePractice.reflections.map((reflection) => (
-              <article key={reflection.areaKey}>
-                <strong>{reflection.areaName}</strong>
-                <p>{reflection.reflection}</p>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="muted-copy">No Elevate Your Practice reflections are available for the current assessment.</p>
-        )}
-      </section>
-
-      <section className="panel">
+      <section className="panel" hidden={activeProfileTab !== "cpd"} role="tabpanel">
         <div className="panel-heading">
           <h2>CPD engagement</h2>
-          <span>{detail.cpdRecords.length} attended</span>
+          <span>{formatDuration(totalCpdMinutes)} recorded</span>
         </div>
-        <div className="table-shell">
+        <div className="profile-cpd-summary">
+          <div>
+            <span>Total CPD time</span>
+            <strong>{formatDuration(totalCpdMinutes)}</strong>
+          </div>
+          <div>
+            <span>Internal CPD</span>
+            <strong>{internalCpdCount}</strong>
+          </div>
+          <div>
+            <span>External CPD</span>
+            <strong>{externalCpdCount}</strong>
+          </div>
+        </div>
+        {loadingSection === "cpd" ? <div className="section-state" role="status">Loading CPD records...</div> : null}
+        {sectionErrors.cpd ? <div className="section-state section-state-error" role="alert">{sectionErrors.cpd}</div> : null}
+        {loadingSection !== "cpd" && !sectionErrors.cpd ? <div className="table-shell">
           <table>
             <thead>
               <tr>
                 <th>Session</th>
                 <th>Date</th>
                 <th>Themes</th>
+                <th>Type</th>
+                <th>Duration</th>
+                <th>Record</th>
               </tr>
             </thead>
             <tbody>
               {detail.cpdRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={3}>No CPD attendance has been recorded yet.</td>
+                  <td colSpan={6}>No CPD attendance has been recorded yet.</td>
                 </tr>
               ) : (
                 detail.cpdRecords.map((record) => (
@@ -305,19 +596,163 @@ export function StaffProfilePanel({
                     <td>{record.title}</td>
                     <td>{record.eventDate}</td>
                     <td>{formatThemes(record.themes)}</td>
+                    <td>{record.isInternal ? "Internal" : "External"}</td>
+                    <td>{record.durationMinutes ? formatDuration(record.durationMinutes) : "Not recorded"}</td>
+                    <td>
+                      {onOpenRecord ? (
+                        <button className="icon-button" onClick={() => onOpenRecord("cpd_event", record.recordId, detail.staffId)} title={`Open full CPD record for ${record.title}`} type="button">
+                          <ExternalLink aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div> : null}
+        <Pagination page={sectionPages.cpd?.page ?? 1} totalPages={sectionPages.cpd?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("cpd", page)} />
+      </section>
+
+      <div hidden={activeProfileTab !== "overview"}>
+      <CollapsibleSection
+        count={sectionSummary?.livCount ?? 0}
+        defaultExpanded={false}
+        emptyMessage="No active LIV records are associated with this staff member."
+        error={sectionErrors.liv}
+        isEmpty={(sectionSummary?.livCount ?? 0) === 0}
+        isLoading={loadingSection === "liv"}
+        onExpandedChange={(expanded) => handleSectionExpansion("liv", expanded)}
+        statusSummary="Active LIV record history"
+        storageKey={`staff-profile:${staffId}:${academicYear}:liv`}
+        title="LIV records"
+      >
+        <div className="table-shell">
+          <table>
+            <thead>
+              <tr>
+                <th>Record</th>
+                <th>Date</th>
+                <th>Reviewer</th>
+                <th>Faculty / team</th>
+                <th>Current stage</th>
+                <th>Status</th>
+                <th>Full record</th>
+              </tr>
+            </thead>
+            <tbody>
+              {livRecords.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>No active LIV records are associated with this staff member.</td>
+                </tr>
+              ) : (
+                livRecords.map((record) => (
+                  <tr key={record.id}>
+                    <td><strong>{record.title}</strong></td>
+                    <td>{record.recordDate ? formatDate(record.recordDate) : formatDateTime(record.createdAt)}</td>
+                    <td>{record.reviewerName ?? "Not assigned"}</td>
+                    <td>{[record.parentOrgUnitCode, record.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td>
+                    <td>{formatLivStage(record.currentStage)}</td>
+                    <td>
+                      <span className={`status-pill ${record.status === "closed" ? "status-complete" : "status-draft"}`}>
+                        {record.status === "closed" ? "Closed" : "In progress"}
+                      </span>
+                    </td>
+                    <td>
+                      {onOpenRecord ? (
+                        <button
+                          className="icon-button"
+                          onClick={() => onOpenRecord("liv", record.recordId, detail.staffId)}
+                          title={`Open full LIV record for ${detail.displayName}`}
+                          type="button"
+                        >
+                          <ExternalLink aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-      </section>
+        <Pagination page={sectionPages.liv?.page ?? 1} totalPages={sectionPages.liv?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("liv", page)} />
+      </CollapsibleSection>
+      </div>
 
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Coaching and mentoring</h2>
-          <span>{detail.coachingRecords.length} sessions</span>
+      {(sectionSummary?.probationCount ?? 0) > 0 ? (
+        <div hidden={activeProfileTab !== "overview"}>
+          <CollapsibleSection
+            count={sectionSummary?.probationCount ?? 0}
+            defaultExpanded={false}
+            error={sectionErrors.probation}
+            isEmpty={probationRecords.length === 0 && loadedSections.probation}
+            isLoading={loadingSection === "probation"}
+            onExpandedChange={(expanded) => handleSectionExpansion("probation", expanded)}
+            statusSummary="Visible probationary observation history"
+            storageKey={`staff-profile:${staffId}:probation`}
+            title="Probationary Records"
+          >
+            <div className="table-shell">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Record</th>
+                    <th>Academic year</th>
+                    <th>Faculty / team</th>
+                    <th>Progress</th>
+                    <th>Status</th>
+                    <th>Full details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {probationRecords.map((record) => (
+                    <tr key={record.id}>
+                      <td>
+                        <strong>{record.title}</strong>
+                        <small className="table-subline">Created {formatDateTime(record.createdAt)}</small>
+                      </td>
+                      <td>{record.academicYear}</td>
+                      <td>{[record.parentOrgUnitCode, record.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td>
+                      <td>Observation {record.currentObservationNumber} of 3</td>
+                      <td>
+                        <span className={`status-pill ${record.status === "in_progress" ? "status-draft" : "status-complete"}`}>
+                          {formatProbationStatus(record.status)}
+                        </span>
+                      </td>
+                      <td>
+                        {onOpenRecord ? (
+                          <Button
+                            icon={ExternalLink}
+                            onClick={() => onOpenRecord("probation_case", record.recordId, detail.staffId)}
+                            variant="secondary"
+                          >
+                            View Full Details
+                          </Button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination page={sectionPages.probation?.page ?? 1} totalPages={sectionPages.probation?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("probation", page)} />
+          </CollapsibleSection>
         </div>
+      ) : null}
+
+      <div hidden={activeProfileTab !== "overview"}>
+      <CollapsibleSection
+        count={sectionSummary?.coachingCount ?? 0}
+        emptyMessage="No coaching or mentoring sessions have been recorded yet."
+        error={sectionErrors.coaching}
+        isEmpty={(sectionSummary?.coachingCount ?? 0) === 0}
+        isLoading={loadingSection === "coaching"}
+        onExpandedChange={(expanded) => handleSectionExpansion("coaching", expanded)}
+        statusSummary="Session history"
+        storageKey={`staff-profile:${staffId}:${academicYear}:coaching`}
+        title="Coaching and mentoring"
+      >
         <div className="table-shell">
           <table>
             <thead>
@@ -327,12 +762,13 @@ export function StaffProfilePanel({
                 <th>Coach or mentor</th>
                 <th>Focus</th>
                 <th>Status</th>
+                <th>Report</th>
               </tr>
             </thead>
             <tbody>
               {detail.coachingRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No coaching or mentoring sessions have been recorded yet.</td>
+                  <td colSpan={6}>No coaching or mentoring sessions have been recorded yet.</td>
                 </tr>
               ) : (
                 detail.coachingRecords.map((record) => (
@@ -344,13 +780,25 @@ export function StaffProfilePanel({
                     <td>{formatDate(record.sessionDate)}</td>
                     <td>{record.coachName}</td>
                     <td>
-                      {record.mainFocus ?? "Not recorded"}
-                      {record.keyTakeaway ? <small className="table-subline">{record.keyTakeaway}</small> : null}
+                      {record.primaryFocus ?? "Not recorded"}
+                      {record.specificSessionFocus ? <small className="table-subline">{record.specificSessionFocus}</small> : null}
                     </td>
                     <td>
                       <span className={`status-pill ${record.status === "completed" ? "status-complete" : "status-draft"}`}>
                         {record.status === "completed" ? "Completed" : "Draft"}
                       </span>
+                    </td>
+                    <td>
+                      {onOpenRecord ? (
+                        <button
+                          className="icon-button"
+                          onClick={() => onOpenRecord("coaching_session", record.recordId, detail.staffId)}
+                          title={record.status === "completed" ? "Open full completed coaching report" : "Open full coaching record"}
+                          type="button"
+                        >
+                          <ExternalLink aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))
@@ -358,27 +806,32 @@ export function StaffProfilePanel({
             </tbody>
           </table>
         </div>
-      </section>
+        <Pagination page={sectionPages.coaching?.page ?? 1} totalPages={sectionPages.coaching?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("coaching", page)} />
+      </CollapsibleSection>
+      </div>
 
-      <section className="panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Staff reflections</h2>
-            <span>{detail.reflections.length} record{detail.reflections.length === 1 ? "" : "s"}</span>
-          </div>
-          {canEditReflections ? (
+      <div hidden={activeProfileTab !== "overview"}>
+      <CollapsibleSection
+        actions={canEditReflections ? (
             <Button
-              disabled={isCreatingReflection || detail.elevatePractice?.status !== "submitted"}
+              disabled={isCreatingReflection || detail.elevatePractice?.status !== "submitted" || detail.academicYear !== currentAcademicYear()}
               icon={Plus}
               onClick={() => void createReflection()}
               variant="primary"
             >
               {isCreatingReflection ? "Creating..." : "Add reflection"}
             </Button>
-          ) : (
-            <span>Read only</span>
-          )}
-        </div>
+          ) : undefined}
+        count={sectionSummary?.reflectionCount ?? 0}
+        emptyMessage="No staff reflections have been recorded."
+        error={sectionErrors.reflections}
+        isEmpty={(sectionSummary?.reflectionCount ?? 0) === 0}
+        isLoading={loadingSection === "reflections"}
+        onExpandedChange={(expanded) => handleSectionExpansion("reflections", expanded)}
+        statusSummary={`${submittedReflectionCount} submitted`}
+        storageKey={`staff-profile:${staffId}:${academicYear}:reflections`}
+        title="Staff reflections"
+      >
         <div className="staff-reflection-list">
           {detail.reflections.length === 0 ? (
             <p className="muted-copy">No staff reflections have been recorded.</p>
@@ -387,115 +840,141 @@ export function StaffProfilePanel({
             const isSaving = savingReflectionId === reflection.id;
             const hasChanges = reflectionHasChanges(reflection, draft);
             return (
-              <article className="staff-reflection-entry" key={reflection.id}>
-                <div className="staff-reflection-heading">
+              <details className="staff-reflection-entry" key={reflection.id}>
+                <summary className="staff-reflection-heading">
                   <div>
                     <h3>Reflection from {formatDate(reflection.reflectionDate)}</h3>
-                    <span>Elevate Your Practice {reflection.elevatePracticeAcademicYear}</span>
+                    <span>Elevate Learning and Innovation {reflection.elevatePracticeAcademicYear}</span>
                   </div>
                   <span className={`status-pill ${reflection.status === "submitted" ? "status-complete" : "status-draft"}`}>
                     {reflection.status === "submitted" ? "Submitted" : "Draft"}
                   </span>
-                </div>
+                  <ChevronDown aria-hidden="true" size={18} />
+                </summary>
 
-                <div className="staff-reflection-meta-grid">
-                  <label className="entry-field">
-                    <span>Reflection date</span>
-                    <input
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(reflection.id, "reflectionDate", event.target.value)}
-                      type="date"
-                      value={draft.reflectionDate}
-                    />
-                  </label>
-                  <label className="entry-field">
-                    <span>Record status</span>
-                    <select
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(
-                        reflection.id,
-                        "status",
-                        event.target.value as StaffReflectionDraft["status"]
-                      )}
-                      value={draft.status}
-                    >
-                      <option value="draft">Draft</option>
-                      <option value="submitted">Submitted</option>
-                    </select>
-                  </label>
-                </div>
+                <div className="staff-reflection-body">
+                  <div className="staff-reflection-meta-grid">
+                    <label className="entry-field">
+                      <span>Reflection date</span>
+                      <input
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(reflection.id, "reflectionDate", event.target.value)}
+                        type="date"
+                        value={draft.reflectionDate}
+                      />
+                    </label>
+                    <label className="entry-field">
+                      <span>Record status</span>
+                      <select
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(
+                          reflection.id,
+                          "status",
+                          event.target.value as StaffReflectionDraft["status"]
+                        )}
+                        value={draft.status}
+                      >
+                        <option value="draft">Draft</option>
+                        <option value="submitted">Submitted</option>
+                      </select>
+                    </label>
+                  </div>
 
-                <div className="staff-reflection-areas">
-                  <strong>Linked development areas</strong>
-                  {reflection.developmentAreas.length === 0 ? (
-                    <span>None selected in the linked assessment</span>
-                  ) : (
-                    <ul>
-                      {reflection.developmentAreas.map((area) => (
-                        <li key={area.developmentAreaId}>{area.textSnapshot}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+                  <div className="staff-reflection-areas">
+                    <strong>Linked LIV focus areas</strong>
+                    {reflection.focusAreas.length === 0 ? (
+                      <span>No primary or secondary focus was recorded in the linked assessment</span>
+                    ) : (
+                      <ul>
+                        {reflection.focusAreas.map((focus) => (
+                          <li key={`${focus.focusType}-${focus.displayOrder}`}>
+                            <strong>{focus.focusType === "primary" ? "Primary" : "Secondary"}:</strong> {focus.textSnapshot}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
 
-                <div className="staff-reflection-fields">
-                  <label className="entry-field">
-                    <span>Progress</span>
-                    <textarea
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(reflection.id, "progress", event.target.value)}
-                      rows={4}
-                      value={draft.progress ?? ""}
-                    />
-                  </label>
-                  <label className="entry-field">
-                    <span>Impact</span>
-                    <textarea
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(reflection.id, "impact", event.target.value)}
-                      rows={4}
-                      value={draft.impact ?? ""}
-                    />
-                  </label>
-                  <label className="entry-field">
-                    <span>Examples</span>
-                    <textarea
-                      disabled={!canEditReflections}
-                      onChange={(event) => updateReflectionDraft(reflection.id, "examples", event.target.value)}
-                      rows={4}
-                      value={draft.examples ?? ""}
-                    />
-                  </label>
-                </div>
+                  <div className="staff-reflection-fields">
+                    <label className="entry-field">
+                      <span>Progress</span>
+                      <textarea
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(reflection.id, "progress", event.target.value)}
+                        rows={4}
+                        value={draft.progress ?? ""}
+                      />
+                    </label>
+                    <label className="entry-field">
+                      <span>Impact</span>
+                      <textarea
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(reflection.id, "impact", event.target.value)}
+                        rows={4}
+                        value={draft.impact ?? ""}
+                      />
+                    </label>
+                    <label className="entry-field">
+                      <span>Examples</span>
+                      <textarea
+                        disabled={!canEditReflections}
+                        onChange={(event) => updateReflectionDraft(reflection.id, "examples", event.target.value)}
+                        rows={4}
+                        value={draft.examples ?? ""}
+                      />
+                    </label>
+                  </div>
 
-                <div className="staff-reflection-footer">
-                  <small className="muted-copy">
-                    {reflection.updatedAt
-                      ? `Updated ${formatDateTime(reflection.updatedAt)}${reflection.updatedByName ? ` by ${reflection.updatedByName}` : ""}`
-                      : `Created ${formatDateTime(reflection.createdAt)}${reflection.createdByName ? ` by ${reflection.createdByName}` : ""}`}
-                  </small>
-                  {canEditReflections ? (
-                    <Button
-                      disabled={isSaving || !hasChanges}
-                      icon={Save}
-                      onClick={() => void saveReflection(reflection)}
-                      variant="primary"
-                    >
-                      {isSaving ? "Saving..." : "Save reflection"}
-                    </Button>
-                  ) : null}
+                  <div className="staff-reflection-footer">
+                    <small className="muted-copy">
+                      {reflection.updatedAt
+                        ? `Updated ${formatDateTime(reflection.updatedAt)}${reflection.updatedByName ? ` by ${reflection.updatedByName}` : ""}`
+                        : `Created ${formatDateTime(reflection.createdAt)}${reflection.createdByName ? ` by ${reflection.createdByName}` : ""}`}
+                    </small>
+                    <div className="profile-record-actions">
+                      <Button
+                        icon={ExternalLink}
+                        onClick={() => {
+                          setActiveElevateRecordId(reflection.elevatePracticeRecordId);
+                          setShowElevateResult(true);
+                        }}
+                        variant="secondary"
+                      >
+                        Open linked report
+                      </Button>
+                      {canEditReflections ? (
+                        <Button
+                          disabled={isSaving || !hasChanges}
+                          icon={Save}
+                          onClick={() => void saveReflection(reflection)}
+                          variant="primary"
+                        >
+                          {isSaving ? "Saving..." : "Save reflection"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
-              </article>
+              </details>
             );
           })}
         </div>
-      </section>
+        <Pagination page={sectionPages.reflections?.page ?? 1} totalPages={sectionPages.reflections?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("reflections", page)} />
+      </CollapsibleSection>
+      </div>
 
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Actions</h2>
-          <span>{openActionCount} open / {completedActionCount} completed</span>
-        </div>
+      <div hidden={activeProfileTab !== "overview"}>
+      <CollapsibleSection
+        count={openActionCount + completedActionCount}
+        emptyMessage="No actions are connected to this staff member."
+        error={sectionErrors.actions}
+        isEmpty={openActionCount + completedActionCount === 0}
+        isLoading={loadingSection === "actions"}
+        onExpandedChange={(expanded) => handleSectionExpansion("actions", expanded)}
+        statusSummary={`${openActionCount} open / ${sectionSummary?.overdueActionCount ?? 0} overdue / ${completedActionCount} completed`}
+        storageKey={`staff-profile:${staffId}:${academicYear}:actions`}
+        title="Actions"
+      >
         <div className="table-shell">
           <table>
             <thead>
@@ -505,12 +984,13 @@ export function StaffProfilePanel({
                 <th>Source</th>
                 <th>Due</th>
                 <th>Status</th>
+                <th>Details</th>
               </tr>
             </thead>
             <tbody>
               {detail.actions.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No actions are connected to this staff member.</td>
+                  <td colSpan={6}>No actions are connected to this staff member.</td>
                 </tr>
               ) : (
                 detail.actions.map((action) => (
@@ -523,6 +1003,15 @@ export function StaffProfilePanel({
                     <td>
                       {formatActionSource(action.sourceModuleName, action.sourceRecordType)}
                       {action.sourceRecordTitle ? <small className="table-subline">{action.sourceRecordTitle}</small> : null}
+                      {action.sourceRecordId && action.sourceRecordType && onOpenRecord ? (
+                        <button
+                          className="profile-inline-record-link"
+                          onClick={() => onOpenRecord(action.sourceRecordType!, action.sourceRecordId!, detail.staffId)}
+                          type="button"
+                        >
+                          Open source record
+                        </button>
+                      ) : null}
                     </td>
                     <td>{action.dueDate ? formatDate(action.dueDate) : "No due date"}</td>
                     <td>
@@ -532,13 +1021,22 @@ export function StaffProfilePanel({
                         {action.completedDate ? "Closed" : action.isOverdue ? "Overdue" : "Open"}
                       </span>
                     </td>
+                    <td>
+                      {onOpenActionDetails ? (
+                        <button className="icon-button" onClick={() => onOpenActionDetails(action.id, detail.staffId)} title={`Open full action details for ${action.title}`} type="button">
+                          <Eye aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-      </section>
+        <Pagination page={sectionPages.actions?.page ?? 1} totalPages={sectionPages.actions?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("actions", page)} />
+      </CollapsibleSection>
+      </div>
     </>
   );
 }
@@ -553,6 +1051,14 @@ function formatThemes(themes?: string) {
     .map((theme) => theme.trim())
     .filter(Boolean)
     .join(", ");
+}
+
+function formatDuration(totalMinutes: number) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes} minutes`;
+  if (minutes === 0) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  return `${hours}h ${minutes}m`;
 }
 
 function buildReflectionDrafts(reflections: StaffReflectionSummary[]) {
@@ -599,7 +1105,25 @@ function formatDate(value: string) {
   });
 }
 
+function formatLivStage(value: string) {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function formatProbationStatus(value: StaffProfileProbationSummary["status"]) {
+  if (value === "in_progress") return "In progress";
+  if (value === "completed") return "Completed";
+  return "Closed";
+}
+
 function formatActionSource(moduleName?: string, recordType?: string) {
+  if (recordType === "liv") {
+    return "Learning and Innovation Visits";
+  }
+
   if (moduleName) {
     return moduleName;
   }
@@ -614,6 +1138,17 @@ function formatActionSource(moduleName?: string, recordType?: string) {
   return "Action engine";
 }
 
-function formatCoachingType(value: "coaching" | "mentoring" | "combined") {
-  return value === "combined" ? "Coaching and mentoring" : value.charAt(0).toUpperCase() + value.slice(1);
+function formatCoachingType(value: "coaching" | "mentoring") {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function elevateStatusAsset(levelKey: ElevateStatusLevelSummary["levelKey"]) {
+  return `/system-assets/elevate-status/${levelKey}.png`;
+}
+
+function currentAcademicYear() {
+  const now = new Date();
+  const calendarYear = now.getUTCFullYear();
+  const startYear = now.getUTCMonth() >= 7 ? calendarYear : calendarYear - 1;
+  return `${startYear}/${String((startYear + 1) % 100).padStart(2, "0")}`;
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
@@ -450,9 +451,10 @@ public sealed partial class SqlFoundationDataStore(
             reader => new RoomSummary(reader.GetGuid(0), reader.GetString(1), reader.GetString(2)),
             cancellationToken);
 
-    public Task<IReadOnlyList<ElevateEnvironmentPillarSummary>> GetElevateEnvironmentPillarsAsync(
-        CancellationToken cancellationToken) =>
-        QueryAsync(
+    public async Task<IReadOnlyList<ElevateEnvironmentPillarSummary>> GetElevateEnvironmentPillarsAsync(
+        CancellationToken cancellationToken)
+    {
+        var rows = await QueryAsync(
             """
             SELECT pillar.id,
                    pillar.pillar_key,
@@ -461,14 +463,32 @@ public sealed partial class SqlFoundationDataStore(
                    pillar.display_order,
                    CASE WHEN pillar.is_active = 1 AND asset.is_active = 1 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,
                    asset.asset_uri,
-                   asset.alt_text
+                   asset.alt_text,
+                   descriptor.id,
+                   descriptor.numerical_score,
+                   descriptor.judgement_key,
+                   descriptor.judgement_label,
+                   descriptor.descriptor,
+                   practice_colour.colour_hex
             FROM quality.elevate_environment_pillars pillar
             JOIN core.system_assets asset ON asset.id = pillar.system_asset_id
+            LEFT JOIN quality.elevate_environment_rubric_descriptors descriptor
+              ON descriptor.pillar_id = pillar.id
+             AND descriptor.archived_at IS NULL
+             AND descriptor.is_active = 1
+            OUTER APPLY (
+                SELECT TOP (1) practice_descriptor.colour_hex
+                FROM quality.elevate_practice_rubric_descriptors practice_descriptor
+                WHERE practice_descriptor.hidden_numeric_value = descriptor.numerical_score
+                  AND practice_descriptor.archived_at IS NULL
+                  AND practice_descriptor.is_active = 1
+                ORDER BY practice_descriptor.updated_at DESC, practice_descriptor.created_at DESC
+            ) practice_colour
             WHERE pillar.archived_at IS NULL
               AND asset.archived_at IS NULL
-            ORDER BY pillar.display_order, pillar.name;
+            ORDER BY pillar.display_order, pillar.name, descriptor.display_order;
             """,
-            reader => new ElevateEnvironmentPillarSummary(
+            reader => new ElevateEnvironmentPillarRow(
                 reader.GetGuid(0),
                 reader.GetString(1),
                 reader.GetString(2),
@@ -476,8 +496,50 @@ public sealed partial class SqlFoundationDataStore(
                 reader.GetInt32(4),
                 reader.GetBoolean(5),
                 reader.GetString(6),
-                reader.GetString(7)),
+                reader.GetString(7),
+                GetGuidOrNull(reader, 8),
+                reader.IsDBNull(9) ? null : Convert.ToInt32(reader.GetValue(9)),
+                GetStringOrNull(reader, 10),
+                GetStringOrNull(reader, 11),
+                GetStringOrNull(reader, 12),
+                GetStringOrNull(reader, 13)),
             cancellationToken);
+
+        return rows
+            .GroupBy(row => new
+            {
+                row.Id,
+                row.PillarKey,
+                row.Name,
+                row.Description,
+                row.DisplayOrder,
+                row.IsActive,
+                row.AssetUri,
+                row.AssetAltText
+            })
+            .Select(group => new ElevateEnvironmentPillarSummary(
+                group.Key.Id,
+                group.Key.PillarKey,
+                group.Key.Name,
+                group.Key.Description,
+                group.Key.DisplayOrder,
+                group.Key.IsActive,
+                group.Key.AssetUri,
+                group.Key.AssetAltText,
+                group
+                    .Where(row => row.DescriptorId.HasValue && row.Score.HasValue)
+                    .Select(row => new ElevateEnvironmentRubricDescriptorSummary(
+                        row.DescriptorId!.Value,
+                        row.Score!.Value,
+                        row.JudgementKey ?? "",
+                        row.Judgement ?? "",
+                        row.RubricDescriptor ?? "",
+                        row.ColorHex))
+                    .OrderBy(descriptor => descriptor.Score)
+                    .ToArray()))
+            .OrderBy(pillar => pillar.DisplayOrder)
+            .ToArray();
+    }
 
     public Task<IReadOnlyList<CourseSummary>> GetCoursesAsync(
         Guid orgUnitId,
@@ -1297,7 +1359,7 @@ public sealed partial class SqlFoundationDataStore(
         }
     }
 
-    public Task<IReadOnlyList<RecordSummary>> GetRecordsAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
+    public Task<IReadOnlyList<RecordSummary>> GetRecordsAsync(CurrentUser currentUser, string? academicYear, CancellationToken cancellationToken) =>
         QueryAsync(
             """
             WITH visible_staff AS (
@@ -1307,7 +1369,8 @@ public sealed partial class SqlFoundationDataStore(
                 SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT r.id, r.module_id, r.record_type, r.title, r.subject_staff_id, r.owner_staff_id, r.org_unit_id, r.record_date, r.created_at,
-                   COALESCE(latest_submission.status, 'submitted') AS submission_status
+                   COALESCE(latest_submission.status, 'submitted') AS submission_status,
+                   r.academic_year_key
             FROM core.records r
             OUTER APPLY (
                 SELECT TOP (1) fsub.status
@@ -1317,6 +1380,7 @@ public sealed partial class SqlFoundationDataStore(
                 ORDER BY fsub.created_at DESC
             ) latest_submission
             WHERE r.archived_at IS NULL
+              AND (@academicYear IS NULL OR r.academic_year_key = @academicYear)
               AND (
                     COALESCE(latest_submission.status, 'submitted') <> 'draft'
                     OR r.owner_staff_id = @currentStaffId
@@ -1350,7 +1414,11 @@ public sealed partial class SqlFoundationDataStore(
               )
             ORDER BY created_at DESC;
             """,
-            command => AddScopeParameters(command, currentUser),
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@academicYear", ToDbValue(academicYear));
+            },
             reader => new RecordSummary(
                 reader.GetGuid(0),
                 reader.GetGuid(1),
@@ -1361,7 +1429,8 @@ public sealed partial class SqlFoundationDataStore(
                 GetGuidOrNull(reader, 6),
                 GetDateOnlyOrNull(reader, 7),
                 reader.GetFieldValue<DateTimeOffset>(8),
-                reader.GetString(9)),
+                reader.GetString(9),
+                reader.GetString(10)),
             cancellationToken);
 
     public async Task<RecordDetailSummary?> GetRecordDetailAsync(
@@ -1433,6 +1502,11 @@ public sealed partial class SqlFoundationDataStore(
             LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
             WHERE r.id = @id
               AND (@includeArchived = 1 OR r.archived_at IS NULL)
+              AND (
+                    fsub.status <> 'draft'
+                    OR r.owner_staff_id = @currentStaffId
+                    OR @canViewAll = 1
+              )
               AND (
                     @canViewAll = 1
                     OR r.owner_staff_id = @currentStaffId
@@ -1633,7 +1707,29 @@ public sealed partial class SqlFoundationDataStore(
                    team.name AS team_name,
                    (SELECT COUNT(*) FROM quality.action_extensions extension WHERE extension.action_id = a.id),
                    latest_extension.reason,
-                   a.liv_visit_id
+                   a.liv_visit_id,
+                   a.liv_cycle_id,
+                   a.review_date,
+                   a.intended_evidence,
+                   a.intended_impact,
+                   a.progress_status,
+                   a.parent_action_id,
+                   COALESCE(
+                       r.academic_year_key,
+                       CONCAT(
+                           CASE WHEN MONTH(CONVERT(date, a.created_at)) >= 8
+                               THEN YEAR(CONVERT(date, a.created_at))
+                               ELSE YEAR(CONVERT(date, a.created_at)) - 1
+                           END,
+                           N'/',
+                           RIGHT(CONCAT(N'0', (
+                               CASE WHEN MONTH(CONVERT(date, a.created_at)) >= 8
+                                   THEN YEAR(CONVERT(date, a.created_at)) + 1
+                                   ELSE YEAR(CONVERT(date, a.created_at))
+                               END
+                           ) % 100), 2)
+                       )
+                   ) AS academic_year_key
             FROM quality.actions a
             LEFT JOIN core.records r ON r.id = a.source_record_id
             LEFT JOIN people.staff subject_staff ON subject_staff.id = a.subject_staff_id
@@ -1683,7 +1779,8 @@ public sealed partial class SqlFoundationDataStore(
                         OR r.owner_staff_id = @currentStaffId
                     ))
                     OR (a.visibility_setting = 'management_only' AND @canViewScopedActivities = 1)
-              );
+              )
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
             """;
 
         var actions = await QueryAsync(
@@ -1739,7 +1836,14 @@ public sealed partial class SqlFoundationDataStore(
                     GetStringOrNull(reader, 37),
                     reader.GetInt32(38),
                     GetStringOrNull(reader, 39),
-                    GetGuidOrNull(reader, 40));
+                    GetGuidOrNull(reader, 40),
+                    GetGuidOrNull(reader, 41),
+                    GetDateOnlyOrNull(reader, 42),
+                    GetStringOrNull(reader, 43),
+                    GetStringOrNull(reader, 44),
+                    GetStringOrNull(reader, 45),
+                    GetGuidOrNull(reader, 46),
+                    reader.GetString(47));
             },
             cancellationToken);
 
@@ -1840,8 +1944,8 @@ public sealed partial class SqlFoundationDataStore(
                 r.summary,
                 r.record_date,
                 r.created_at,
-                CASE WHEN r.record_type = 'coaching_session'
-                     THEN coaching_session.status
+                CASE WHEN r.record_type = 'coaching_session' THEN coaching_session.status
+                     WHEN r.record_type = 'probation_case' THEN probation_case.status
                      ELSE COALESCE(latest_submission.status, 'submitted')
                 END AS submission_status,
                 r.org_unit_id,
@@ -1866,35 +1970,57 @@ public sealed partial class SqlFoundationDataStore(
                 owner_staff.display_name AS owner_display_name,
                 subject_staff.display_name AS subject_display_name,
                 CASE
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND elevate_assessment.barrier_count > 0 THEN 'Priority improvement present'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 4.5 THEN 'Leading practice'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 3.5 THEN 'Strong'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 2.5 THEN 'Secure'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0
+                         AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 1.5 THEN 'Developing'
+                    WHEN r.record_type = 'elevate_environment'
+                         AND environment_rating_metrics.rating_count > 0 THEN 'Priority improvement'
                     WHEN r.record_type = 'elevate_environment' AND elevate_assessment.barrier_count > 0 THEN 'Barrier present'
                     WHEN r.record_type = 'elevate_environment'
                          AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 3 THEN 'Elevate'
                     WHEN r.record_type = 'elevate_environment'
                          AND CAST(elevate_assessment.total_score AS decimal(10, 2)) / NULLIF(elevate_assessment.scored_value_count, 0) >= 2 THEN 'Secure'
                     WHEN r.record_type = 'elevate_environment' THEN 'Emerging'
-                    WHEN r.record_type = 'coaching_session' THEN CASE coaching_session.main_focus
-                        WHEN 'teaching_learning' THEN 'Teaching & learning'
-                        WHEN 'subject_practice' THEN 'Subject practice'
-                        ELSE REPLACE(coaching_session.main_focus, '_', ' ')
-                    END
+                    WHEN r.record_type = 'coaching_session' THEN coaching_focus.display_name
+                    WHEN r.record_type = 'probation_case' THEN CONCAT('Observation ', probation_case.current_observation_number)
                     ELSE theme_response.response_text
                 END AS theme,
                 CASE
                     WHEN r.record_type = 'work_scrutiny' THEN r.summary
                     WHEN r.record_type = 'coaching_session' THEN CONCAT(
-                        REPLACE(coaching_session.session_type, '_', ' '),
+                        COALESCE(coaching_session.specific_session_focus, REPLACE(coaching_session.session_type, '_', ' ')),
                         CASE WHEN coaching_session.duration_minutes IS NULL THEN ''
                              ELSE CONCAT(', ', coaching_session.duration_minutes, ' minutes') END
+                    )
+                    WHEN r.record_type = 'probation_case' THEN CONCAT(
+                        'Highest completed: ', COALESCE(probation_metrics.highest_completed_observation, 0), ' of 3'
                     )
                     ELSE detail_response.response_text
                 END AS detail,
                 cpd_metrics.participant_area_breakdown,
                 COALESCE(cpd_metrics.participant_count, 0) AS participant_count,
                 COALESCE(cpd_metrics.attendance_credits, 0) AS attendance_credits,
-                COALESCE(scrutiny_detail.sample_size, 0) AS sample_size,
+                COALESCE(cpd_metrics.learning_minutes, 0) AS learning_minutes,
+                CASE WHEN r.record_type = 'probation_case'
+                     THEN COALESCE(probation_metrics.highest_completed_observation, 0)
+                     ELSE COALESCE(scrutiny_detail.sample_size, 0) END AS sample_size,
                 COALESCE(elevate_assessment.total_score, 0) AS score_total,
                 COALESCE(elevate_assessment.scored_value_count, 0) AS score_count,
-                COALESCE(elevate_assessment.barrier_count, 0) AS barrier_count
+                COALESCE(elevate_assessment.barrier_count, 0) AS barrier_count,
+                CASE WHEN environment_rating_metrics.rating_count > 0 THEN 5 ELSE 3 END AS score_maximum,
+                probation_metrics.linked_liv_source_record_id
             FROM core.records r
             LEFT JOIN people.staff owner_staff ON owner_staff.id = r.owner_staff_id
             LEFT JOIN people.staff subject_staff ON subject_staff.id = r.subject_staff_id
@@ -1905,8 +2031,24 @@ public sealed partial class SqlFoundationDataStore(
             LEFT JOIN quality.work_scrutiny_details scrutiny_detail ON scrutiny_detail.activity_id = activity.id
             LEFT JOIN quality.elevate_environment_assessments elevate_assessment ON elevate_assessment.record_id = r.id
             LEFT JOIN quality.rooms elevate_room ON elevate_room.id = elevate_assessment.room_id
+            OUTER APPLY (
+                SELECT COUNT_BIG(*) AS rating_count
+                FROM quality.elevate_environment_pillar_ratings pillar_rating
+                WHERE pillar_rating.record_id = r.id
+            ) environment_rating_metrics
             LEFT JOIN quality.coaching_sessions coaching_session ON coaching_session.record_id = r.id
                 AND coaching_session.archived_at IS NULL
+            LEFT JOIN core.lookup_values coaching_focus ON coaching_focus.id = coaching_session.primary_focus_lookup_value_id
+            LEFT JOIN quality.probation_cases probation_case ON probation_case.record_id = r.id
+                AND probation_case.archived_at IS NULL
+            OUTER APPLY (
+                SELECT MAX(CASE WHEN observation.status = N'completed' THEN observation.observation_number ELSE 0 END)
+                           AS highest_completed_observation,
+                       MAX(linked_liv.record_id) AS linked_liv_source_record_id
+                FROM quality.probation_observations observation
+                LEFT JOIN quality.liv_records linked_liv ON linked_liv.id = observation.linked_liv_record_id
+                WHERE observation.probation_case_id = probation_case.id
+            ) probation_metrics
             OUTER APPLY (
                 SELECT TOP (1) submission.id, submission.status
                 FROM forms.form_submissions submission
@@ -1935,7 +2077,7 @@ public sealed partial class SqlFoundationDataStore(
                   AND field.field_key = CASE r.record_type
                       WHEN 'work_scrutiny' THEN 'course_or_unit'
                       WHEN 'cpd_event' THEN 'delivery_mode'
-                      WHEN 'elevate_environment' THEN 'intended_purpose'
+                      WHEN 'elevate_environment' THEN NULL
                       ELSE 'staff_id'
                   END
             ) detail_response
@@ -1944,6 +2086,7 @@ public sealed partial class SqlFoundationDataStore(
                     COUNT(*) AS area_count,
                     COALESCE(SUM(area_metrics.participant_count), 0) AS participant_count,
                     COALESCE(SUM(area_metrics.attendance_credits), 0) AS attendance_credits,
+                    COALESCE(SUM(area_metrics.learning_minutes), 0) AS learning_minutes,
                     MAX(area_metrics.area_code) AS area_code,
                     MAX(area_metrics.area_name) AS area_name,
                     MAX(area_metrics.parent_area_code) AS parent_area_code,
@@ -1952,7 +2095,8 @@ public sealed partial class SqlFoundationDataStore(
                             COALESCE(area_metrics.parent_area_code, ''), '~',
                             COALESCE(area_metrics.area_code, 'Unassigned'), '~',
                             area_metrics.participant_count, '~',
-                            area_metrics.attendance_credits
+                            area_metrics.attendance_credits, '~',
+                            area_metrics.learning_minutes
                         ),
                         '|'
                     ) AS participant_area_breakdown
@@ -1962,7 +2106,8 @@ public sealed partial class SqlFoundationDataStore(
                         attendee_org.name AS area_name,
                         attendee_parent.code AS parent_area_code,
                         COUNT(attendance.id) AS participant_count,
-                        COALESCE(SUM(attendance.milestone_credit), 0) AS attendance_credits
+                        COALESCE(SUM(attendance.milestone_credit), 0) AS attendance_credits,
+                        COALESCE(SUM(event.duration_minutes), 0) AS learning_minutes
                     FROM cpd.cpd_events event
                     JOIN cpd.cpd_attendance attendance ON attendance.cpd_event_id = event.id
                         AND attendance.archived_at IS NULL
@@ -1983,7 +2128,7 @@ public sealed partial class SqlFoundationDataStore(
                 ) area_metrics
             ) cpd_metrics
             WHERE r.archived_at IS NULL
-              AND r.record_type IN ('learning_walk', 'work_scrutiny', 'cpd_event', 'elevate_environment', 'coaching_session')
+              AND r.record_type IN ('learning_walk', 'work_scrutiny', 'cpd_event', 'elevate_environment', 'coaching_session', 'probation_case')
               AND (
                     COALESCE(coaching_session.status, latest_submission.status, 'submitted') <> 'draft'
                     OR r.owner_staff_id = @currentStaffId
@@ -2041,9 +2186,24 @@ public sealed partial class SqlFoundationDataStore(
                             OR EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                         )
                     )
+                    OR (
+                        r.record_type = 'probation_case'
+                        AND (
+                            r.subject_staff_id = @currentStaffId
+                            OR EXISTS (
+                                SELECT 1 FROM quality.probation_case_reviewers reviewer
+                                WHERE reviewer.probation_case_id = probation_case.id
+                                  AND reviewer.staff_id = @currentStaffId
+                            )
+                            OR (@canViewScopedActivities = 1 AND (
+                                EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.subject_staff_id)
+                                OR EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                            ))
+                        )
+                    )
               )
             ORDER BY COALESCE(r.record_date, CONVERT(date, r.created_at)) DESC, r.created_at DESC
-            OPTION (FORCE ORDER, MAXDOP 1);
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE, MAX_GRANT_PERCENT = 1);
             """,
             command => AddScopeParameters(command, currentUser),
             reader => new ProcessDashboardRecordSummary(
@@ -2068,7 +2228,10 @@ public sealed partial class SqlFoundationDataStore(
                 Convert.ToInt32(reader.GetValue(18)),
                 Convert.ToInt32(reader.GetValue(19)),
                 Convert.ToInt32(reader.GetValue(20)),
-                Convert.ToInt32(reader.GetValue(21))),
+                Convert.ToInt32(reader.GetValue(21)),
+                Convert.ToInt32(reader.GetValue(22)),
+                Convert.ToInt32(reader.GetValue(23)),
+                GetGuidOrNull(reader, 24)),
             cancellationToken);
 
     public Task<IReadOnlyList<LearningWalkRollupSummary>> GetLearningWalkRollupAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
@@ -2129,24 +2292,52 @@ public sealed partial class SqlFoundationDataStore(
     {
         const string sql = """
             SELECT
-                profile.staff_id,
-                profile.external_id,
-                profile.display_name,
-                profile.email,
-                profile.job_title,
-                profile.primary_org_code,
-                profile.cpd_sessions_attended,
-                profile.evidence_records,
-                profile.open_actions,
-                profile.overdue_actions
-            FROM reporting.v_staff_profile_summary profile
-            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = profile.staff_id
-            ORDER BY profile.display_name;
+                staff.id,
+                staff.external_id,
+                staff.display_name,
+                staff.email,
+                staff.job_title,
+                org_unit.code,
+                COALESCE(cpd_totals.cpd_sessions_attended, 0),
+                COALESCE(evidence_totals.evidence_records, 0),
+                COALESCE(action_totals.open_actions, 0),
+                COALESCE(action_totals.overdue_actions, 0)
+            FROM people.staff staff
+            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = staff.id
+            LEFT JOIN org.org_units org_unit ON org_unit.id = staff.primary_org_unit_id
+            OUTER APPLY (
+                SELECT COUNT_BIG(*) AS cpd_sessions_attended
+                FROM cpd.cpd_attendance attendance
+                WHERE attendance.staff_id = staff.id
+                  AND attendance.archived_at IS NULL
+                  AND attendance.attendance_status = 'Attended'
+            ) cpd_totals
+            OUTER APPLY (
+                SELECT COUNT_BIG(*) AS evidence_records
+                FROM evidence.evidence_items evidence_item
+                WHERE evidence_item.staff_id = staff.id
+                  AND evidence_item.archived_at IS NULL
+            ) evidence_totals
+            OUTER APPLY (
+                SELECT
+                    COUNT_BIG(*) AS open_actions,
+                    SUM(CASE
+                        WHEN action_item.due_date < CONVERT(date, sysutcdatetime()) THEN CONVERT(bigint, 1)
+                        ELSE CONVERT(bigint, 0)
+                    END) AS overdue_actions
+                FROM quality.actions action_item
+                WHERE action_item.subject_staff_id = staff.id
+                  AND action_item.archived_at IS NULL
+                  AND action_item.completed_date IS NULL
+            ) action_totals
+            WHERE staff.archived_at IS NULL
+            ORDER BY staff.display_name
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
             """;
 
         return QueryAsync(
             sql,
-            command => command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId)),
+            command => command.Parameters.Add("@currentUserAccountId", System.Data.SqlDbType.UniqueIdentifier).Value = ToDbValue(currentUser.UserAccountId),
             reader => new StaffProfileSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -2467,8 +2658,12 @@ public sealed partial class SqlFoundationDataStore(
         }
 
         var sourceSubRecordType = request.SourceSubRecordType
-            ?? (request.LivVisitId.HasValue ? "liv_visit" : null);
-        var sourceSubRecordId = request.SourceSubRecordId ?? request.LivVisitId;
+            ?? (request.LivVisitId.HasValue ? "liv_visit" : request.LivCycleId.HasValue ? "liv_cycle" : null);
+        var sourceSubRecordId = request.SourceSubRecordId ?? request.LivVisitId ?? request.LivCycleId;
+        var linkedLivCycleId = request.LivCycleId
+            ?? (string.Equals(sourceSubRecordType, "liv_cycle", StringComparison.OrdinalIgnoreCase)
+                ? sourceSubRecordId
+                : null);
         var visibilitySetting = NormalizeActionVisibility(request.VisibilitySetting, request.PublishedToStaff);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -2496,6 +2691,51 @@ public sealed partial class SqlFoundationDataStore(
                 if (Convert.ToInt32(await validationCommand.ExecuteScalarAsync(cancellationToken)) != 1)
                 {
                     throw new WorkflowValidationException("The selected LIV visit does not belong to the source record.");
+                }
+            }
+
+            if (string.Equals(sourceSubRecordType, "liv_cycle", StringComparison.OrdinalIgnoreCase)
+                && sourceSubRecordId.HasValue)
+            {
+                await using var validationCommand = new SqlCommand(
+                    """
+                    SELECT COUNT(*)
+                    FROM quality.liv_cycles cycle
+                    JOIN quality.liv_records liv ON liv.id = cycle.liv_record_id
+                    WHERE cycle.id = @livCycleId
+                      AND liv.record_id = @sourceRecordId
+                      AND liv.archived_at IS NULL;
+                    """,
+                    connection,
+                    (SqlTransaction)transaction);
+                validationCommand.Parameters.AddWithValue("@livCycleId", sourceSubRecordId.Value);
+                validationCommand.Parameters.AddWithValue("@sourceRecordId", ToDbValue(request.SourceRecordId));
+                if (Convert.ToInt32(await validationCommand.ExecuteScalarAsync(cancellationToken)) != 1)
+                {
+                    throw new WorkflowValidationException("The selected LIV cycle does not belong to the source record.");
+                }
+            }
+
+            if (string.Equals(sourceSubRecordType, "probation_observation", StringComparison.OrdinalIgnoreCase)
+                && sourceSubRecordId.HasValue)
+            {
+                await using var validationCommand = new SqlCommand(
+                    """
+                    SELECT COUNT(*)
+                    FROM quality.probation_observations observation
+                    JOIN quality.probation_cases probation_case ON probation_case.id = observation.probation_case_id
+                    WHERE observation.id = @observationId
+                      AND probation_case.record_id = @sourceRecordId
+                      AND observation.archived_at IS NULL
+                      AND probation_case.archived_at IS NULL;
+                    """,
+                    connection,
+                    (SqlTransaction)transaction);
+                validationCommand.Parameters.AddWithValue("@observationId", sourceSubRecordId.Value);
+                validationCommand.Parameters.AddWithValue("@sourceRecordId", ToDbValue(request.SourceRecordId));
+                if (Convert.ToInt32(await validationCommand.ExecuteScalarAsync(cancellationToken)) != 1)
+                {
+                    throw new WorkflowValidationException("The selected probation observation does not belong to the source record.");
                 }
             }
 
@@ -2542,7 +2782,8 @@ public sealed partial class SqlFoundationDataStore(
                     published_to_staff,
                     visibility_setting,
                     created_by_user_account_id,
-                    liv_visit_id
+                    liv_visit_id,
+                    liv_cycle_id
                 )
                 OUTPUT inserted.id
                 VALUES (
@@ -2575,7 +2816,8 @@ public sealed partial class SqlFoundationDataStore(
                     @publishedToStaff,
                     @visibilitySetting,
                     @createdByUserAccountId,
-                    CASE WHEN @sourceSubRecordType = 'liv_visit' THEN @sourceSubRecordId ELSE NULL END
+                    CASE WHEN @sourceSubRecordType = 'liv_visit' THEN @sourceSubRecordId ELSE NULL END,
+                    @livCycleId
                 );
                 """,
                 connection,
@@ -2596,10 +2838,22 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@publishedToStaff", request.PublishedToStaff);
                 command.Parameters.AddWithValue("@visibilitySetting", visibilitySetting);
                 command.Parameters.AddWithValue("@createdByUserAccountId", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@livCycleId", ToDbValue(linkedLivCycleId));
 
                 actionId = (Guid)(await command.ExecuteScalarAsync(cancellationToken)
                     ?? throw new InvalidOperationException("Action insert did not return an id."));
             }
+
+            await InsertDomainEventAsync(
+                connection,
+                (SqlTransaction)transaction,
+                "action.assigned",
+                "action",
+                actionId,
+                request.SourceRecordId,
+                "{}",
+                currentUser.UserAccountId,
+                cancellationToken);
 
             await WriteAuditAsync(
                 connection,
@@ -2641,6 +2895,11 @@ public sealed partial class SqlFoundationDataStore(
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var canManageVisibleAction = AccessBoundaryPolicy.CanManageVisibleAction(
+            currentUser,
+            (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
+                .Any(action => action.Id == actionId));
+
         if (request.OwnerStaffId.HasValue)
         {
             var ownerOptions = await GetActionOwnerOptionsAsync(null, null, currentUser, cancellationToken);
@@ -2693,7 +2952,7 @@ public sealed partial class SqlFoundationDataStore(
             // wider edits need actions.manage.
             var isOwner = currentUser.StaffId == action.OwnerStaffId;
             var isSourceOwner = currentUser.StaffId.HasValue && currentUser.StaffId == action.SourceOwnerStaffId;
-            var canManage = currentUser.HasPermission(PermissionKeys.ActionsManage);
+            var canManage = canManageVisibleAction;
             if (!isOwner && !isSourceOwner && !canManage)
             {
                 await transaction.RollbackAsync(cancellationToken);
@@ -2761,6 +3020,12 @@ public sealed partial class SqlFoundationDataStore(
                         WHEN @cancelling = 1 THEN @cancellationComments
                         WHEN @reopening = 1 THEN NULL
                         ELSE cancellation_comments END,
+                    progress_status = CASE
+                        WHEN progress_status IS NULL THEN NULL
+                        WHEN @completing = 1 THEN 'completed'
+                        WHEN @cancelling = 1 THEN 'closed'
+                        WHEN @reopening = 1 THEN 'not_started'
+                        ELSE progress_status END,
                     status_lookup_value_id = CASE
                         WHEN @completing = 1 OR @reopening = 1 OR @cancelling = 1 THEN
                             (SELECT TOP (1) lv.id
@@ -2796,6 +3061,19 @@ public sealed partial class SqlFoundationDataStore(
 
             var auditAction = completing ? "action.completed" : cancelling ? "action.cancelled" : reopening ? "action.reopened" : "action.updated";
             var auditVerb = completing ? "completed" : cancelling ? "cancelled" : reopening ? "reopened" : "updated";
+            if (completing)
+            {
+                await InsertDomainEventAsync(
+                    connection,
+                    (SqlTransaction)transaction,
+                    "action.completed",
+                    "action",
+                    actionId,
+                    action.SourceRecordId,
+                    "{}",
+                    currentUser.UserAccountId,
+                    cancellationToken);
+            }
             await WriteAuditAsync(
                 connection,
                 transaction,
@@ -2849,6 +3127,11 @@ public sealed partial class SqlFoundationDataStore(
             throw new WorkflowValidationException("Enter a reason for extending the action.");
         }
 
+        var canManageVisibleAction = AccessBoundaryPolicy.CanManageVisibleAction(
+            currentUser,
+            (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
+                .Any(action => action.Id == actionId));
+
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
         try
@@ -2885,7 +3168,7 @@ public sealed partial class SqlFoundationDataStore(
                     GetStringOrNull(reader, 6));
             }
 
-            var canEdit = currentUser.HasPermission(PermissionKeys.ActionsManage)
+            var canEdit = canManageVisibleAction
                 || currentUser.StaffId == action.OwnerStaffId
                 || (currentUser.StaffId.HasValue && currentUser.StaffId == action.SourceOwnerStaffId);
             if (!canEdit)
@@ -3009,6 +3292,11 @@ public sealed partial class SqlFoundationDataStore(
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        if (!await CanUseActionContextAsync(sourceRecordId, subjectStaffId, currentUser, cancellationToken))
+        {
+            return [];
+        }
+
         var staff = await GetStaffAsync(currentUser, cancellationToken);
         var contextRows = await QueryAsync(
             """
@@ -3051,13 +3339,93 @@ public sealed partial class SqlFoundationDataStore(
             .ToArray();
     }
 
+    private async Task<bool> CanUseActionContextAsync(
+        Guid? sourceRecordId,
+        Guid? subjectStaffId,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        if (!sourceRecordId.HasValue && !subjectStaffId.HasValue)
+        {
+            return true;
+        }
+
+        var rows = await QueryAsync(
+            """
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
+            )
+            SELECT CONVERT(bit, CASE
+                WHEN (
+                    @subjectStaffId IS NULL
+                    OR EXISTS (
+                        SELECT 1 FROM visible_staff staff
+                        WHERE staff.staff_id = @subjectStaffId
+                    )
+                )
+                AND (
+                    @sourceRecordId IS NULL
+                    OR EXISTS (
+                        SELECT 1
+                        FROM core.records record
+                        OUTER APPLY (
+                            SELECT TOP (1) submission.status
+                            FROM forms.form_submissions submission
+                            WHERE submission.record_id = record.id
+                              AND submission.archived_at IS NULL
+                            ORDER BY submission.created_at DESC
+                        ) latest_submission
+                        WHERE record.id = @sourceRecordId
+                          AND record.archived_at IS NULL
+                          AND (
+                                COALESCE(latest_submission.status, 'submitted') <> 'draft'
+                                OR record.owner_staff_id = @currentStaffId
+                                OR @canViewAll = 1
+                          )
+                          AND (
+                                @canViewAll = 1
+                                OR record.owner_staff_id = @currentStaffId
+                                OR record.subject_staff_id = @currentStaffId
+                                OR (
+                                    @canViewScopedActivities = 1
+                                    AND (
+                                        EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = record.subject_staff_id)
+                                        OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = record.owner_staff_id)
+                                        OR EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = record.org_unit_id)
+                                    )
+                                )
+                          )
+                    )
+                )
+                THEN 1 ELSE 0 END);
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
+            """,
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@sourceRecordId", ToDbValue(sourceRecordId));
+                command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(subjectStaffId));
+            },
+            reader => reader.GetBoolean(0),
+            cancellationToken);
+
+        return rows.FirstOrDefault();
+    }
+
     public async Task<FormSubmissionUpdateResult> DeleteActionAsync(
         Guid actionId,
         string reason,
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
-        if (!currentUser.HasPermission(PermissionKeys.ActionsManage))
+        var canManageVisibleAction = AccessBoundaryPolicy.CanManageVisibleAction(
+            currentUser,
+            (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
+                .Any(action => action.Id == actionId));
+        if (!canManageVisibleAction)
         {
             return FormSubmissionUpdateResult.Forbidden;
         }
@@ -3108,7 +3476,11 @@ public sealed partial class SqlFoundationDataStore(
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
-        if (!currentUser.HasPermission(PermissionKeys.ActionsManage))
+        var canManageVisibleAction = AccessBoundaryPolicy.CanManageVisibleAction(
+            currentUser,
+            (await GetActionsAsync(currentUser, includeDeleted: true, cancellationToken))
+                .Any(action => action.Id == actionId));
+        if (!canManageVisibleAction)
         {
             return FormSubmissionUpdateResult.Forbidden;
         }
@@ -3695,7 +4067,41 @@ public sealed partial class SqlFoundationDataStore(
         try
         {
             var template = await GetLatestTemplateVersionAsync(connection, transaction, request.TemplateKey, cancellationToken);
+            if (!template.IsPublished)
+            {
+                throw new WorkflowValidationException("Only published form templates can accept submissions.");
+            }
+            if (!AccessBoundaryPolicy.IsTemplateCompatible(request.RecordType, template.ModuleKey))
+            {
+                throw new WorkflowValidationException("The selected form template does not belong to this record type.");
+            }
+
+            var subjectStaffId = string.Equals(request.TemplateKey, "cpd_external_self_log", StringComparison.OrdinalIgnoreCase)
+                ? currentUser.StaffId
+                : request.SubjectStaffId;
+            await ValidateVisibleStaffTargetAsync(
+                connection,
+                transaction,
+                subjectStaffId,
+                currentUser,
+                cancellationToken);
+            if (string.Equals(request.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase))
+            {
+                await ValidateVisibleOrgUnitAsync(
+                    connection,
+                    transaction,
+                    request.OrgUnitId,
+                    currentUser,
+                    "Learning Walks must use a team or faculty within your assigned scope.",
+                    cancellationToken);
+            }
+
             var fields = await GetFieldInfoAsync(connection, transaction, template.VersionId, cancellationToken);
+
+            if (request.SaveAsDraft && request.Actions is { Count: > 0 })
+            {
+                throw new WorkflowValidationException("Actions can only be assigned when the record is submitted.");
+            }
 
             if (string.Equals(request.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase))
             {
@@ -3761,7 +4167,7 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@recordType", request.RecordType);
                 command.Parameters.AddWithValue("@title", request.Title);
                 command.Parameters.AddWithValue("@summary", ToDbValue(request.Summary));
-                command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(request.SubjectStaffId));
+                command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(subjectStaffId));
                 command.Parameters.AddWithValue("@ownerStaffId", ToDbValue(currentUser.StaffId));
                 command.Parameters.AddWithValue("@orgUnitId", ToDbValue(request.OrgUnitId));
                 command.Parameters.AddWithValue("@recordDate", ToDbValue(request.RecordDate));
@@ -3825,7 +4231,19 @@ public sealed partial class SqlFoundationDataStore(
 
             if (!request.SaveAsDraft)
             {
-                await ApplyModuleSideEffectsAsync(connection, transaction, recordId, request.RecordType, request.OrgUnitId, request.RecordDate, request.SubjectStaffId, valuesByFieldKey, currentUser, cancellationToken);
+                await ApplyModuleSideEffectsAsync(
+                    connection,
+                    transaction,
+                    recordId,
+                    request.RecordType,
+                    request.TemplateKey,
+                    request.OrgUnitId,
+                    request.RecordDate,
+                    subjectStaffId,
+                    valuesByFieldKey,
+                    fields.Values.Any(field => string.Equals(field.FieldType, "environment_rubric_1_5", StringComparison.OrdinalIgnoreCase)),
+                    currentUser,
+                    cancellationToken);
 
                 if (string.Equals(request.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase))
                 {
@@ -3849,6 +4267,20 @@ public sealed partial class SqlFoundationDataStore(
                         currentUser,
                         cancellationToken);
                 }
+            }
+
+            if (!request.SaveAsDraft)
+            {
+                await InsertDomainEventAsync(
+                    connection,
+                    (SqlTransaction)transaction,
+                    "form.submitted",
+                    "record",
+                    recordId,
+                    recordId,
+                    "{}",
+                    currentUser.UserAccountId,
+                    cancellationToken);
             }
 
             await WriteAuditAsync(
@@ -3899,6 +4331,26 @@ public sealed partial class SqlFoundationDataStore(
                 return FormSubmissionUpdateResult.Forbidden;
             }
 
+            var subjectStaffId = string.Equals(submission.TemplateKey, "cpd_external_self_log", StringComparison.OrdinalIgnoreCase)
+                ? submission.SubjectStaffId ?? submission.OwnerStaffId
+                : request.SubjectStaffId;
+            await ValidateVisibleStaffTargetAsync(
+                connection,
+                transaction,
+                subjectStaffId,
+                currentUser,
+                cancellationToken);
+            if (string.Equals(submission.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase))
+            {
+                await ValidateVisibleOrgUnitAsync(
+                    connection,
+                    transaction,
+                    request.OrgUnitId,
+                    currentUser,
+                    "Learning Walks must use a team or faculty within your assigned scope.",
+                    cancellationToken);
+            }
+
             if (string.Equals(submission.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase))
             {
                 if (!request.OrgUnitId.HasValue || !request.RecordDate.HasValue)
@@ -3915,6 +4367,14 @@ public sealed partial class SqlFoundationDataStore(
                 {
                     throw new WorkflowValidationException("Select the sampled courses when changing the Work Scrutiny sub-team.");
                 }
+
+                await ValidateWorkScrutinyUpdateScopeAsync(
+                    connection,
+                    transaction,
+                    submission.VersionId,
+                    request.OrgUnitId.Value,
+                    currentUser,
+                    cancellationToken);
             }
 
             var fields = await GetFieldInfoAsync(connection, transaction, submission.VersionId, cancellationToken);
@@ -3928,7 +4388,6 @@ public sealed partial class SqlFoundationDataStore(
             var beforeResponses = await GetResponsesByFieldKeyAsync(connection, transaction, submissionId, cancellationToken);
             var beforeJson = SerializeSubmissionSnapshot(
                 submission.Title, submission.Summary, submission.OrgUnitId, submission.RecordDate, submission.Status, beforeResponses);
-
             await using (var command = new SqlCommand(
                 """
                 UPDATE core.records
@@ -3956,7 +4415,7 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@submissionId", submissionId);
                 command.Parameters.AddWithValue("@title", request.Title);
                 command.Parameters.AddWithValue("@summary", ToDbValue(request.Summary));
-                command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(request.SubjectStaffId));
+                command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(subjectStaffId));
                 command.Parameters.AddWithValue("@orgUnitId", ToDbValue(request.OrgUnitId));
                 command.Parameters.AddWithValue("@recordDate", ToDbValue(request.RecordDate));
                 command.Parameters.AddWithValue("@updatedByUserAccountId", ToDbValue(currentUser.UserAccountId));
@@ -3996,7 +4455,22 @@ public sealed partial class SqlFoundationDataStore(
                     request.CourseIds,
                     cancellationToken);
             }
-            await ApplyModuleSideEffectsAsync(connection, transaction, submission.RecordId, submission.RecordType, request.OrgUnitId, request.RecordDate, request.SubjectStaffId, valuesByFieldKey, currentUser, cancellationToken);
+            if (submission.Status == SubmissionLifecycle.Submitted)
+            {
+                await ApplyModuleSideEffectsAsync(
+                    connection,
+                    transaction,
+                    submission.RecordId,
+                    submission.RecordType,
+                    submission.TemplateKey,
+                    request.OrgUnitId,
+                    request.RecordDate,
+                    subjectStaffId,
+                    valuesByFieldKey,
+                    fields.Values.Any(field => string.Equals(field.FieldType, "environment_rubric_1_5", StringComparison.OrdinalIgnoreCase)),
+                    currentUser,
+                    cancellationToken);
+            }
 
             await WriteAuditAsync(
                 connection,
@@ -4088,6 +4562,20 @@ public sealed partial class SqlFoundationDataStore(
                         requireOtherContext: true,
                         cancellationToken);
                 }
+
+                await ApplyModuleSideEffectsAsync(
+                    connection,
+                    transaction,
+                    submission.RecordId,
+                    submission.RecordType,
+                    submission.TemplateKey,
+                    submission.OrgUnitId,
+                    submission.RecordDate,
+                    submission.SubjectStaffId,
+                    stored,
+                    fields.Values.Any(field => string.Equals(field.FieldType, "environment_rubric_1_5", StringComparison.OrdinalIgnoreCase)),
+                    currentUser,
+                    cancellationToken);
             }
 
             await using (var command = new SqlCommand(
@@ -4141,6 +4629,22 @@ public sealed partial class SqlFoundationDataStore(
                 archiveActionsCommand.Parameters.AddWithValue("@deletionReason", $"Source {submission.RecordType.Replace('_', ' ')} record archived.");
                 await archiveActionsCommand.ExecuteNonQueryAsync(cancellationToken);
             }
+
+            var domainEventType = action == SubmissionLifecycle.ActionSubmit
+                ? "form.submitted"
+                : action == SubmissionLifecycle.ActionReopen
+                    ? "record.reopened"
+                    : "record.status_changed";
+            await InsertDomainEventAsync(
+                connection,
+                (SqlTransaction)transaction,
+                domainEventType,
+                "record",
+                submission.RecordId,
+                submission.RecordId,
+                "{}",
+                currentUser.UserAccountId,
+                cancellationToken);
 
             await WriteAuditAsync(
                 connection,
@@ -4248,8 +4752,11 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<StaffProfileDetail?> GetStaffProfileDetailAsync(
         Guid staffId,
+        string academicYear,
+        CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var (academicYearStart, academicYearEnd) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
         var headers = await QueryAsync(
             """
             SELECT
@@ -4263,18 +4770,27 @@ public sealed partial class SqlFoundationDataStore(
                  FROM evidence.evidence_items ev
                  WHERE ev.staff_id = s.id
                    AND ev.archived_at IS NULL
+                   AND ev.evidence_date >= @academicYearStart
+                   AND ev.evidence_date <= @academicYearEnd
                    AND (ev.pillar_or_theme IS NULL OR ev.pillar_or_theme <> 'reflection')) AS evidence_submitted,
                 (SELECT COUNT(DISTINCT ev.milestone_lookup_value_id)
                  FROM evidence.evidence_items ev
                  WHERE ev.staff_id = s.id
                    AND ev.archived_at IS NULL
+                   AND ev.evidence_date >= @academicYearStart
+                   AND ev.evidence_date <= @academicYearEnd
                    AND ev.milestone_lookup_value_id IS NOT NULL) AS milestones_completed
             FROM people.staff s
             LEFT JOIN org.org_units ou ON ou.id = s.primary_org_unit_id
             WHERE s.id = @staffId
               AND s.archived_at IS NULL;
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYearStart", academicYearStart.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.ToDateTime(TimeOnly.MinValue));
+            },
             reader => new StaffProfileHeaderRow(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -4292,11 +4808,13 @@ public sealed partial class SqlFoundationDataStore(
         }
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var reflections = await GetStaffReflectionsAsync(staffId, cancellationToken);
-
+        var reflections = (await GetStaffReflectionsAsync(staffId, cancellationToken))
+            .Where(reflection => string.Equals(reflection.ElevatePracticeAcademicYear, academicYear, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         var cpdRecords = await QueryAsync(
             """
-            SELECT ce.id, ce.event_title, ce.event_date, themes.response_text
+            SELECT ce.id, ce.record_id, ce.event_title, ce.event_date, themes.response_text, ce.duration_minutes,
+                   CASE WHEN template_info.template_key = N'cpd_core' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END
             FROM cpd.cpd_attendance ca
             JOIN cpd.cpd_events ce ON ce.id = ca.cpd_event_id
                 AND ce.archived_at IS NULL
@@ -4310,17 +4828,36 @@ public sealed partial class SqlFoundationDataStore(
                 WHERE fsub.record_id = ce.record_id
                   AND fsub.archived_at IS NULL
             ) themes
+            OUTER APPLY (
+                SELECT TOP (1) template.template_key
+                FROM forms.form_submissions submission
+                JOIN forms.form_template_versions version ON version.id = submission.form_template_version_id
+                JOIN forms.form_templates template ON template.id = version.form_template_id
+                WHERE submission.record_id = ce.record_id
+                  AND submission.archived_at IS NULL
+                ORDER BY submission.created_at DESC
+            ) template_info
             WHERE ca.staff_id = @staffId
               AND ca.archived_at IS NULL
               AND ca.attendance_status = 'Attended'
+              AND ce.event_date >= @academicYearStart
+              AND ce.event_date <= @academicYearEnd
             ORDER BY ce.event_date DESC;
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYearStart", academicYearStart.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.ToDateTime(TimeOnly.MinValue));
+            },
             reader => new StaffCpdRecordSummary(
                 reader.GetGuid(0),
-                reader.GetString(1),
-                DateOnly.FromDateTime(reader.GetDateTime(2)),
-                GetStringOrNull(reader, 3)),
+                reader.GetGuid(1),
+                reader.GetString(2),
+                DateOnly.FromDateTime(reader.GetDateTime(3)),
+                GetStringOrNull(reader, 4),
+                GetIntOrNull(reader, 5),
+                reader.GetBoolean(6)),
             cancellationToken);
 
         var actions = await QueryAsync(
@@ -4345,12 +4882,24 @@ public sealed partial class SqlFoundationDataStore(
             LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
             WHERE (a.subject_staff_id = @staffId OR a.owner_staff_id = @staffId)
               AND a.archived_at IS NULL
+              AND (
+                    (r.id IS NOT NULL AND r.academic_year_key = @academicYear)
+                    OR
+                    (r.id IS NULL AND CONVERT(date, a.created_at) >= @academicYearStart AND CONVERT(date, a.created_at) <= @academicYearEnd)
+                  )
             ORDER BY
                 CASE WHEN a.completed_date IS NULL THEN 0 ELSE 1 END,
                 a.due_date,
-                a.created_at DESC;
+                a.created_at DESC
+            OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYear", academicYear);
+                command.Parameters.AddWithValue("@academicYearStart", academicYearStart.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.ToDateTime(TimeOnly.MinValue));
+            },
             reader =>
             {
                 var dueDate = GetDateOnlyOrNull(reader, 10);
@@ -4383,17 +4932,25 @@ public sealed partial class SqlFoundationDataStore(
                 session.session_type,
                 session.status,
                 coach.display_name,
-                session.main_focus,
-                session.key_takeaway
+                primary_focus.display_name,
+                session.specific_session_focus
             FROM quality.coaching_sessions session
             JOIN quality.coaching_cycles cycle ON cycle.id = session.cycle_id
             JOIN people.staff coach ON coach.id = session.coach_staff_id
+            LEFT JOIN core.lookup_values primary_focus ON primary_focus.id = session.primary_focus_lookup_value_id
             WHERE session.staff_id = @staffId
               AND session.archived_at IS NULL
               AND cycle.archived_at IS NULL
+              AND session.session_date >= @academicYearStart
+              AND session.session_date <= @academicYearEnd
             ORDER BY session.session_date DESC, cycle.cycle_number DESC, session.session_number DESC;
             """,
-            command => command.Parameters.AddWithValue("@staffId", staffId),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", staffId);
+                command.Parameters.AddWithValue("@academicYearStart", academicYearStart.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.ToDateTime(TimeOnly.MinValue));
+            },
             reader => new StaffProfileCoachingSummary(
                 reader.GetGuid(0),
                 reader.GetGuid(1),
@@ -4408,7 +4965,8 @@ public sealed partial class SqlFoundationDataStore(
             cancellationToken);
 
         var header = headers[0];
-        var elevatePractice = await GetElevatePracticeProfileSummaryAsync(staffId, cancellationToken);
+        var elevatePractice = await GetElevatePracticeProfileSummaryAsync(staffId, academicYear, cancellationToken);
+        var elevateStatus = await GetElevateStatusAsync(staffId, academicYear, currentUser, cancellationToken);
         return new StaffProfileDetail(
             header.StaffId,
             header.ExternalId,
@@ -4416,13 +4974,15 @@ public sealed partial class SqlFoundationDataStore(
             header.Email,
             header.PrimaryOrgCode,
             header.AccountStatus,
+            academicYear,
             header.EvidenceSubmitted,
             header.MilestonesCompleted,
             reflections,
             cpdRecords,
             actions,
             coachingRecords,
-            elevatePractice);
+            elevatePractice,
+            elevateStatus);
     }
 
     public async Task<FormSubmissionUpdateResult> SaveStaffReflectionAsync(
@@ -5967,9 +6527,11 @@ public sealed partial class SqlFoundationDataStore(
                 ft.id,
                 ft.module_id,
                 ftv.id,
-                ftv.is_published
+                ftv.is_published,
+                module.module_key
             FROM forms.form_templates ft
             JOIN forms.form_template_versions ftv ON ftv.form_template_id = ft.id
+            JOIN core.modules module ON module.id = ft.module_id
             WHERE ft.template_key = @templateKey
               AND ft.archived_at IS NULL
               AND ftv.archived_at IS NULL
@@ -5986,7 +6548,12 @@ public sealed partial class SqlFoundationDataStore(
             throw new InvalidOperationException($"Template '{templateKey}' was not found.");
         }
 
-        return new TemplateVersionInfo(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetBoolean(3));
+        return new TemplateVersionInfo(
+            reader.GetGuid(0),
+            reader.GetGuid(1),
+            reader.GetGuid(2),
+            reader.GetBoolean(3),
+            reader.GetString(4));
     }
 
     private static async Task<Dictionary<Guid, FormFieldInfo>> GetFieldInfoAsync(
@@ -6041,6 +6608,105 @@ public sealed partial class SqlFoundationDataStore(
         {
             throw new WorkflowValidationException(
                 $"Complete the required fields before submitting: {string.Join(", ", missing)}.");
+        }
+    }
+
+    private static async Task ValidateVisibleStaffTargetAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid? staffId,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        if (!staffId.HasValue)
+        {
+            return;
+        }
+
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM people.staff staff
+            JOIN org.fn_visible_staff(@currentUserAccountId) visible ON visible.staff_id = staff.id
+            WHERE staff.id = @staffId
+              AND staff.account_status = 'active'
+              AND staff.archived_at IS NULL;
+            """,
+            connection,
+            (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
+        command.Parameters.AddWithValue("@staffId", staffId.Value);
+        if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != 1)
+        {
+            throw new WorkflowValidationException("The selected staff member is outside your assigned access scope.");
+        }
+    }
+
+    private static async Task ValidateVisibleOrgUnitAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid? orgUnitId,
+        CurrentUser currentUser,
+        string validationMessage,
+        CancellationToken cancellationToken)
+    {
+        if (!orgUnitId.HasValue)
+        {
+            throw new WorkflowValidationException(validationMessage);
+        }
+
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM org.org_units unit
+            JOIN org.fn_visible_org_units(@currentUserAccountId) visible ON visible.org_unit_id = unit.id
+            WHERE unit.id = @orgUnitId
+              AND unit.is_active = 1
+              AND unit.archived_at IS NULL;
+            """,
+            connection,
+            (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
+        command.Parameters.AddWithValue("@orgUnitId", orgUnitId.Value);
+        if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != 1)
+        {
+            throw new WorkflowValidationException(validationMessage);
+        }
+    }
+
+    private static async Task ValidateWorkScrutinyUpdateScopeAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid templateVersionId,
+        Guid orgUnitId,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        await ValidateVisibleOrgUnitAsync(
+            connection,
+            transaction,
+            orgUnitId,
+            currentUser,
+            "The selected Work Scrutiny sub-team is outside your assigned scope.",
+            cancellationToken);
+
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM forms.form_template_versions version
+            JOIN forms.form_template_org_units assignment ON assignment.form_template_id = version.form_template_id
+            WHERE version.id = @templateVersionId
+              AND version.archived_at IS NULL
+              AND assignment.org_unit_id = @orgUnitId
+              AND assignment.archived_at IS NULL;
+            """,
+            connection,
+            (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@templateVersionId", templateVersionId);
+        command.Parameters.AddWithValue("@orgUnitId", orgUnitId);
+        if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != 1)
+        {
+            throw new WorkflowValidationException("The selected Work Scrutiny template is not allocated to that sub-team.");
         }
     }
 
@@ -6272,20 +6938,18 @@ public sealed partial class SqlFoundationDataStore(
             {
                 throw new WorkflowValidationException("Every action needs a description.");
             }
+            if (action.OwnerStaffId == Guid.Empty)
+            {
+                throw new WorkflowValidationException("Every action needs an owner.");
+            }
+            if (action.DueDate == default)
+            {
+                throw new WorkflowValidationException("Every action needs an implementation or review date.");
+            }
 
             var actionId = Guid.NewGuid();
             await using (var command = new SqlCommand(
                 """
-                IF @sourceRecordId IS NOT NULL
-                   AND @dueDate IS NULL
-                   AND EXISTS (
-                       SELECT 1 FROM core.records
-                       WHERE id = @sourceRecordId
-                         AND record_type = 'learning_walk'
-                         AND archived_at IS NULL
-                   )
-                    THROW 51000, 'Learning Walk actions require an implementation date.', 1;
-
                 ;WITH visible_staff AS (
                     SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
                 )
@@ -6363,6 +7027,17 @@ public sealed partial class SqlFoundationDataStore(
                     throw new WorkflowValidationException("One of the selected action owners is not an active staff member.");
                 }
             }
+
+            await InsertDomainEventAsync(
+                connection,
+                (SqlTransaction)transaction,
+                "action.assigned",
+                "action",
+                actionId,
+                recordId,
+                "{}",
+                currentUser.UserAccountId,
+                cancellationToken);
 
             await WriteAuditAsync(
                 connection,
@@ -6621,16 +7296,20 @@ public sealed partial class SqlFoundationDataStore(
         System.Data.Common.DbTransaction transaction,
         Guid recordId,
         string recordType,
+        string templateKey,
         Guid? orgUnitId,
         DateOnly? recordDate,
         Guid? subjectStaffId,
         Dictionary<string, string> valuesByFieldKey,
+        bool usesEnvironmentRubric,
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
         var isLearningWalk = string.Equals(recordType, "learning_walk", StringComparison.OrdinalIgnoreCase);
         var isWorkScrutiny = string.Equals(recordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase);
         var isCpdEvent = string.Equals(recordType, "cpd_event", StringComparison.OrdinalIgnoreCase);
+        var isExternalCpdSelfLog = isCpdEvent
+            && string.Equals(templateKey, "cpd_external_self_log", StringComparison.OrdinalIgnoreCase);
         var isElevateEnvironment = string.Equals(recordType, "elevate_environment", StringComparison.OrdinalIgnoreCase);
 
         if ((isLearningWalk || isWorkScrutiny) && recordDate.HasValue)
@@ -6718,47 +7397,17 @@ public sealed partial class SqlFoundationDataStore(
                 throw new WorkflowValidationException("Select a room from the room register.");
             }
 
-            var intendedPurposes = valuesByFieldKey.TryGetValue("intended_purpose", out var purposeValue)
-                ? purposeValue.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray()
-                : [];
-            if (intendedPurposes.Length == 0)
-            {
-                throw new WorkflowValidationException("Select at least one intended purpose.");
-            }
-
-            await using (var command = new SqlCommand(
-                """
-                SELECT COUNT(*)
-                FROM core.lookup_values value
-                JOIN core.lookup_types type ON type.id = value.lookup_type_id
-                WHERE type.lookup_key = 'elevate_environment_purpose'
-                  AND type.is_active = 1
-                  AND type.archived_at IS NULL
-                  AND value.is_active = 1
-                  AND value.archived_at IS NULL
-                  AND value.display_name IN (SELECT value FROM STRING_SPLIT(@purposes, '|'));
-                """,
-                connection,
-                (SqlTransaction)transaction))
-            {
-                command.Parameters.AddWithValue("@purposes", string.Join('|', intendedPurposes));
-                if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != intendedPurposes.Length)
-                {
-                    throw new WorkflowValidationException("Select intended purposes from the active administrator-controlled list.");
-                }
-            }
-
             var valueKeys = new[] { "aspirational", "collaborative", "respectful", "innovative", "inclusion" };
             var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var valueKey in valueKeys)
             {
                 if (!valuesByFieldKey.TryGetValue($"{valueKey}_score", out var scoreValue)
                     || !int.TryParse(scoreValue, out var score)
-                    || score is < 0 or > 3)
+                    || (usesEnvironmentRubric ? score is < 1 or > 5 : score is < 0 or > 3))
                 {
-                    throw new WorkflowValidationException("Every Elevate value needs a score from 0 to 3.");
+                    throw new WorkflowValidationException(usesEnvironmentRubric
+                        ? "Every learning environment pillar needs a judgement from 1 to 5."
+                        : "Every Elevate value needs a score from 0 to 3.");
                 }
                 scores[valueKey] = score;
             }
@@ -6809,46 +7458,96 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@roomId", roomId);
                 command.Parameters.AddWithValue("@totalScore", scores.Values.Sum());
                 command.Parameters.AddWithValue("@scoreCount", scores.Count);
-                command.Parameters.AddWithValue("@barrierCount", scores.Values.Count(score => score == 0));
+                command.Parameters.AddWithValue("@barrierCount", scores.Values.Count(score => score == (usesEnvironmentRubric ? 1 : 0)));
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            foreach (var valueKey in valueKeys)
+            if (usesEnvironmentRubric)
             {
-                valuesByFieldKey.TryGetValue($"{valueKey}_action", out var actionText);
-                valuesByFieldKey.TryGetValue($"{valueKey}_owner", out var ownerValue);
-                valuesByFieldKey.TryGetValue($"{valueKey}_target", out var targetValue);
+                await using var ratingsCommand = new SqlCommand(
+                    """
+                    WITH selected_ratings AS (
+                        SELECT source.pillar_key,
+                               descriptor.id AS rubric_descriptor_id,
+                               descriptor.numerical_score,
+                               descriptor.judgement_key,
+                               descriptor.judgement_label,
+                               descriptor.descriptor
+                        FROM (VALUES
+                            (N'aspirational', @aspirationalScore),
+                            (N'collaborative', @collaborativeScore),
+                            (N'respectful', @respectfulScore),
+                            (N'innovative', @innovativeScore),
+                            (N'inclusion', @inclusionScore)
+                        ) source(pillar_key, numerical_score)
+                        JOIN quality.elevate_environment_pillars pillar
+                          ON pillar.pillar_key = source.pillar_key
+                         AND pillar.archived_at IS NULL
+                        JOIN quality.elevate_environment_rubric_descriptors descriptor
+                          ON descriptor.pillar_id = pillar.id
+                         AND descriptor.numerical_score = source.numerical_score
+                         AND descriptor.is_active = 1
+                         AND descriptor.archived_at IS NULL
+                    )
+                    MERGE quality.elevate_environment_pillar_ratings AS target
+                    USING selected_ratings AS source
+                       ON target.record_id = @recordId
+                      AND target.pillar_key = source.pillar_key
+                    WHEN MATCHED THEN
+                        UPDATE SET rubric_descriptor_id = source.rubric_descriptor_id,
+                                   numerical_score = source.numerical_score,
+                                   judgement_key = source.judgement_key,
+                                   judgement_label_snapshot = source.judgement_label,
+                                   descriptor_snapshot = source.descriptor,
+                                   updated_at = sysutcdatetime()
+                    WHEN NOT MATCHED THEN
+                        INSERT (
+                            record_id, pillar_key, rubric_descriptor_id, numerical_score,
+                            judgement_key, judgement_label_snapshot, descriptor_snapshot
+                        )
+                        VALUES (
+                            @recordId, source.pillar_key, source.rubric_descriptor_id, source.numerical_score,
+                            source.judgement_key, source.judgement_label, source.descriptor
+                        )
+                    WHEN NOT MATCHED BY SOURCE AND target.record_id = @recordId THEN DELETE;
 
-                if (scores[valueKey] == 0 && string.IsNullOrWhiteSpace(actionText))
-                {
-                    throw new WorkflowValidationException(
-                        $"A Barrier score for {FormatElevateValue(valueKey)} requires an immediate action.");
-                }
-
-                Guid? ownerStaffId = Guid.TryParse(ownerValue, out var parsedOwner) ? parsedOwner : null;
-                DateOnly? targetDate = DateOnly.TryParse(targetValue, out var parsedTarget) ? parsedTarget : null;
-                if (!string.IsNullOrWhiteSpace(actionText) && (!ownerStaffId.HasValue || !targetDate.HasValue))
-                {
-                    throw new WorkflowValidationException(
-                        $"The {FormatElevateValue(valueKey)} action needs an owner and target date.");
-                }
-
-                await SyncElevateActionAsync(
+                    IF (SELECT COUNT(*) FROM quality.elevate_environment_pillar_ratings WHERE record_id = @recordId) <> 5
+                    BEGIN
+                        THROW 51000, 'Every learning environment pillar rating must map to an active rubric descriptor.', 1;
+                    END;
+                    """,
                     connection,
-                    transaction,
-                    recordId,
-                    valueKey,
-                    actionText,
-                    ownerStaffId,
-                    targetDate,
-                    currentUser,
-                    cancellationToken);
+                    (SqlTransaction)transaction);
+                ratingsCommand.Parameters.AddWithValue("@recordId", recordId);
+                ratingsCommand.Parameters.AddWithValue("@aspirationalScore", scores["aspirational"]);
+                ratingsCommand.Parameters.AddWithValue("@collaborativeScore", scores["collaborative"]);
+                ratingsCommand.Parameters.AddWithValue("@respectfulScore", scores["respectful"]);
+                ratingsCommand.Parameters.AddWithValue("@innovativeScore", scores["innovative"]);
+                ratingsCommand.Parameters.AddWithValue("@inclusionScore", scores["inclusion"]);
+                await ratingsCommand.ExecuteNonQueryAsync(cancellationToken);
             }
+
         }
 
         if (isCpdEvent)
         {
             var eventTitle = valuesByFieldKey.TryGetValue("cpd_title", out var cpdTitle) ? cpdTitle : "CPD event";
+            if (!valuesByFieldKey.TryGetValue("duration_hours", out var durationHoursValue)
+                || !int.TryParse(durationHoursValue, out var durationHours)
+                || durationHours is < 0 or > 24
+                || !valuesByFieldKey.TryGetValue("duration_minutes", out var durationMinutesValue)
+                || !int.TryParse(durationMinutesValue, out var durationMinutePart)
+                || durationMinutePart is < 0 or > 59)
+            {
+                throw new WorkflowValidationException("CPD duration requires hours from 0 to 24 and minutes from 0 to 59.");
+            }
+
+            var totalDurationMinutes = (durationHours * 60) + durationMinutePart;
+            if (totalDurationMinutes == 0)
+            {
+                throw new WorkflowValidationException("CPD duration must be at least one minute.");
+            }
+
             DateOnly? eventDate = recordDate;
             TimeOnly? startTime = null;
             if (valuesByFieldKey.TryGetValue("date_time", out var dateTimeValue)
@@ -6870,8 +7569,12 @@ public sealed partial class SqlFoundationDataStore(
                 IF @eventId IS NULL
                 BEGIN
                     SET @eventId = newid();
-                    INSERT INTO cpd.cpd_events (id, record_id, event_title, event_date, start_time, delivery_method, facilitator_staff_id)
-                    VALUES (@eventId, @recordId, @eventTitle, @eventDate, @startTime, @deliveryMethod, @facilitatorStaffId);
+                    INSERT INTO cpd.cpd_events (
+                        id, record_id, event_title, event_date, start_time, delivery_method, facilitator_staff_id, duration_minutes
+                    )
+                    VALUES (
+                        @eventId, @recordId, @eventTitle, @eventDate, @startTime, @deliveryMethod, @facilitatorStaffId, @durationMinutes
+                    );
                 END
                 ELSE
                 BEGIN
@@ -6880,6 +7583,7 @@ public sealed partial class SqlFoundationDataStore(
                         event_date = @eventDate,
                         start_time = @startTime,
                         delivery_method = @deliveryMethod,
+                        duration_minutes = @durationMinutes,
                         updated_at = sysutcdatetime()
                     WHERE id = @eventId;
                 END;
@@ -6894,22 +7598,28 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@startTime", startTime.HasValue ? startTime.Value.ToTimeSpan() : DBNull.Value);
                 command.Parameters.AddWithValue("@deliveryMethod", ToDbValue(valuesByFieldKey.TryGetValue("delivery_mode", out var delivery) ? delivery : null));
                 command.Parameters.AddWithValue("@facilitatorStaffId", ToDbValue(currentUser.StaffId));
+                command.Parameters.AddWithValue("@durationMinutes", totalDurationMinutes);
                 cpdEventId = (Guid)(await command.ExecuteScalarAsync(cancellationToken)
                     ?? throw new InvalidOperationException("CPD event upsert did not return an id."));
             }
 
-            var attendeeIds = valuesByFieldKey.TryGetValue("staff_search", out var staffSearch)
-                ? staffSearch.Split('|', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(value => Guid.TryParse(value, out var staffId) ? staffId : (Guid?)null)
-                    .Where(value => value.HasValue)
-                    .Select(value => value!.Value)
-                    .Distinct()
-                    .ToArray()
-                : [];
+            var attendeeIds = isExternalCpdSelfLog
+                ? new[] { subjectStaffId ?? currentUser.StaffId ?? Guid.Empty }.Where(id => id != Guid.Empty).ToArray()
+                : valuesByFieldKey.TryGetValue("staff_search", out var staffSearch)
+                    ? staffSearch.Split('|', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(value => Guid.TryParse(value, out var staffId) ? staffId : (Guid?)null)
+                        .Where(value => value.HasValue)
+                        .Select(value => value!.Value)
+                        .Distinct()
+                        .ToArray()
+                    : [];
 
             if (attendeeIds.Length == 0)
             {
-                throw new WorkflowValidationException("Select at least one active participant for the CPD event.");
+                throw new WorkflowValidationException(
+                    isExternalCpdSelfLog
+                        ? "The signed-in account is not linked to an active staff record."
+                        : "Select at least one active participant for the CPD event.");
             }
 
             await using (var command = new SqlCommand(
@@ -6959,141 +7669,6 @@ public sealed partial class SqlFoundationDataStore(
         }
     }
 
-    private static async Task SyncElevateActionAsync(
-        SqlConnection connection,
-        System.Data.Common.DbTransaction transaction,
-        Guid recordId,
-        string valueKey,
-        string? actionText,
-        Guid? ownerStaffId,
-        DateOnly? targetDate,
-        CurrentUser currentUser,
-        CancellationToken cancellationToken)
-    {
-        var actionTitle = string.IsNullOrWhiteSpace(actionText)
-            ? null
-            : $"{FormatElevateValue(valueKey)}: {actionText.Trim()}";
-        if (actionTitle?.Length > 300)
-        {
-            actionTitle = actionTitle[..300];
-        }
-
-        await using var command = new SqlCommand(
-            """
-            DECLARE @actionId uniqueidentifier = (
-                SELECT action_id
-                FROM quality.elevate_environment_action_links
-                WHERE record_id = @recordId
-                  AND value_key = @valueKey
-            );
-
-            IF @actionTitle IS NULL
-            BEGIN
-                IF @actionId IS NOT NULL
-                BEGIN
-                    UPDATE quality.actions
-                    SET archived_at = sysutcdatetime(),
-                        deleted_by_user_account_id = @currentUserAccountId,
-                        deletion_reason = 'Removed from the Learning Environment record.',
-                        updated_by_user_account_id = @currentUserAccountId,
-                        updated_at = sysutcdatetime()
-                    WHERE id = @actionId;
-
-                    DELETE FROM quality.elevate_environment_action_links
-                    WHERE record_id = @recordId AND value_key = @valueKey;
-                END;
-            END
-            ELSE IF @actionId IS NOT NULL
-            BEGIN
-                UPDATE quality.actions
-                SET owner_staff_id = @ownerStaffId,
-                    title = @actionTitle,
-                    detail = @actionDetail,
-                    due_date = @targetDate,
-                    original_due_date = COALESCE(original_due_date, @targetDate),
-                    revised_due_date = CASE WHEN original_due_date IS NOT NULL AND original_due_date <> @targetDate THEN @targetDate ELSE revised_due_date END,
-                    source_form_type = 'elevate_environment',
-                    source_sub_record_type = 'environment_pillar',
-                    source_sub_record_key = @valueKey,
-                    visibility_setting = 'staff_and_management',
-                    archived_at = NULL,
-                    deleted_by_user_account_id = NULL,
-                    deletion_reason = NULL,
-                    updated_by_user_account_id = @currentUserAccountId,
-                    updated_at = sysutcdatetime()
-                WHERE id = @actionId;
-            END
-            ELSE
-            BEGIN
-                SET @actionId = newid();
-
-                INSERT INTO quality.actions (
-                    id,
-                    source_record_id,
-                    source_form_type,
-                    source_sub_record_type,
-                    source_sub_record_key,
-                    owner_staff_id,
-                    title,
-                    detail,
-                    status_lookup_value_id,
-                    due_date,
-                    original_due_date,
-                    published_to_staff,
-                    visibility_setting,
-                    created_by_user_account_id
-                )
-                SELECT
-                    @actionId,
-                    @recordId,
-                    'elevate_environment',
-                    'environment_pillar',
-                    @valueKey,
-                    @ownerStaffId,
-                    @actionTitle,
-                    @actionDetail,
-                    lookup_value.id,
-                    @targetDate,
-                    @targetDate,
-                    1,
-                    'staff_and_management',
-                    @currentUserAccountId
-                FROM core.lookup_values lookup_value
-                JOIN core.lookup_types lookup_type ON lookup_type.id = lookup_value.lookup_type_id
-                WHERE lookup_type.lookup_key = 'action_status'
-                  AND lookup_value.value_key = 'open';
-
-                INSERT INTO quality.elevate_environment_action_links (record_id, value_key, action_id)
-                VALUES (@recordId, @valueKey, @actionId);
-            END;
-            """,
-            connection,
-            (SqlTransaction)transaction);
-
-        command.Parameters.AddWithValue("@recordId", recordId);
-        command.Parameters.AddWithValue("@valueKey", valueKey);
-        command.Parameters.AddWithValue("@actionTitle", ToDbValue(actionTitle));
-        command.Parameters.AddWithValue(
-            "@actionDetail",
-            ToDbValue(string.IsNullOrWhiteSpace(actionText)
-                ? null
-                : $"Elevate Learning Environments action for {FormatElevateValue(valueKey)}. {actionText.Trim()}"));
-        command.Parameters.AddWithValue("@ownerStaffId", ToDbValue(ownerStaffId));
-        command.Parameters.AddWithValue("@targetDate", ToDbValue(targetDate));
-        command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static string FormatElevateValue(string valueKey) => valueKey switch
-    {
-        "aspirational" => "Aspirational",
-        "collaborative" => "Collaborative",
-        "respectful" => "Respectful",
-        "innovative" => "Innovative",
-        "inclusion" => "Inclusion",
-        _ => valueKey
-    };
-
     private static async Task<SubmissionEditInfo?> GetSubmissionEditInfoAsync(
         SqlConnection connection,
         System.Data.Common.DbTransaction transaction,
@@ -7106,7 +7681,9 @@ public sealed partial class SqlFoundationDataStore(
                 fsub.record_id,
                 fsub.form_template_version_id,
                 r.owner_staff_id,
+                r.subject_staff_id,
                 r.record_type,
+                template.template_key,
                 fsub.status,
                 r.title,
                 r.summary,
@@ -7114,6 +7691,8 @@ public sealed partial class SqlFoundationDataStore(
                 r.record_date
             FROM forms.form_submissions fsub
             JOIN core.records r ON r.id = fsub.record_id
+            JOIN forms.form_template_versions version ON version.id = fsub.form_template_version_id
+            JOIN forms.form_templates template ON template.id = version.form_template_id
             WHERE fsub.id = @submissionId
               AND fsub.archived_at IS NULL
               AND r.archived_at IS NULL;
@@ -7132,12 +7711,14 @@ public sealed partial class SqlFoundationDataStore(
             reader.GetGuid(0),
             reader.GetGuid(1),
             GetGuidOrNull(reader, 2),
-            reader.GetString(3),
+            GetGuidOrNull(reader, 3),
             reader.GetString(4),
             reader.GetString(5),
-            GetStringOrNull(reader, 6),
-            GetGuidOrNull(reader, 7),
-            GetDateOnlyOrNull(reader, 8));
+            reader.GetString(6),
+            reader.GetString(7),
+            GetStringOrNull(reader, 8),
+            GetGuidOrNull(reader, 9),
+            GetDateOnlyOrNull(reader, 10));
     }
 
     private static async Task<Dictionary<string, string>> GetResponsesByFieldKeyAsync(
@@ -7372,10 +7953,14 @@ public sealed partial class SqlFoundationDataStore(
     private async Task<SqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var connection = new SqlConnection(_connectionString);
+        var startedAt = Stopwatch.GetTimestamp();
 
         try
         {
             await connection.OpenAsync(cancellationToken);
+            var elapsed = Stopwatch.GetElapsedTime(startedAt);
+            if (elapsed > TimeSpan.FromSeconds(2))
+                logger.LogWarning("Opening a SQL connection took {ElapsedMilliseconds:F0} ms.", elapsed.TotalMilliseconds);
             return connection;
         }
         catch
@@ -7390,6 +7975,9 @@ public sealed partial class SqlFoundationDataStore(
 
     private static Guid? GetGuidOrNull(SqlDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetGuid(ordinal);
+
+    private static int? GetIntOrNull(SqlDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
 
     private static IReadOnlyList<Guid> ParseGuidValues(string? values) =>
         string.IsNullOrWhiteSpace(values)
@@ -7463,7 +8051,12 @@ public sealed partial class SqlFoundationDataStore(
         int? ThemeDisplayOrder,
         bool? IsOther,
         bool? IsActive);
-    private sealed record TemplateVersionInfo(Guid TemplateId, Guid ModuleId, Guid VersionId, bool IsPublished);
+    private sealed record TemplateVersionInfo(
+        Guid TemplateId,
+        Guid ModuleId,
+        Guid VersionId,
+        bool IsPublished,
+        string ModuleKey);
 
     private sealed record FormTemplateRow(
         Guid Id,
@@ -7479,6 +8072,22 @@ public sealed partial class SqlFoundationDataStore(
         string? AssignedOrgCode,
         string? AssignedOrgName,
         int SubmissionCount);
+
+    private sealed record ElevateEnvironmentPillarRow(
+        Guid Id,
+        string PillarKey,
+        string Name,
+        string Description,
+        int DisplayOrder,
+        bool IsActive,
+        string AssetUri,
+        string AssetAltText,
+        Guid? DescriptorId,
+        int? Score,
+        string? JudgementKey,
+        string? Judgement,
+        string? RubricDescriptor,
+        string? ColorHex);
 
     private sealed record FormDefinitionRow(
         Guid TemplateId,
@@ -7539,7 +8148,9 @@ public sealed partial class SqlFoundationDataStore(
         Guid RecordId,
         Guid VersionId,
         Guid? OwnerStaffId,
+        Guid? SubjectStaffId,
         string RecordType,
+        string TemplateKey,
         string Status,
         string Title,
         string? Summary,

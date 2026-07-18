@@ -1,20 +1,26 @@
 import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
-import { StaffProfilePanel } from "../features/StaffProfilePanel";
+import { StaffProfilePanel, type StaffProfileRecordLinkHandler } from "../features/StaffProfilePanel";
 import type { CurrentUser, StaffProfileSummary, StaffSummary } from "../services/types";
 
 export function StaffProfileWorkspace({
+  academicYear,
   profiles,
   staff,
   user,
   initialStaffId = "",
-  initialElevateRecordId = ""
+  initialElevateRecordId = "",
+  onOpenRecord,
+  onOpenActionDetails
 }: {
+  academicYear: string;
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   user: CurrentUser;
   initialStaffId?: string;
   initialElevateRecordId?: string;
+  onOpenRecord: StaffProfileRecordLinkHandler;
+  onOpenActionDetails: (actionId: string, staffId: string) => void;
 }) {
   const canViewAllProfiles =
     user.permissions.includes("liv.manage") ||
@@ -72,10 +78,13 @@ export function StaffProfileWorkspace({
         <StaffProfilePanel
           key={`${selectedStaffId}:${initialElevateRecordId}`}
           elevateRecordId={initialElevateRecordId}
+          academicYear={academicYear}
           openElevateResult={Boolean(initialElevateRecordId)}
           profiles={profiles}
           staffId={selectedStaffId}
           user={user}
+          onOpenActionDetails={onOpenActionDetails}
+          onOpenRecord={onOpenRecord}
         />
       ) : (
         <section className="panel">

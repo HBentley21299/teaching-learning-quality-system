@@ -1,10 +1,20 @@
 import type {
   ActionSummary,
+  AcademicYearSummary,
   ActionExtensionSummary,
   ActionOwnerOption,
   AdminManagedList,
   AdminOrganisationStructure,
   AdminOrganisationStaff,
+  MembershipChangeImpact,
+  MessageDeliverySummary,
+  MessagePreview,
+  MessageTemplateSummary,
+  MessageTemplateVersionSummary,
+  MessagingParameter,
+  OrganisationChangeImpact,
+  OrganisationMigrationReview,
+  PagedResult,
   AdminRecord,
   AdminWorkScrutinyRecord,
   AdminWorkScrutinyAction,
@@ -16,6 +26,7 @@ import type {
   CoachingSessionDetail,
   CoachingSessionSaveSummary,
   CoachingSessionSummary,
+  CompleteStaffOnboardingRequest,
   CourseSummary,
   CreateActionRequest,
   CreateAdminUserRequest,
@@ -31,31 +42,51 @@ import type {
   LearningWalkThemeMappingSummary,
   LearningWalkThemeGroup,
   LearningWalkRollupSummary,
+  LivConfiguration,
+  LivCycle,
   LivRecordSummary,
+  LivStaffContext,
   LookupSummary,
   LookupValueSummary,
   ModuleSummary,
   MyTeamMember,
   OrgUnitSummary,
   ProcessDashboardRecordSummary,
+  ProbationCase,
+  ProbationConfiguration,
+  ProbationStaffContext,
+  CreateProbationCaseRequest,
   RecordDetail,
   RecordAudit,
   RecordSummary,
   RoomSummary,
   SaveLivRecordRequest,
+  SaveLivStageRequest,
   SaveManagerRelationshipRequest,
+  SaveMessageTemplateRequest,
   SaveOrgUnitManagerRequest,
+  SaveOrganisationUnitRequest,
   SaveOrganisationMembershipRequest,
   SaveLivVisitRequest,
+  SaveProbationStageRequest,
+  SaveProbationVisitRequest,
   SaveLearningWalkThemeRequest,
   SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
+  SaveElevateStatusLevelRequest,
   SaveStaffReflectionRequest,
   StaffProfileDetail,
+  StaffProfileActionSummary,
+  StaffProfileCoachingSummary,
+  StaffProfileLivSummary,
+  StaffProfileProbationSummary,
   StaffProfileRecordSummary,
+  StaffProfileSectionSummary,
   StaffProfileSummary,
+  StaffCpdRecordSummary,
   StaffReflectionSummary,
   StaffSummary,
+  StaffOnboardingOptions,
   SharedThemeGroup,
   SubmitFormRequest,
   UpdateActionRequest,
@@ -74,11 +105,24 @@ const configuredTimeout = Number.parseInt(import.meta.env.VITE_API_TIMEOUT_MS ??
 const apiRequestTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout >= 1000
   ? configuredTimeout
   : 30000;
+const exportRequestTimeoutMs = Math.max(apiRequestTimeoutMs, 180000);
 
 export type ApiResult<T = never> = {
   ok: boolean;
   message?: string;
   data?: T;
+};
+
+export type ExportFilters = {
+  academicYear?: string;
+  facultyCode?: string;
+  teamCode?: string;
+  fromDate?: string;
+  toDate?: string;
+  staffId?: string;
+  reviewerId?: string;
+  status?: string;
+  recordType?: string;
 };
 
 async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> {
@@ -94,8 +138,8 @@ async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> 
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-async function getJson<T>(url: string): Promise<T> {
-  const response = await requestApi(url, { headers: await buildHeaders(false) });
+async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await requestApi(url, { headers: await buildHeaders(false) }, signal);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText} for ${url}`);
   }
@@ -140,9 +184,11 @@ async function sendJson<TRequest, TResponse = never>(url: string, method: "POST"
   }
 }
 
-async function requestApi(url: string, init: RequestInit): Promise<Response> {
+async function requestApi(url: string, init: RequestInit, externalSignal?: AbortSignal, timeoutMs = apiRequestTimeoutMs): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), apiRequestTimeoutMs);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
   try {
     return await fetch(`${apiBaseUrl}${url}`, {
@@ -152,11 +198,57 @@ async function requestApi(url: string, init: RequestInit): Promise<Response> {
     });
   } finally {
     window.clearTimeout(timeoutId);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
+async function downloadApiFile(url: string): Promise<ApiResult> {
+  try {
+    const response = await requestApi(url, { headers: await buildHeaders(false) }, undefined, exportRequestTimeoutMs);
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: response.status === 403
+          ? "You do not have permission to create this export."
+          : `The export could not be created (${response.status}).`
+      };
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    const fileName = encodedName ? decodeURIComponent(encodedName) : plainName ?? "i-elevate-export";
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return { ok: false, message: "The export took too long. Narrow the filters and try again." };
+    }
+    return { ok: false, message: "The API could not be reached. Check it is running." };
   }
 }
 
 export const api = {
+  exportExcel: (moduleKey: string, filters: ExportFilters = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value) query.set(key, value); });
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    return downloadApiFile(`/api/v1/exports/excel/${encodeURIComponent(moduleKey)}${suffix}`);
+  },
+  exportRecordWord: (recordId: string) =>
+    downloadApiFile(`/api/v1/exports/word/records/${encodeURIComponent(recordId)}`),
   currentUser: () => getJson<CurrentUser>("/api/v1/me"),
+  staffOnboardingOptions: () => getJson<StaffOnboardingOptions>("/api/v1/onboarding/options"),
+  completeStaffOnboarding: (request: CompleteStaffOnboardingRequest) =>
+    sendJson<CompleteStaffOnboardingRequest, CurrentUser>("/api/v1/onboarding", "POST", request),
   modules: () => getJson<ModuleSummary[]>("/api/v1/modules"),
   lookups: () => getJson<LookupSummary[]>("/api/v1/lookups"),
   sharedThemes: (applicationKey: string) =>
@@ -179,7 +271,8 @@ export const api = {
     getJson<CourseSummary[]>(`/api/v1/courses?orgUnitId=${encodeURIComponent(orgUnitId)}`),
   staff: () => getJson<StaffSummary[]>("/api/v1/staff"),
   myTeam: () => getJson<MyTeamMember[]>("/api/v1/my-team"),
-  records: () => getJson<RecordSummary[]>("/api/v1/records"),
+  records: (academicYear?: string) =>
+    getJson<RecordSummary[]>(`/api/v1/records${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
   recordDetail: (id: string) => getJson<RecordDetail>(`/api/v1/records/${id}`),
   adminWorkScrutinyRecords: () =>
     getJson<AdminWorkScrutinyRecord[]>("/api/v1/admin/work-scrutiny/records"),
@@ -243,6 +336,9 @@ export const api = {
   changeSubmissionStatus: (id: string, action: "submit" | "reopen" | "archive") =>
     sendJson(`/api/v1/form-submissions/${id}/status`, "POST", { action }),
   livRecords: () => getJson<LivRecordSummary[]>("/api/v1/liv-records"),
+  livConfiguration: () => getJson<LivConfiguration>("/api/v1/liv-records/configuration"),
+  livStaffContext: (staffId: string) =>
+    getJson<LivStaffContext>(`/api/v1/liv-records/staff/${staffId}/context`),
   createLivRecord: (request: SaveLivRecordRequest) => sendJson("/api/v1/liv-records", "POST", request),
   updateLivRecord: (id: string, request: SaveLivRecordRequest) =>
     sendJson(`/api/v1/liv-records/${id}`, "PUT", request),
@@ -250,12 +346,79 @@ export const api = {
     sendJson<SaveLivVisitRequest, { id: string; visitNumber: number }>(`/api/v1/liv-records/${id}/visits`, "POST", request),
   updateLivVisit: (id: string, visitId: string, request: SaveLivVisitRequest) =>
     sendJson(`/api/v1/liv-records/${id}/visits/${visitId}`, "PUT", request),
+  addLivStage: (id: string, request: SaveLivStageRequest) =>
+    sendJson<SaveLivStageRequest, { id: string; stageType: string; stageOrder: number; visitId?: string }>(
+      `/api/v1/liv-records/${id}/stages`, "POST", request
+    ),
+  updateLivStage: (id: string, stageId: string, request: SaveLivStageRequest) =>
+    sendJson(`/api/v1/liv-records/${id}/stages/${stageId}`, "PUT", request),
+  completeLivCycle: (id: string) =>
+    sendJson<never, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete`, "POST"),
   changeLivStatus: (id: string, action: "close" | "reopen" | "archive") =>
     sendJson(`/api/v1/liv-records/${id}/status`, "POST", { action }),
+  probationCases: () => getJson<ProbationCase[]>("/api/v1/probation-observations"),
+  probationConfiguration: () => getJson<ProbationConfiguration>("/api/v1/probation-observations/configuration"),
+  probationStaffContext: (staffId: string) =>
+    getJson<ProbationStaffContext>(`/api/v1/probation-observations/staff/${staffId}/context`),
+  createProbationCase: (request: CreateProbationCaseRequest) =>
+    sendJson<CreateProbationCaseRequest, { id: string }>("/api/v1/probation-observations", "POST", request),
+  updateProbationStage: (caseId: string, observationId: string, stageId: string, request: SaveProbationStageRequest) =>
+    sendJson(`/api/v1/probation-observations/${caseId}/observations/${observationId}/stages/${stageId}`, "PUT", request),
+  updateProbationVisit: (caseId: string, observationId: string, request: SaveProbationVisitRequest) =>
+    sendJson(`/api/v1/probation-observations/${caseId}/observations/${observationId}/visit`, "PUT", request),
+  completeProbationObservation: (caseId: string, observationId: string) =>
+    sendJson(`/api/v1/probation-observations/${caseId}/observations/${observationId}/complete`, "POST"),
+  startProbationLiv: (caseId: string) =>
+    sendJson<never, { livRecordId: string; livSourceRecordId: string }>(`/api/v1/probation-observations/${caseId}/observations/2/start`, "POST"),
   staffProfiles: () =>
     getJson<StaffProfileSummary[]>("/api/v1/reports/staff-profile-summaries"),
   staffProfileRecords: () => getJson<StaffProfileRecordSummary[]>("/api/v1/staff-profiles"),
-  staffProfile: (staffId: string) => getJson<StaffProfileDetail>(`/api/v1/staff-profiles/${staffId}`),
+  academicYears: () => getJson<AcademicYearSummary[]>("/api/v1/academic-years"),
+  staffProfile: (staffId: string, academicYear?: string) =>
+    getJson<StaffProfileDetail>(
+      `/api/v1/staff-profiles/${staffId}${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`
+    ),
+  staffProfileSectionSummary: (staffId: string, academicYear: string, signal?: AbortSignal) =>
+    getJson<StaffProfileSectionSummary>(
+      `/api/v1/staff-profiles/${staffId}/section-summary?academicYear=${encodeURIComponent(academicYear)}`,
+      signal
+    ),
+  staffProfileReflections: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffReflectionSummary>>(
+      `/api/v1/staff-profiles/${staffId}/reflections?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileCpd: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffCpdRecordSummary>>(
+      `/api/v1/staff-profiles/${staffId}/cpd?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileCoaching: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffProfileCoachingSummary>>(
+      `/api/v1/staff-profiles/${staffId}/coaching?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileLiv: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffProfileLivSummary>>(
+      `/api/v1/staff-profiles/${staffId}/liv?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileProbation: (staffId: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffProfileProbationSummary>>(
+      `/api/v1/staff-profiles/${staffId}/probation?page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  staffProfileActions: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    getJson<PagedResult<StaffProfileActionSummary>>(
+      `/api/v1/staff-profiles/${staffId}/actions?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      signal
+    ),
+  saveElevateStatusLevel: (staffId: string, levelNumber: number, request: SaveElevateStatusLevelRequest) =>
+    sendJson<SaveElevateStatusLevelRequest, StaffProfileDetail["elevateStatus"]>(
+      `/api/v1/staff-profiles/${staffId}/elevate-status/${levelNumber}`,
+      "PUT",
+      request
+    ),
   elevatePracticeMe: () => getJson<ElevatePracticeWorkspace>("/api/v1/elevate-practice/me"),
   saveElevatePractice: (request: SaveElevatePracticeAssessmentRequest) =>
     sendJson<SaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>("/api/v1/elevate-practice/me", "PUT", request),
@@ -278,6 +441,12 @@ export const api = {
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/records/${recordId}`),
   coachingSessions: () => getJson<CoachingSessionSummary[]>("/api/v1/coaching/sessions"),
   coachingConfiguration: () => getJson<CoachingConfiguration>("/api/v1/coaching/configuration"),
+  updateCoachingConfiguration: (maxActionsPerSession: number) =>
+    sendJson<{ maxActionsPerSession: number }, { maxActionsPerSession: number }>(
+      "/api/v1/admin/coaching/configuration",
+      "PUT",
+      { maxActionsPerSession }
+    ),
   coachingSession: (id: string) => getJson<CoachingSessionDetail>(`/api/v1/coaching/sessions/${id}`),
   coachingContext: (staffId: string, cycleId?: string) =>
     getJson<CoachingContext>(
@@ -300,6 +469,16 @@ export const api = {
     getJson<AdminOrganisationStaff[]>("/api/v1/admin/organisation/staff"),
   adminOrganisationStructure: () =>
     getJson<AdminOrganisationStructure>("/api/v1/admin/organisation/structure"),
+  createOrganisationUnit: (request: SaveOrganisationUnitRequest) =>
+    sendJson<SaveOrganisationUnitRequest, { id: string }>("/api/v1/admin/organisation/units", "POST", request),
+  updateOrganisationUnit: (orgUnitId: string, request: SaveOrganisationUnitRequest) =>
+    sendJson<SaveOrganisationUnitRequest>(`/api/v1/admin/organisation/units/${orgUnitId}`, "PUT", request),
+  organisationUnitImpact: (orgUnitId: string) =>
+    getJson<OrganisationChangeImpact>(`/api/v1/admin/organisation/units/${orgUnitId}/impact`),
+  setOrganisationUnitStatus: (orgUnitId: string, isActive: boolean, reason: string, confirmImpact: boolean) =>
+    sendJson(`/api/v1/admin/organisation/units/${orgUnitId}/status`, "POST", { isActive, reason, confirmImpact }),
+  organisationMigrationReviews: () =>
+    getJson<OrganisationMigrationReview[]>("/api/v1/admin/organisation/migration-reviews"),
   saveOrgUnitManager: (orgUnitId: string, request: SaveOrgUnitManagerRequest) =>
     sendJson<SaveOrgUnitManagerRequest, { id: string }>(
       `/api/v1/admin/organisation/units/${orgUnitId}/manager`,
@@ -318,6 +497,8 @@ export const api = {
     sendJson(`/api/v1/admin/organisation/staff/${staffId}/memberships/${membershipId}/primary`, "POST"),
   archiveOrganisationMembership: (staffId: string, membershipId: string, reason: string) =>
     sendJson(`/api/v1/admin/organisation/staff/${staffId}/memberships/${membershipId}/archive`, "POST", { reason }),
+  organisationMembershipImpact: (staffId: string, membershipId: string) =>
+    getJson<MembershipChangeImpact>(`/api/v1/admin/organisation/staff/${staffId}/memberships/${membershipId}/impact`),
   saveManagerRelationship: (staffId: string, request: SaveManagerRelationshipRequest) =>
     sendJson<SaveManagerRelationshipRequest, { id: string }>(
       `/api/v1/admin/organisation/staff/${staffId}/managers`,
@@ -346,5 +527,30 @@ export const api = {
   adminRoles: () => getJson<AdminRoleSummary[]>("/api/v1/admin/roles"),
   updateFormTemplateStructure: (id: string, request: UpdateFormTemplateStructureRequest) =>
     sendJson(`/api/v1/form-templates/${id}/structure`, "PUT", request),
-  publishFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST")
+  publishFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST"),
+  messageTemplates: (includeDeleted = false) =>
+    getJson<MessageTemplateSummary[]>(`/api/v1/admin/messaging/templates?includeDeleted=${includeDeleted}`),
+  messagingParameters: () => getJson<MessagingParameter[]>("/api/v1/admin/messaging/parameters"),
+  messageTemplateVersions: (id: string) =>
+    getJson<MessageTemplateVersionSummary[]>(`/api/v1/admin/messaging/templates/${id}/versions`),
+  createMessageTemplate: (request: SaveMessageTemplateRequest) =>
+    sendJson<SaveMessageTemplateRequest, { id: string }>("/api/v1/admin/messaging/templates", "POST", request),
+  updateMessageTemplate: (id: string, request: SaveMessageTemplateRequest) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}`, "PUT", request),
+  duplicateMessageTemplate: (id: string, messageKey: string, name: string) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}/duplicate`, "POST", { messageKey, name }),
+  previewMessageTemplate: (request: SaveMessageTemplateRequest) =>
+    sendJson<SaveMessageTemplateRequest, MessagePreview>("/api/v1/admin/messaging/templates/preview", "POST", request),
+  setMessageTemplateStatus: (id: string, isActive: boolean, restore: boolean, reason: string) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}/status`, "POST", { isActive, restore, reason }),
+  deleteMessageTemplate: (id: string, reason: string) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}/delete`, "POST", { reason }),
+  sendTestMessage: (id: string, recipientEmail: string) =>
+    sendJson(`/api/v1/admin/messaging/templates/${id}/test`, "POST", { recipientEmail }),
+  messageDeliveries: (take = 100) =>
+    getJson<MessageDeliverySummary[]>(`/api/v1/admin/messaging/deliveries?take=${take}`),
+  retryMessageDelivery: (id: string, reason: string) =>
+    sendJson(`/api/v1/admin/messaging/deliveries/${id}/retry`, "POST", { reason }),
+  cancelMessageDelivery: (id: string, reason: string) =>
+    sendJson(`/api/v1/admin/messaging/deliveries/${id}/cancel`, "POST", { reason })
 };

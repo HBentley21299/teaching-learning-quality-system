@@ -21,6 +21,20 @@ The system is a modular monolith. It is deployed as one web application and one 
 - Action engine: one action model across all processes.
 - Evidence engine: evidence metadata, files, review status, related records.
 - Reporting engine: permission-aware read models and dashboard configuration.
+- Messaging engine: versioned templates, approved parameters, durable domain events,
+  an idempotent outbox and Microsoft Graph delivery.
+- Export engine: scope-aware Excel workbooks and extensible Word record reports.
+
+## Operational Scale
+
+- Staff profile collections are loaded only when their collapsible section opens
+  and are paged server-side.
+- Interactive exports have a 25,000-row limit per worksheet and always record the
+  applied filters and requesting user.
+- Domain events and message deliveries use database-backed claims and expiring
+  locks, so multiple App Service instances cannot send the same event twice.
+- Membership describes where a staff member works. Management access comes only
+  from explicit scopes, manager relationships or global permissions.
 
 ## Non-Negotiables
 
@@ -29,4 +43,6 @@ The system is a modular monolith. It is deployed as one web application and one 
 - Template versioning is required for auditability.
 - Files live in Blob Storage; the database stores metadata and relationships.
 - Staff identity, user account, and Entra identity are separate concepts.
+- New notifications must publish a standard domain event; modules must not call
+  Microsoft Graph directly.
 

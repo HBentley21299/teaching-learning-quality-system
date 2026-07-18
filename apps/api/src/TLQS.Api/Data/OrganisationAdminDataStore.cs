@@ -13,7 +13,7 @@ public sealed partial class SqlFoundationDataStore
     {
         var staff = await QueryAsync(
             """
-            SELECT id, external_id, display_name, email, account_status
+            SELECT id, external_id, display_name, email, account_status, staff_category
             FROM people.staff
             WHERE archived_at IS NULL
             ORDER BY display_name;
@@ -23,7 +23,8 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
-                reader.GetString(4)),
+                reader.GetString(4),
+                GetStringOrNull(reader, 5)),
             cancellationToken);
 
         var memberships = await QueryAsync(
@@ -119,6 +120,7 @@ public sealed partial class SqlFoundationDataStore
                 person.DisplayName,
                 person.Email,
                 person.AccountStatus,
+                person.StaffCategory,
                 personRoles.FirstOrDefault()?.RoleName ?? "Tutor",
                 personRoles.Select(role => role.RoleName).ToArray(),
                 memberships
@@ -426,14 +428,16 @@ public sealed partial class SqlFoundationDataStore
                 transaction,
                 """
                 DECLARE @wasPrimary bit = 0;
-                DECLARE @replacementId uniqueidentifier;
-                DECLARE @replacementOrgUnitId uniqueidentifier;
-                SELECT @wasPrimary = is_primary
+                DECLARE @removedOrgUnitId uniqueidentifier;
+                SELECT @wasPrimary = is_primary,
+                       @removedOrgUnitId = org_unit_id
                 FROM org.staff_org_memberships
                 WHERE id = @membershipId AND staff_id = @staffId AND archived_at IS NULL;
 
                 UPDATE org.staff_org_memberships
                 SET is_primary = 0,
+                    active_to = COALESCE(active_to, CONVERT(date, sysutcdatetime())),
+                    change_reason = @reason,
                     archived_at = sysutcdatetime(),
                     updated_by_user_account_id = @updatedBy,
                     updated_at = sysutcdatetime()
@@ -441,38 +445,16 @@ public sealed partial class SqlFoundationDataStore
 
                 IF @wasPrimary = 1
                 BEGIN
-                    SELECT TOP (1)
-                        @replacementId = id,
-                        @replacementOrgUnitId = org_unit_id
-                    FROM org.staff_org_memberships
-                    WHERE staff_id = @staffId
-                      AND id <> @membershipId
-                      AND archived_at IS NULL
-                      AND (active_from IS NULL OR active_from <= CONVERT(date, sysutcdatetime()))
-                      AND (active_to IS NULL OR active_to >= CONVERT(date, sysutcdatetime()))
-                    ORDER BY CASE membership_type
-                                 WHEN N'programme_leader' THEN 1
-                                 WHEN N'head_of_faculty' THEN 2
-                                 WHEN N'director' THEN 3
-                                 ELSE 4
-                             END,
-                             created_at;
-
-                    UPDATE org.staff_org_memberships
-                    SET is_primary = 1,
-                        updated_by_user_account_id = @updatedBy,
-                        updated_at = sysutcdatetime()
-                    WHERE id = @replacementId;
-
                     UPDATE people.staff
-                    SET primary_org_unit_id = @replacementOrgUnitId, updated_at = sysutcdatetime()
-                    WHERE id = @staffId;
+                    SET primary_org_unit_id = NULL, updated_at = sysutcdatetime()
+                    WHERE id = @staffId AND primary_org_unit_id = @removedOrgUnitId;
                 END;
                 """,
                 command =>
                 {
                     command.Parameters.AddWithValue("@membershipId", membershipId);
                     command.Parameters.AddWithValue("@staffId", staffId);
+                    command.Parameters.AddWithValue("@reason", reason);
                     command.Parameters.AddWithValue("@updatedBy", ToDbValue(currentUser.UserAccountId));
                 },
                 cancellationToken);
@@ -842,7 +824,7 @@ public sealed partial class SqlFoundationDataStore
         }
     }
 
-    private sealed record OrganisationStaffRow(Guid StaffId, string ExternalId, string DisplayName, string Email, string AccountStatus);
+    private sealed record OrganisationStaffRow(Guid StaffId, string ExternalId, string DisplayName, string Email, string AccountStatus, string? StaffCategory);
     private sealed record OrganisationMembershipRow(
         Guid Id,
         Guid StaffId,

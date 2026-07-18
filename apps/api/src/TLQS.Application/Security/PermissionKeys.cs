@@ -10,6 +10,8 @@ public static class PermissionKeys
     public const string LearningWalkSubmit = "learning_walk.submit";
     public const string WorkScrutinySubmit = "work_scrutiny.submit";
     public const string CpdManage = "cpd.manage";
+    public const string CpdSelfLog = "cpd.self_log";
+    public const string ElevateStatusManage = "elevate_status.manage";
     public const string EvidenceSubmit = "evidence.submit";
     public const string EvidenceReview = "evidence.review";
     public const string ActionsManage = "actions.manage";
@@ -25,8 +27,13 @@ public static class PermissionKeys
     public const string ElevatePracticeSubmit = "elevate_practice.submit";
     public const string CoachingSubmit = "coaching.submit";
     public const string CoachingManage = "coaching.manage";
+    public const string ProbationSubmit = "probation.submit";
+    public const string ProbationManage = "probation.manage";
     public const string ReportsViewAll = "reports.view_all";
     public const string ReportsViewScoped = "reports.view_scoped";
+    public const string MessagingManage = "messaging.manage";
+    public const string MessagingSend = "messaging.send";
+    public const string ExportsCreate = "exports.create";
 
     public static readonly string[] All =
     [
@@ -38,6 +45,8 @@ public static class PermissionKeys
         LearningWalkSubmit,
         WorkScrutinySubmit,
         CpdManage,
+        CpdSelfLog,
+        ElevateStatusManage,
         EvidenceSubmit,
         EvidenceReview,
         ActionsManage,
@@ -53,7 +62,12 @@ public static class PermissionKeys
         ElevatePracticeSubmit,
         CoachingSubmit,
         CoachingManage,
+        ProbationSubmit,
+        ProbationManage,
         ReportsViewAll,
-        ReportsViewScoped
+        ReportsViewScoped,
+        MessagingManage,
+        MessagingSend,
+        ExportsCreate
     ];
 }

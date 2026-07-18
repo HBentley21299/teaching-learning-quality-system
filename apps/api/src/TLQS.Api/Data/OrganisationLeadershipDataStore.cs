@@ -14,10 +14,9 @@ public sealed partial class SqlFoundationDataStore
     {
         var units = await QueryAsync(
             """
-            SELECT id, parent_org_unit_id, org_unit_type, code, name
+            SELECT id, parent_org_unit_id, org_unit_type, code, name, description, is_active
             FROM org.org_units
             WHERE org_unit_type IN (N'faculty', N'team')
-              AND is_active = 1
               AND archived_at IS NULL
             ORDER BY CASE org_unit_type WHEN N'faculty' THEN 0 ELSE 1 END, code, name;
             """,
@@ -26,12 +25,34 @@ public sealed partial class SqlFoundationDataStore
                 GetGuidOrNull(reader, 1),
                 reader.GetString(2),
                 reader.GetString(3),
-                reader.GetString(4)),
+                reader.GetString(4),
+                GetStringOrNull(reader, 5),
+                reader.GetBoolean(6)),
+            cancellationToken);
+
+        var aliases = await QueryAsync(
+            """
+            SELECT replacement_org_unit_id, legacy_code
+            FROM org.org_unit_code_aliases
+            ORDER BY legacy_code;
+            """,
+            reader => new OrgUnitAliasRow(reader.GetGuid(0), reader.GetString(1)),
+            cancellationToken);
+
+        var alignments = await QueryAsync(
+            """
+            SELECT alignment.service_org_unit_id, target.code
+            FROM org.org_unit_alignments alignment
+            JOIN org.org_units target ON target.id = alignment.aligned_org_unit_id
+            WHERE alignment.is_active = 1 AND alignment.archived_at IS NULL
+            ORDER BY target.code;
+            """,
+            reader => new OrgUnitAlignmentRow(reader.GetGuid(0), reader.GetString(1)),
             cancellationToken);
 
         var staff = await QueryAsync(
             """
-            SELECT staff.id, staff.external_id, staff.display_name, staff.email,
+            SELECT staff.id, staff.external_id, staff.display_name, staff.email, staff.staff_category,
                    COALESCE(effective_role.name, N'Tutor'), primary_unit.code
             FROM people.staff staff
             JOIN auth.user_accounts account ON account.staff_id = staff.id
@@ -59,8 +80,9 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
-                reader.GetString(4),
-                GetStringOrNull(reader, 5)),
+                GetStringOrNull(reader, 4),
+                reader.GetString(5),
+                GetStringOrNull(reader, 6)),
             cancellationToken);
 
         var leaderships = await QueryAsync(
@@ -100,6 +122,7 @@ public sealed partial class SqlFoundationDataStore
         var staffById = staff.ToDictionary(person => person.StaffId);
         var leadershipByUnit = leaderships.ToDictionary(leadership => leadership.OrgUnitId);
         var teamsByFaculty = units
+            .Where(unit => unit.IsActive)
             .Where(unit => unit.OrgUnitType == OrganisationLeadershipRules.TeamType && unit.ParentOrgUnitId.HasValue)
             .GroupBy(unit => unit.ParentOrgUnitId!.Value)
             .ToDictionary(group => group.Key, group => group.ToArray());
@@ -145,10 +168,14 @@ public sealed partial class SqlFoundationDataStore
                 unit.OrgUnitType,
                 unit.Code,
                 unit.Name,
+                unit.Description,
                 directStaffCount,
                 totalStaffCount,
                 childTeams.Length,
                 childTeams.Count(team => leadershipByUnit.ContainsKey(team.Id)),
+                unit.IsActive,
+                aliases.Where(alias => alias.OrgUnitId == unit.Id).Select(alias => alias.LegacyCode).ToArray(),
+                alignments.Where(alignment => alignment.ServiceOrgUnitId == unit.Id).Select(alignment => alignment.FacultyCode).ToArray(),
                 ManagerFor(unit.Id),
                 unit.OrgUnitType == OrganisationLeadershipRules.TeamType ? ManagerFor(unit.ParentOrgUnitId) : null);
         }).ToArray();
@@ -160,6 +187,7 @@ public sealed partial class SqlFoundationDataStore
                 person.ExternalId,
                 person.DisplayName,
                 person.Email,
+                person.StaffCategory,
                 person.EffectivePermissionLevel,
                 person.PrimaryOrgCode)).ToArray());
     }
@@ -360,7 +388,7 @@ public sealed partial class SqlFoundationDataStore
     {
         await using var command = new SqlCommand(
             """
-            SELECT id, parent_org_unit_id, org_unit_type, code, name
+            SELECT id, parent_org_unit_id, org_unit_type, code, name, description, is_active
             FROM org.org_units
             WHERE id = @id AND is_active = 1 AND archived_at IS NULL;
             """,
@@ -374,7 +402,9 @@ public sealed partial class SqlFoundationDataStore
                 GetGuidOrNull(reader, 1),
                 reader.GetString(2),
                 reader.GetString(3),
-                reader.GetString(4))
+                reader.GetString(4),
+                GetStringOrNull(reader, 5),
+                reader.GetBoolean(6))
             : null;
     }
 
@@ -430,13 +460,19 @@ public sealed partial class SqlFoundationDataStore
         Guid? ParentOrgUnitId,
         string OrgUnitType,
         string Code,
-        string Name);
+        string Name,
+        string? Description,
+        bool IsActive);
+
+    private sealed record OrgUnitAliasRow(Guid OrgUnitId, string LegacyCode);
+    private sealed record OrgUnitAlignmentRow(Guid ServiceOrgUnitId, string FacultyCode);
 
     private sealed record ManagedStaffRow(
         Guid StaffId,
         string ExternalId,
         string DisplayName,
         string Email,
+        string? StaffCategory,
         string EffectivePermissionLevel,
         string? PrimaryOrgCode);
 

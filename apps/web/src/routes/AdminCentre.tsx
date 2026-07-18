@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -21,6 +21,7 @@ import { AdminWorkScrutiny } from "./AdminWorkScrutiny";
 import { AdminManagedLists } from "./AdminManagedLists";
 import { AdminRecordsPanel } from "./AdminRecordsPanel";
 import { OrganisationStructureAdmin } from "./OrganisationStructureAdmin";
+import { MessagingAdminPanel } from "./MessagingAdminPanel";
 
 export function AdminCentre({
   user,
@@ -49,7 +50,8 @@ export function AdminCentre({
   const canManageLists = user.permissions.includes("lists.manage");
   const canManageForms = user.permissions.includes("forms.manage");
   const canManageRecords = user.permissions.includes("records.manage");
-  const canUseAdmin = canManagePeople || canManageOrganisation || canManageLists || canManageForms || canManageRecords;
+  const canManageMessaging = user.permissions.includes("messaging.manage");
+  const canUseAdmin = canManagePeople || canManageOrganisation || canManageLists || canManageForms || canManageRecords || canManageMessaging;
   const tabAccess: Record<AdminTabKey, boolean> = {
     overview: canUseAdmin,
     "staff-access": canManagePeople,
@@ -58,6 +60,7 @@ export function AdminCentre({
     forms: canManageForms,
     elevate: canManageRecords || user.permissions.includes("users.manage"),
     records: canManageRecords,
+    messaging: canManageMessaging,
     dashboards: canManageRecords
   };
   const visibleTabs = adminTabs.filter((tab) => tabAccess[tab.key]);
@@ -126,16 +129,17 @@ export function AdminCentre({
       ) : null}
       {activeTab === "staff-access" ? <div className="route-stack"><StaffAdminPanel user={user} /><PermissionAdminPanel user={user} /></div> : null}
       {activeTab === "organisation" ? <OrganisationStructureAdmin /> : null}
-      {activeTab === "lists" ? <div className="route-stack"><AdminManagedLists /><LearningWalkThemeAdminPanel /></div> : null}
+      {activeTab === "lists" ? <div className="route-stack"><CoachingConfigurationAdmin /><AdminManagedLists /><LearningWalkThemeAdminPanel /></div> : null}
       {activeTab === "forms" ? <FormBuilder embedded user={user} /> : null}
       {activeTab === "elevate" ? <AdminElevatePractice /> : null}
       {activeTab === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
+      {activeTab === "messaging" ? <MessagingAdminPanel /> : null}
       {activeTab === "dashboards" ? <DashboardAdminPanel /> : null}
     </div>
   );
 }
 
-type AdminTabKey = "overview" | "staff-access" | "organisation" | "lists" | "forms" | "elevate" | "records" | "dashboards";
+type AdminTabKey = "overview" | "staff-access" | "organisation" | "lists" | "forms" | "elevate" | "records" | "messaging" | "dashboards";
 
 const adminTabs: Array<{ key: AdminTabKey; label: string; icon: typeof SlidersHorizontal }> = [
   { key: "overview", label: "Overview", icon: SlidersHorizontal },
@@ -145,6 +149,7 @@ const adminTabs: Array<{ key: AdminTabKey; label: string; icon: typeof SlidersHo
   { key: "forms", label: "Forms", icon: FileText },
   { key: "elevate", label: "Elevate Records", icon: Sparkles },
   { key: "records", label: "Records", icon: Database },
+  { key: "messaging", label: "Messaging", icon: Mail },
   { key: "dashboards", label: "Dashboards", icon: LayoutDashboard }
 ];
 
@@ -199,8 +204,7 @@ function AdminOverview({
           </div>
           <div className="lookup-list">
             <button className="lookup-row" onClick={onOpenLookups} type="button">CPD themes</button>
-            <button className="lookup-row" onClick={onOpenLookups} type="button">Learning Environment purposes</button>
-            <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching development stages</button>
+            <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching qualification statuses</button>
             <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching focus areas</button>
             <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching support types</button>
           </div>
@@ -226,6 +230,42 @@ function AdminOverview({
   );
 }
 
+function CoachingConfigurationAdmin() {
+  const [maxActions, setMaxActions] = useState("3");
+  const [message, setMessage] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    void api.coachingConfiguration()
+      .then((configuration) => setMaxActions(String(configuration.maxActionsPerSession)))
+      .catch(() => setMessage("Coaching configuration could not be loaded."));
+  }, []);
+
+  async function saveConfiguration() {
+    const value = Number(maxActions);
+    if (!Number.isInteger(value) || value < 1 || value > 10) {
+      setMessage("Enter a maximum between 1 and 10 actions.");
+      return;
+    }
+
+    setIsSaving(true);
+    const result = await api.updateCoachingConfiguration(value);
+    setIsSaving(false);
+    setMessage(result.ok ? "Coaching action limit updated." : result.message ?? "The coaching configuration could not be saved.");
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-heading"><div><h2>Coaching workflow</h2><span>Session-level configuration</span></div></div>
+      <div className="lookup-admin-toolbar">
+        <label className="entry-field"><span>Maximum new actions per session</span><input max={10} min={1} onChange={(event) => setMaxActions(event.target.value)} type="number" value={maxActions} /></label>
+        <Button disabled={isSaving} icon={Save} onClick={() => void saveConfiguration()} variant="primary">Save setting</Button>
+      </div>
+      {message ? <div className="notice-row" role="status">{message}</div> : null}
+    </section>
+  );
+}
+
 function LookupAdminPanel() {
   return (
     <div className="route-stack">
@@ -239,22 +279,13 @@ function LookupAdminPanel() {
         valueLabel="CPD theme"
       />
       <LookupValueAdminSection
-        addLabel="Add purpose"
-        emptyPrompt="Enter a Learning Environment purpose before adding it."
-        inputLabel="New intended purpose"
-        lookupKey="elevate_environment_purpose"
-        placeholder="Enter intended purpose"
-        title="Learning Environment purposes"
-        valueLabel="intended purpose"
-      />
-      <LookupValueAdminSection
         addLabel="Add stage"
-        emptyPrompt="Enter a staff development stage before adding it."
-        inputLabel="New development stage"
+        emptyPrompt="Enter a qualification status before adding it."
+        inputLabel="New qualification status"
         lookupKey="coaching_development_stage"
-        placeholder="Enter development stage"
-        title="Coaching development stages"
-        valueLabel="development stage"
+        placeholder="Enter qualification status"
+        title="Coaching qualification statuses"
+        valueLabel="qualification status"
       />
       <LookupValueAdminSection
         addLabel="Add focus area"

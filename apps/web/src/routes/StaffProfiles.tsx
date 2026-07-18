@@ -1,6 +1,7 @@
 import { Search, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { StaffProfilePanel } from "../features/StaffProfilePanel";
+import { ExportExcelButton } from "../components/ExportButtons";
+import { StaffProfilePanel, type StaffProfileRecordLinkHandler } from "../features/StaffProfilePanel";
 import type { CurrentUser, StaffProfileSummary, StaffSummary } from "../services/types";
 
 const MAX_RESULTS = 8;
@@ -11,13 +12,19 @@ const MAX_RESULTS = 8;
  * profile endpoint re-checks scope server-side.
  */
 export function StaffProfiles({
+  academicYear,
   profiles,
   staff,
-  user
+  user,
+  onOpenRecord,
+  onOpenActionDetails
 }: {
+  academicYear: string;
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   user: CurrentUser;
+  onOpenRecord: StaffProfileRecordLinkHandler;
+  onOpenActionDetails: (actionId: string, staffId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [isResultsOpen, setIsResultsOpen] = useState(false);
@@ -91,6 +98,7 @@ export function StaffProfiles({
           <p className="eyebrow">People and scope</p>
           <h1>Staff</h1>
         </div>
+        {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear }} moduleKey="staff" /> : null}
       </div>
 
       <section className="panel">
@@ -160,7 +168,14 @@ export function StaffProfiles({
       </section>
 
       {selectedStaff ? (
-        <StaffProfilePanel profiles={profiles} staffId={selectedStaff.id} user={user} />
+        <StaffProfilePanel
+          academicYear={academicYear}
+          onOpenActionDetails={onOpenActionDetails}
+          onOpenRecord={onOpenRecord}
+          profiles={profiles}
+          staffId={selectedStaff.id}
+          user={user}
+        />
       ) : (
         <section className="panel">
           <div className="panel-heading">

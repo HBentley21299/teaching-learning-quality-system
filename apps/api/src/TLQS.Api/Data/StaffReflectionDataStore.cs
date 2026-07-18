@@ -41,7 +41,8 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN people.staff updated_by ON updated_by.id = updated_account.staff_id
             WHERE reflection.staff_id = @staffId
               AND reflection.archived_at IS NULL
-            ORDER BY reflection.reflection_date DESC, reflection.created_at DESC;
+            ORDER BY reflection.reflection_date DESC, reflection.created_at DESC
+            OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);
             """,
             command => command.Parameters.AddWithValue("@staffId", staffId),
             reader => new StaffReflectionRow(
@@ -68,36 +69,42 @@ public sealed partial class SqlFoundationDataStore
             return [];
         }
 
-        var areas = await QueryAsync(
+        var focusAreas = await QueryAsync(
             """
             SELECT
                 link.reflection_id,
-                link.development_area_id,
-                link.development_area_text_snapshot,
+                link.focus_lookup_value_id,
+                link.focus_key_snapshot,
+                link.focus_text_snapshot,
+                link.focus_type,
                 link.display_order
-            FROM quality.staff_reflection_development_areas link
+            FROM quality.staff_reflection_focus_areas link
             JOIN quality.staff_reflections reflection ON reflection.id = link.reflection_id
             WHERE reflection.staff_id = @staffId
               AND reflection.archived_at IS NULL
             ORDER BY link.reflection_id, link.display_order;
             """,
             command => command.Parameters.AddWithValue("@staffId", staffId),
-            reader => new StaffReflectionAreaRow(
+            reader => new StaffReflectionFocusRow(
                 reader.GetGuid(0),
-                reader.GetGuid(1),
+                GetGuidOrNull(reader, 1),
                 reader.GetString(2),
-                reader.GetInt32(3)),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetInt32(5)),
             cancellationToken);
 
-        var areasByReflection = areas
-            .GroupBy(area => area.ReflectionId)
+        var focusByReflection = focusAreas
+            .GroupBy(focus => focus.ReflectionId)
             .ToDictionary(
                 group => group.Key,
-                group => (IReadOnlyList<StaffReflectionDevelopmentAreaSummary>)group
-                    .Select(area => new StaffReflectionDevelopmentAreaSummary(
-                        area.DevelopmentAreaId,
-                        area.TextSnapshot,
-                        area.DisplayOrder))
+                group => (IReadOnlyList<StaffReflectionFocusAreaSummary>)group
+                    .Select(focus => new StaffReflectionFocusAreaSummary(
+                        focus.FocusLookupValueId,
+                        focus.FocusKeySnapshot,
+                        focus.TextSnapshot,
+                        focus.FocusType,
+                        focus.DisplayOrder))
                     .ToArray());
 
         return rows
@@ -112,7 +119,7 @@ public sealed partial class SqlFoundationDataStore
                 row.Impact,
                 row.Examples,
                 row.Status,
-                areasByReflection.GetValueOrDefault(row.Id, []),
+                focusByReflection.GetValueOrDefault(row.Id, []),
                 row.CreatedByUserAccountId,
                 row.CreatedByName,
                 row.CreatedAt,
@@ -167,7 +174,7 @@ public sealed partial class SqlFoundationDataStore
                 return new StaffReflectionMutationResult(
                     StaffReflectionMutationStatus.NoSubmittedElevateAssessment,
                     null,
-                    "A submitted Elevate Your Practice assessment is required before a reflection can be created.");
+                    "A submitted Elevate Learning and Innovation assessment is required before a reflection can be created.");
             }
 
             var reflectionId = Guid.NewGuid();
@@ -192,21 +199,39 @@ public sealed partial class SqlFoundationDataStore
                     @createdByUserAccountId
                 );
 
-                INSERT INTO quality.staff_reflection_development_areas (
+                INSERT INTO quality.staff_reflection_focus_areas (
                     reflection_id,
-                    development_area_id,
-                    development_area_text_snapshot,
+                    focus_lookup_value_id,
+                    focus_key_snapshot,
+                    focus_text_snapshot,
+                    focus_type,
                     display_order
                 )
                 SELECT
                     @id,
-                    selection.area_id,
-                    area.name,
-                    area.display_order
-                FROM quality.elevate_practice_selections selection
-                JOIN quality.elevate_practice_areas area ON area.id = selection.area_id
-                WHERE selection.assessment_id = @assessmentId
-                  AND selection.selection_type = 'development';
+                    focus.id,
+                    focus.value_key,
+                    focus.display_name,
+                    N'primary',
+                    1
+                FROM quality.elevate_practice_liv_information information
+                JOIN core.lookup_values focus ON focus.id = information.primary_focus_lookup_value_id
+                WHERE information.assessment_id = @assessmentId
+                UNION ALL
+                SELECT
+                    @id,
+                    focus.id,
+                    focus.value_key,
+                    CASE
+                        WHEN focus.value_key = N'other'
+                            THEN COALESCE(NULLIF(LTRIM(RTRIM(information.secondary_focus_other)), N''), focus.display_name)
+                        ELSE focus.display_name
+                    END,
+                    N'secondary',
+                    2
+                FROM quality.elevate_practice_liv_information information
+                JOIN core.lookup_values focus ON focus.id = information.secondary_focus_lookup_value_id
+                WHERE information.assessment_id = @assessmentId;
                 """,
                 connection,
                 (SqlTransaction)transaction))
@@ -419,10 +444,12 @@ public sealed partial class SqlFoundationDataStore
         string? UpdatedByName,
         DateTimeOffset? UpdatedAt);
 
-    private sealed record StaffReflectionAreaRow(
+    private sealed record StaffReflectionFocusRow(
         Guid ReflectionId,
-        Guid DevelopmentAreaId,
+        Guid? FocusLookupValueId,
+        string FocusKeySnapshot,
         string TextSnapshot,
+        string FocusType,
         int DisplayOrder);
 
     private sealed record ElevateAssessmentLink(Guid Id, Guid RecordId, string AcademicYear);

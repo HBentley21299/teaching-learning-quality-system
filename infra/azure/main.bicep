@@ -36,6 +36,21 @@ param entraTenantId string = tenant().tenantId
 @description('Client ID/audience of the Entra API app registration.')
 param entraApiAudience string
 
+@description('Enable Microsoft Graph email delivery. Keep false until the Graph app permission, mailbox and Key Vault secret are ready.')
+param messagingEnabled bool = false
+
+@description('Client ID of the Entra application granted Microsoft Graph Mail.Send application permission.')
+param messagingClientId string = ''
+
+@description('Mailbox used as the Microsoft Graph sendMail user.')
+param messagingSenderAddress string = ''
+
+@description('Optional reply-to mailbox for application messages.')
+param messagingReplyToAddress string = ''
+
+@description('Redirect all non-production messages to this address. Required when messaging is enabled outside production.')
+param messagingTestRecipient string = ''
+
 @description('Temporarily permit one public IP to run first-time migrations. Disable after migration.')
 param enableSqlMigrationAccess bool = false
 
@@ -381,7 +396,7 @@ resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
       healthCheckPath: '/health/ready'
       minTlsVersion: '1.2'
       vnetRouteAllEnabled: isProduction
-      appSettings: [
+      appSettings: concat([
         {
           name: 'ASPNETCORE_ENVIRONMENT'
           value: 'Production'
@@ -430,7 +445,48 @@ resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'WEBSITE_RUN_FROM_PACKAGE'
           value: '1'
         }
-      ]
+      ], messagingEnabled ? [
+        {
+          name: 'Messaging__Enabled'
+          value: 'true'
+        }
+        {
+          name: 'Messaging__Provider'
+          value: 'MicrosoftGraph'
+        }
+        {
+          name: 'Messaging__TenantId'
+          value: entraTenantId
+        }
+        {
+          name: 'Messaging__ClientId'
+          value: messagingClientId
+        }
+        {
+          name: 'Messaging__ClientSecret'
+          value: '@Microsoft.KeyVault(SecretUri=${keyVault.properties.vaultUri}secrets/messaging-graph-client-secret)'
+        }
+        {
+          name: 'Messaging__SenderAddress'
+          value: messagingSenderAddress
+        }
+        {
+          name: 'Messaging__ReplyToAddress'
+          value: messagingReplyToAddress
+        }
+        {
+          name: 'Messaging__ApplicationUrl'
+          value: 'https://${appServiceName}.azurewebsites.net'
+        }
+        {
+          name: 'Messaging__TestMode'
+          value: isProduction ? 'false' : 'true'
+        }
+        {
+          name: 'Messaging__TestRecipient'
+          value: messagingTestRecipient
+        }
+      ] : [])
     }
   }
 }
@@ -463,3 +519,4 @@ output sqlServerFqdn string = sqlServer.properties.fullyQualifiedDomainName
 output sqlDatabaseName string = sqlDatabase.name
 output storageAccountName string = storage.name
 output keyVaultUri string = keyVault.properties.vaultUri
+output keyVaultName string = keyVault.name
