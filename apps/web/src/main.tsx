@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { LoginScreen } from "./components/LoginScreen";
 import { hasSignedInAccount, initializeAuth, isAuthEnabled } from "./services/auth";
+import "@fontsource-variable/inter";
 import "./app/styles.css";
+import "./app/theme.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
