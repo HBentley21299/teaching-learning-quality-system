@@ -5,6 +5,10 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Azure.Core;
 using Azure.Identity;
+using MailKit.Net.Smtp;
+using MailKit.Security;
+using MimeKit;
+using TLQS.Api.Data;
 
 namespace TLQS.Api.Messaging;
 
@@ -22,7 +26,35 @@ public sealed class MessagingOptions
     public string TestRecipient { get; set; } = "";
     public string ApplicationUrl { get; set; } = "";
     public int PollSeconds { get; set; } = 10;
+    public string SmtpHost { get; set; } = "smtp.office365.com";
+    public int SmtpPort { get; set; } = 587;
+    public string SmtpSecurity { get; set; } = "StartTls";
+    public string SmtpAuthentication { get; set; } = "OAuth2";
+    public string SmtpUsername { get; set; } = "";
+    public string SmtpPassword { get; set; } = "";
 }
+
+public sealed record MessagingRuntimeConfiguration(
+    bool Enabled,
+    bool TestMode,
+    string Provider,
+    string TenantId,
+    string ClientId,
+    string ClientSecret,
+    string SenderAddress,
+    string SenderDisplayName,
+    string ReplyToAddress,
+    string TestRecipient,
+    string ApplicationUrl,
+    int PollSeconds,
+    string SmtpHost,
+    int SmtpPort,
+    string SmtpSecurity,
+    string SmtpAuthentication,
+    string SmtpUsername,
+    string SmtpPassword,
+    DateTimeOffset? UpdatedAt = null,
+    string? UpdatedBy = null);
 
 public sealed record OutboundRecipient(string Type, string EmailAddress, string? DisplayName);
 public sealed record OutboundEmail(string Subject, string PlainTextBody, string? HtmlBody, IReadOnlyList<OutboundRecipient> Recipients);
@@ -33,29 +65,33 @@ public interface IEmailProvider
     Task<EmailDeliveryResult> SendAsync(OutboundEmail email, CancellationToken cancellationToken);
 }
 
-public sealed class MicrosoftGraphEmailProvider(
+public sealed class ConfiguredEmailProvider(
     HttpClient httpClient,
-    Microsoft.Extensions.Options.IOptions<MessagingOptions> configuredOptions) : IEmailProvider
+    MessagingConfigurationStore configurationStore) : IEmailProvider
 {
-    private readonly MessagingOptions _options = configuredOptions.Value;
-
     public async Task<EmailDeliveryResult> SendAsync(OutboundEmail email, CancellationToken cancellationToken)
     {
-        if (!_options.Enabled) throw new InvalidOperationException("Production message delivery is disabled.");
-        if (string.IsNullOrWhiteSpace(_options.TenantId) || string.IsNullOrWhiteSpace(_options.ClientId)
-            || string.IsNullOrWhiteSpace(_options.ClientSecret) || string.IsNullOrWhiteSpace(_options.SenderAddress))
+        var settings = await configurationStore.GetEffectiveAsync(cancellationToken);
+        if (!settings.Enabled) throw new InvalidOperationException("Production message delivery is disabled.");
+        var recipients = ResolveRecipients(email.Recipients, settings);
+        return settings.Provider == "Smtp"
+            ? await SendSmtpAsync(email, recipients, settings, cancellationToken)
+            : await SendGraphAsync(email, recipients, settings, cancellationToken);
+    }
+
+    private async Task<EmailDeliveryResult> SendGraphAsync(
+        OutboundEmail email,
+        IReadOnlyList<OutboundRecipient> recipients,
+        MessagingRuntimeConfiguration settings,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(settings.TenantId) || string.IsNullOrWhiteSpace(settings.ClientId)
+            || string.IsNullOrWhiteSpace(settings.ClientSecret) || string.IsNullOrWhiteSpace(settings.SenderAddress))
             throw new InvalidOperationException("Microsoft Graph messaging credentials and sender address are not configured.");
 
-        var credential = new ClientSecretCredential(_options.TenantId, _options.ClientId, _options.ClientSecret);
+        var credential = new ClientSecretCredential(settings.TenantId, settings.ClientId, settings.ClientSecret);
         AccessToken token = await credential.GetTokenAsync(
             new TokenRequestContext(["https://graph.microsoft.com/.default"]), cancellationToken);
-        var recipients = email.Recipients;
-        if (_options.TestMode)
-        {
-            if (string.IsNullOrWhiteSpace(_options.TestRecipient))
-                throw new InvalidOperationException("Messaging test mode requires Messaging:TestRecipient.");
-            recipients = [new OutboundRecipient("to", _options.TestRecipient, "Test recipient")];
-        }
 
         static object Recipient(OutboundRecipient item) => new { emailAddress = new { address = item.EmailAddress, name = item.DisplayName } };
         var contentType = string.IsNullOrWhiteSpace(email.HtmlBody) ? "Text" : "HTML";
@@ -69,14 +105,14 @@ public sealed class MicrosoftGraphEmailProvider(
                 toRecipients = recipients.Where(item => item.Type == "to").Select(Recipient),
                 ccRecipients = recipients.Where(item => item.Type == "cc").Select(Recipient),
                 bccRecipients = recipients.Where(item => item.Type == "bcc").Select(Recipient),
-                replyTo = string.IsNullOrWhiteSpace(_options.ReplyToAddress)
+                replyTo = string.IsNullOrWhiteSpace(settings.ReplyToAddress)
                     ? Array.Empty<object>()
-                    : [new { emailAddress = new { address = _options.ReplyToAddress } }]
+                    : [new { emailAddress = new { address = settings.ReplyToAddress } }]
             },
             saveToSentItems = true
         };
         using var request = new HttpRequestMessage(HttpMethod.Post,
-            $"https://graph.microsoft.com/v1.0/users/{Uri.EscapeDataString(_options.SenderAddress)}/sendMail");
+            $"https://graph.microsoft.com/v1.0/users/{Uri.EscapeDataString(settings.SenderAddress)}/sendMail");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
         request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         using var response = await httpClient.SendAsync(request, cancellationToken);
@@ -86,6 +122,70 @@ public sealed class MicrosoftGraphEmailProvider(
             throw new InvalidOperationException($"Microsoft Graph rejected the message ({(int)response.StatusCode}): {Truncate(responseBody, 800)}");
         }
         return new EmailDeliveryResult(response.Headers.TryGetValues("request-id", out var values) ? values.FirstOrDefault() : null);
+    }
+
+    private static async Task<EmailDeliveryResult> SendSmtpAsync(
+        OutboundEmail email,
+        IReadOnlyList<OutboundRecipient> recipients,
+        MessagingRuntimeConfiguration settings,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(settings.SmtpHost) || string.IsNullOrWhiteSpace(settings.SenderAddress))
+            throw new InvalidOperationException("SMTP server and sender address are not configured.");
+
+        var message = new MimeMessage();
+        message.From.Add(new MailboxAddress(settings.SenderDisplayName, settings.SenderAddress));
+        foreach (var recipient in recipients)
+        {
+            var mailbox = new MailboxAddress(recipient.DisplayName ?? "", recipient.EmailAddress);
+            if (recipient.Type == "cc") message.Cc.Add(mailbox);
+            else if (recipient.Type == "bcc") message.Bcc.Add(mailbox);
+            else message.To.Add(mailbox);
+        }
+        if (!string.IsNullOrWhiteSpace(settings.ReplyToAddress))
+            message.ReplyTo.Add(MailboxAddress.Parse(settings.ReplyToAddress));
+        message.Subject = email.Subject;
+        var body = new BodyBuilder { TextBody = email.PlainTextBody };
+        if (!string.IsNullOrWhiteSpace(email.HtmlBody)) body.HtmlBody = email.HtmlBody;
+        message.Body = body.ToMessageBody();
+
+        using var client = new SmtpClient();
+        var socketOptions = settings.SmtpSecurity switch
+        {
+            "SslOnConnect" => SecureSocketOptions.SslOnConnect,
+            "None" => SecureSocketOptions.None,
+            _ => SecureSocketOptions.StartTls
+        };
+        await client.ConnectAsync(settings.SmtpHost, settings.SmtpPort, socketOptions, cancellationToken);
+        if (settings.SmtpAuthentication == "OAuth2")
+        {
+            if (string.IsNullOrWhiteSpace(settings.TenantId) || string.IsNullOrWhiteSpace(settings.ClientId)
+                || string.IsNullOrWhiteSpace(settings.ClientSecret) || string.IsNullOrWhiteSpace(settings.SmtpUsername))
+                throw new InvalidOperationException("SMTP OAuth2 requires tenant, client, secret and mailbox username settings.");
+            var credential = new ClientSecretCredential(settings.TenantId, settings.ClientId, settings.ClientSecret);
+            var token = await credential.GetTokenAsync(
+                new TokenRequestContext(["https://outlook.office365.com/.default"]), cancellationToken);
+            await client.AuthenticateAsync(new SaslMechanismOAuth2(settings.SmtpUsername, token.Token), cancellationToken);
+        }
+        else if (settings.SmtpAuthentication == "UsernamePassword")
+        {
+            if (string.IsNullOrWhiteSpace(settings.SmtpUsername) || string.IsNullOrWhiteSpace(settings.SmtpPassword))
+                throw new InvalidOperationException("SMTP username and password are not configured.");
+            await client.AuthenticateAsync(settings.SmtpUsername, settings.SmtpPassword, cancellationToken);
+        }
+        await client.SendAsync(message, cancellationToken);
+        await client.DisconnectAsync(true, cancellationToken);
+        return new EmailDeliveryResult(message.MessageId);
+    }
+
+    private static IReadOnlyList<OutboundRecipient> ResolveRecipients(
+        IReadOnlyList<OutboundRecipient> recipients,
+        MessagingRuntimeConfiguration settings)
+    {
+        if (!settings.TestMode) return recipients;
+        if (string.IsNullOrWhiteSpace(settings.TestRecipient))
+            throw new InvalidOperationException("Messaging test mode requires a test recipient.");
+        return [new OutboundRecipient("to", settings.TestRecipient, "Test recipient")];
     }
 
     private static string Truncate(string value, int length) => value.Length <= length ? value : value[..length];

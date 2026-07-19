@@ -45,6 +45,8 @@ type LivVisitsProps = {
   onActionsChanged?: () => Promise<void>;
   onOpenStaffProfile?: (staffId: string) => void;
   initialSourceRecordId?: string;
+  onRecordOpened?: (recordId: string) => void;
+  onRecordClosed?: () => void;
 };
 
 type CoverageStatus = "not_started" | "in_progress" | "completed";
@@ -63,7 +65,9 @@ export function LivVisits({
   user,
   onActionsChanged,
   onOpenStaffProfile,
-  initialSourceRecordId = ""
+  initialSourceRecordId = "",
+  onRecordOpened,
+  onRecordClosed
 }: LivVisitsProps) {
   const [records, setRecords] = useState<LivRecordSummary[]>([]);
   const [configuration, setConfiguration] = useState<LivConfiguration | null>(null);
@@ -84,6 +88,11 @@ export function LivVisits({
 
   const canCreate = user.permissions.includes("liv.submit") || user.permissions.includes("liv.manage");
   const selectedRecord = records.find((record) => record.id === selectedRecordId) ?? null;
+
+  function openRecord(record: LivRecordSummary) {
+    setSelectedRecordId(record.id);
+    onRecordOpened?.(record.recordId);
+  }
 
   async function refreshData(nextMessage = "") {
     try {
@@ -107,7 +116,7 @@ export function LivVisits({
     if (!initialSourceRecordId || !records.length || openedInitialRecord.current === initialSourceRecordId) return;
     openedInitialRecord.current = initialSourceRecordId;
     const record = records.find((candidate) => candidate.recordId === initialSourceRecordId);
-    if (record) setSelectedRecordId(record.id);
+    if (record) openRecord(record);
     else setStatusMessage("The LIV source record is outside your permitted scope.");
   }, [initialSourceRecordId, records]);
 
@@ -184,7 +193,7 @@ export function LivVisits({
         actions={actions.filter((action) => action.sourceRecordId === selectedRecord.recordId)}
         configuration={configuration}
         cycleId={selectedCycleId}
-        onBack={() => { setSelectedRecordId(""); setSelectedCycleId(""); }}
+        onBack={() => { setSelectedRecordId(""); setSelectedCycleId(""); onRecordClosed?.(); }}
         onChanged={async (message) => { await refreshData(message); await onActionsChanged?.(); }}
         onCycleChange={setSelectedCycleId}
         onOpenStaffProfile={onOpenStaffProfile}
@@ -224,7 +233,7 @@ export function LivVisits({
           <label><span>LIV status</span><select onChange={(event) => setCoverageStatus(event.target.value as typeof coverageStatus)} value={coverageStatus}><option value="all">All statuses</option><option value="completed">Completed</option><option value="in_progress">In progress</option><option value="not_started">Not started</option></select></label>
         </div>
         <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty</th><th>Team</th><th>LIV status</th><th>Record</th></tr></thead><tbody>
-          {filteredCoverage.length === 0 ? <tr><td colSpan={5}>No staff match these filters.</td></tr> : filteredCoverage.map((row) => <tr key={row.staff.id}><td><strong>{row.staff.displayName}</strong><small className="table-subline">{row.staff.externalId}</small></td><td>{row.faculties.map((unit) => unit.code).join(", ") || "Unassigned"}</td><td>{row.teams.map((unit) => unit.code).join(", ") || "Unassigned"}</td><td><span className={`status-pill ${coverageStatusClass(row.status)}`}>{coverageStatusLabel(row.status)}</span></td><td>{row.record ? <button className="icon-button" onClick={() => setSelectedRecordId(row.record!.id)} title="Open LIV record" type="button"><Eye size={16} /></button> : "-"}</td></tr>)}
+          {filteredCoverage.length === 0 ? <tr><td colSpan={5}>No staff match these filters.</td></tr> : filteredCoverage.map((row) => <tr key={row.staff.id}><td><strong>{row.staff.displayName}</strong><small className="table-subline">{row.staff.externalId}</small></td><td>{row.faculties.map((unit) => unit.code).join(", ") || "Unassigned"}</td><td>{row.teams.map((unit) => unit.code).join(", ") || "Unassigned"}</td><td><span className={`status-pill ${coverageStatusClass(row.status)}`}>{coverageStatusLabel(row.status)}</span></td><td>{row.record ? <button className="icon-button" onClick={() => openRecord(row.record!)} title="Open LIV record" type="button"><Eye size={16} /></button> : "-"}</td></tr>)}
         </tbody></table></div>
       </section>
 
@@ -235,7 +244,7 @@ export function LivVisits({
           <label><span>Status</span><select onChange={(event) => setRecordStatus(event.target.value)} value={recordStatus}><option value="all">All statuses</option><option value="in_progress">In progress</option><option value="closed">Closed</option></select></label>
         </div>
         <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty / team</th><th>Latest delivery area</th><th>Current cycle</th><th>Status</th><th>Open</th></tr></thead><tbody>
-          {visibleRecords.length === 0 ? <tr><td colSpan={6}>No LIV records match these filters.</td></tr> : visibleRecords.map((record) => <tr key={record.id}><td><strong>{record.subjectStaffName}</strong><small className="table-subline">{record.reviewerStaffName ? `Created by ${record.reviewerStaffName}` : ""}</small></td><td>{[record.parentOrgUnitCode, record.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{latestVisit(record)?.deliveryAreaName ?? "Not set"}</td><td>{record.cycles.find((cycle) => cycle.status === "in_progress")?.cycleNumber ?? record.cycles.at(-1)?.cycleNumber ?? 1}</td><td><span className={`status-pill ${record.status === "closed" ? "status-complete" : "status-draft"}`}>{record.status === "closed" ? "Closed" : "In progress"}</span></td><td><button className="icon-button" onClick={() => setSelectedRecordId(record.id)} title="Open LIV record" type="button"><Eye size={16} /></button></td></tr>)}
+          {visibleRecords.length === 0 ? <tr><td colSpan={6}>No LIV records match these filters.</td></tr> : visibleRecords.map((record) => <tr key={record.id}><td><strong>{record.subjectStaffName}</strong><small className="table-subline">{record.reviewerStaffName ? `Created by ${record.reviewerStaffName}` : ""}</small></td><td>{[record.parentOrgUnitCode, record.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{latestVisit(record)?.deliveryAreaName ?? "Not set"}</td><td>{record.cycles.find((cycle) => cycle.status === "in_progress")?.cycleNumber ?? record.cycles.at(-1)?.cycleNumber ?? 1}</td><td><span className={`status-pill ${record.status === "closed" ? "status-complete" : "status-draft"}`}>{record.status === "closed" ? "Closed" : "In progress"}</span></td><td><button className="icon-button" onClick={() => openRecord(record)} title="Open LIV record" type="button"><Eye size={16} /></button></td></tr>)}
         </tbody></table></div>
       </details>
     </div>

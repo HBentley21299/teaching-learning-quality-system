@@ -48,6 +48,8 @@ type Props = {
   onActionsChanged?: () => Promise<void>;
   onOpenEliReport: (staffId: string, elevateRecordId: string) => void;
   initialSourceRecordId?: string;
+  onRecordOpened?: (recordId: string) => void;
+  onRecordClosed?: () => void;
 };
 
 const stageDefinitions = [
@@ -65,7 +67,9 @@ export function ProbationObservations({
   user,
   onActionsChanged,
   onOpenEliReport,
-  initialSourceRecordId = ""
+  initialSourceRecordId = "",
+  onRecordOpened,
+  onRecordClosed
 }: Props) {
   const [cases, setCases] = useState<ProbationCase[]>([]);
   const [configuration, setConfiguration] = useState<ProbationConfiguration | null>(null);
@@ -89,6 +93,12 @@ export function ProbationObservations({
   const hasProbationPermission = user.permissions.includes("probation.submit") || user.permissions.includes("probation.manage");
   const canCreate = hasProbationPermission && Boolean(configuration?.canCreateCase);
   const selectedCase = cases.find((item) => item.id === selectedCaseId) ?? null;
+
+  function openCase(item: ProbationCase) {
+    setSelectedCaseId(item.id);
+    setSelectedObservationNumber(item.currentObservationNumber);
+    onRecordOpened?.(item.recordId);
+  }
   const faculties = orgUnits.filter((unit) => unit.orgUnitType === "faculty" && unit.isActive);
   const teams = orgUnits.filter((unit) => unit.orgUnitType === "team" && unit.isActive
     && (facultyFilter === "all" || unit.parentOrgUnitId === facultyFilter));
@@ -116,7 +126,7 @@ export function ProbationObservations({
     const match = cases.find((item) => item.recordId === initialSourceRecordId
       || item.observations.some((observation) => observation.linkedLivSourceRecordId === initialSourceRecordId));
     if (match) {
-      setSelectedCaseId(match.id);
+      openCase(match);
       const linked = match.observations.find((observation) => observation.linkedLivSourceRecordId === initialSourceRecordId);
       setSelectedObservationNumber(linked?.observationNumber ?? match.currentObservationNumber);
     }
@@ -179,7 +189,7 @@ export function ProbationObservations({
         selectedLivCycleId={selectedLivCycleId}
         record={selectedCase}
         staff={staff}
-        onBack={() => { setSelectedCaseId(""); setSelectedLivCycleId(""); }}
+        onBack={() => { setSelectedCaseId(""); setSelectedLivCycleId(""); onRecordClosed?.(); }}
         onChanged={async (nextMessage) => { await onActionsChanged?.(); await refresh(nextMessage); }}
         onObservationChange={(number) => { setSelectedObservationNumber(number); setSelectedLivCycleId(""); }}
         onLivCycleChange={setSelectedLivCycleId}
@@ -225,7 +235,7 @@ export function ProbationObservations({
           <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label>
         </div>
         <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty / team</th><th>Academic year</th><th>Progress</th><th>Reviewers</th><th>Open</th></tr></thead><tbody>
-          {filteredCases.length === 0 ? <tr><td colSpan={6}>No probation records match these filters.</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => { setSelectedCaseId(item.id); setSelectedObservationNumber(item.currentObservationNumber); }} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
+          {filteredCases.length === 0 ? <tr><td colSpan={6}>No probation records match these filters.</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => openCase(item)} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
         </tbody></table></div>
       </details>
     </div>

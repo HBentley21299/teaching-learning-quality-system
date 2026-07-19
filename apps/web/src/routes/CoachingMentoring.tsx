@@ -42,6 +42,8 @@ type CoachingMentoringProps = {
   user: CurrentUser;
   onActionsChanged: () => void;
   initialRecordId?: string;
+  onRecordOpened?: (recordId: string) => void;
+  onRecordClosed?: () => void;
 };
 
 const sessionTypes = [
@@ -63,7 +65,7 @@ const reviewOutcomes: Array<[CoachingReviewOutcome, string]> = [
   ["closed_without_completion", "Closed without completion"]
 ];
 
-export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, initialRecordId = "" }: CoachingMentoringProps) {
+export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, initialRecordId = "", onRecordOpened, onRecordClosed }: CoachingMentoringProps) {
   const canCreate = user.permissions.includes("coaching.submit") || user.permissions.includes("coaching.manage");
   const [configuration, setConfiguration] = useState<CoachingConfiguration | null>(null);
   const [sessions, setSessions] = useState<CoachingSessionSummary[]>([]);
@@ -144,6 +146,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
       setDetail(nextDetail);
       setForm(formFromDetail(nextDetail));
       setView("form");
+      onRecordOpened?.(nextDetail.recordId);
     } catch {
       setMessage("The selected coaching session could not be opened.");
     } finally {
@@ -246,7 +249,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
         form={form}
         isSaving={isSaving}
         message={message}
-        onBack={() => { setView("list"); setMessage(""); }}
+        onBack={() => { setView("list"); setMessage(""); onRecordClosed?.(); }}
         onChange={setForm}
         onCycleChange={(value) => void changeCycle(value)}
         onSave={(status) => void save(status)}

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
@@ -22,11 +23,13 @@ if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("TlqsDat
 }
 
 builder.Services.AddSingleton<SqlFoundationDataStore>();
+builder.Services.AddSingleton<MessagingConfigurationStore>();
 builder.Services.AddSingleton<ExcelExportService>();
 builder.Services.AddSingleton<WordExportService>();
 builder.Services.Configure<ExportBrandingOptions>(builder.Configuration.GetSection("ExportBranding"));
 builder.Services.Configure<MessagingOptions>(builder.Configuration.GetSection("Messaging"));
-builder.Services.AddHttpClient<IEmailProvider, MicrosoftGraphEmailProvider>(client =>
+builder.Services.AddDataProtection().SetApplicationName("TLQS");
+builder.Services.AddHttpClient<IEmailProvider, ConfiguredEmailProvider>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(30);
 });

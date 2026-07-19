@@ -28,15 +28,20 @@ export function AdminCentre({
   modules,
   profiles,
   staff,
-  onOpenRecord
+  onOpenRecord,
+  initialTab = "overview",
+  onTabChange
 }: {
   user: CurrentUser;
   modules: ModuleSummary[];
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   onOpenRecord: (record: AdminRecord) => void;
+  initialTab?: string;
+  onTabChange?: (tab: string) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<AdminTabKey>("overview");
+  const requestedTab = adminTabs.some((tab) => tab.key === initialTab) ? initialTab as AdminTabKey : "overview";
+  const [activeTab, setActiveTab] = useState<AdminTabKey>(requestedTab);
   const permissionRows = [
     ["Admin", "System maintenance, users, records and labels", "Global"],
     ["Teaching & Learning", "Forms, CPD, LIV, reports and actions", "Global"],
@@ -65,9 +70,18 @@ export function AdminCentre({
   };
   const visibleTabs = adminTabs.filter((tab) => tabAccess[tab.key]);
 
+  function selectTab(tab: AdminTabKey) {
+    setActiveTab(tab);
+    onTabChange?.(tab);
+  }
+
+  useEffect(() => {
+    if (tabAccess[requestedTab]) setActiveTab(requestedTab);
+  }, [requestedTab]);
+
   useEffect(() => {
     if (!tabAccess[activeTab]) {
-      setActiveTab(visibleTabs[0]?.key ?? "overview");
+      selectTab(visibleTabs[0]?.key ?? "overview");
     }
   }, [activeTab, tabAccess, visibleTabs]);
 
@@ -108,7 +122,7 @@ export function AdminCentre({
               aria-selected={activeTab === tab.key}
               className={activeTab === tab.key ? "admin-tab admin-tab-active" : "admin-tab"}
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => selectTab(tab.key)}
               role="tab"
               type="button"
             >
@@ -122,7 +136,7 @@ export function AdminCentre({
       {activeTab === "overview" ? (
         <AdminOverview
           modules={modules}
-          onOpenLookups={() => setActiveTab("lists")}
+          onOpenLookups={() => selectTab("lists")}
           permissionRows={permissionRows}
           user={user}
         />

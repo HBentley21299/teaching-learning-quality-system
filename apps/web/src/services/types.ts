@@ -581,6 +581,12 @@ export type ProcessDashboardRecordSummary = {
   relatedRecordId?: string;
 };
 
+export type RecordNavigation = {
+  id: string;
+  recordType: string;
+  subjectStaffId?: string;
+};
+
 export type StaffProfileSummary = {
   staffId: string;
   externalId: string;
@@ -1662,4 +1668,37 @@ export type MessageDeliverySummary = {
   failedAt?: string;
   lastError?: string;
   providerResponseId?: string;
+};
+
+export type MessagingConfiguration = {
+  enabled: boolean;
+  testMode: boolean;
+  provider: "MicrosoftGraph" | "Smtp";
+  tenantId: string;
+  clientId: string;
+  clientSecretConfigured: boolean;
+  senderAddress: string;
+  senderDisplayName: string;
+  replyToAddress: string;
+  testRecipient: string;
+  applicationUrl: string;
+  pollSeconds: number;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecurity: "StartTls" | "SslOnConnect" | "None";
+  smtpAuthentication: "OAuth2" | "UsernamePassword" | "None";
+  smtpUsername: string;
+  smtpPasswordConfigured: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+};
+
+export type SaveMessagingConfigurationRequest = Omit<
+  MessagingConfiguration,
+  "clientSecretConfigured" | "smtpPasswordConfigured" | "updatedAt" | "updatedBy"
+> & {
+  clientSecret?: string;
+  clearClientSecret: boolean;
+  smtpPassword?: string;
+  clearSmtpPassword: boolean;
 };

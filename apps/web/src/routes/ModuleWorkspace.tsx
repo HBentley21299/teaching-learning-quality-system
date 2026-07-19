@@ -42,6 +42,8 @@ type ModuleWorkspaceProps = {
   user: CurrentUser;
   onActionsChanged?: () => Promise<void>;
   initialRecordId?: string;
+  onRecordOpened?: (recordId: string) => void;
+  onRecordClosed?: () => void;
 };
 
 const workspaceConfig: Record<WorkspaceMode, {
@@ -91,7 +93,7 @@ const externalCpdConfig = {
 
 type CpdWorkspaceView = "managed" | "external";
 
-export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "" }: ModuleWorkspaceProps) {
+export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "", onRecordOpened, onRecordClosed }: ModuleWorkspaceProps) {
   const canManageCpd = user.permissions.includes("cpd.manage");
   const canLogCpdEvent = mode === "cpd" && canManageCpd;
   const canLogExternalCpd = mode === "cpd"
@@ -491,6 +493,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     try {
       const detail = await api.recordDetail(recordId);
       setSelectedDetail(detail);
+      onRecordOpened?.(detail.id);
       setIsEditing(false);
       setEditResponses({});
       setStatusMessage("");
@@ -610,6 +613,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       await refreshData();
       if (action === "archive") {
         setSelectedDetail(null);
+        onRecordClosed?.();
       } else {
         await openRecord(selectedDetail.id);
       }
@@ -706,6 +710,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     setIsCreating(true);
     setIsEditing(false);
     setSelectedDetail(null);
+    onRecordClosed?.();
     if (isChangingForm) {
       setResponses({});
     }

@@ -12,6 +12,9 @@ import type {
   MessageTemplateSummary,
   MessageTemplateVersionSummary,
   MessagingParameter,
+  MessagingConfiguration,
+  RecordNavigation,
+  SaveMessagingConfigurationRequest,
   OrganisationChangeImpact,
   OrganisationMigrationReview,
   PagedResult,
@@ -274,6 +277,7 @@ export const api = {
   records: (academicYear?: string) =>
     getJson<RecordSummary[]>(`/api/v1/records${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
   recordDetail: (id: string) => getJson<RecordDetail>(`/api/v1/records/${id}`),
+  recordNavigation: (id: string) => getJson<RecordNavigation>(`/api/v1/records/${id}/navigation`),
   adminWorkScrutinyRecords: () =>
     getJson<AdminWorkScrutinyRecord[]>("/api/v1/admin/work-scrutiny/records"),
   adminWorkScrutinyRecord: (id: string) =>
@@ -530,6 +534,10 @@ export const api = {
   publishFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST"),
   messageTemplates: (includeDeleted = false) =>
     getJson<MessageTemplateSummary[]>(`/api/v1/admin/messaging/templates?includeDeleted=${includeDeleted}`),
+  messagingConfiguration: () =>
+    getJson<MessagingConfiguration>("/api/v1/admin/messaging/settings"),
+  saveMessagingConfiguration: (request: SaveMessagingConfigurationRequest) =>
+    sendJson<SaveMessagingConfigurationRequest, MessagingConfiguration>("/api/v1/admin/messaging/settings", "PUT", request),
   messagingParameters: () => getJson<MessagingParameter[]>("/api/v1/admin/messaging/parameters"),
   messageTemplateVersions: (id: string) =>
     getJson<MessageTemplateVersionSummary[]>(`/api/v1/admin/messaging/templates/${id}/versions`),

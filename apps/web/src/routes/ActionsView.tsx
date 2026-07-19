@@ -36,6 +36,8 @@ type ActionsViewProps = {
   initialStaffId?: string;
   initialActionId?: string;
   onOpenSource?: (action: ActionSummary) => void;
+  onActionOpened?: (actionId: string) => void;
+  onActionClosed?: () => void;
 };
 
 type StatusFilter = "all" | "open" | "extended" | "overdue" | "complete" | "cancelled" | "deleted";
@@ -77,7 +79,7 @@ function formatDateTime(value?: string) {
   return value ? new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "Not recorded";
 }
 
-export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", initialActionId = "", onOpenSource }: ActionsViewProps) {
+export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", initialActionId = "", onOpenSource, onActionOpened, onActionClosed }: ActionsViewProps) {
   const [localActions, setLocalActions] = useState(actions);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -262,6 +264,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
 
   async function showDetail(action: ActionSummary) {
     setDetailId(action.id);
+    onActionOpened?.(action.id);
     setExtensions(action.extensionCount ? await api.actionExtensions(action.id) : []);
   }
 
@@ -379,7 +382,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
 
       {selectedAction ? (
         <section className="panel action-detail-panel">
-          <div className="panel-heading"><div><h2>{selectedAction.title}</h2><span>{sourceLabel(selectedAction.sourceFormType)} · {actionStatus(selectedAction)}</span></div><Button icon={X} onClick={() => setDetailId("")} variant="quiet">Close</Button></div>
+          <div className="panel-heading"><div><h2>{selectedAction.title}</h2><span>{sourceLabel(selectedAction.sourceFormType)} · {actionStatus(selectedAction)}</span></div><Button icon={X} onClick={() => { setDetailId(""); onActionClosed?.(); }} variant="quiet">Close</Button></div>
           {selectedAction.detail ? <p className="action-detail-copy">{selectedAction.detail}</p> : null}
           <dl className="action-detail-grid">
             <div><dt>Owner</dt><dd>{selectedAction.ownerStaffName}</dd></div><div><dt>Staff member</dt><dd>{selectedAction.subjectStaffName ?? "Not staff-specific"}</dd></div>

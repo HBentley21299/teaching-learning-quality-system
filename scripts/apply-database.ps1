@@ -142,7 +142,8 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\038_domain_event_dispatch.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\039_staff_profile_summary_performance.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\040_learning_walk_practice_observed_rubric.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\041_elevate_learning_environment_audit_rubric.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\041_elevate_learning_environment_audit_rubric.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\042_messaging_transport_configuration.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

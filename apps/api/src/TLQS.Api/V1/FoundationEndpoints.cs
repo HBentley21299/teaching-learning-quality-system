@@ -376,6 +376,13 @@ public static class FoundationEndpoints
             return detail is null ? Results.NotFound() : Results.Ok(detail);
         });
 
+        api.MapGet("/records/{id:guid}/navigation", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var navigation = await store.GetRecordNavigationAsync(id, currentUser, cancellationToken);
+            return navigation is null ? Results.NotFound() : Results.Ok(navigation);
+        });
+
         api.MapGet("/admin/work-scrutiny/records", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
@@ -1504,6 +1511,8 @@ public sealed record MyTeamMemberSummary(
     bool CanOpenProfile,
     bool CanManageActions);
 public sealed record RecordSummary(Guid Id, Guid ModuleId, string RecordType, string Title, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate, DateTimeOffset CreatedAt, string SubmissionStatus, string AcademicYear);
+
+public sealed record RecordNavigationSummary(Guid Id, string RecordType, Guid? SubjectStaffId);
 public sealed record ActionSummary(
     Guid Id,
     Guid? SourceRecordId,
