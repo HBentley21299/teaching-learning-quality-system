@@ -3,6 +3,7 @@ import {
   Building2,
   ClipboardCheck,
   GraduationCap,
+  House,
   LayoutDashboard,
   Lightbulb,
   ListChecks,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 
 export const navigationItems = [
+  { key: "home", label: "Home", icon: House },
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "staff", label: "Staff", icon: Users },
   { key: "team", label: "My Team", icon: UsersRound },

@@ -683,6 +683,291 @@ h1, h2, h3 {
   letter-spacing: -0.015em;
 }
 
+/* ---------------------------------------------------------------- mascot */
+
+:root {
+  --mascot-body: #262d2b;
+  --mascot-line: #5a6864;
+  --mascot-chair: #3a423e;
+  --mascot-screen: #0b100e;
+  --mascot-glow: #3fe0c8;
+  --mascot-dim: #228072;
+  --mascot-mug: #c47846;
+  --mascot-mug-dark: #965830;
+  --mascot-coffee: #3c261c;
+}
+
+/* Antenna beacon pulse. */
+@keyframes mascot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.mascot-antenna-tip {
+  animation: mascot-pulse 2.2s ease-in-out infinite;
+}
+
+/* Natural double-blink. */
+@keyframes mascot-blink {
+  0%, 91%, 96%, 100% { transform: scaleY(1); }
+  93.5%, 98% { transform: scaleY(0.15); }
+}
+
+.mascot-eyes {
+  animation: mascot-blink 4.6s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Coffee steam drifts up and dissolves, staggered per pixel. */
+@keyframes mascot-steam {
+  0% { opacity: 0; transform: translateY(2px); }
+  30% { opacity: 0.9; }
+  100% { opacity: 0; transform: translateY(-4px); }
+}
+
+.mascot-steam-1 { animation: mascot-steam 2.6s steps(6, end) infinite; }
+.mascot-steam-2 { animation: mascot-steam 2.6s steps(6, end) infinite 0.9s; }
+.mascot-steam-3 { animation: mascot-steam 2.6s steps(6, end) infinite 1.7s; }
+
+/* ------------------------------------------------------------- home page */
+
+:root {
+  --eli-board: #eef2f0;
+  --eli-board-line: #b4beba;
+  --eli-scene-bg: #181c1a;
+}
+
+.home-hero {
+  align-items: center;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.8fr);
+  overflow: hidden;
+  padding: 18px 24px;
+}
+
+@media (max-width: 900px) {
+  .home-hero {
+    grid-template-columns: 1fr;
+  }
+}
+
+.home-hero-copy h1 {
+  font-size: 1.55rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin: 4px 0 10px;
+}
+
+.home-hero-message {
+  color: var(--text-muted);
+  font-size: 1.02rem;
+  margin: 0;
+  max-width: 42ch;
+}
+
+.eli-stage-button {
+  justify-self: end;
+  max-width: 340px;
+  width: 100%;
+  background: var(--eli-scene-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  line-height: 0;
+  padding: 14px 16px 8px;
+  position: relative;
+  transition: box-shadow 200ms var(--ease);
+}
+
+.eli-stage-button:hover {
+  box-shadow: var(--shadow);
+}
+
+.eli-stage-button:active .eli-stage {
+  transform: translateY(1px);
+}
+
+.eli-stage {
+  height: auto;
+  width: 100%;
+}
+
+/* ELI sprite-strip animation: 4 frames per strip, cell aspect 0.781.
+   Overlaid on the SVG stage; feet sit on the stage floor line. */
+.eli-anim {
+  aspect-ratio: 0.781;
+  background-repeat: no-repeat;
+  background-size: 400% 100%;
+  bottom: 11%;
+  image-rendering: pixelated;
+  left: 24.5%;
+  position: absolute;
+  width: 25%;
+}
+
+@keyframes eli-frames {
+  from { background-position-x: 0%; }
+  to { background-position-x: 100%; }
+}
+
+.eli-anim-idle {
+  animation: eli-frames 1.6s steps(4, jump-none) infinite;
+  background-image: url("/system-assets/eli/eli-anim-idle.png");
+}
+
+.eli-stage-button:hover .eli-anim-idle {
+  animation-duration: 0.9s;
+  background-image: url("/system-assets/eli/eli-anim-wave.png");
+}
+
+.eli-anim-celebrate {
+  animation: eli-frames 0.55s steps(4, jump-none) infinite;
+  background-image: url("/system-assets/eli/eli-anim-celebrate.png");
+}
+
+.eli-sparkle-1 { animation: mascot-twinkle 2.6s ease-in-out infinite; }
+.eli-sparkle-2 { animation: mascot-twinkle 3.4s ease-in-out infinite 0.8s; }
+.eli-sparkle-3 { animation: mascot-twinkle 3s ease-in-out infinite 1.5s; }
+
+/* Bars on ELI's whiteboard grow in chunky data-refresh steps. */
+@keyframes eli-grow {
+  0% { transform: scaleY(0.3); }
+  60%, 100% { transform: scaleY(1); }
+}
+
+.eli-chart rect {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+}
+
+.eli-bar-1 { animation: eli-grow 3.2s steps(4, end) infinite; }
+.eli-bar-2 { animation: eli-grow 3.2s steps(5, end) infinite 0.4s; }
+.eli-bar-3 { animation: eli-grow 3.2s steps(6, end) infinite 0.8s; }
+
+/* Pointer gestures toward the chart. */
+@keyframes eli-point {
+  0%, 55%, 100% { transform: rotate(0deg); }
+  70%, 85% { transform: rotate(-9deg); }
+}
+
+.eli-pointer {
+  animation: eli-point 2.8s steps(2, end) infinite;
+  transform-box: fill-box;
+  transform-origin: left center;
+}
+
+/* Marking ticks appear stroke by stroke. */
+@keyframes eli-marking {
+  0%, 20% { opacity: 0; }
+  40%, 80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.eli-tick {
+  animation: eli-marking 2.4s steps(3, end) infinite;
+}
+
+@keyframes mascot-twinkle {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.eli-doodle {
+  animation: mascot-twinkle 3s ease-in-out infinite;
+}
+
+/* Tile grid into each permitted area. */
+.home-tiles {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.home-tile {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: flex;
+  gap: 14px;
+  padding: 14px;
+  text-align: left;
+  transition: border-color 160ms var(--ease), box-shadow 200ms var(--ease), transform 200ms var(--ease);
+}
+
+.home-tile:hover {
+  border-color: var(--teal-line);
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+
+.home-tile:active {
+  transform: translateY(0);
+}
+
+.home-tile-glyph {
+  align-items: center;
+  background: var(--eli-scene-bg);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  flex-shrink: 0;
+  justify-content: center;
+  padding: 8px;
+}
+
+.home-tile-glyph svg {
+  height: 30px;
+  width: 30px;
+}
+
+.home-tile-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.home-tile-text strong {
+  font-size: 0.92rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.home-tile-text span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+/* Click reward: aqua pixel stars shoot up out of the scene. */
+@keyframes star-fly {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(0.5) rotate(0deg);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--star-dx), var(--star-dy)) scale(1.15) rotate(200deg);
+  }
+}
+
+.shooting-star {
+  animation: star-fly 950ms cubic-bezier(0.2, 0.6, 0.3, 1) both;
+  bottom: 46px;
+  filter: drop-shadow(0 0 5px rgba(63, 224, 200, 0.9));
+  left: 55%;
+  line-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 3;
+}
+
 /* ----------------------------------------------------------------- motion */
 
 @media (prefers-reduced-motion: reduce) {

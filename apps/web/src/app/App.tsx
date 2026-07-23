@@ -26,6 +26,7 @@ import type {
   StaffSummary
 } from "../services/types";
 
+const Home = lazy(() => import("../routes/Home").then((module) => ({ default: module.Home })));
 const Dashboard = lazy(() => import("../routes/Dashboard").then((module) => ({ default: module.Dashboard })));
 const StaffProfiles = lazy(() => import("../routes/StaffProfiles").then((module) => ({ default: module.StaffProfiles })));
 const AdminCentre = lazy(() => import("../routes/AdminCentre").then((module) => ({ default: module.AdminCentre })));
@@ -437,6 +438,13 @@ export function App() {
             </section>
           ) : (
             <Suspense fallback={<div className="route-stack"><p className="muted-copy">Loading this workspace...</p></div>}>
+              {route === "home" ? (
+                <Home
+                  onNavigate={navigate}
+                  tiles={visibleNavigationItems}
+                  user={user}
+                />
+              ) : null}
               {route === "dashboard" ? (
                 <Dashboard
                   actions={yearActions}

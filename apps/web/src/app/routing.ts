@@ -11,6 +11,7 @@ export type AppLocation = {
 };
 
 const routePaths: Record<AppRoute, string> = {
+  home: "/home",
   dashboard: "/dashboard",
   staff: "/staff",
   team: "/my-team",
@@ -65,7 +66,7 @@ export function parseAppLocation(pathname = window.location.pathname): AppLocati
   };
 
   if (normalized === "/" || normalized === "/index.html") {
-    return { ...empty, route: "dashboard" };
+    return { ...empty, route: "home" };
   }
 
   const segments = normalized.split("/").filter(Boolean).map(decodeURIComponent);
