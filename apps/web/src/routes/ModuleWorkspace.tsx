@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Archive, Building2, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { CpdParticipantPicker } from "../components/CpdParticipantPicker";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { RoomSearchSelect } from "../components/RoomSearchSelect";
@@ -28,6 +29,7 @@ type WorkspaceMode = "learning" | "scrutiny" | "cpd" | "elevate";
 
 type DraftLinkedAction = {
   id: string;
+  actionTheme: string;
   title: string;
   ownerStaffId: string;
   dueDate: string;
@@ -128,6 +130,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const [editResponses, setEditResponses] = useState<Record<string, string>>({});
   const [statusMessage, setStatusMessage] = useState("");
   const [isCreatingAction, setIsCreatingAction] = useState(false);
+  const [actionTheme, setActionTheme] = useState("");
   const [actionTitle, setActionTitle] = useState("");
   const [actionOwnerId, setActionOwnerId] = useState(user.staffId ?? "");
   const [actionDueDate, setActionDueDate] = useState("");
@@ -159,6 +162,9 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     () => getAgreedTheme(themeMappings, selectedFacultyId, selectedTeamId),
     [selectedFacultyId, selectedTeamId, themeMappings]
   );
+  const selectedLearningWalkFocuses = parseLearningWalkThemeSelections(
+    getResponseValue(createSections, responses, "additional_focus_context")
+  );
 
   const editSections = selectedDetail?.sections ?? [];
   const editEntrySections = getEnvironmentEntrySections(mode, editSections, environmentPillars);
@@ -173,6 +179,9 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const editAgreedTheme = useMemo(
     () => getAgreedTheme(themeMappings, editFacultyId, editTeamId),
     [editFacultyId, editTeamId, themeMappings]
+  );
+  const selectedEditLearningWalkFocuses = parseLearningWalkThemeSelections(
+    getResponseValue(editSections, editResponses, "additional_focus_context")
   );
 
   const recordAreaOptions = useMemo(
@@ -443,14 +452,19 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
           return;
         }
 
+        const focusRatingValidation = validateLearningWalkFocusRatings(createSections, responses);
+        if (focusRatingValidation) {
+          setStatusMessage(focusRatingValidation);
+          return;
+        }
       }
 
       if ((mode === "learning" || mode === "elevate")
-          && draftActions.some((action) => !action.title.trim() || !action.ownerStaffId || !action.dueDate)) {
+          && draftActions.some((action) => !action.actionTheme.trim() || !action.title.trim() || !action.ownerStaffId || !action.dueDate)) {
         setStatusMessage(
           mode === "elevate"
-            ? "Every added action needs an action, owner and review date."
-            : "Every added action needs an action, owner and implementation date."
+            ? "Every added action needs an action theme, action, owner and review date."
+            : "Every added action needs an action theme, action, owner and implementation date."
         );
         return;
       }
@@ -470,6 +484,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       saveAsDraft: asDraft,
       actions: (mode === "learning" || mode === "elevate") && !asDraft
         ? draftActions.map((action) => ({
+            actionTheme: action.actionTheme.trim(),
             title: action.title.trim(),
             ownerStaffId: action.ownerStaffId,
             dueDate: action.dueDate
@@ -551,6 +566,12 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
           setStatusMessage(otherValidation);
           return;
         }
+
+        const focusRatingValidation = validateLearningWalkFocusRatings(editSections, editResponses);
+        if (focusRatingValidation) {
+          setStatusMessage(focusRatingValidation);
+          return;
+        }
       }
     }
 
@@ -624,13 +645,13 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
   async function createLinkedAction() {
     const requiresDueDate = mode === "learning" || mode === "elevate";
-    if (!selectedDetail || !actionTitle.trim() || !actionOwnerId || (requiresDueDate && !actionDueDate)) {
+    if (!selectedDetail || !actionTheme.trim() || !actionTitle.trim() || !actionOwnerId || (requiresDueDate && !actionDueDate)) {
       setStatusMessage(
         mode === "learning"
-          ? "A Learning Walk action needs an action, owner and implementation date."
+          ? "A Learning Walk action needs an action theme, action, owner and implementation date."
           : mode === "elevate"
-            ? "A Learning Environment action needs an action, owner and date for review."
-            : "A linked action needs a title and an owner."
+            ? "A Learning Environment action needs an action theme, action, owner and date for review."
+            : "A linked action needs an action theme, action and owner."
       );
       return;
     }
@@ -639,6 +660,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     const result = await api.createAction({
       sourceRecordId: selectedDetail.id,
       ownerStaffId: actionOwnerId,
+      actionTheme: actionTheme.trim(),
       title: actionTitle.trim(),
       dueDate: actionDueDate || undefined,
       publishedToStaff: true
@@ -648,6 +670,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     if (result.ok) {
       setStatusMessage("Linked action created.");
       setIsCreatingAction(false);
+      setActionTheme("");
       setActionTitle("");
       setActionDueDate("");
       setActions((await api.actions().catch(() => actions)).filter((action) => action.academicYear === academicYear));
@@ -686,7 +709,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   function addDraftAction() {
     setDraftActions((current) => [
       ...current,
-      { id: crypto.randomUUID(), title: "", ownerStaffId: "", dueDate: "" }
+      { id: crypto.randomUUID(), actionTheme: "", title: "", ownerStaffId: "", dueDate: "" }
     ]);
   }
 
@@ -865,11 +888,18 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                         field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
                         learningWalkThemeGroups={learningWalkThemeGroups}
-                        onChange={(value) => setResponses((current) => updateResponseMap(createSections, current, field, value, rooms))}
+                        onChange={(value) => setResponses((current) => updateResponseMap(
+                          createSections,
+                          current,
+                          field,
+                          typeof value === "function" ? value(current[field.id] ?? "") : value,
+                          rooms
+                        ))}
                         orgUnits={orgUnits}
                         practiceRubric={practiceRubric}
                         rooms={rooms}
                         selectedFacultyId={selectedFacultyId}
+                        selectedLearningWalkFocuses={selectedLearningWalkFocuses}
                         staff={staff}
                         value={responses[field.id] ?? ""}
                       />
@@ -896,6 +926,15 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                     <div className="scrutiny-action-list">
                       {draftActions.map((action, index) => (
                         <div className="scrutiny-action-row" key={action.id}>
+                          <label className="entry-field scrutiny-action-theme">
+                            <span>Action theme <strong>Required</strong></span>
+                            <ActionThemeSelect
+                              id={`submission-action-theme-${action.id}`}
+                              onChange={(actionTheme) => updateDraftAction(action.id, { actionTheme })}
+                              sourceFormType={config.recordType}
+                              value={action.actionTheme}
+                            />
+                          </label>
                           <label className="entry-field scrutiny-action-text">
                             <span>Action {index + 1} <strong>Required</strong></span>
                             <textarea
@@ -1098,11 +1137,18 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                         field={field.fieldKey === "additional_focus_other" ? { ...field, isRequired: true } : field}
                         key={field.id}
                         learningWalkThemeGroups={learningWalkThemeGroups}
-                        onChange={(value) => setEditResponses((current) => updateResponseMap(editSections, current, field, value, rooms))}
+                        onChange={(value) => setEditResponses((current) => updateResponseMap(
+                          editSections,
+                          current,
+                          field,
+                          typeof value === "function" ? value(current[field.id] ?? "") : value,
+                          rooms
+                        ))}
                         orgUnits={orgUnits}
                         practiceRubric={practiceRubric}
                         rooms={rooms}
                         selectedFacultyId={editFacultyId}
+                        selectedLearningWalkFocuses={selectedEditLearningWalkFocuses}
                         staff={staff}
                         value={editResponses[field.id] ?? ""}
                       />
@@ -1160,8 +1206,17 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
             <div className="entry-form">
               <div className="entry-field-grid">
                 <label className="entry-field entry-field-wide">
-                  <span>Action title <strong>Required</strong></span>
-                  <input onChange={(event) => setActionTitle(event.target.value)} type="text" value={actionTitle} />
+                  <span>Action theme <strong>Required</strong></span>
+                  <ActionThemeSelect
+                    id={`linked-action-theme-${selectedDetail.id}`}
+                    onChange={setActionTheme}
+                    sourceFormType={config.recordType}
+                    value={actionTheme}
+                  />
+                </label>
+                <label className="entry-field entry-field-wide">
+                  <span>Action <strong>Required</strong></span>
+                  <textarea maxLength={300} onChange={(event) => setActionTitle(event.target.value)} rows={3} value={actionTitle} />
                 </label>
                 <label className="entry-field">
                   <span>Owner <strong>Required</strong></span>
@@ -1229,18 +1284,20 @@ function FieldInput({
   environmentPillars,
   learningWalkThemeGroups,
   practiceRubric,
+  selectedLearningWalkFocuses,
   value
 }: {
   cpdThemes: string[];
   environmentPillars: ElevateEnvironmentPillarSummary[];
   field: FormFieldDefinition;
-  onChange: (value: string) => void;
+  onChange: (value: string | ((currentValue: string) => string)) => void;
   orgUnits: OrgUnitSummary[];
   rooms: RoomSummary[];
   selectedFacultyId?: string;
   staff: StaffSummary[];
   learningWalkThemeGroups: LearningWalkThemeGroup[];
   practiceRubric: CoachingRubricOption[];
+  selectedLearningWalkFocuses: LearningWalkThemeSelection[];
   value: string;
 }) {
   const faculties = orgUnits.filter((orgUnit) => orgUnit.orgUnitType === "faculty");
@@ -1295,7 +1352,10 @@ function FieldInput({
         </span>
         <div className="learning-walk-theme-picker-groups">
           {learningWalkThemeGroups.map((group) => {
-            const visibleThemes = group.themes.filter((theme) => theme.isActive || selectedIds.includes(theme.id));
+            const visibleThemes = group.themes.filter((theme) =>
+              group.isActive
+                ? theme.isActive || selectedIds.includes(theme.id)
+                : selectedIds.includes(theme.id));
             if (visibleThemes.length === 0) {
               return null;
             }
@@ -1307,11 +1367,11 @@ function FieldInput({
                   <label key={theme.id}>
                     <input
                       checked={selectedIds.includes(theme.id)}
-                      disabled={!theme.isActive && !selectedIds.includes(theme.id)}
+                      disabled={(!group.isActive || !theme.isActive) && !selectedIds.includes(theme.id)}
                       onChange={() => onChange(toggleLearningWalkTheme(value, theme, group))}
                       type="checkbox"
                     />
-                    <span>{theme.name}{theme.isActive ? "" : " (inactive)"}</span>
+                    <span>{theme.name}{group.isActive && theme.isActive ? "" : " (inactive)"}</span>
                   </label>
                 ))}
               </fieldset>
@@ -1352,6 +1412,51 @@ function FieldInput({
             })}
           </div>
         ) : <div className="empty-row">The Elevate practice rubric is unavailable.</div>}
+        {field.helpText ? <small>{field.helpText}</small> : null}
+      </fieldset>
+    );
+  }
+
+  if (field.fieldType === "focus_rubrics_1_5") {
+    const ratings = parseLearningWalkFocusRatings(value);
+    return (
+      <fieldset className="coaching-wording-rubric entry-field-wide learning-walk-focus-rubrics">
+        <legend>
+          {field.label}
+          {field.isRequired ? <strong>Required</strong> : null}
+        </legend>
+        {selectedLearningWalkFocuses.length > 0 ? (
+          <div className="learning-walk-focus-rubric-list">
+            {selectedLearningWalkFocuses.map((focus) => {
+              const selectedRating = ratings.find((rating) => rating.focusId === focus.id);
+              return (
+                <fieldset className="learning-walk-focus-rubric" key={focus.id}>
+                  <legend>{focus.name}</legend>
+                  <div>
+                    {practiceRubric.map((option) => {
+                      const optionValue = learningWalkFocusRubricLabel(option.displayOrder);
+                      const isSelected = selectedRating?.score === option.displayOrder;
+                      return (
+                        <button
+                          aria-pressed={isSelected}
+                          className={isSelected ? "is-selected" : ""}
+                          key={option.id}
+                          onClick={() => onChange((currentValue) => updateLearningWalkFocusRating(currentValue, focus, option))}
+                          type="button"
+                        >
+                          <i aria-hidden="true" style={{ backgroundColor: option.colorHex ?? "#60736b" }} />
+                          <span><strong>{optionValue}</strong></span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty-row">Select one or more focuses above to show their rubrics.</div>
+        )}
         {field.helpText ? <small>{field.helpText}</small> : null}
       </fieldset>
     );
@@ -1698,7 +1803,7 @@ function getRecordTimestamp(record: RecordSummary) {
 }
 
 function isWideEntryField(fieldType: string) {
-  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add", "learning_walk_theme_group", "practice_rubric_1_5", "environment_rubric_1_5"].includes(
+  return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add", "learning_walk_theme_group", "practice_rubric_1_5", "focus_rubrics_1_5", "environment_rubric_1_5"].includes(
     fieldType
   );
 }
@@ -1716,6 +1821,15 @@ type LearningWalkThemeSelection = {
   name: string;
   groupName: string;
   isOther: boolean;
+};
+
+type LearningWalkFocusRating = {
+  focusId: string;
+  focusName: string;
+  groupName: string;
+  descriptorId: string;
+  score: number;
+  rating: string;
 };
 
 function parseLearningWalkThemeSelections(value?: string): LearningWalkThemeSelection[] {
@@ -1743,6 +1857,55 @@ function toggleLearningWalkTheme(
     ? selected.filter((item) => item.id !== theme.id)
     : [...selected, { id: theme.id, name: theme.name, groupName: group.name, isOther: theme.isOther }];
   return JSON.stringify(next);
+}
+
+function parseLearningWalkFocusRatings(value?: string): LearningWalkFocusRating[] {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as LearningWalkFocusRating[];
+    return Array.isArray(parsed)
+      ? parsed.filter((item) =>
+          typeof item?.focusId === "string"
+          && typeof item?.focusName === "string"
+          && typeof item?.score === "number"
+          && typeof item?.rating === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function updateLearningWalkFocusRating(
+  currentValue: string,
+  focus: LearningWalkThemeSelection,
+  option: CoachingRubricOption
+) {
+  const ratings = parseLearningWalkFocusRatings(currentValue);
+  const nextRating: LearningWalkFocusRating = {
+    focusId: focus.id,
+    focusName: focus.name,
+    groupName: focus.groupName,
+    descriptorId: option.id,
+    score: option.displayOrder,
+    rating: learningWalkFocusRubricLabel(option.displayOrder)
+  };
+  return JSON.stringify([
+    ...ratings.filter((rating) => rating.focusId !== focus.id),
+    nextRating
+  ]);
+}
+
+function learningWalkFocusRubricLabel(score: number) {
+  return [
+    "Emerging Practice",
+    "Developing Practice",
+    "Secure Practice",
+    "Strong Practice",
+    "Exceptional Practice"
+  ][score - 1] ?? `Level ${score}`;
 }
 
 function shouldShowLearningWalkField(
@@ -1776,6 +1939,28 @@ function validateLearningWalkOtherContext(
   return shouldShowLearningWalkField("learning", otherField, sections, responses, groups)
     ? "Describe the other focus or context before submitting the Learning Walk."
     : "";
+}
+
+function validateLearningWalkFocusRatings(
+  sections: Array<{ fields: FormFieldDefinition[] }>,
+  responses: Record<string, string>
+) {
+  const ratingField = findField(sections, "focus_rubric_ratings");
+  if (!ratingField) {
+    return "";
+  }
+
+  const focuses = parseLearningWalkThemeSelections(
+    getResponseValue(sections, responses, "additional_focus_context")
+  );
+  if (focuses.length === 0) {
+    return "Select at least one focus before submitting the Learning Walk.";
+  }
+
+  const ratings = parseLearningWalkFocusRatings(responses[ratingField.id]);
+  return focuses.every((focus) => ratings.some((rating) => rating.focusId === focus.id))
+    ? ""
+    : "Choose a practice level for every selected focus before submitting the Learning Walk.";
 }
 
 function toggleDelimitedValue(currentValue: string, option: string) {
@@ -1830,6 +2015,16 @@ function updateResponseMap(
 
   if (field.fieldKey === "team_level") {
     deleteFieldResponse(sections, next, "learning_walk_theme");
+  }
+
+  if (field.fieldKey === "additional_focus_context") {
+    const ratingField = findField(sections, "focus_rubric_ratings");
+    if (ratingField) {
+      const selectedIds = new Set(parseLearningWalkThemeSelections(value).map((focus) => focus.id));
+      const retainedRatings = parseLearningWalkFocusRatings(current[ratingField.id])
+        .filter((rating) => selectedIds.has(rating.focusId));
+      next[ratingField.id] = retainedRatings.length > 0 ? JSON.stringify(retainedRatings) : "";
+    }
   }
 
   if (field.fieldKey === "room_code") {
@@ -1933,6 +2128,13 @@ function formatAnswer(
     return selections
       .map((selection) => `${selection.groupName}: ${selection.name}`)
       .join("\n");
+  }
+
+  if (fieldType === "focus_rubrics_1_5") {
+    const ratings = parseLearningWalkFocusRatings(value);
+    return ratings.length > 0
+      ? ratings.map((rating) => `${rating.focusName}: ${rating.rating}`).join(" • ")
+      : "Not recorded";
   }
 
   if (fieldType === "datetime") {

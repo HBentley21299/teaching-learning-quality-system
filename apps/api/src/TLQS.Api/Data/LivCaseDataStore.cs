@@ -655,9 +655,16 @@ public sealed partial class SqlFoundationDataStore
                     AND application.application_key = N'liv'
                     AND application.is_active = 1
                 WHERE theme.archived_at IS NULL
-                  AND theme.is_active = 1
                   AND theme_group.archived_at IS NULL
-                  AND theme_group.is_active = 1
+                  AND (
+                        (theme.is_active = 1 AND theme_group.is_active = 1)
+                        OR EXISTS (
+                            SELECT 1
+                            FROM quality.liv_record_themes existing
+                            WHERE existing.liv_record_id = @livId
+                              AND existing.theme_id = theme.id
+                        )
+                  )
                   AND (
                         (@useIds = 1 AND theme.id IN (
                             SELECT id FROM OPENJSON(@idsJson) WITH (id uniqueidentifier '$')
@@ -671,6 +678,7 @@ public sealed partial class SqlFoundationDataStore
                 connection,
                 (SqlTransaction)transaction);
             select.Parameters.AddWithValue("@useIds", useIds);
+            select.Parameters.AddWithValue("@livId", livId);
             select.Parameters.AddWithValue("@idsJson", JsonSerializer.Serialize(requestedIds));
             select.Parameters.AddWithValue("@keysJson", JsonSerializer.Serialize(requestedKeys));
             await using var reader = await select.ExecuteReaderAsync(cancellationToken);

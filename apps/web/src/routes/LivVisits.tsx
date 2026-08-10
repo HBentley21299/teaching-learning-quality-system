@@ -20,6 +20,7 @@ import { Button } from "../design-system/Button";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { KpiStrip } from "../components/KpiStrip";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
+import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { api } from "../services/api";
 import type {
   ActionOwnerOption,
@@ -310,7 +311,6 @@ export function LivCaseWorkspace({ record, configuration, actions, cycleId, staf
           <span>{record.sourceElevateAssessmentId ? "Linked assessment" : "No linked assessment"}</span>
         </div>
         <div className="liv-information-grid">
-          <div><span>Notice preference</span><strong>{record.eliNoticePreference ?? "Not provided"}</strong></div>
           <div><span>Preferred month</span><strong>{formatPreferredMonth(record.eliPreferredVisitMonth)}</strong></div>
           <div><span>Primary focus</span><strong>{record.eliPrimaryFocus ?? "Not provided"}</strong></div>
           <div><span>Secondary focus</span><strong>{eliSecondaryFocus(record)}</strong></div>
@@ -499,26 +499,26 @@ function LivActions({ actions, record, cycle, ownerOptions, staff, onChanged }: 
   onChanged: (message: string) => Promise<void>;
 }) {
   const [isAdding, setIsAdding] = useState(false);
+  const [actionTheme, setActionTheme] = useState("");
   const [text, setText] = useState("");
-  const [detail, setDetail] = useState("");
   const [ownerId, setOwnerId] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
   async function createAction() {
-    if (!text.trim() || !ownerId || !dueDate) return;
+    if (!actionTheme.trim() || !text.trim() || !ownerId || !dueDate) return;
     setIsSaving(true);
-    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "liv", subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, title: text.trim(), detail: detail.trim() || undefined, dueDate, publishedToStaff: true, livCycleId: cycle.id, visibilitySetting: "staff_and_management" });
+    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "liv", subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, actionTheme: actionTheme.trim(), title: text.trim(), dueDate, publishedToStaff: true, livCycleId: cycle.id, visibilitySetting: "staff_and_management" });
     setIsSaving(false);
     if (!result.ok) return;
-    setText(""); setDetail(""); setOwnerId(""); setDueDate(""); setIsAdding(false);
+    setActionTheme(""); setText(""); setOwnerId(""); setDueDate(""); setIsAdding(false);
     await onChanged("LIV action created in the central action engine.");
   }
 
   return (
     <div className="liv-v2-actions">
       <div className="liv-actions-heading"><div><h3>Cycle actions</h3><span>{actions.length} linked to this cycle</span></div>{record.canEdit && cycle.status === "in_progress" ? <Button icon={Plus} onClick={() => setIsAdding((value) => !value)} variant="primary">Add action</Button> : null}</div>
-      {isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action</span><input onChange={(event) => setText(event.target.value)} value={text} /></label><label className="entry-field"><span>Description <small>Optional</small></span><textarea onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} /></label><div className="form-grid form-grid-two"><label className="entry-field"><span>Owner</span><select onChange={(event) => setOwnerId(event.target.value)} value={ownerId}><option value="">Select owner</option>{ownerOptions.map((option) => <option key={option.staffId} value={option.staffId}>{option.displayName} - {option.relationship}</option>)}</select></label><label className="entry-field"><span>Date to be implemented by</span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !text.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void createAction()} variant="primary">Create action</Button></div></div> : null}
+      {isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`liv-action-theme-${cycle.id}`} onChange={setActionTheme} sourceFormType="liv" value={actionTheme} /></label><label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setText(event.target.value)} rows={3} value={text} /></label><div className="form-grid form-grid-two"><label className="entry-field"><span>Owner <strong>Required</strong></span><select onChange={(event) => setOwnerId(event.target.value)} value={ownerId}><option value="">Select owner</option>{ownerOptions.map((option) => <option key={option.staffId} value={option.staffId}>{option.displayName} - {option.relationship}</option>)}</select></label><label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !actionTheme.trim() || !text.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void createAction()} variant="primary">Create action</Button></div></div> : null}
       <div className="liv-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added to this cycle.</p> : actions.map((action) => <LivActionCard action={action} key={action.id} onChanged={onChanged} />)}</div>
       {ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No valid owners are available for this record and your current permissions.</small> : null}
     </div>
@@ -555,7 +555,7 @@ function OpportunityChecklist({ options, selected, disabled, onChange }: { optio
 }
 
 function EliContext({ context }: { context: LivStaffContext }) {
-  return <section className="liv-v2-eli-context"><div className="liv-information-grid"><div><span>Notice preference</span><strong>{context.noticePreference ?? "Not provided"}</strong></div><div><span>Preferred month</span><strong>{formatPreferredMonth(context.preferredVisitMonth)}</strong></div><div><span>Primary focus</span><strong>{context.primaryFocus ?? "Not provided"}</strong></div><div><span>Secondary focus</span><strong>{context.secondaryFocusKey === "other" ? context.secondaryFocusOther || "Other" : context.secondaryFocus ?? "Not provided"}</strong></div></div><details><summary><Target size={16} /> Desired outcome</summary><p>{context.desiredOutcome || "No desired outcome was provided."}</p></details>{context.existingLivRecordId ? <p className="notice-row">This submitted ELI assessment is already linked to a LIV case.</p> : null}</section>;
+  return <section className="liv-v2-eli-context"><div className="liv-information-grid"><div><span>Preferred month</span><strong>{formatPreferredMonth(context.preferredVisitMonth)}</strong></div><div><span>Primary focus</span><strong>{context.primaryFocus ?? "Not provided"}</strong></div><div><span>Secondary focus</span><strong>{context.secondaryFocusKey === "other" ? context.secondaryFocusOther || "Other" : context.secondaryFocus ?? "Not provided"}</strong></div></div><details><summary><Target size={16} /> Desired outcome</summary><p>{context.desiredOutcome || "No desired outcome was provided."}</p></details>{context.existingLivRecordId ? <p className="notice-row">This submitted ELI assessment is already linked to a LIV case.</p> : null}</section>;
 }
 
 function emptyStageRequest(stageType: LivStage["stageType"]): SaveLivStageRequest { return { stageType, developmentOpportunityKeys: [], stageStatus: "in_progress" }; }

@@ -19,6 +19,7 @@ import {
 import { KpiStrip } from "../components/KpiStrip";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
+import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -409,21 +410,113 @@ function ProbationStageEditor({ record, observation, stage, configuration, actio
 }
 
 function ProbationVisitEditor({ configuration, disabled, value, onChange }: { configuration: ProbationConfiguration; disabled: boolean; value: SaveProbationVisitRequest; onChange: (value: SaveProbationVisitRequest) => void }) {
+  const [retainedRatings, setRetainedRatings] = useState<Record<string, SaveProbationVisitRequest["ratings"][number]>>({});
+
   function selectRating(focusKey: string, descriptorId: string) {
     const existing = value.ratings.find((rating) => rating.focusKey === focusKey);
     onChange({ ...value, ratings: [...value.ratings.filter((rating) => rating.focusKey !== focusKey), { focusKey, descriptorId, evidenceOfPractice: existing?.evidenceOfPractice }] });
   }
+
   function updateEvidence(focusKey: string, evidenceOfPractice: string) {
     onChange({ ...value, ratings: value.ratings.map((rating) => rating.focusKey === focusKey ? { ...rating, evidenceOfPractice } : rating) });
   }
-  return <div className="form-stack probation-visit-editor"><div className="form-grid form-grid-three"><label className="entry-field"><span>Delivery area</span><select disabled={disabled} onChange={(event) => onChange({ ...value, deliveryAreaKey: event.target.value })} value={value.deliveryAreaKey ?? ""}><option value="">Select delivery area</option>{configuration.deliveryAreas.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label><label className="entry-field"><span>Observation date</span><input disabled={disabled} onChange={(event) => onChange({ ...value, observationDate: event.target.value })} type="date" value={value.observationDate ?? ""} /></label><label className="entry-field"><span>Observation time</span><input disabled={disabled} onChange={(event) => onChange({ ...value, observationTime: event.target.value })} type="time" value={value.observationTime ?? ""} /></label><label className="entry-field"><span>Course name</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseName: event.target.value })} value={value.courseName ?? ""} /></label><label className="entry-field"><span>Course group</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseGroup: event.target.value })} value={value.courseGroup ?? ""} /></label><label className="entry-field"><span>Course level</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseLevel: event.target.value })} value={value.courseLevel ?? ""} /></label></div><label className="entry-field"><span>Key points</span><textarea disabled={disabled} onChange={(event) => onChange({ ...value, keyPoints: event.target.value })} rows={5} value={value.keyPoints ?? ""} /></label><section className="probation-rubric"><div className="panel-heading"><div><h3>Practice rubric</h3><span>Select one wording judgement for every area. Numerical values remain hidden.</span></div></div>{configuration.focusAreas.map((focus) => { const selected = value.ratings.find((rating) => rating.focusKey === focus.key); return <fieldset key={focus.key}><legend>{focus.name}</legend><div className="probation-rubric-options">{configuration.rubric.map((descriptor) => <button className={selected?.descriptorId === descriptor.id ? "is-selected" : ""} disabled={disabled} key={descriptor.id} onClick={() => selectRating(focus.key, descriptor.id)} title={descriptor.meaning} type="button"><i style={{ background: descriptor.colorHex }} /><span>{descriptor.descriptor}</span></button>)}</div>{selected ? <details className="probation-evidence-disclosure"><summary>Evidence of practice <small>Optional</small><ChevronDown size={16} /></summary><textarea disabled={disabled} onChange={(event) => updateEvidence(focus.key, event.target.value)} placeholder="Add the evidence observed for this area" rows={3} value={selected.evidenceOfPractice ?? ""} /></details> : null}</fieldset>; })}</section></div>;
+
+  function setObserved(focusKey: string, observed: boolean) {
+    if (!observed) {
+      const existing = value.ratings.find((rating) => rating.focusKey === focusKey);
+      if (existing) setRetainedRatings((current) => ({ ...current, [focusKey]: existing }));
+      onChange({
+        ...value,
+        unobservedFocusKeys: [...value.unobservedFocusKeys.filter((key) => key !== focusKey), focusKey],
+        ratings: value.ratings.filter((rating) => rating.focusKey !== focusKey)
+      });
+      return;
+    }
+
+    const retained = retainedRatings[focusKey];
+    onChange({
+      ...value,
+      unobservedFocusKeys: value.unobservedFocusKeys.filter((key) => key !== focusKey),
+      ratings: retained
+        ? [...value.ratings.filter((rating) => rating.focusKey !== focusKey), retained]
+        : value.ratings
+    });
+    if (retained) {
+      setRetainedRatings((current) => {
+        const next = { ...current };
+        delete next[focusKey];
+        return next;
+      });
+    }
+  }
+
+  return (
+    <div className="form-stack probation-visit-editor">
+      <div className="form-grid form-grid-three">
+        <label className="entry-field"><span>Delivery area</span><select disabled={disabled} onChange={(event) => onChange({ ...value, deliveryAreaKey: event.target.value })} value={value.deliveryAreaKey ?? ""}><option value="">Select delivery area</option>{configuration.deliveryAreas.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
+        <label className="entry-field"><span>Observation date</span><input disabled={disabled} onChange={(event) => onChange({ ...value, observationDate: event.target.value })} type="date" value={value.observationDate ?? ""} /></label>
+        <label className="entry-field"><span>Observation time</span><input disabled={disabled} onChange={(event) => onChange({ ...value, observationTime: event.target.value })} type="time" value={value.observationTime ?? ""} /></label>
+        <label className="entry-field"><span>Course name</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseName: event.target.value })} value={value.courseName ?? ""} /></label>
+        <label className="entry-field"><span>Course group</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseGroup: event.target.value })} value={value.courseGroup ?? ""} /></label>
+        <label className="entry-field"><span>Course level</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseLevel: event.target.value })} value={value.courseLevel ?? ""} /></label>
+      </div>
+      <label className="entry-field"><span>Key points</span><textarea disabled={disabled} onChange={(event) => onChange({ ...value, keyPoints: event.target.value })} rows={5} value={value.keyPoints ?? ""} /></label>
+      <section className="probation-rubric">
+        <div className="panel-heading">
+          <div>
+            <h3>Practice rubric</h3>
+            <span>Turn off areas that were not observed. Select one wording judgement for each observed area.</span>
+          </div>
+        </div>
+        {configuration.focusAreas.map((focus) => {
+          const selected = value.ratings.find((rating) => rating.focusKey === focus.key);
+          const observed = !value.unobservedFocusKeys.includes(focus.key);
+          return (
+            <fieldset className={observed ? "" : "is-not-observed"} key={focus.key}>
+              <legend className="probation-rubric-area-heading">
+                <span>{focus.name}</span>
+                <label className="probation-observed-toggle">
+                  <input
+                    aria-label={`${focus.name} observed`}
+                    checked={observed}
+                    disabled={disabled}
+                    onChange={(event) => setObserved(focus.key, event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>{observed ? "Observed" : "Not observed"}</span>
+                </label>
+              </legend>
+              {observed ? (
+                <>
+                  <div className="probation-rubric-options">
+                    {configuration.rubric.map((descriptor) => (
+                      <button className={selected?.descriptorId === descriptor.id ? "is-selected" : ""} disabled={disabled} key={descriptor.id} onClick={() => selectRating(focus.key, descriptor.id)} title={descriptor.meaning} type="button">
+                        <i style={{ background: descriptor.colorHex }} />
+                        <span>{descriptor.descriptor}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {selected ? (
+                    <details className="probation-evidence-disclosure">
+                      <summary>Evidence of practice <small>Optional</small><ChevronDown size={16} /></summary>
+                      <textarea disabled={disabled} onChange={(event) => updateEvidence(focus.key, event.target.value)} placeholder="Add the evidence observed for this area" rows={3} value={selected.evidenceOfPractice ?? ""} />
+                    </details>
+                  ) : null}
+                </>
+              ) : <p className="probation-not-observed-copy">No practice judgement is required for this area.</p>}
+            </fieldset>
+          );
+        })}
+      </section>
+    </div>
+  );
 }
 
 function ProbationActions({ record, observation, stage, actions, staff, onChanged }: { record: ProbationCase; observation: ProbationObservation; stage: ProbationStage; actions: ActionSummary[]; staff: StaffSummary[]; onChanged: (message: string) => Promise<void> }) {
   const [ownerOptions, setOwnerOptions] = useState<ActionOwnerOption[]>([]);
   const [isAdding, setIsAdding] = useState(false);
+  const [actionTheme, setActionTheme] = useState("");
   const [title, setTitle] = useState("");
-  const [detail, setDetail] = useState("");
   const [ownerId, setOwnerId] = useState(record.subjectStaffId);
   const [dueDate, setDueDate] = useState("");
   const [stageComplete, setStageComplete] = useState(stage.stageStatus === "completed");
@@ -434,12 +527,12 @@ function ProbationActions({ record, observation, stage, actions, staff, onChange
   }, [ownerOptions, staff]);
   useEffect(() => { api.actionOwnerOptions(record.recordId, record.subjectStaffId).then(setOwnerOptions).catch(() => setOwnerOptions([])); }, [record.recordId, record.subjectStaffId]);
   async function addAction() {
-    if (!title.trim() || !ownerId || !dueDate) return;
+    if (!actionTheme.trim() || !title.trim() || !ownerId || !dueDate) return;
     setIsSaving(true);
-    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "probation_observation", sourceSubRecordType: "probation_observation", sourceSubRecordId: observation.id, sourceSubRecordKey: `observation_${observation.observationNumber}`, subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, title: title.trim(), detail: detail.trim() || undefined, dueDate, publishedToStaff: true, visibilitySetting: "staff_and_management" });
+    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "probation_observation", sourceSubRecordType: "probation_observation", sourceSubRecordId: observation.id, sourceSubRecordKey: `observation_${observation.observationNumber}`, subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, actionTheme: actionTheme.trim(), title: title.trim(), dueDate, publishedToStaff: true, visibilitySetting: "staff_and_management" });
     setIsSaving(false);
     if (!result.ok) return;
-    setTitle(""); setDetail(""); setDueDate(""); setOwnerId(record.subjectStaffId); setIsAdding(false);
+    setActionTheme(""); setTitle(""); setDueDate(""); setOwnerId(record.subjectStaffId); setIsAdding(false);
     await onChanged("Probation action added to the central Action Engine.");
   }
   async function saveStage() {
@@ -448,7 +541,7 @@ function ProbationActions({ record, observation, stage, actions, staff, onChange
     setIsSaving(false);
     if (result.ok) await onChanged("Actions stage saved.");
   }
-  return <div className="probation-actions"><div className="liv-actions-heading"><div><h3>Observation actions</h3><span>{actions.length} linked to Observation {observation.observationNumber}</span></div>{stage.canEdit ? <Button icon={Plus} onClick={() => setIsAdding((value) => !value)} variant="primary">Add action</Button> : null}</div>{isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action</span><input onChange={(event) => setTitle(event.target.value)} value={title} /></label><label className="entry-field"><span>Description <small>Optional</small></span><textarea onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} /></label><div className="form-grid form-grid-two"><div className="entry-field"><span>Owner</span><StaffSearchSelect helperText="Type to find an authorised action owner." id={`probation-action-owner-${observation.id}`} onChange={setOwnerId} staff={permittedOwnerStaff} value={ownerId} /></div><label className="entry-field"><span>Date to be implemented by</span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !title.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void addAction()} variant="primary">Create action</Button></div></div> : null}<div className="probation-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added.</p> : actions.map((action) => <div key={action.id}><span className={`status-pill ${action.completedDate ? "status-complete" : "status-draft"}`}>{action.completedDate ? "Completed" : action.isOverdue ? "Overdue" : "Open"}</span><div><strong>{action.title}</strong><span>{action.ownerStaffName ?? "Unassigned"} / {formatDate(action.dueDate)}</span></div></div>)}</div>{stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={stageComplete} onChange={(event) => setStageComplete(event.target.checked)} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void saveStage()} variant="primary">Save stage</Button></div> : null}{ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No action owners are available within your scope.</small> : null}</div>;
+  return <div className="probation-actions"><div className="liv-actions-heading"><div><h3>Observation actions</h3><span>{actions.length} linked to Observation {observation.observationNumber}</span></div>{stage.canEdit ? <Button icon={Plus} onClick={() => setIsAdding((value) => !value)} variant="primary">Add action</Button> : null}</div>{isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`probation-action-theme-${observation.id}`} onChange={setActionTheme} sourceFormType="probation_observation" value={actionTheme} /></label><label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label><div className="form-grid form-grid-two"><div className="entry-field"><span>Owner <strong>Required</strong></span><StaffSearchSelect helperText="Type to find an authorised action owner." id={`probation-action-owner-${observation.id}`} onChange={setOwnerId} staff={permittedOwnerStaff} value={ownerId} /></div><label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !actionTheme.trim() || !title.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void addAction()} variant="primary">Create action</Button></div></div> : null}<div className="probation-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added.</p> : actions.map((action) => <div key={action.id}><span className={`status-pill ${action.completedDate ? "status-complete" : "status-draft"}`}>{action.completedDate ? "Completed" : action.isOverdue ? "Overdue" : "Open"}</span><div><strong>{action.title}</strong><span>{action.actionTheme} / {action.ownerStaffName ?? "Unassigned"} / {formatDate(action.dueDate)}</span></div></div>)}</div>{stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={stageComplete} onChange={(event) => setStageComplete(event.target.checked)} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void saveStage()} variant="primary">Save stage</Button></div> : null}{ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No action owners are available within your scope.</small> : null}</div>;
 }
 
 function ProbationEliContext({ context }: { context: ProbationStaffContext }) {
@@ -459,7 +552,7 @@ function stageToRequest(stage: ProbationStage): SaveProbationStageRequest {
   return { contextText: stage.contextText, aimsText: stage.aimsText, learnerActivityText: stage.learnerActivityText, reflectionText: stage.reflectionText, developmentOpportunityKeys: stage.developmentOpportunityKeys, intendedNextObservationDate: stage.intendedNextObservationDate, stageStatus: stage.stageStatus };
 }
 function visitToRequest(visit: ProbationVisit | undefined, stageStatus: ProbationStage["stageStatus"]): SaveProbationVisitRequest {
-  return { deliveryAreaKey: visit?.deliveryAreaKey, observationDate: visit?.observationDate, observationTime: visit?.observationTime, courseName: visit?.courseName, courseGroup: visit?.courseGroup, courseLevel: visit?.courseLevel, keyPoints: visit?.keyPoints, ratings: visit?.ratings.map((rating) => ({ focusKey: rating.focusKey, descriptorId: rating.descriptorId, evidenceOfPractice: rating.evidenceOfPractice })) ?? [], stageStatus };
+  return { deliveryAreaKey: visit?.deliveryAreaKey, observationDate: visit?.observationDate, observationTime: visit?.observationTime, courseName: visit?.courseName, courseGroup: visit?.courseGroup, courseLevel: visit?.courseLevel, keyPoints: visit?.keyPoints, unobservedFocusKeys: visit?.unobservedFocusKeys ?? [], ratings: visit?.ratings.map((rating) => ({ focusKey: rating.focusKey, descriptorId: rating.descriptorId, evidenceOfPractice: rating.evidenceOfPractice })) ?? [], stageStatus };
 }
 function highestCompletedObservation(record: ProbationCase) { return Math.max(0, ...record.observations.filter((item) => item.status === "completed").map((item) => item.observationNumber)); }
 function toggleValue(values: string[], value: string) { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }

@@ -44,7 +44,6 @@ public sealed partial class SqlFoundationDataStore
             SELECT staff.id, staff.display_name, assessment.id, assessment.academic_year,
                    focus.value_key, focus.display_name, information.desired_outcome,
                    liv.id, liv.record_id,
-                   notice.value_key, notice.display_name,
                    CONVERT(nvarchar(7), information.preferred_visit_month, 126),
                    secondary_focus.value_key, secondary_focus.display_name,
                    information.secondary_focus_other
@@ -59,7 +58,6 @@ public sealed partial class SqlFoundationDataStore
             ) assessment
             LEFT JOIN quality.elevate_practice_liv_information information ON information.assessment_id = assessment.id
             LEFT JOIN core.lookup_values focus ON focus.id = information.primary_focus_lookup_value_id
-            LEFT JOIN core.lookup_values notice ON notice.id = information.notice_preference_lookup_value_id
             LEFT JOIN core.lookup_values secondary_focus ON secondary_focus.id = information.secondary_focus_lookup_value_id
             OUTER APPLY (
                 SELECT TOP (1) record.id, record.record_id
@@ -91,7 +89,7 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 3), GetStringOrNull(reader, 4), GetStringOrNull(reader, 5),
                 GetStringOrNull(reader, 6), GetGuidOrNull(reader, 7), GetGuidOrNull(reader, 8),
                 GetStringOrNull(reader, 9), GetStringOrNull(reader, 10), GetStringOrNull(reader, 11),
-                GetStringOrNull(reader, 12), GetStringOrNull(reader, 13), GetStringOrNull(reader, 14)),
+                GetStringOrNull(reader, 12)),
             cancellationToken);
         return rows.FirstOrDefault();
     }
@@ -145,7 +143,6 @@ public sealed partial class SqlFoundationDataStore
                    COALESCE(source_primary.value_key, liv.eli_primary_focus_key),
                    COALESCE(source_primary.display_name, liv.eli_primary_focus_snapshot),
                    COALESCE(source_information.desired_outcome, liv.eli_desired_outcome),
-                   source_notice.value_key, source_notice.display_name,
                    CONVERT(nvarchar(7), source_information.preferred_visit_month, 126),
                    source_secondary.value_key, source_secondary.display_name,
                     source_information.secondary_focus_other,
@@ -162,8 +159,6 @@ public sealed partial class SqlFoundationDataStore
               ON probation_case.id = probation_observation.probation_case_id AND probation_case.archived_at IS NULL
             LEFT JOIN quality.elevate_practice_liv_information source_information
               ON source_information.assessment_id = COALESCE(liv.source_elevate_assessment_id, probation_case.source_elevate_assessment_id)
-            LEFT JOIN core.lookup_values source_notice
-              ON source_notice.id = source_information.notice_preference_lookup_value_id
             LEFT JOIN core.lookup_values source_primary
               ON source_primary.id = source_information.primary_focus_lookup_value_id
             LEFT JOIN core.lookup_values source_secondary
@@ -193,8 +188,8 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 21), GetStringOrNull(reader, 22), GetGuidOrNull(reader, 23),
                 GetStringOrNull(reader, 24), GetStringOrNull(reader, 25), GetStringOrNull(reader, 26), [],
                 GetStringOrNull(reader, 27), GetStringOrNull(reader, 28), GetStringOrNull(reader, 29),
-                GetStringOrNull(reader, 30), GetStringOrNull(reader, 31), GetStringOrNull(reader, 32),
-                GetGuidOrNull(reader, 33), reader.IsDBNull(34) ? null : reader.GetByte(34)),
+                GetStringOrNull(reader, 30), GetGuidOrNull(reader, 31),
+                reader.IsDBNull(32) ? null : reader.GetByte(32)),
             cancellationToken);
 
         if (cases.Count == 0)

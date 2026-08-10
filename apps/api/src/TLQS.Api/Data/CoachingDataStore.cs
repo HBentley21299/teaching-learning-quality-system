@@ -347,7 +347,7 @@ public sealed partial class SqlFoundationDataStore
                    revised.id, revised.source_display_order, revised.title, COALESCE(revised.owner_context, 'staff'),
                    revised_owner.display_name, revised.due_date, revised.intended_evidence,
                    revised.intended_impact, revised.review_date, COALESCE(revised.progress_status, 'not_started'),
-                   revised.parent_action_id
+                   revised.parent_action_id, revised.action_theme
             FROM quality.coaching_action_reviews review
             LEFT JOIN quality.actions revised ON revised.id = review.revised_action_id
             LEFT JOIN people.staff revised_owner ON revised_owner.id = revised.owner_staff_id
@@ -365,6 +365,7 @@ public sealed partial class SqlFoundationDataStore
                     : new CoachingSessionActionSummary(
                         reader.GetGuid(4),
                         reader.GetInt32(5),
+                        reader.GetString(15),
                         reader.GetString(6),
                         reader.GetString(7),
                         reader.GetString(8),
@@ -380,7 +381,8 @@ public sealed partial class SqlFoundationDataStore
             SELECT action.id, action.source_display_order, action.title,
                    COALESCE(action.owner_context, 'staff'), owner.display_name, action.due_date,
                    action.intended_evidence, action.intended_impact, action.review_date,
-                   COALESCE(action.progress_status, 'not_started'), action.parent_action_id
+                   COALESCE(action.progress_status, 'not_started'), action.parent_action_id,
+                   action.action_theme
             FROM quality.actions action
             JOIN people.staff owner ON owner.id = action.owner_staff_id
             WHERE action.source_sub_record_type = 'coaching_session'
@@ -393,6 +395,7 @@ public sealed partial class SqlFoundationDataStore
             reader => new CoachingSessionActionSummary(
                 reader.GetGuid(0),
                 reader.GetInt32(1),
+                reader.GetString(11),
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.GetString(4),
@@ -712,8 +715,14 @@ public sealed partial class SqlFoundationDataStore
         Guid cycleId,
         int? beforeSessionNumber,
         Guid? reviewSessionId,
-        CancellationToken cancellationToken) =>
-        await QueryAsync(
+        CancellationToken cancellationToken)
+    {
+        if (beforeSessionNumber is <= 1)
+        {
+            return [];
+        }
+
+        return await QueryAsync(
             """
             SELECT action.id, action.title, COALESCE(action.owner_context, 'staff'),
                    CASE
@@ -724,7 +733,8 @@ public sealed partial class SqlFoundationDataStore
                    action.due_date, action.review_date,
                    COALESCE(action.progress_status, 'not_started'),
                    action.intended_evidence, action.intended_impact,
-                   latest_review.progress_update, latest_review.impact_observed
+                   latest_review.progress_update, latest_review.impact_observed,
+                   action.action_theme
             FROM quality.actions action
             JOIN quality.coaching_sessions origin
               ON action.source_sub_record_type = 'coaching_session'
@@ -757,7 +767,8 @@ public sealed partial class SqlFoundationDataStore
                           AND current_review.action_id = action.id
                     )
               )
-            ORDER BY action.due_date, action.title;
+            ORDER BY action.due_date, action.title
+            OPTION (RECOMPILE);
             """,
             command =>
             {
@@ -767,6 +778,7 @@ public sealed partial class SqlFoundationDataStore
             },
             reader => new CoachingPreviousActionSummary(
                 reader.GetGuid(0),
+                reader.GetString(11),
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
@@ -778,6 +790,7 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 9),
                 GetStringOrNull(reader, 10)),
             cancellationToken);
+    }
 
     private async Task<CoachingCoachRow> ResolveCoachAsync(
         Guid staffId,
@@ -1374,6 +1387,7 @@ public sealed partial class SqlFoundationDataStore
             """
             UPDATE quality.actions
             SET source_display_order = @actionOrder,
+                action_theme = @actionTheme,
                 title = @actionText,
                 owner_context = @ownerType,
                 owner_staff_id = @ownerStaffId,
@@ -1407,7 +1421,7 @@ public sealed partial class SqlFoundationDataStore
             BEGIN
                 INSERT INTO quality.actions (
                     id, source_record_id, source_form_type, source_sub_record_type, source_sub_record_id,
-                    source_display_order, owner_context, subject_staff_id, owner_staff_id, title, detail,
+                    source_display_order, owner_context, subject_staff_id, owner_staff_id, action_theme, title, detail,
                     intended_evidence, intended_impact, review_date, progress_status, parent_action_id,
                     priority_lookup_value_id, status_lookup_value_id, due_date, original_due_date,
                     completed_date, completed_by_user_account_id, cancelled_at, cancelled_by_user_account_id,
@@ -1415,7 +1429,7 @@ public sealed partial class SqlFoundationDataStore
                 )
                 VALUES (
                     @id, @recordId, 'coaching_mentoring', 'coaching_session', @sessionId,
-                    @actionOrder, @ownerType, @staffId, @ownerStaffId, @actionText, @intendedEvidence,
+                    @actionOrder, @ownerType, @staffId, @ownerStaffId, @actionTheme, @actionText, @intendedEvidence,
                     @intendedEvidence, @intendedImpact, @reviewDate, @progressStatus, @parentActionId,
                     (SELECT TOP (1) value.id FROM core.lookup_values value
                      JOIN core.lookup_types type ON type.id = value.lookup_type_id
@@ -1439,6 +1453,7 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@recordId", recordId);
         command.Parameters.AddWithValue("@staffId", staffId);
         command.Parameters.AddWithValue("@actionOrder", actionOrder);
+        command.Parameters.AddWithValue("@actionTheme", request.ActionTheme.Trim());
         command.Parameters.AddWithValue("@actionText", request.ActionText.Trim());
         command.Parameters.AddWithValue("@ownerType", request.OwnerType.ToLowerInvariant());
         command.Parameters.AddWithValue(
@@ -1496,6 +1511,10 @@ public sealed partial class SqlFoundationDataStore
 
         foreach (var action in request.Actions ?? [])
         {
+            if (string.IsNullOrWhiteSpace(action.ActionTheme))
+            {
+                throw new WorkflowValidationException("Every coaching action needs an action theme.");
+            }
             ValidateCoachingOption(action.OwnerType, CoachingActionOwners, "action owner", true);
             ValidateCoachingOption(action.Status, CoachingActionStatuses, "action status", true);
         }
@@ -1515,6 +1534,10 @@ public sealed partial class SqlFoundationDataStore
 
             if (review.RevisedAction is not null)
             {
+                if (string.IsNullOrWhiteSpace(review.RevisedAction.ActionTheme))
+                {
+                    throw new WorkflowValidationException("Every revised action needs an action theme.");
+                }
                 ValidateCoachingOption(review.RevisedAction.OwnerType, CoachingActionOwners, "revised action owner", true);
                 ValidateCoachingOption(review.RevisedAction.Status, CoachingActionStatuses, "revised action status", true);
             }
@@ -1571,12 +1594,10 @@ public sealed partial class SqlFoundationDataStore
         foreach (var action in completedActions)
         {
             if (string.IsNullOrWhiteSpace(action.ActionText)
-                || !action.DueDate.HasValue
-                || string.IsNullOrWhiteSpace(action.IntendedEvidence)
-                || string.IsNullOrWhiteSpace(action.IntendedImpact)
-                || !action.ReviewDate.HasValue)
+                || string.IsNullOrWhiteSpace(action.ActionTheme)
+                || !action.DueDate.HasValue)
             {
-                throw new WorkflowValidationException("Every action needs a description, owner, due date, intended evidence, intended impact and review date.");
+                throw new WorkflowValidationException("Every action needs an action theme, action, owner and implementation date.");
             }
         }
     }
@@ -1629,6 +1650,25 @@ public sealed partial class SqlFoundationDataStore
         foreach (var value in (request.SupportTypes ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             await ValidateLookupValueAsync("coaching_support_type", value, "support type");
+        }
+
+        var newActions = (request.Actions ?? [])
+            .Where(action => !action.Id.HasValue)
+            .Concat((request.ActionReviews ?? [])
+                .Select(review => review.RevisedAction)
+                .OfType<CoachingSessionActionRequest>()
+                .Where(action => !action.Id.HasValue));
+        foreach (var actionTheme in newActions
+                     .Select(action => action.ActionTheme)
+                     .Where(theme => !string.IsNullOrWhiteSpace(theme))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            await ValidateActionThemeAsync(
+                connection,
+                transaction,
+                "coaching_mentoring",
+                actionTheme,
+                cancellationToken);
         }
 
         var actionCount = (request.Actions ?? []).Count(action => !string.IsNullOrWhiteSpace(action.ActionText));

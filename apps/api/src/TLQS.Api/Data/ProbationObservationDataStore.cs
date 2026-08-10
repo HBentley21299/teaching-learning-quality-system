@@ -271,14 +271,16 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT visit.probation_observation_id, delivery.value_key, delivery.display_name,
                    visit.observation_date, CONVERT(nvarchar(5), visit.observation_time, 108),
-                   visit.course_name, visit.course_group, visit.course_level, visit.key_points
+                   visit.course_name, visit.course_group, visit.course_level, visit.key_points,
+                   visit.unobserved_focus_keys_json
             FROM quality.probation_observation_visits visit
             LEFT JOIN core.lookup_values delivery ON delivery.id = visit.delivery_area_lookup_value_id;
             """,
             reader => new ProbationVisitRow(
                 reader.GetGuid(0), GetStringOrNull(reader, 1), GetStringOrNull(reader, 2),
                 GetDateOnlyOrNull(reader, 3), GetStringOrNull(reader, 4), GetStringOrNull(reader, 5),
-                GetStringOrNull(reader, 6), GetStringOrNull(reader, 7), GetStringOrNull(reader, 8)),
+                GetStringOrNull(reader, 6), GetStringOrNull(reader, 7), GetStringOrNull(reader, 8),
+                ParseLivStringList(GetStringOrNull(reader, 9))),
             cancellationToken);
         var ratings = await QueryAsync(
             """
@@ -312,6 +314,7 @@ public sealed partial class SqlFoundationDataStore
                     visit is null ? null : new ProbationVisitSummary(
                         visit.DeliveryAreaKey, visit.DeliveryAreaName, visit.ObservationDate, visit.ObservationTime,
                         visit.CourseName, visit.CourseGroup, visit.CourseLevel, visit.KeyPoints,
+                        visit.UnobservedFocusKeys,
                         ratings.Where(rating => rating.ObservationId == row.Id).Select(rating => rating.Rating).ToArray()));
             }).OrderBy(item => item.ObservationNumber).ToArray());
 
@@ -593,6 +596,17 @@ public sealed partial class SqlFoundationDataStore
                 string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase), cancellationToken);
             var ratings = (request.Ratings ?? []).Where(rating => !string.IsNullOrWhiteSpace(rating.FocusKey))
                 .GroupBy(rating => rating.FocusKey, StringComparer.OrdinalIgnoreCase).Select(group => group.Last()).ToArray();
+            var rubricAreaKeys = await GetProbationRubricAreaKeysAsync(connection, transaction, cancellationToken);
+            var unobservedFocusKeys = (request.UnobservedFocusKeys ?? [])
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .Select(key => key.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (unobservedFocusKeys.Any(key => !rubricAreaKeys.Contains(key)))
+                throw new WorkflowValidationException("One or more unobserved probation rubric areas are invalid.");
+            var unobservedSet = unobservedFocusKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (ratings.Any(rating => unobservedSet.Contains(rating.FocusKey)))
+                throw new WorkflowValidationException("An area marked as not observed cannot also have a practice outcome.");
 
             await using (var command = new SqlCommand(
                 """
@@ -600,6 +614,7 @@ public sealed partial class SqlFoundationDataStore
                 SET delivery_area_lookup_value_id = @deliveryAreaId, observation_date = @date,
                     observation_time = TRY_CONVERT(time(0), @time), course_name = @courseName,
                     course_group = @courseGroup, course_level = @courseLevel, key_points = @keyPoints,
+                    unobserved_focus_keys_json = @unobservedFocusKeys,
                     updated_by_user_account_id = @user, updated_at = sysutcdatetime()
                 WHERE probation_observation_id = @observationId;
 
@@ -618,6 +633,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@courseGroup", ToDbValue(request.CourseGroup));
                 command.Parameters.AddWithValue("@courseLevel", ToDbValue(request.CourseLevel));
                 command.Parameters.AddWithValue("@keyPoints", ToDbValue(request.KeyPoints));
+                command.Parameters.AddWithValue("@unobservedFocusKeys", ToDbValue(SerializeLivStringList(unobservedFocusKeys)));
                 command.Parameters.AddWithValue("@status", status);
                 command.Parameters.AddWithValue("@user", ToDbValue(currentUser.UserAccountId));
                 await command.ExecuteNonQueryAsync(cancellationToken);
@@ -651,9 +667,14 @@ public sealed partial class SqlFoundationDataStore
 
             if (status == "completed")
             {
-                var requiredCount = await GetProbationRubricAreaCountAsync(connection, transaction, cancellationToken);
-                if (ratings.Length != requiredCount)
-                    throw new WorkflowValidationException("Select a practice outcome for every probation rubric area.");
+                var observedAreaKeys = rubricAreaKeys
+                    .Where(key => !unobservedSet.Contains(key))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var ratedAreaKeys = ratings
+                    .Select(rating => rating.FocusKey.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!observedAreaKeys.SetEquals(ratedAreaKeys))
+                    throw new WorkflowValidationException("Select a practice outcome for every observed probation rubric area.");
             }
 
             await WriteAuditAsync(
@@ -696,7 +717,10 @@ public sealed partial class SqlFoundationDataStore
                 while (await reader.ReadAsync(cancellationToken)) completedStages.Add(reader.GetString(0));
             }
             var selectedRatings = await GetProbationRatingCountAsync(connection, transaction, observationId, cancellationToken);
-            var requiredRatings = await GetProbationRubricAreaCountAsync(connection, transaction, cancellationToken);
+            var rubricAreaKeys = await GetProbationRubricAreaKeysAsync(connection, transaction, cancellationToken);
+            var unobservedFocusKeys = await GetProbationUnobservedFocusKeysAsync(
+                connection, transaction, observationId, cancellationToken);
+            var requiredRatings = rubricAreaKeys.Count(key => !unobservedFocusKeys.Contains(key));
             ProbationObservationWorkflow.ValidateCompletion(metadata.ObservationNumber, completedStages, selectedRatings, requiredRatings);
 
             await using (var command = new SqlCommand(
@@ -925,20 +949,41 @@ public sealed partial class SqlFoundationDataStore
     private static string NormalizeProbationStageStatus(string? status) =>
         string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase) ? "completed" : "in_progress";
 
-    private static async Task<int> GetProbationRubricAreaCountAsync(
+    private static async Task<HashSet<string>> GetProbationRubricAreaKeysAsync(
         SqlConnection connection,
         System.Data.Common.DbTransaction transaction,
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
             """
-            SELECT COUNT(*)
+            SELECT value.value_key
             FROM core.lookup_values value
             JOIN core.lookup_types type ON type.id = value.lookup_type_id
             WHERE type.lookup_key = N'liv_focus_area' AND value.value_key <> N'other'
               AND value.is_active = 1 AND value.archived_at IS NULL;
             """, connection, (SqlTransaction)transaction);
-        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) keys.Add(reader.GetString(0));
+        return keys;
+    }
+
+    private static async Task<HashSet<string>> GetProbationUnobservedFocusKeysAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid observationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT unobserved_focus_keys_json
+            FROM quality.probation_observation_visits
+            WHERE probation_observation_id = @id;
+            """, connection, (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@id", observationId);
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return ParseLivStringList(value is null or DBNull ? null : Convert.ToString(value))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static async Task<int> GetProbationRatingCountAsync(
@@ -969,7 +1014,8 @@ public sealed partial class SqlFoundationDataStore
         IReadOnlyList<string> DevelopmentOpportunityKeys, DateOnly? IntendedNextObservationDate);
     private sealed record ProbationVisitRow(
         Guid ObservationId, string? DeliveryAreaKey, string? DeliveryAreaName, DateOnly? ObservationDate,
-        string? ObservationTime, string? CourseName, string? CourseGroup, string? CourseLevel, string? KeyPoints);
+        string? ObservationTime, string? CourseName, string? CourseGroup, string? CourseLevel, string? KeyPoints,
+        IReadOnlyList<string> UnobservedFocusKeys);
     private sealed record ProbationRatingRow(Guid ObservationId, ProbationRatingSummary Rating);
     private sealed record ProbationObservationMetadata(
         Guid RecordId, string CaseStatus, int CurrentObservationNumber, int ObservationNumber,

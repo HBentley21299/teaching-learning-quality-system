@@ -12,9 +12,11 @@ import type {
 } from "../services/types";
 import { StaffSearchSelect } from "./StaffSearchSelect";
 import { CourseMultiSelect } from "./CourseMultiSelect";
+import { ActionThemeSelect } from "./ActionThemeSelect";
 
 type DraftAction = {
   id: string;
+  actionTheme: string;
   title: string;
   ownerStaffId: string;
   dueDate: string;
@@ -95,7 +97,7 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
   function addAction() {
     setActions((current) => [
       ...current,
-      { id: crypto.randomUUID(), title: "", ownerStaffId: "", dueDate: "" }
+      { id: crypto.randomUUID(), actionTheme: "", title: "", ownerStaffId: "", dueDate: "" }
     ]);
   }
 
@@ -122,9 +124,9 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
       return;
     }
 
-    const incompleteAction = actions.find((action) => !action.title.trim() || !action.ownerStaffId || !action.dueDate);
+    const incompleteAction = actions.find((action) => !action.actionTheme.trim() || !action.title.trim() || !action.ownerStaffId || !action.dueDate);
     if (incompleteAction) {
-      setStatusMessage("Every added action needs an action description, owner and due date.");
+      setStatusMessage("Every added action needs an action theme, action, owner and implementation date.");
       return;
     }
 
@@ -141,6 +143,7 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
       }))),
       courseIds: selectedCourseIds,
       actions: actions.map((action) => ({
+        actionTheme: action.actionTheme.trim(),
         title: action.title.trim(),
         ownerStaffId: action.ownerStaffId,
         dueDate: action.dueDate
@@ -253,6 +256,15 @@ export function WorkScrutinyCreateForm({ onCancel, onSubmitted, orgUnits, staff,
             <div className="scrutiny-action-list">
               {actions.map((action, index) => (
                 <div className="scrutiny-action-row" key={action.id}>
+                  <label className="entry-field scrutiny-action-theme">
+                    <span>Action theme <strong>Required</strong></span>
+                    <ActionThemeSelect
+                      id={`scrutiny-action-theme-${action.id}`}
+                      onChange={(actionTheme) => updateAction(action.id, { actionTheme })}
+                      sourceFormType="work_scrutiny"
+                      value={action.actionTheme}
+                    />
+                  </label>
                   <label className="entry-field scrutiny-action-text">
                     <span>Action {index + 1} <strong>Required</strong></span>
                     <textarea

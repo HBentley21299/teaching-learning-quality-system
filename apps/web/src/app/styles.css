@@ -1421,6 +1421,66 @@ td {
   padding: 22px;
 }
 
+.practice-liv-recommendations {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+}
+
+.practice-liv-recommendations > div {
+  display: grid;
+  gap: 3px;
+}
+
+.practice-liv-recommendations span,
+.practice-liv-guidance {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.practice-liv-recommendations ol {
+  align-items: center;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-start;
+  list-style: none;
+  margin: 0;
+  min-height: 42px;
+  padding: 7px 10px;
+}
+
+.practice-liv-recommendations li {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-weight: 700;
+  padding: 7px 11px;
+}
+
+.practice-liv-guidance {
+  background: var(--surface-muted);
+  border-left: 3px solid var(--accent);
+  margin: 7px 0 10px;
+  padding: 10px 13px;
+}
+
+.practice-liv-guidance p {
+  margin: 0 0 7px;
+}
+
+.practice-liv-guidance p:last-child {
+  margin-bottom: 0;
+}
+
+.practice-liv-guidance ul {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
 .sr-only {
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
@@ -1592,8 +1652,10 @@ td {
 }
 
 .likert-control button.is-selected {
-  background: color-mix(in srgb, var(--rating-color) 10%, white);
+  background: color-mix(in srgb, var(--rating-color) 18%, var(--surface));
   color: var(--text);
+  outline: 1px solid color-mix(in srgb, var(--rating-color) 72%, var(--text));
+  outline-offset: -2px;
 }
 
 .likert-control button strong {
@@ -4427,6 +4489,22 @@ td {
   grid-template-columns: minmax(200px, 0.45fr) minmax(260px, 1fr) auto;
 }
 
+.learning-theme-area-add-row {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  margin-bottom: 12px;
+  max-width: 720px;
+}
+
+.learning-theme-governance-note {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin: 12px 0 0;
+}
+
 .learning-theme-groups {
   border-top: 1px solid var(--line);
   display: grid;
@@ -4438,15 +4516,45 @@ td {
   padding: 14px 0;
 }
 
+.learning-theme-group.is-inactive {
+  background: color-mix(in srgb, var(--surface-muted) 55%, transparent);
+  margin-inline: -10px;
+  padding-inline: 10px;
+}
+
 .learning-theme-group:last-child {
   border-bottom: 0;
 }
 
 .learning-theme-group-heading {
-  align-items: baseline;
+  align-items: center;
   display: flex;
+  gap: 12px;
   justify-content: space-between;
   margin-bottom: 6px;
+}
+
+.learning-theme-group-title {
+  display: grid;
+  gap: 2px;
+}
+
+.learning-theme-area-edit {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  max-width: 680px;
+  width: 100%;
+}
+
+.learning-theme-area-edit input {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  min-width: 0;
+  padding: 9px 10px;
 }
 
 .learning-theme-group-heading h3 {
@@ -4501,8 +4609,13 @@ td {
 
 @media (max-width: 760px) {
   .learning-walk-theme-picker-groups,
+  .learning-theme-area-add-row,
   .learning-theme-add-row {
     grid-template-columns: 1fr;
+  }
+
+  .learning-theme-area-edit {
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
 
   .learning-theme-admin-row {
@@ -4674,6 +4787,10 @@ td {
   grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1fr) 170px;
   padding: 12px 46px 0 0;
   position: relative;
+}
+
+.scrutiny-action-theme {
+  grid-column: 1 / -1;
 }
 
 .scrutiny-action-remove {
@@ -5212,6 +5329,65 @@ td {
   margin-top: 8px;
 }
 
+.learning-walk-focus-rubrics > legend {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  width: 100%;
+}
+
+.learning-walk-focus-rubrics > legend > strong {
+  color: var(--red);
+  font-size: 0.75rem;
+}
+
+.coaching-wording-rubric > .learning-walk-focus-rubric-list {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 1fr;
+}
+
+.learning-walk-focus-rubric {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+  min-width: 0;
+  padding: 12px 0 0;
+}
+
+.learning-walk-focus-rubric:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.learning-walk-focus-rubric > legend {
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 800;
+  margin-bottom: 9px;
+  padding: 0;
+}
+
+.learning-walk-focus-rubric > div {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+}
+
+.learning-walk-focus-rubric button {
+  min-height: 48px;
+}
+
+.learning-walk-focus-rubric button > span {
+  align-content: center;
+  padding: 9px;
+}
+
+.learning-walk-focus-rubric button strong {
+  font-size: 0.74rem;
+}
+
 .environment-pillar-rubric button {
   min-height: 190px;
 }
@@ -5543,6 +5719,14 @@ td {
     grid-template-columns: repeat(3, minmax(140px, 1fr));
   }
 
+  .coaching-wording-rubric > .learning-walk-focus-rubric-list {
+    grid-template-columns: 1fr;
+  }
+
+  .learning-walk-focus-rubric > div {
+    grid-template-columns: repeat(3, minmax(140px, 1fr));
+  }
+
   .coaching-action-text,
   .coaching-action-evidence {
     grid-column: auto;
@@ -5585,6 +5769,14 @@ td {
   .coaching-wording-rubric > div {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
   }
+
+  .coaching-wording-rubric > .learning-walk-focus-rubric-list {
+    grid-template-columns: 1fr;
+  }
+
+  .learning-walk-focus-rubric > div {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
 }
 
 @media (max-width: 680px) {
@@ -5618,6 +5810,11 @@ td {
 
   .coaching-confidence-options {
     grid-template-columns: repeat(5, minmax(52px, 1fr));
+  }
+
+  .coaching-wording-rubric > .learning-walk-focus-rubric-list,
+  .learning-walk-focus-rubric > div {
+    grid-template-columns: 1fr;
   }
 
   .coaching-confidence-options button {
@@ -6249,11 +6446,11 @@ td {
 .coaching-action-fields {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.7fr) minmax(150px, 0.6fr) minmax(150px, 0.6fr);
+  grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1fr) 190px;
 }
 
-.coaching-action-description {
-  grid-column: span 2;
+.coaching-action-theme {
+  grid-column: 1 / -1;
 }
 
 .coaching-action-evidence,
@@ -7864,6 +8061,44 @@ td {
 .probation-rubric legend {
   margin-bottom: 10px;
   font-weight: 750;
+}
+
+.probation-rubric legend.probation-rubric-area-heading {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.probation-observed-toggle {
+  align-items: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 650;
+  gap: 7px;
+}
+
+.probation-observed-toggle input {
+  accent-color: var(--teal);
+  height: 17px;
+  width: 17px;
+}
+
+.probation-observed-toggle input:disabled {
+  cursor: not-allowed;
+}
+
+.probation-rubric fieldset.is-not-observed > legend > span {
+  color: var(--text-muted);
+}
+
+.probation-not-observed-copy {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  margin: 0;
 }
 
 .probation-rubric-options {

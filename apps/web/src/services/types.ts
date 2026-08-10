@@ -74,6 +74,7 @@ export type ActionSummary = {
   subjectStaffName?: string;
   ownerStaffId: string;
   ownerStaffName?: string;
+  actionTheme: string;
   title: string;
   detail?: string;
   statusKey?: string;
@@ -121,6 +122,7 @@ export type CreateActionRequest = {
   sourceRecordId?: string;
   subjectStaffId?: string;
   ownerStaffId: string;
+  actionTheme: string;
   title: string;
   detail?: string;
   priorityLookupValueId?: string;
@@ -137,6 +139,7 @@ export type CreateActionRequest = {
 };
 
 export type UpdateActionRequest = {
+  actionTheme?: string;
   title?: string;
   detail?: string;
   dueDate?: string;
@@ -245,8 +248,6 @@ export type LivStaffContext = {
   desiredOutcome?: string;
   existingLivRecordId?: string;
   existingLivSourceRecordId?: string;
-  noticePreferenceKey?: string;
-  noticePreference?: string;
   preferredVisitMonth?: string;
   secondaryFocusKey?: string;
   secondaryFocus?: string;
@@ -284,8 +285,6 @@ export type LivRecordSummary = {
   eliPrimaryFocus?: string;
   eliDesiredOutcome?: string;
   cycles: LivCycle[];
-  eliNoticePreferenceKey?: string;
-  eliNoticePreference?: string;
   eliPreferredVisitMonth?: string;
   eliSecondaryFocusKey?: string;
   eliSecondaryFocus?: string;
@@ -378,6 +377,7 @@ export type ProbationVisit = {
   courseGroup?: string;
   courseLevel?: string;
   keyPoints?: string;
+  unobservedFocusKeys: string[];
   ratings: ProbationRating[];
 };
 
@@ -452,6 +452,7 @@ export type SaveProbationVisitRequest = {
   courseGroup?: string;
   courseLevel?: string;
   keyPoints?: string;
+  unobservedFocusKeys: string[];
   ratings: Array<{ focusKey: string; descriptorId: string; evidenceOfPractice?: string }>;
   stageStatus?: "in_progress" | "completed";
 };
@@ -850,20 +851,18 @@ export type StaffProfileProbationSummary = {
 
 export type ElevateLookupOption = { key: string; name: string; displayOrder: number; isOther?: boolean };
 export type ElevateLivInformation = {
-  noticePreferenceKey?: string;
   preferredVisitMonth?: string;
   primaryFocusKey?: string;
   secondaryFocusKey?: string;
   secondaryFocusOther?: string;
   desiredOutcome?: string;
-  noticeOptions: ElevateLookupOption[];
   focusOptions: ElevateLookupOption[];
 };
 
 export type SaveElevatePracticeAssessmentRequest = {
   ratings: Array<{ areaId: string; statementId: string; descriptorId: string }>;
   reflections: Array<{ areaKey: string; text: string }>;
-  livInformation: Omit<ElevateLivInformation, "noticeOptions" | "focusOptions">;
+  livInformation: Omit<ElevateLivInformation, "focusOptions">;
   submit: boolean;
 };
 
@@ -912,6 +911,7 @@ export type CoachingCycleSummary = {
 
 export type CoachingPreviousActionSummary = {
   actionId: string;
+  actionTheme: string;
   title: string;
   ownerType: CoachingActionOwner;
   ownerName: string;
@@ -988,6 +988,7 @@ export type CoachingSessionSummary = {
 export type CoachingSessionAction = {
   id?: string;
   actionOrder: number;
+  actionTheme: string;
   actionText: string;
   ownerType: CoachingActionOwner;
   ownerName?: string;
@@ -1565,7 +1566,12 @@ export type LearningWalkThemeGroup = {
   groupKey: string;
   name: string;
   displayOrder: number;
+  isActive: boolean;
   themes: LearningWalkTheme[];
+};
+
+export type SaveLearningWalkThemeGroupRequest = {
+  name: string;
 };
 
 export type SaveLearningWalkThemeRequest = {

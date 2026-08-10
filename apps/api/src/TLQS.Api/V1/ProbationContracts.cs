@@ -56,6 +56,7 @@ public sealed record SaveProbationVisitRequest(
     string? CourseGroup,
     string? CourseLevel,
     string? KeyPoints,
+    IReadOnlyList<string>? UnobservedFocusKeys,
     IReadOnlyList<ProbationRatingRequest>? Ratings,
     string? StageStatus = null);
 
@@ -68,6 +69,7 @@ public sealed record ProbationVisitSummary(
     string? CourseGroup,
     string? CourseLevel,
     string? KeyPoints,
+    IReadOnlyList<string> UnobservedFocusKeys,
     IReadOnlyList<ProbationRatingSummary> Ratings);
 
 public sealed record SaveProbationStageRequest(

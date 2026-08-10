@@ -32,13 +32,12 @@ public sealed partial class SqlFoundationDataStore
             .Select(group => group.Last())
             .ToArray();
         var livInformation = request.LivInformation
-            ?? new SaveElevateLivInformationRequest(null, null, null, null, null, null);
+            ?? new SaveElevateLivInformationRequest(null, null, null, null, null);
 
         var statementAreas = current.Areas
             .SelectMany(area => area.Statements.Select(statement => new { statement.Id, AreaId = area.Id }))
             .ToDictionary(value => value.Id, value => value.AreaId);
         var descriptorIds = current.RatingScale.Select(descriptor => descriptor.Id).ToHashSet();
-        var noticeKeys = current.LivInformation.NoticeOptions.Select(option => option.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var focusKeys = current.LivInformation.FocusOptions.Select(option => option.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (ratings.Any(value =>
                 !statementAreas.TryGetValue(value.StatementId, out var areaId)
@@ -47,8 +46,7 @@ public sealed partial class SqlFoundationDataStore
         {
             throw new WorkflowValidationException("Every statement response must belong to this assessment framework.");
         }
-        if ((!string.IsNullOrWhiteSpace(livInformation.NoticePreferenceKey) && !noticeKeys.Contains(livInformation.NoticePreferenceKey))
-            || (!string.IsNullOrWhiteSpace(livInformation.PrimaryFocusKey) && !focusKeys.Contains(livInformation.PrimaryFocusKey))
+        if ((!string.IsNullOrWhiteSpace(livInformation.PrimaryFocusKey) && !focusKeys.Contains(livInformation.PrimaryFocusKey))
             || (!string.IsNullOrWhiteSpace(livInformation.SecondaryFocusKey) && !focusKeys.Contains(livInformation.SecondaryFocusKey)))
         {
             throw new WorkflowValidationException("One or more LIV information choices are no longer available.");
@@ -75,7 +73,6 @@ public sealed partial class SqlFoundationDataStore
 
         if (status == "submitted"
             && (ratings.Length != statementAreas.Count
-                || string.IsNullOrWhiteSpace(livInformation.NoticePreferenceKey)
                 || !preferredVisitMonth.HasValue
                 || string.IsNullOrWhiteSpace(livInformation.PrimaryFocusKey)
                 || string.IsNullOrWhiteSpace(livInformation.DesiredOutcome)))

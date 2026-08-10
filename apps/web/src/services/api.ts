@@ -73,6 +73,7 @@ import type {
   SaveLivVisitRequest,
   SaveProbationStageRequest,
   SaveProbationVisitRequest,
+  SaveLearningWalkThemeGroupRequest,
   SaveLearningWalkThemeRequest,
   SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
@@ -254,6 +255,8 @@ export const api = {
     sendJson<CompleteStaffOnboardingRequest, CurrentUser>("/api/v1/onboarding", "POST", request),
   modules: () => getJson<ModuleSummary[]>("/api/v1/modules"),
   lookups: () => getJson<LookupSummary[]>("/api/v1/lookups"),
+  actionThemes: (sourceFormType: string) =>
+    getJson<LookupValueSummary[]>(`/api/v1/action-themes/${encodeURIComponent(sourceFormType)}`),
   sharedThemes: (applicationKey: string) =>
     getJson<SharedThemeGroup[]>(`/api/v1/themes/${encodeURIComponent(applicationKey)}`),
   adminLookupValues: (lookupKey: string) =>
@@ -322,6 +325,12 @@ export const api = {
     getJson<LearningWalkThemeGroup[]>("/api/v1/learning-walk/themes"),
   adminLearningWalkThemes: () =>
     getJson<LearningWalkThemeGroup[]>("/api/v1/admin/learning-walk/themes"),
+  createLearningWalkThemeGroup: (request: SaveLearningWalkThemeGroupRequest) =>
+    sendJson<SaveLearningWalkThemeGroupRequest, { id: string }>("/api/v1/admin/learning-walk/theme-groups", "POST", request),
+  updateLearningWalkThemeGroup: (id: string, request: SaveLearningWalkThemeGroupRequest) =>
+    sendJson(`/api/v1/admin/learning-walk/theme-groups/${id}`, "PUT", request),
+  setLearningWalkThemeGroupStatus: (id: string, isActive: boolean) =>
+    sendJson(`/api/v1/admin/learning-walk/theme-groups/${id}/status`, "POST", { isActive }),
   createLearningWalkTheme: (request: SaveLearningWalkThemeRequest) =>
     sendJson<SaveLearningWalkThemeRequest, { id: string }>("/api/v1/admin/learning-walk/themes", "POST", request),
   updateLearningWalkTheme: (id: string, request: SaveLearningWalkThemeRequest) =>
@@ -441,6 +450,12 @@ export const api = {
     getJson<ElevatePracticeAudit[]>(`/api/v1/elevate-practice/admin/records/${assessmentId}/audit`),
   elevatePracticeResult: (staffId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/latest`),
+  saveStaffElevatePracticeRecord: (staffId: string, assessmentId: string, request: AdminSaveElevatePracticeAssessmentRequest) =>
+    sendJson<AdminSaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>(
+      `/api/v1/elevate-practice/staff/${staffId}/records/${assessmentId}`,
+      "PUT",
+      request
+    ),
   elevatePracticeRecord: (recordId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/records/${recordId}`),
   coachingSessions: () => getJson<CoachingSessionSummary[]>("/api/v1/coaching/sessions"),

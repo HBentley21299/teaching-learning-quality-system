@@ -209,12 +209,10 @@ public sealed partial class SqlFoundationDataStore
                 SELECT N'LIV — Preferences and focus', values_row.field_label, values_row.field_value, values_row.display_order
                 FROM quality.liv_records liv
                 LEFT JOIN quality.elevate_practice_liv_information liv_info ON liv_info.assessment_id = liv.source_elevate_assessment_id
-                LEFT JOIN core.lookup_values notice ON notice.id = liv_info.notice_preference_lookup_value_id
                 CROSS APPLY (VALUES
-                    (N'Notice preference', CONVERT(nvarchar(max), notice.display_name), 1),
-                    (N'Preferred month', CONVERT(nvarchar(max), liv_info.preferred_visit_month, 23), 2),
-                    (N'Primary focus', CONVERT(nvarchar(max), liv.eli_primary_focus_snapshot), 3),
-                    (N'Desired outcome', CONVERT(nvarchar(max), liv.eli_desired_outcome), 4),
+                    (N'Preferred month', CONVERT(nvarchar(max), liv_info.preferred_visit_month, 23), 1),
+                    (N'Primary focus', CONVERT(nvarchar(max), liv.eli_primary_focus_snapshot), 2),
+                    (N'Desired outcome', CONVERT(nvarchar(max), liv.eli_desired_outcome), 3),
                     (N'Areas of practice', CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CONVERT(nvarchar(max), liv.area_of_practice_keys_json) END, 5),
                     (N'Elevate practitioner', CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CASE WHEN liv.is_elevate_practitioner = 1 THEN N'Yes' ELSE N'No' END END, 6),
                     (N'Record visibility', CONVERT(nvarchar(max), liv.visibility_status), 7),

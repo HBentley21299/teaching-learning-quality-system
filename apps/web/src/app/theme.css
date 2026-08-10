@@ -173,6 +173,10 @@ html {
 
 /* ------------------------------------------------------------------ shell */
 
+.app-shell {
+  transition: grid-template-columns 180ms var(--ease);
+}
+
 .sidebar {
   background: var(--sidebar-bg);
   backdrop-filter: blur(24px) saturate(1.4);
@@ -192,6 +196,58 @@ html {
 .brand-logo {
   border: 0;
   border-radius: 0;
+}
+
+.brand-logo-mark {
+  display: none;
+}
+
+@media (min-width: 761px) {
+  .app-shell-nav-collapsed {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .app-shell-nav-collapsed .sidebar {
+    align-items: center;
+    padding-inline: 10px;
+  }
+
+  .app-shell-nav-collapsed .brand-block {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .app-shell-nav-collapsed .brand-logo-full {
+    display: none;
+  }
+
+  .app-shell-nav-collapsed .brand-logo-mark {
+    display: block;
+    height: 38px;
+    width: 38px;
+  }
+
+  .app-shell-nav-collapsed .sidebar nav {
+    justify-items: center;
+    width: 100%;
+  }
+
+  .app-shell-nav-collapsed .nav-item {
+    gap: 0;
+    justify-content: center;
+    padding-inline: 0;
+    width: 44px;
+  }
+
+  .app-shell-nav-collapsed .nav-item span {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .navigation-collapse-button {
+    display: none;
+  }
 }
 
 .nav-item {
@@ -741,10 +797,10 @@ h1, h2, h3 {
 .home-hero {
   align-items: center;
   display: grid;
-  gap: 20px;
-  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.8fr);
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.55fr);
   overflow: hidden;
-  padding: 18px 24px;
+  padding: 16px 24px;
 }
 
 @media (max-width: 900px) {
@@ -769,14 +825,14 @@ h1, h2, h3 {
 
 .eli-stage-button {
   justify-self: end;
-  max-width: 340px;
+  max-width: 240px;
   width: 100%;
   background: var(--eli-scene-bg);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   cursor: pointer;
   line-height: 0;
-  padding: 14px 16px 8px;
+  padding: 10px 12px 6px;
   position: relative;
   transition: box-shadow 200ms var(--ease);
 }
@@ -910,8 +966,9 @@ h1, h2, h3 {
 
 .home-tile-glyph {
   align-items: center;
-  background: var(--eli-scene-bg);
+  background: var(--teal-soft);
   border-radius: var(--radius-sm);
+  color: var(--teal);
   display: inline-flex;
   flex-shrink: 0;
   justify-content: center;
@@ -919,8 +976,8 @@ h1, h2, h3 {
 }
 
 .home-tile-glyph svg {
-  height: 30px;
-  width: 30px;
+  height: 24px;
+  width: 24px;
 }
 
 .home-tile-text {

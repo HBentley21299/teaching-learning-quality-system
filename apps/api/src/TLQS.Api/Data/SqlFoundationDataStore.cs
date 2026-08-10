@@ -217,6 +217,16 @@ public sealed partial class SqlFoundationDataStore(
                 reader.GetInt32(3)),
             cancellationToken);
 
+    public Task<IReadOnlyList<LookupValueSummary>> GetActionThemeValuesAsync(
+        string sourceFormType,
+        CancellationToken cancellationToken)
+    {
+        var lookupKey = ActionThemeLookupKeyForSource(sourceFormType);
+        return lookupKey is null
+            ? Task.FromResult<IReadOnlyList<LookupValueSummary>>([])
+            : GetLookupValuesAsync(lookupKey, cancellationToken);
+    }
+
     public async Task<LookupValueSummary> SaveLookupValueAsync(
         string lookupKey,
         string displayName,
@@ -1007,6 +1017,7 @@ public sealed partial class SqlFoundationDataStore(
                 theme_group.group_key,
                 theme_group.name,
                 theme_group.display_order,
+                theme_group.is_active,
                 theme.id,
                 theme.name,
                 theme.display_order,
@@ -1021,7 +1032,7 @@ public sealed partial class SqlFoundationDataStore(
                 ON application.theme_id = theme.id
                AND application.application_key = 'learning_walk'
             WHERE theme_group.archived_at IS NULL
-              AND theme_group.is_active = 1
+              AND (@includeInactive = 1 OR theme_group.is_active = 1)
               AND (theme.id IS NULL OR application.theme_id IS NOT NULL)
             ORDER BY theme_group.display_order, theme.display_order, theme.name;
             """,
@@ -1031,20 +1042,22 @@ public sealed partial class SqlFoundationDataStore(
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetInt32(3),
-                GetGuidOrNull(reader, 4),
-                GetStringOrNull(reader, 5),
-                reader.IsDBNull(6) ? null : reader.GetInt32(6),
-                reader.IsDBNull(7) ? null : reader.GetBoolean(7),
-                reader.IsDBNull(8) ? null : reader.GetBoolean(8)),
+                reader.GetBoolean(4),
+                GetGuidOrNull(reader, 5),
+                GetStringOrNull(reader, 6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetBoolean(8),
+                reader.IsDBNull(9) ? null : reader.GetBoolean(9)),
             cancellationToken);
 
         return rows
-            .GroupBy(row => new { row.GroupId, row.GroupKey, row.GroupName, row.GroupDisplayOrder })
+            .GroupBy(row => new { row.GroupId, row.GroupKey, row.GroupName, row.GroupDisplayOrder, row.GroupIsActive })
             .Select(group => new LearningWalkThemeGroupSummary(
                 group.Key.GroupId,
                 group.Key.GroupKey,
                 group.Key.GroupName,
                 group.Key.GroupDisplayOrder,
+                group.Key.GroupIsActive,
                 group.Where(row => row.ThemeId.HasValue)
                     .Select(row => new LearningWalkThemeSummary(
                         row.ThemeId!.Value,
@@ -1056,6 +1069,192 @@ public sealed partial class SqlFoundationDataStore(
                     .ToArray()))
             .OrderBy(group => group.DisplayOrder)
             .ToArray();
+    }
+
+    public async Task<Guid> CreateLearningWalkThemeGroupAsync(
+        SaveLearningWalkThemeGroupRequest request,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var id = Guid.NewGuid();
+        var keyPrefix = Slugify(request.Name);
+        var groupKey = $"{keyPrefix[..Math.Min(keyPrefix.Length, 60)]}_{id:N}";
+
+        try
+        {
+            await using (var command = new SqlCommand(
+                """
+                IF EXISTS (
+                    SELECT 1 FROM core.theme_groups
+                    WHERE name = @name AND archived_at IS NULL
+                )
+                    THROW 51000, 'That theme area already exists.', 1;
+
+                INSERT INTO core.theme_groups (
+                    id, group_key, name, display_order, created_by_user_account_id
+                )
+                SELECT
+                    @id,
+                    @groupKey,
+                    @name,
+                    COALESCE(MAX(display_order), 0) + 10,
+                    @userAccountId
+                FROM core.theme_groups
+                WHERE archived_at IS NULL;
+                """,
+                connection,
+                (SqlTransaction)transaction))
+            {
+                command.Parameters.AddWithValue("@id", id);
+                command.Parameters.AddWithValue("@groupKey", groupKey);
+                command.Parameters.AddWithValue("@name", request.Name.Trim());
+                command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await WriteAuditAsync(
+                connection,
+                transaction,
+                currentUser.UserAccountId,
+                null,
+                "learning_walk_theme_group",
+                id,
+                "learning_walk_theme_group.created",
+                $"Learning Walk theme area '{request.Name.Trim()}' created by {currentUser.DisplayName}.",
+                null,
+                JsonSerializer.Serialize(new { name = request.Name.Trim(), isActive = true }),
+                cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+            return id;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<bool> UpdateLearningWalkThemeGroupAsync(
+        Guid id,
+        SaveLearningWalkThemeGroupRequest request,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            string? beforeJson;
+            await using (var beforeCommand = new SqlCommand(
+                """
+                SELECT (
+                    SELECT name, is_active AS isActive
+                    FROM core.theme_groups
+                    WHERE id = @id AND archived_at IS NULL
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+                );
+                """,
+                connection,
+                (SqlTransaction)transaction))
+            {
+                beforeCommand.Parameters.AddWithValue("@id", id);
+                beforeJson = await beforeCommand.ExecuteScalarAsync(cancellationToken) as string;
+            }
+
+            if (string.IsNullOrWhiteSpace(beforeJson))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+
+            await using (var command = new SqlCommand(
+                """
+                IF EXISTS (
+                    SELECT 1 FROM core.theme_groups
+                    WHERE name = @name
+                      AND id <> @id
+                      AND archived_at IS NULL
+                )
+                    THROW 51000, 'That theme area already exists.', 1;
+
+                UPDATE core.theme_groups
+                SET name = @name,
+                    updated_by_user_account_id = @userAccountId,
+                    updated_at = sysutcdatetime()
+                WHERE id = @id AND archived_at IS NULL;
+                """,
+                connection,
+                (SqlTransaction)transaction))
+            {
+                command.Parameters.AddWithValue("@id", id);
+                command.Parameters.AddWithValue("@name", request.Name.Trim());
+                command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await WriteAuditAsync(
+                connection,
+                transaction,
+                currentUser.UserAccountId,
+                null,
+                "learning_walk_theme_group",
+                id,
+                "learning_walk_theme_group.updated",
+                $"Learning Walk theme area renamed to '{request.Name.Trim()}' by {currentUser.DisplayName}.",
+                beforeJson,
+                JsonSerializer.Serialize(new { name = request.Name.Trim() }),
+                cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+            return true;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<bool> SetLearningWalkThemeGroupStatusAsync(
+        Guid id,
+        bool isActive,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = new SqlCommand(
+            """
+            UPDATE core.theme_groups
+            SET is_active = @isActive,
+                updated_by_user_account_id = @userAccountId,
+                updated_at = sysutcdatetime()
+            WHERE id = @id AND archived_at IS NULL;
+
+            IF @@ROWCOUNT > 0
+            BEGIN
+                INSERT INTO ops.audit_logs (user_account_id, entity_name, entity_id, action, summary, after_json)
+                VALUES (
+                    @userAccountId,
+                    'learning_walk_theme_group',
+                    @id,
+                    CASE WHEN @isActive = 1 THEN 'learning_walk_theme_group.reactivated' ELSE 'learning_walk_theme_group.deactivated' END,
+                    CONCAT('Learning Walk theme area ', CASE WHEN @isActive = 1 THEN 'reactivated' ELSE 'deactivated' END, ' by ', @displayName, '.'),
+                    CONCAT('{"isActive":', CASE WHEN @isActive = 1 THEN 'true' ELSE 'false' END, '}')
+                );
+            END;
+
+            SELECT @@ROWCOUNT;
+            """,
+            connection);
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@isActive", isActive);
+        command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+        command.Parameters.AddWithValue("@displayName", currentUser.DisplayName);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) > 0;
     }
 
     public async Task<Guid> CreateLearningWalkThemeAsync(
@@ -1714,6 +1913,7 @@ public sealed partial class SqlFoundationDataStore(
                    a.intended_impact,
                    a.progress_status,
                    a.parent_action_id,
+                   a.action_theme,
                    COALESCE(
                        r.academic_year_key,
                        CONCAT(
@@ -1806,6 +2006,7 @@ public sealed partial class SqlFoundationDataStore(
                     GetStringOrNull(reader, 15),
                     reader.GetGuid(7),
                     GetStringOrNull(reader, 16),
+                    reader.GetString(47),
                     reader.GetString(8),
                     GetStringOrNull(reader, 9),
                     GetStringOrNull(reader, 17),
@@ -1843,7 +2044,7 @@ public sealed partial class SqlFoundationDataStore(
                     GetStringOrNull(reader, 44),
                     GetStringOrNull(reader, 45),
                     GetGuidOrNull(reader, 46),
-                    reader.GetString(47));
+                    reader.GetString(48));
             },
             cancellationToken);
 
@@ -2647,6 +2848,11 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<Guid> CreateActionAsync(CreateActionRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(request.ActionTheme))
+        {
+            throw new WorkflowValidationException("Enter an action theme.");
+        }
+
         var ownerOptions = await GetActionOwnerOptionsAsync(
             request.SourceRecordId,
             request.SubjectStaffId,
@@ -2671,6 +2877,24 @@ public sealed partial class SqlFoundationDataStore(
 
         try
         {
+            var sourceFormType = request.SourceFormType?.Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(sourceFormType) && request.SourceRecordId.HasValue)
+            {
+                await using var sourceTypeCommand = new SqlCommand(
+                    "SELECT record_type FROM core.records WHERE id = @sourceRecordId AND archived_at IS NULL;",
+                    connection,
+                    (SqlTransaction)transaction);
+                sourceTypeCommand.Parameters.AddWithValue("@sourceRecordId", request.SourceRecordId.Value);
+                sourceFormType = await sourceTypeCommand.ExecuteScalarAsync(cancellationToken) as string;
+            }
+            sourceFormType ??= "standalone";
+            await ValidateActionThemeAsync(
+                connection,
+                (SqlTransaction)transaction,
+                sourceFormType,
+                request.ActionTheme,
+                cancellationToken);
+
             if (string.Equals(sourceSubRecordType, "liv_visit", StringComparison.OrdinalIgnoreCase)
                 && sourceSubRecordId.HasValue)
             {
@@ -2773,6 +2997,7 @@ public sealed partial class SqlFoundationDataStore(
                     source_sub_record_key,
                     subject_staff_id,
                     owner_staff_id,
+                    action_theme,
                     title,
                     detail,
                     priority_lookup_value_id,
@@ -2797,6 +3022,7 @@ public sealed partial class SqlFoundationDataStore(
                     @sourceSubRecordKey,
                     @subjectStaffId,
                     @ownerStaffId,
+                    @actionTheme,
                     @title,
                     @detail,
                     @priorityLookupValueId,
@@ -2824,12 +3050,13 @@ public sealed partial class SqlFoundationDataStore(
                 (SqlTransaction)transaction))
             {
                 command.Parameters.AddWithValue("@sourceRecordId", ToDbValue(request.SourceRecordId));
-                command.Parameters.AddWithValue("@sourceFormType", ToDbValue(request.SourceFormType));
+                command.Parameters.AddWithValue("@sourceFormType", sourceFormType);
                 command.Parameters.AddWithValue("@sourceSubRecordType", ToDbValue(sourceSubRecordType));
                 command.Parameters.AddWithValue("@sourceSubRecordId", ToDbValue(sourceSubRecordId));
                 command.Parameters.AddWithValue("@sourceSubRecordKey", ToDbValue(request.SourceSubRecordKey));
                 command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(request.SubjectStaffId));
                 command.Parameters.AddWithValue("@ownerStaffId", request.OwnerStaffId);
+                command.Parameters.AddWithValue("@actionTheme", request.ActionTheme.Trim());
                 command.Parameters.AddWithValue("@title", request.Title);
                 command.Parameters.AddWithValue("@detail", ToDbValue(request.Detail));
                 command.Parameters.AddWithValue("@priorityLookupValueId", ToDbValue(request.PriorityLookupValueId));
@@ -2917,8 +3144,9 @@ public sealed partial class SqlFoundationDataStore(
             ActionEditInfo? action;
             await using (var command = new SqlCommand(
                 """
-                SELECT a.owner_staff_id, a.title, a.detail, a.due_date, a.completed_date, a.completion_note, a.source_record_id,
-                       status_value.value_key, source_record.owner_staff_id, a.visibility_setting, a.cancellation_comments
+                SELECT a.owner_staff_id, a.action_theme, a.title, a.detail, a.due_date, a.completed_date, a.completion_note, a.source_record_id,
+                       status_value.value_key, source_record.owner_staff_id, a.visibility_setting, a.cancellation_comments,
+                       COALESCE(a.source_form_type, source_record.record_type, 'standalone')
                 FROM quality.actions a
                 LEFT JOIN core.lookup_values status_value ON status_value.id = a.status_lookup_value_id
                 LEFT JOIN core.records source_record ON source_record.id = a.source_record_id
@@ -2937,15 +3165,17 @@ public sealed partial class SqlFoundationDataStore(
                 action = new ActionEditInfo(
                     reader.GetGuid(0),
                     reader.GetString(1),
-                    GetStringOrNull(reader, 2),
-                    GetDateOnlyOrNull(reader, 3),
+                    reader.GetString(2),
+                    GetStringOrNull(reader, 3),
                     GetDateOnlyOrNull(reader, 4),
-                    GetStringOrNull(reader, 5),
-                    GetGuidOrNull(reader, 6),
-                    GetStringOrNull(reader, 7),
-                    GetGuidOrNull(reader, 8),
-                    reader.GetString(9),
-                    GetStringOrNull(reader, 10));
+                    GetDateOnlyOrNull(reader, 5),
+                    GetStringOrNull(reader, 6),
+                    GetGuidOrNull(reader, 7),
+                    GetStringOrNull(reader, 8),
+                    GetGuidOrNull(reader, 9),
+                    reader.GetString(10),
+                    GetStringOrNull(reader, 11),
+                    reader.GetString(12));
             }
 
             // The assigned owner can progress or complete their own action;
@@ -2978,6 +3208,16 @@ public sealed partial class SqlFoundationDataStore(
                 return FormSubmissionUpdateResult.Forbidden;
             }
 
+            var newActionTheme = canManage && !string.IsNullOrWhiteSpace(request.ActionTheme) ? request.ActionTheme!.Trim() : action.ActionTheme;
+            if (!newActionTheme.Equals(action.ActionTheme, StringComparison.OrdinalIgnoreCase))
+            {
+                await ValidateActionThemeAsync(
+                    connection,
+                    (SqlTransaction)transaction,
+                    action.SourceFormType,
+                    newActionTheme,
+                    cancellationToken);
+            }
             var newTitle = canManage && !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : action.Title;
             var newDetail = canManage ? (request.Detail ?? action.Detail) : action.Detail;
             var newDueDate = canManage ? (request.DueDate ?? action.DueDate) : action.DueDate;
@@ -2989,7 +3229,8 @@ public sealed partial class SqlFoundationDataStore(
             await using (var command = new SqlCommand(
                 """
                 UPDATE quality.actions
-                SET title = @title,
+                SET action_theme = @actionTheme,
+                    title = @title,
                     detail = @detail,
                     owner_staff_id = @ownerStaffId,
                     due_date = @dueDate,
@@ -3045,6 +3286,7 @@ public sealed partial class SqlFoundationDataStore(
                 (SqlTransaction)transaction))
             {
                 command.Parameters.AddWithValue("@actionId", actionId);
+                command.Parameters.AddWithValue("@actionTheme", newActionTheme);
                 command.Parameters.AddWithValue("@title", newTitle);
                 command.Parameters.AddWithValue("@detail", ToDbValue(newDetail));
                 command.Parameters.AddWithValue("@ownerStaffId", newOwnerStaffId);
@@ -3400,8 +3642,8 @@ public sealed partial class SqlFoundationDataStore(
                           )
                     )
                 )
-                THEN 1 ELSE 0 END);
-            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
+                THEN 1 ELSE 0 END)
+            OPTION (MAXDOP 1, RECOMPILE);
             """,
             command =>
             {
@@ -6938,6 +7180,10 @@ public sealed partial class SqlFoundationDataStore(
             {
                 throw new WorkflowValidationException("Every action needs a description.");
             }
+            if (string.IsNullOrWhiteSpace(action.ActionTheme))
+            {
+                throw new WorkflowValidationException("Every action needs an action theme.");
+            }
             if (action.OwnerStaffId == Guid.Empty)
             {
                 throw new WorkflowValidationException("Every action needs an owner.");
@@ -6946,6 +7192,12 @@ public sealed partial class SqlFoundationDataStore(
             {
                 throw new WorkflowValidationException("Every action needs an implementation or review date.");
             }
+            await ValidateActionThemeAsync(
+                connection,
+                (SqlTransaction)transaction,
+                recordType,
+                action.ActionTheme,
+                cancellationToken);
 
             var actionId = Guid.NewGuid();
             await using (var command = new SqlCommand(
@@ -6959,6 +7211,7 @@ public sealed partial class SqlFoundationDataStore(
                     source_form_type,
                     subject_staff_id,
                     owner_staff_id,
+                    action_theme,
                     title,
                     status_lookup_value_id,
                     due_date,
@@ -6973,6 +7226,7 @@ public sealed partial class SqlFoundationDataStore(
                     @recordType,
                     staff.id,
                     staff.id,
+                    @actionTheme,
                     @title,
                     (
                         SELECT TOP (1) value.id
@@ -7016,6 +7270,7 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@recordId", recordId);
                 command.Parameters.AddWithValue("@recordType", recordType);
                 command.Parameters.AddWithValue("@ownerStaffId", action.OwnerStaffId);
+                command.Parameters.AddWithValue("@actionTheme", action.ActionTheme.Trim());
                 command.Parameters.AddWithValue("@title", action.Title.Trim());
                 command.Parameters.AddWithValue("@dueDate", action.DueDate.ToDateTime(TimeOnly.MinValue));
                 command.Parameters.AddWithValue("@createdByUserAccountId", ToDbValue(currentUser.UserAccountId));
@@ -7138,6 +7393,64 @@ public sealed partial class SqlFoundationDataStore(
             && string.IsNullOrWhiteSpace(valuesByFieldKey.GetValueOrDefault("additional_focus_other")))
         {
             throw new WorkflowValidationException("Describe the other focus or context before submitting the Learning Walk.");
+        }
+
+        if (valuesByFieldKey.ContainsKey("focus_rubric_ratings"))
+        {
+            ValidateLearningWalkFocusRatings(
+                themeIds,
+                valuesByFieldKey.GetValueOrDefault("focus_rubric_ratings"),
+                requireCompleteRatings: requireOtherContext);
+        }
+    }
+
+    private static void ValidateLearningWalkFocusRatings(
+        IReadOnlyList<Guid> selectedThemeIds,
+        string? value,
+        bool requireCompleteRatings)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            if (requireCompleteRatings)
+            {
+                throw new WorkflowValidationException("Choose a practice level for every selected Learning Walk focus.");
+            }
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new JsonException();
+            }
+
+            var selectedIds = selectedThemeIds.ToHashSet();
+            var ratedIds = new HashSet<Guid>();
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (!item.TryGetProperty("focusId", out var focusIdProperty)
+                    || focusIdProperty.ValueKind != JsonValueKind.String
+                    || !Guid.TryParse(focusIdProperty.GetString(), out var focusId)
+                    || !item.TryGetProperty("score", out var scoreProperty)
+                    || !scoreProperty.TryGetInt32(out var score)
+                    || score is < 1 or > 5
+                    || !selectedIds.Contains(focusId)
+                    || !ratedIds.Add(focusId))
+                {
+                    throw new JsonException();
+                }
+            }
+
+            if (requireCompleteRatings && !selectedIds.SetEquals(ratedIds))
+            {
+                throw new WorkflowValidationException("Choose a practice level for every selected Learning Walk focus.");
+            }
+        }
+        catch (JsonException)
+        {
+            throw new WorkflowValidationException("The Learning Walk focus ratings are invalid.");
         }
     }
 
@@ -7950,6 +8263,55 @@ public sealed partial class SqlFoundationDataStore(
             : throw new WorkflowValidationException("Select a valid action visibility setting.");
     }
 
+    private static string? ActionThemeLookupKeyForSource(string? sourceFormType) =>
+        sourceFormType?.Trim().ToLowerInvariant() switch
+        {
+            "learning_walk" => "action_theme_learning_walk",
+            "elevate_environment" => "action_theme_elevate_environment",
+            "work_scrutiny" => "action_theme_work_scrutiny",
+            "coaching_mentoring" => "action_theme_coaching_mentoring",
+            "liv" => "action_theme_liv",
+            "probation_observation" => "action_theme_probation_observation",
+            "cpd" or "cpd_event" => "action_theme_cpd",
+            "standalone" => "action_theme_standalone",
+            _ => null
+        };
+
+    private static async Task ValidateActionThemeAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        string sourceFormType,
+        string actionTheme,
+        CancellationToken cancellationToken)
+    {
+        var lookupKey = ActionThemeLookupKeyForSource(sourceFormType);
+        if (lookupKey is null)
+        {
+            return;
+        }
+
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM core.lookup_values value
+            JOIN core.lookup_types type ON type.id = value.lookup_type_id
+            WHERE type.lookup_key = @lookupKey
+              AND type.archived_at IS NULL
+              AND type.is_active = 1
+              AND value.archived_at IS NULL
+              AND value.is_active = 1
+              AND value.display_name = @actionTheme;
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@lookupKey", lookupKey);
+        command.Parameters.AddWithValue("@actionTheme", actionTheme.Trim());
+        if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) == 0)
+        {
+            throw new WorkflowValidationException("Select an action theme from the configured list for this process.");
+        }
+    }
+
     private async Task<SqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var connection = new SqlConnection(_connectionString);
@@ -8046,6 +8408,7 @@ public sealed partial class SqlFoundationDataStore(
         string GroupKey,
         string GroupName,
         int GroupDisplayOrder,
+        bool GroupIsActive,
         Guid? ThemeId,
         string? ThemeName,
         int? ThemeDisplayOrder,
@@ -8161,6 +8524,7 @@ public sealed partial class SqlFoundationDataStore(
 
     private sealed record ActionEditInfo(
         Guid OwnerStaffId,
+        string ActionTheme,
         string Title,
         string? Detail,
         DateOnly? DueDate,
@@ -8170,7 +8534,8 @@ public sealed partial class SqlFoundationDataStore(
         string? StatusKey,
         Guid? SourceOwnerStaffId,
         string VisibilitySetting,
-        string? CancellationComments);
+        string? CancellationComments,
+        string SourceFormType);
 
     private sealed record ActionExtensionEditInfo(
         Guid OwnerStaffId,

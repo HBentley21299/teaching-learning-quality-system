@@ -522,7 +522,7 @@ export function StaffProfilePanel({
             </div>
             {detail.elevatePractice?.status === "submitted" ? (
               <Button icon={ExternalLink} onClick={() => {
-                setActiveElevateRecordId(detail.elevatePractice?.recordId ?? "");
+                setActiveElevateRecordId("");
                 setShowElevateResult(true);
               }} variant="primary">View report</Button>
             ) : null}

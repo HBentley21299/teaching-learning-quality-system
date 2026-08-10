@@ -59,6 +59,9 @@ public static class FoundationEndpoints
         api.MapGet("/lookups", async (SqlFoundationDataStore store, CancellationToken cancellationToken) =>
             Results.Ok(await store.GetLookupsAsync(cancellationToken)));
 
+        api.MapGet("/action-themes/{sourceFormType}", async (string sourceFormType, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+            Results.Ok(await store.GetActionThemeValuesAsync(sourceFormType, cancellationToken)));
+
         api.MapGet("/admin/lookups/{lookupKey}/values", async (string lookupKey, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
@@ -268,6 +271,57 @@ public static class FoundationEndpoints
             }
 
             return Results.Ok(await store.GetLearningWalkThemeGroupsAsync(includeInactive: true, cancellationToken));
+        });
+
+        api.MapPost("/admin/learning-walk/theme-groups", async (SaveLearningWalkThemeGroupRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage)
+                && !AdministrationAccessPolicy.CanManageLists(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Name))
+            {
+                return Results.BadRequest(new { Message = "A theme area name is required." });
+            }
+
+            var id = await store.CreateLearningWalkThemeGroupAsync(request, currentUser, cancellationToken);
+            return Results.Created($"/api/v1/admin/learning-walk/theme-groups/{id}", new { Id = id });
+        });
+
+        api.MapPut("/admin/learning-walk/theme-groups/{id:guid}", async (Guid id, SaveLearningWalkThemeGroupRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage)
+                && !AdministrationAccessPolicy.CanManageLists(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Name))
+            {
+                return Results.BadRequest(new { Message = "A theme area name is required." });
+            }
+
+            return await store.UpdateLearningWalkThemeGroupAsync(id, request, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        api.MapPost("/admin/learning-walk/theme-groups/{id:guid}/status", async (Guid id, SetLearningWalkThemeStatusRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.FormsManage)
+                && !AdministrationAccessPolicy.CanManageLists(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            return await store.SetLearningWalkThemeGroupStatusAsync(id, request.IsActive, currentUser, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
         });
 
         api.MapPost("/admin/learning-walk/themes", async (SaveLearningWalkThemeRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -516,6 +570,10 @@ public static class FoundationEndpoints
             if (string.IsNullOrWhiteSpace(request.Title))
             {
                 return Results.BadRequest(new { Message = "An action title is required." });
+            }
+            if (string.IsNullOrWhiteSpace(request.ActionTheme))
+            {
+                return Results.BadRequest(new { Message = "An action theme is required." });
             }
 
             var id = await store.CreateActionAsync(request, currentUser, cancellationToken);
@@ -986,7 +1044,38 @@ public static class FoundationEndpoints
             }
 
             var result = await store.GetLatestElevatePracticeWorkspaceAsync(staffId, cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
+            var canEditSubmitted = currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                || (currentUser.HasPermission(PermissionKeys.ReportsViewScoped)
+                    && await store.IsStaffProfileInScopeAsync(staffId, currentUser, cancellationToken));
+            return result is null ? Results.NotFound() : Results.Ok(result with { CanEdit = canEditSubmitted });
+        });
+
+        api.MapPut("/elevate-practice/staff/{staffId:guid}/records/{assessmentId:guid}", async (
+            Guid staffId,
+            Guid assessmentId,
+            AdminSaveElevatePracticeAssessmentRequest request,
+            ClaimsPrincipal principal,
+            SqlFoundationDataStore store,
+            CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var canEdit = currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                || (currentUser.HasPermission(PermissionKeys.ReportsViewScoped)
+                    && await store.IsStaffProfileInScopeAsync(staffId, currentUser, cancellationToken));
+            if (!canEdit)
+            {
+                return Results.Forbid();
+            }
+
+            var current = await store.GetAdminElevatePracticeWorkspaceAsync(assessmentId, cancellationToken);
+            if (current is null || current.StaffId != staffId)
+            {
+                return Results.NotFound();
+            }
+
+            var submittedRequest = request with { Status = "submitted" };
+            var result = await store.AdminSaveElevatePracticeAssessmentAsync(assessmentId, submittedRequest, currentUser, cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result with { CanEdit = true });
         });
 
         api.MapGet("/elevate-practice/records/{recordId:guid}", async (Guid recordId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -1525,6 +1614,7 @@ public sealed record ActionSummary(
     string? SubjectStaffName,
     Guid OwnerStaffId,
     string? OwnerStaffName,
+    string ActionTheme,
     string Title,
     string? Detail,
     string? StatusKey,
@@ -1666,6 +1756,7 @@ public sealed record CreateActionRequest(
     Guid? SourceRecordId,
     Guid? SubjectStaffId,
     Guid OwnerStaffId,
+    string ActionTheme,
     string Title,
     string? Detail,
     Guid? PriorityLookupValueId,
@@ -1686,7 +1777,8 @@ public sealed record FormFieldSummary(Guid Id, string FieldKey, string Label, st
 public sealed record LearningWalkThemeMappingSummary(Guid Id, Guid FacultyOrgUnitId, Guid ChildOrgUnitId, string AgreedTheme);
 public sealed record UpdateLearningWalkThemeMappingRequest(Guid FacultyOrgUnitId, Guid ChildOrgUnitId, string AgreedTheme);
 public sealed record LearningWalkThemeSummary(Guid Id, Guid ThemeGroupId, string Name, int DisplayOrder, bool IsOther, bool IsActive);
-public sealed record LearningWalkThemeGroupSummary(Guid Id, string GroupKey, string Name, int DisplayOrder, IReadOnlyList<LearningWalkThemeSummary> Themes);
+public sealed record LearningWalkThemeGroupSummary(Guid Id, string GroupKey, string Name, int DisplayOrder, bool IsActive, IReadOnlyList<LearningWalkThemeSummary> Themes);
+public sealed record SaveLearningWalkThemeGroupRequest(string Name);
 public sealed record SaveLearningWalkThemeRequest(Guid ThemeGroupId, string Name);
 public sealed record SetLearningWalkThemeStatusRequest(bool IsActive);
 public sealed record ReorderLearningWalkThemesRequest(Guid ThemeGroupId, IReadOnlyList<Guid> ThemeIds);
@@ -1702,10 +1794,11 @@ public sealed record SubmitFormRequest(
     bool SaveAsDraft = false,
     IReadOnlyList<Guid>? CourseIds = null,
     IReadOnlyList<SubmitLinkedActionRequest>? Actions = null);
-public sealed record SubmitLinkedActionRequest(string Title, Guid OwnerStaffId, DateOnly DueDate);
+public sealed record SubmitLinkedActionRequest(string ActionTheme, string Title, Guid OwnerStaffId, DateOnly DueDate);
 public sealed record SubmittedFormResult(Guid SubmissionId, Guid RecordId);
 public sealed record ChangeSubmissionStatusRequest(string Action);
 public sealed record UpdateActionRequest(
+    string? ActionTheme,
     string? Title,
     string? Detail,
     DateOnly? DueDate,
@@ -1811,8 +1904,6 @@ public sealed record LivCaseSummary(
     string? EliPrimaryFocus = null,
     string? EliDesiredOutcome = null,
     IReadOnlyList<LivCycleSummary>? Cycles = null,
-    string? EliNoticePreferenceKey = null,
-    string? EliNoticePreference = null,
     string? EliPreferredVisitMonth = null,
     string? EliSecondaryFocusKey = null,
     string? EliSecondaryFocus = null,
@@ -1835,8 +1926,6 @@ public sealed record LivStaffContextSummary(
     string? DesiredOutcome,
     Guid? ExistingLivRecordId,
     Guid? ExistingLivSourceRecordId,
-    string? NoticePreferenceKey = null,
-    string? NoticePreference = null,
     string? PreferredVisitMonth = null,
     string? SecondaryFocusKey = null,
     string? SecondaryFocus = null,

@@ -242,18 +242,15 @@ public sealed partial class SqlFoundationDataStore
             reader => new ElevatePracticeSupportOptionSummary(reader.GetString(0), reader.GetString(1)),
             cancellationToken);
 
-        var noticeOptions = await GetElevateLookupOptionsAsync("liv_notice_preference", cancellationToken);
         var focusOptions = await GetElevateLookupOptionsAsync("liv_focus_area", cancellationToken);
         IReadOnlyList<ElevateLivInformationSummary> livInformationRows = assessment is null
             ? []
             : await QueryAsync(
                 """
-                SELECT notice.value_key,
-                       CONVERT(nvarchar(7), information.preferred_visit_month, 126),
+                SELECT CONVERT(nvarchar(7), information.preferred_visit_month, 126),
                        primary_focus.value_key, secondary_focus.value_key,
                        information.secondary_focus_other, information.desired_outcome
                 FROM quality.elevate_practice_liv_information information
-                LEFT JOIN core.lookup_values notice ON notice.id = information.notice_preference_lookup_value_id
                 LEFT JOIN core.lookup_values primary_focus ON primary_focus.id = information.primary_focus_lookup_value_id
                 LEFT JOIN core.lookup_values secondary_focus ON secondary_focus.id = information.secondary_focus_lookup_value_id
                 WHERE information.assessment_id = @assessmentId;
@@ -262,11 +259,10 @@ public sealed partial class SqlFoundationDataStore
                 reader => new ElevateLivInformationSummary(
                     GetStringOrNull(reader, 0), GetStringOrNull(reader, 1),
                     GetStringOrNull(reader, 2), GetStringOrNull(reader, 3),
-                    GetStringOrNull(reader, 4), GetStringOrNull(reader, 5),
-                    noticeOptions, focusOptions),
+                    GetStringOrNull(reader, 4), focusOptions),
                 cancellationToken);
         var livInformation = livInformationRows.FirstOrDefault()
-            ?? new ElevateLivInformationSummary(null, null, null, null, null, null, noticeOptions, focusOptions);
+            ?? new ElevateLivInformationSummary(null, null, null, null, null, focusOptions);
 
         var scoredAreas = areas
             .Select(area => new { Area = area, AverageScore = areaAverageScores[area.AreaKey] })
@@ -595,13 +591,13 @@ public sealed partial class SqlFoundationDataStore
                     await using (var actionCommand = new SqlCommand(
                         """
                         INSERT INTO quality.actions (
-                            source_record_id, source_form_type, subject_staff_id, owner_staff_id, title, detail,
+                            source_record_id, source_form_type, subject_staff_id, owner_staff_id, action_theme, title, detail,
                             priority_lookup_value_id, status_lookup_value_id, published_to_staff,
                             visibility_setting, created_by_user_account_id
                         )
                         OUTPUT inserted.id
                         VALUES (
-                            @recordId, 'elevate_practice', @staffId, @staffId, @title, @detail,
+                            @recordId, 'elevate_practice', @staffId, @staffId, @actionTheme, @title, @detail,
                             (SELECT TOP (1) lv.id FROM core.lookup_values lv JOIN core.lookup_types lt ON lt.id = lv.lookup_type_id WHERE lt.lookup_key = 'priority' AND lv.value_key = 'medium'),
                             (SELECT TOP (1) lv.id FROM core.lookup_values lv JOIN core.lookup_types lt ON lt.id = lv.lookup_type_id WHERE lt.lookup_key = 'action_status' AND lv.value_key = 'open'),
                             1, 'staff_and_management', @userAccountId
@@ -612,6 +608,7 @@ public sealed partial class SqlFoundationDataStore
                     {
                         actionCommand.Parameters.AddWithValue("@recordId", recordId);
                         actionCommand.Parameters.AddWithValue("@staffId", staffId);
+                        actionCommand.Parameters.AddWithValue("@actionTheme", area.Name);
                         actionCommand.Parameters.AddWithValue("@title", $"Elevate Learning and Innovation: {area.Name}");
                         actionCommand.Parameters.AddWithValue("@detail", detail);
                         actionCommand.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));

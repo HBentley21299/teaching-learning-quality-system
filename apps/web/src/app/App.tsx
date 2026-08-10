@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CalendarDays, LogOut, Moon, PanelLeftClose, Search, Sun } from "lucide-react";
+import { AlertTriangle, CalendarDays, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun } from "lucide-react";
 import { navigationItems, type AppRoute } from "./navigation";
 import {
   actionPath,
@@ -67,6 +67,9 @@ export function App() {
   const [pendingRecordId, setPendingRecordId] = useState(initialLocation.pendingRecordId);
   const [adminTab, setAdminTab] = useState(initialLocation.adminTab);
   const [linkError, setLinkError] = useState("");
+  const [isNavigationCollapsed, setIsNavigationCollapsed] = useState(
+    () => localStorage.getItem("ielevate-navigation-collapsed") === "true"
+  );
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const stored = localStorage.getItem("ielevate-theme");
     if (stored === "light" || stored === "dark") return stored;
@@ -77,6 +80,10 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("ielevate-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("ielevate-navigation-collapsed", String(isNavigationCollapsed));
+  }, [isNavigationCollapsed]);
 
   const applyLocation = useCallback((location: AppLocation) => {
     setRoute(location.route);
@@ -329,15 +336,21 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar" aria-label="Main navigation">
+    <div className={isNavigationCollapsed ? "app-shell app-shell-nav-collapsed" : "app-shell"}>
+      <aside className="sidebar" aria-label="Main navigation" id="main-navigation">
         <div className="brand-block">
           <img
-            className="brand-logo"
+            className="brand-logo brand-logo-full"
             src={theme === "dark"
               ? "/system-assets/i-elevate-logo-transparent.png"
               : "/system-assets/i-elevate-logo-ink.png"}
             alt="i-Elevate"
+          />
+          <img
+            aria-hidden="true"
+            className="brand-logo-mark"
+            src="/system-assets/eli/eli-favicon-64.png"
+            alt=""
           />
         </div>
         <nav>
@@ -361,8 +374,17 @@ export function App() {
 
       <main className="main">
         <header className="topbar">
-          <button className="icon-button" title="Collapse navigation" type="button">
-            <PanelLeftClose size={18} aria-hidden="true" />
+          <button
+            aria-controls="main-navigation"
+            aria-expanded={!isNavigationCollapsed}
+            className="icon-button navigation-collapse-button"
+            onClick={() => setIsNavigationCollapsed((current) => !current)}
+            title={isNavigationCollapsed ? "Expand navigation" : "Collapse navigation"}
+            type="button"
+          >
+            {isNavigationCollapsed
+              ? <PanelLeftOpen size={18} aria-hidden="true" />
+              : <PanelLeftClose size={18} aria-hidden="true" />}
           </button>
           <div className="topbar-search">
             <Search size={16} aria-hidden="true" />

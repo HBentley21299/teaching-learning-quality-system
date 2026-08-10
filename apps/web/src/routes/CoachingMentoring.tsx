@@ -14,6 +14,7 @@ import {
   UsersRound
 } from "lucide-react";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
+import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -604,13 +605,10 @@ function WordingRubric({ label, options, value, onChange }: { label: string; opt
 function ActionFields({ action, coachName, index, staffName, onChange }: { action: CoachingSessionAction; coachName: string; index: number; staffName: string; onChange: (changes: Partial<CoachingSessionAction>) => void }) {
   return (
     <div className="coaching-action-fields">
-      <label className="entry-field coaching-action-description"><span>Action description</span><textarea onChange={(event) => onChange({ actionText: event.target.value })} rows={2} value={action.actionText} /></label>
-      <label className="entry-field"><span>Action owner</span><select onChange={(event) => onChange({ ownerType: event.target.value as CoachingSessionAction["ownerType"] })} value={action.ownerType}><option value="staff">{staffName}</option><option value="coach">{coachName}</option><option value="joint">Staff member and coach</option></select></label>
-      <label className="entry-field"><span>Due date</span><input onChange={(event) => onChange({ dueDate: event.target.value || undefined })} type="date" value={action.dueDate ?? ""} /></label>
-      <label className="entry-field"><span>Review date</span><input onChange={(event) => onChange({ reviewDate: event.target.value || undefined })} type="date" value={action.reviewDate ?? ""} /></label>
-      <label className="entry-field coaching-action-evidence"><span>Intended evidence of completion or success</span><textarea onChange={(event) => onChange({ intendedEvidence: event.target.value })} rows={2} value={action.intendedEvidence ?? ""} /></label>
-      <label className="entry-field coaching-action-impact"><span>Intended impact</span><textarea onChange={(event) => onChange({ intendedImpact: event.target.value })} rows={2} value={action.intendedImpact ?? ""} /></label>
-      <label className="entry-field"><span>Status</span><select aria-label={`Status for action ${index + 1}`} onChange={(event) => onChange({ status: event.target.value as CoachingActionStatus })} value={action.status}>{actionStatuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label className="entry-field coaching-action-theme"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`coaching-action-theme-${action.id ?? index}`} onChange={(actionTheme) => onChange({ actionTheme })} sourceFormType="coaching_mentoring" value={action.actionTheme} /></label>
+      <label className="entry-field coaching-action-description"><span>Action {index + 1} <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => onChange({ actionText: event.target.value })} rows={3} value={action.actionText} /></label>
+      <label className="entry-field"><span>Owner <strong>Required</strong></span><select onChange={(event) => onChange({ ownerType: event.target.value as CoachingSessionAction["ownerType"] })} value={action.ownerType}><option value="staff">{staffName}</option><option value="coach">{coachName}</option><option value="joint">Staff member and coach</option></select></label>
+      <label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => onChange({ dueDate: event.target.value || undefined })} type="date" value={action.dueDate ?? ""} /></label>
     </div>
   );
 }
@@ -630,12 +628,13 @@ function emptyCoachingForm(staffId: string): SaveCoachingSessionRequest {
 }
 
 function emptyAction(actionOrder: number): CoachingSessionAction {
-  return { actionOrder, actionText: "", ownerType: "staff", status: "not_started" };
+  return { actionOrder, actionTheme: "", actionText: "", ownerType: "staff", status: "not_started" };
 }
 
 function revisedActionFrom(action: CoachingPreviousActionSummary): CoachingSessionAction {
   return {
     actionOrder: 0,
+    actionTheme: action.actionTheme,
     actionText: action.title,
     ownerType: action.ownerType,
     dueDate: action.dueDate,
@@ -689,7 +688,7 @@ function validateCompletion(form: SaveCoachingSessionRequest, previousActions: C
     ...form.actionReviews.filter((review) => review.reviewOutcome === "revised" && review.revisedAction).map((review) => review.revisedAction!)
   ].filter((action) => action.actionText.trim());
   if (!form.closeCycle && actions.length === 0) return "Add at least one action, or formally close the coaching cycle.";
-  if (actions.some((action) => !action.actionText.trim() || !action.dueDate || !action.reviewDate || !action.intendedEvidence?.trim() || !action.intendedImpact?.trim())) return "Complete every field for each agreed action.";
+  if (actions.some((action) => !action.actionTheme.trim() || !action.actionText.trim() || !action.dueDate)) return "Every agreed action needs an action theme, action, owner and implementation date.";
   return "";
 }
 

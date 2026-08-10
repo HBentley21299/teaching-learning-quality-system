@@ -355,7 +355,7 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
     {
         SetCell(tables, 2, 1, 0, data.StaffName);
         SetCell(tables, 2, 1, 1, data.ReviewerName ?? data.CreatedBy);
-        SetCell(tables, 2, 3, 0, Value(data, "Notice preference"));
+        SetCell(tables, 2, 3, 0, "");
         SetCell(tables, 2, 3, 1, DateValue(Value(data, "Preferred month"), "MMMM yyyy"));
         SetCell(tables, 2, 5, 0, Value(data, "Primary focus"));
         SetCell(tables, 2, 5, 1, Value(data, "Secondary focus"));

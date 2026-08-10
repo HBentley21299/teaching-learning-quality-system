@@ -113,6 +113,7 @@ export const mockActions: ActionSummary[] = [
     id: "ACT-001",
     ownerStaffId: "40000000-0000-0000-0000-000000000002",
     subjectStaffId: "40000000-0000-0000-0000-000000000002",
+    actionTheme: "Impact evidence",
     title: "Upload winter impact evidence",
     detail: "Add implementation notes and at least one supporting file.",
     sourceFormType: "standalone",
@@ -128,6 +129,7 @@ export const mockActions: ActionSummary[] = [
   {
     id: "ACT-002",
     ownerStaffId: "40000000-0000-0000-0000-000000000001",
+    actionTheme: "Work scrutiny",
     title: "Review work scrutiny findings",
     sourceFormType: "work_scrutiny",
     dueDate: "2026-10-04",
