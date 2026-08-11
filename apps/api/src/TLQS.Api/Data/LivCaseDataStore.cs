@@ -342,6 +342,8 @@ public sealed partial class SqlFoundationDataStore
 
         try
         {
+            _ = await ReadActiveLookupValueIdAsync(
+                connection, transaction, "liv_course_level", request.CourseLevel, false, cancellationToken);
             var metadata = await GetLivCaseMetadataAsync(connection, transaction, livId, cancellationToken);
             if (metadata is null || !CanEditLivCase(metadata, currentUser))
             {
@@ -405,6 +407,8 @@ public sealed partial class SqlFoundationDataStore
 
         try
         {
+            _ = await ReadActiveLookupValueIdAsync(
+                connection, transaction, "liv_course_level", request.CourseLevel, false, cancellationToken);
             var metadata = await GetLivCaseMetadataAsync(connection, transaction, livId, cancellationToken);
             if (metadata is null)
             {
@@ -756,7 +760,7 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@visitDate", ToDbValue(request.VisitDate));
         command.Parameters.AddWithValue("@visitTime", ToDbValue(request.VisitTime));
         command.Parameters.AddWithValue("@courseName", ToDbValue(request.CourseName));
-        command.Parameters.AddWithValue("@courseGroup", ToDbValue(request.CourseGroup));
+        command.Parameters.AddWithValue("@courseGroup", DBNull.Value);
         command.Parameters.AddWithValue("@courseLevel", ToDbValue(request.CourseLevel));
         command.Parameters.AddWithValue("@reflectionNotes", ToDbValue(request.ReflectionNotes));
         command.Parameters.AddWithValue("@findings", ToDbValue(request.Findings));

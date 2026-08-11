@@ -405,6 +405,18 @@ function LivStageEditor({ stage, record, cycle, configuration, actions, previous
       setMessage("Select the delivery area for this LIV visit.");
       return;
     }
+    if (!visit.courseLevel) {
+      setMessage("Select the course level for this LIV visit.");
+      return;
+    }
+    if (!visit.ratings?.length) {
+      setMessage("Select at least one focus area for the LIV visit detail.");
+      return;
+    }
+    if (visit.ratings.some((rating) => !rating.descriptorId && !rating.isNotApplicable)) {
+      setMessage("Choose one practice outcome for every selected LIV focus area.");
+      return;
+    }
     setIsSaving(true);
     const result = await api.updateLivVisit(record.id, stage.visitId, visit);
     const stageResult = result.ok
@@ -415,10 +427,11 @@ function LivStageEditor({ stage, record, cycle, configuration, actions, previous
       setMessage(result.message ?? stageResult?.message ?? "The LIV visit could not be saved.");
       return;
     }
-    await onChanged("LIV visit and rubric saved.");
+    await onChanged("LIV visit detail saved.");
   }
 
   if (stage.stageType === "actions") return <LivActions actions={actions} cycle={cycle} ownerOptions={ownerOptions} record={record} staff={staff} onChanged={onChanged} />;
+  if (stage.stageType === "visit" && !record.canViewSensitive) return null;
 
   return (
     <div className="liv-v2-stage-form">
@@ -435,7 +448,7 @@ function LivStageEditor({ stage, record, cycle, configuration, actions, previous
           <OpportunityChecklist disabled={!canEdit} options={configuration.developmentOpportunities} selected={form.developmentOpportunityKeys} onChange={(keys) => setForm({ ...form, developmentOpportunityKeys: keys })} />
         </div>
       ) : stage.stageType === "visit" ? (
-        <VisitEditor configuration={configuration} disabled={!canEdit} record={record} value={visit} onChange={setVisit} />
+        <VisitEditor completed={stage.stageStatus === "completed"} configuration={configuration} disabled={!canEdit} record={record} value={visit} onChange={setVisit} />
       ) : stage.stageType === "post_reflection" ? (
         <div className="form-stack">
           {cycle.isFollowUp && previousActions.length ? <PreviousActions actions={previousActions} onChanged={onChanged} /> : null}
@@ -455,7 +468,8 @@ function LivStageEditor({ stage, record, cycle, configuration, actions, previous
   );
 }
 
-function VisitEditor({ configuration, disabled, record, value, onChange }: {
+function VisitEditor({ completed, configuration, disabled, record, value, onChange }: {
+  completed: boolean;
   configuration: LivConfiguration;
   disabled: boolean;
   record: LivRecordSummary;
@@ -466,27 +480,43 @@ function VisitEditor({ configuration, disabled, record, value, onChange }: {
   function updateRating(focusKey: string, descriptorId?: string, isNotApplicable = false) {
     onChange({ ...value, ratings: [...ratings.filter((rating) => rating.focusKey !== focusKey), { focusKey, descriptorId, isNotApplicable }] });
   }
+  function toggleFocus(focusKey: string) {
+    const selected = ratings.some((rating) => rating.focusKey === focusKey);
+    onChange({
+      ...value,
+      ratings: selected
+        ? ratings.filter((rating) => rating.focusKey !== focusKey)
+        : [...ratings, { focusKey, isNotApplicable: false }]
+    });
+  }
+  const selectedFocusAreas = configuration.focusAreas
+    .filter((focus) => !focus.isOther && ratings.some((rating) => rating.focusKey === focus.key));
   return (
-    <div className="form-stack">
-      <div className="form-grid form-grid-three">
-        <label className="entry-field"><span>Delivery area</span><select disabled={disabled} onChange={(event) => onChange({ ...value, deliveryAreaKey: event.target.value })} value={value.deliveryAreaKey ?? ""}><option value="">Select delivery area</option>{configuration.deliveryAreas.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
-        <label className="entry-field"><span>Visit date</span><input disabled={disabled} onChange={(event) => onChange({ ...value, visitDate: event.target.value })} type="date" value={value.visitDate ?? ""} /></label>
-        <label className="entry-field"><span>Visit time</span><input disabled={disabled} onChange={(event) => onChange({ ...value, visitTime: event.target.value })} type="time" value={value.visitTime ?? ""} /></label>
-        <label className="entry-field"><span>Course name</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseName: event.target.value })} value={value.courseName ?? ""} /></label>
-        <label className="entry-field"><span>Course group</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseGroup: event.target.value })} value={value.courseGroup ?? ""} /></label>
-        <label className="entry-field"><span>Course level</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseLevel: event.target.value })} value={value.courseLevel ?? ""} /></label>
+    <details className="liv-visit-detail" open={!completed}>
+      <summary><span>Detail</span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <div className="form-stack liv-visit-detail-body">
+        <div className="form-grid form-grid-three">
+          <label className="entry-field"><span>Delivery area</span><select disabled={disabled} onChange={(event) => onChange({ ...value, deliveryAreaKey: event.target.value })} value={value.deliveryAreaKey ?? ""}><option value="">Select delivery area</option>{configuration.deliveryAreas.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
+          <label className="entry-field"><span>Visit date</span><input disabled={disabled} onChange={(event) => onChange({ ...value, visitDate: event.target.value })} type="date" value={value.visitDate ?? ""} /></label>
+          <label className="entry-field"><span>Visit time</span><input disabled={disabled} onChange={(event) => onChange({ ...value, visitTime: event.target.value })} type="time" value={value.visitTime ?? ""} /></label>
+          <label className="entry-field"><span>Course name</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseName: event.target.value })} value={value.courseName ?? ""} /></label>
+          <label className="entry-field"><span>Course level</span><select disabled={disabled} onChange={(event) => onChange({ ...value, courseLevel: event.target.value })} value={value.courseLevel ?? ""}><option value="">Select course level</option>{configuration.courseLevels.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
+        </div>
+        <label className="entry-field"><span>LIV notes</span><textarea disabled={disabled} onChange={(event) => onChange({ ...value, reflectionNotes: event.target.value })} rows={7} value={value.reflectionNotes ?? ""} /></label>
+        <fieldset className="support-options liv-visit-focus-selector">
+          <legend>Focus areas</legend>
+          {configuration.focusAreas.filter((focus) => !focus.isOther).map((focus) => <label key={focus.key}><input checked={ratings.some((rating) => rating.focusKey === focus.key)} disabled={disabled} onChange={() => toggleFocus(focus.key)} type="checkbox" /><span>{focus.name}</span></label>)}
+        </fieldset>
+        <section className="coaching-wording-rubric learning-walk-focus-rubrics liv-visit-selected-rubrics">
+          <div className="panel-heading"><h3>LIV visit detail</h3><span>Choose one practice outcome for each selected area</span></div>
+          {selectedFocusAreas.length ? <div className="learning-walk-focus-rubric-list">{selectedFocusAreas.map((focus) => {
+            const selected = ratings.find((rating) => rating.focusKey === focus.key);
+            return <fieldset className="learning-walk-focus-rubric" key={focus.key}><legend>{focus.name}</legend><div>{configuration.rubric.filter((descriptor) => descriptor.isActive).map((descriptor) => <button aria-pressed={selected?.descriptorId === descriptor.id} className={selected?.descriptorId === descriptor.id ? "is-selected" : ""} disabled={disabled} key={descriptor.id} onClick={() => updateRating(focus.key, descriptor.id)} title={descriptor.meaning} type="button"><i aria-hidden="true" style={{ background: descriptor.colorHex }} /><span><strong>{descriptor.descriptor}</strong></span></button>)}</div></fieldset>;
+          })}</div> : <div className="empty-row">Select one or more focus areas to show their detail.</div>}
+        </section>
+        <details><summary>Restricted Elevate practitioner information</summary><div className="detail-grid"><div><span>Elevate Practitioner</span><strong>{record.isElevatePractitioner ? "Yes" : "-"}</strong></div><div><span>Areas of practice</span><strong>{[...record.areaOfPracticeKeys, record.areaOfPracticeOther].filter(Boolean).join(", ") || "Not recorded"}</strong></div></div></details>
       </div>
-      <label className="entry-field"><span>Discussion, observations and key points</span><textarea disabled={disabled} onChange={(event) => onChange({ ...value, reflectionNotes: event.target.value })} rows={7} value={value.reflectionNotes ?? ""} /></label>
-      <section className="liv-v2-mini-rubric">
-        <div className="panel-heading"><h3>LIV visit rubric</h3><span>Choose one practice outcome per focus</span></div>
-        {configuration.focusAreas.filter((focus) => !focus.isOther).map((focus) => {
-          const selected = ratings.find((rating) => rating.focusKey === focus.key);
-          const canUseNa = focus.key === "positive_start" || focus.key === "digital";
-          return <fieldset key={focus.key}><legend>{focus.name}</legend><div>{configuration.rubric.filter((descriptor) => descriptor.isActive).map((descriptor) => <button className={selected?.descriptorId === descriptor.id && !selected.isNotApplicable ? "is-selected" : ""} disabled={disabled} key={descriptor.id} onClick={() => updateRating(focus.key, descriptor.id)} title={descriptor.meaning} type="button"><i style={{ background: descriptor.colorHex }} /><span>{descriptor.descriptor}</span></button>)}{canUseNa ? <button className={selected?.isNotApplicable ? "is-selected" : ""} disabled={disabled} onClick={() => updateRating(focus.key, undefined, true)} type="button"><span>Not applicable</span></button> : null}</div></fieldset>;
-        })}
-      </section>
-      {record.canViewSensitive ? <details><summary>Restricted Elevate practitioner information</summary><div className="detail-grid"><div><span>Elevate Practitioner</span><strong>{record.isElevatePractitioner === undefined ? "Not recorded" : record.isElevatePractitioner ? "Yes" : "No"}</strong></div><div><span>Areas of practice</span><strong>{[...record.areaOfPracticeKeys, record.areaOfPracticeOther].filter(Boolean).join(", ") || "Not recorded"}</strong></div></div></details> : null}
-    </div>
+    </details>
   );
 }
 
@@ -560,7 +590,7 @@ function EliContext({ context }: { context: LivStaffContext }) {
 
 function emptyStageRequest(stageType: LivStage["stageType"]): SaveLivStageRequest { return { stageType, developmentOpportunityKeys: [], stageStatus: "in_progress" }; }
 function stageToRequest(stage: LivStage): SaveLivStageRequest { return { stageType: stage.stageType, contextText: stage.contextText, aimsText: stage.aimsText, learnerActivityText: stage.learnerActivityText, reflectionText: stage.reflectionText, intendedFollowUpDate: stage.intendedFollowUpDate, distanceImpactText: stage.distanceImpactText, developmentOpportunityKeys: stage.developmentOpportunityKeys, stageStatus: stage.stageStatus }; }
-function visitToRequest(visit?: LivVisitSummary): SaveLivVisitRequest { return { visitDate: visit?.visitDate, visitTime: visit?.visitTime, courseName: visit?.courseName, courseGroup: visit?.courseGroup, courseLevel: visit?.courseLevel, reflectionNotes: visit?.reflectionNotes, findings: visit?.findings, deliveryAreaKey: visit?.deliveryAreaKey, ratings: visit?.ratings.map((rating) => ({ focusKey: rating.focusKey, descriptorId: rating.descriptorId, isNotApplicable: rating.isNotApplicable })) ?? [] }; }
+function visitToRequest(visit?: LivVisitSummary): SaveLivVisitRequest { return { visitDate: visit?.visitDate, visitTime: visit?.visitTime, courseName: visit?.courseName, courseLevel: visit?.courseLevel, reflectionNotes: visit?.reflectionNotes, findings: visit?.findings, deliveryAreaKey: visit?.deliveryAreaKey, ratings: visit?.ratings.map((rating) => ({ focusKey: rating.focusKey, descriptorId: rating.descriptorId, isNotApplicable: rating.isNotApplicable })) ?? [] }; }
 function latestVisit(record: LivRecordSummary) { return record.visits.at(-1); }
 function eliSecondaryFocus(record: LivRecordSummary) { return record.eliSecondaryFocusKey === "other" ? record.eliSecondaryFocusOther || "Other" : record.eliSecondaryFocus ?? "Not provided"; }
 function formatPreferredMonth(value?: string) { if (!value) return "Not provided"; const [year, month] = value.split("-").map(Number); return new Date(year, month - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" }); }

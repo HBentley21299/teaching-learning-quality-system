@@ -1,27 +1,44 @@
 import {
+  Activity,
   AlertTriangle,
+  BarChart3,
   BookOpenCheck,
   Building2,
   ClipboardCheck,
+  ClipboardList,
+  Download,
   GraduationCap,
   MessagesSquare,
   RefreshCw,
   RotateCcw,
   Search,
+  ShieldCheck,
+  Sparkles,
+  Target,
   UsersRound
 } from "lucide-react";
 import type { LucideProps } from "lucide-react";
-import { useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { CollapsibleSection } from "../components/CollapsibleSection";
 import { DataTable } from "../components/DataTable";
-import { KpiStrip } from "../components/KpiStrip";
 import { Button } from "../design-system/Button";
-import type { ActionSummary, CurrentUser, OrgUnitSummary, ProcessDashboardRecordSummary } from "../services/types";
+import { api } from "../services/api";
+import type {
+  ActionSummary,
+  CurrentUser,
+  DashboardConfiguration,
+  DashboardDimensionFact,
+  DashboardProcessConfiguration,
+  OrgUnitSummary,
+  ProcessDashboardRecordSummary
+} from "../services/types";
 
-type ProcessKey = ProcessDashboardRecordSummary["processKey"];
+type DashboardProcessKey = DashboardProcessConfiguration["processKey"];
+type RecordProcessKey = ProcessDashboardRecordSummary["processKey"];
 type SortKey = "date_desc" | "date_asc" | "title" | "area" | "status";
 
 type DashboardProps = {
+  academicYear: string;
   actions: ActionSummary[];
   orgUnits: OrgUnitSummary[];
   processRecords: ProcessDashboardRecordSummary[];
@@ -30,951 +47,527 @@ type DashboardProps = {
 };
 
 type ProcessDefinition = {
-  key: ProcessKey;
+  key: DashboardProcessKey;
   label: string;
+  shortLabel: string;
   singular: string;
   icon: ComponentType<LucideProps>;
-  tone: "teal" | "blue" | "green" | "amber";
+  tone: "teal" | "blue" | "green" | "amber" | "violet";
 };
 
-type CpdAreaMetric = {
-  parentCode: string;
-  areaCode: string;
-  participants: number;
-  credits: number;
-  learningMinutes: number;
-};
+type ChartDatum = { label: string; value: number; secondary?: string };
 
 const processDefinitions: ProcessDefinition[] = [
-  { key: "learning_walk", label: "Learning Walks", singular: "Learning Walk", icon: BookOpenCheck, tone: "teal" },
-  { key: "work_scrutiny", label: "Work Scrutiny", singular: "Work Scrutiny", icon: ClipboardCheck, tone: "blue" },
-  { key: "cpd_event", label: "CPD", singular: "CPD event", icon: GraduationCap, tone: "green" },
-  { key: "elevate_environment", label: "Elevate Environments", singular: "environment check", icon: Building2, tone: "amber" },
-  { key: "coaching_session", label: "Coaching & Mentoring", singular: "session", icon: MessagesSquare, tone: "teal" },
-  { key: "probation_case", label: "Probationary Observations", singular: "probation case", icon: UsersRound, tone: "blue" }
+  { key: "overview", label: "Executive overview", shortLabel: "Overview", singular: "record", icon: Sparkles, tone: "teal" },
+  { key: "learning_walk", label: "Learning Walks", shortLabel: "Learning Walks", singular: "learning walk", icon: BookOpenCheck, tone: "teal" },
+  { key: "liv", label: "LIV", shortLabel: "LIV", singular: "LIV record", icon: Target, tone: "blue" },
+  { key: "eli", label: "Elevate Learning and Innovation", shortLabel: "ELI", singular: "assessment", icon: Sparkles, tone: "violet" },
+  { key: "probation_case", label: "Probationary Observations", shortLabel: "Probation", singular: "probation case", icon: UsersRound, tone: "blue" },
+  { key: "elevate_environment", label: "Elevate Environments", shortLabel: "Environments", singular: "environment audit", icon: Building2, tone: "amber" },
+  { key: "coaching_session", label: "Coaching and Mentoring", shortLabel: "Coaching", singular: "session", icon: MessagesSquare, tone: "teal" },
+  { key: "work_scrutiny", label: "Work Scrutiny", shortLabel: "Scrutiny", singular: "scrutiny", icon: ClipboardCheck, tone: "blue" },
+  { key: "cpd_event", label: "CPD", shortLabel: "CPD", singular: "CPD event", icon: GraduationCap, tone: "green" },
+  { key: "actions", label: "Actions", shortLabel: "Actions", singular: "action", icon: ClipboardList, tone: "amber" }
 ];
 
-export function Dashboard({ actions, orgUnits, processRecords, user, onRefresh }: DashboardProps) {
-  const [selectedProcess, setSelectedProcess] = useState<ProcessKey>("learning_walk");
+const fallbackConfiguration: DashboardConfiguration = {
+  schemaVersion: 2,
+  processes: processDefinitions.map((definition, index) => ({
+    processKey: definition.key,
+    label: definition.label,
+    isEnabled: true,
+    displayOrder: (index + 1) * 10,
+    primaryVisual: ["overview", "learning_walk", "liv", "eli", "probation_case", "elevate_environment", "work_scrutiny", "cpd_event"].includes(definition.key) ? "bar" : "donut",
+    showTrend: true,
+    showAreaComparison: true,
+    showOutcomes: true,
+    showActions: !["eli", "cpd_event"].includes(definition.key)
+  }))
+};
+
+export function Dashboard({ academicYear, actions, orgUnits, processRecords, user, onRefresh }: DashboardProps) {
+  const [configuration, setConfiguration] = useState<DashboardConfiguration>(fallbackConfiguration);
+  const [facts, setFacts] = useState<DashboardDimensionFact[]>([]);
+  const [selectedProcess, setSelectedProcess] = useState<DashboardProcessKey>("overview");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [areaFilter, setAreaFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [themeFilter, setThemeFilter] = useState("all");
+  const [dimensionFilter, setDimensionFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date_desc");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [intelligenceError, setIntelligenceError] = useState("");
 
   const canViewReports = user.permissions.includes("reports.view_all") || user.permissions.includes("reports.view_scoped");
   const canViewAll = user.permissions.includes("reports.view_all");
 
-  const areaOptions = useMemo(
-    () => selectedProcess === "elevate_environment"
-      ? collectAreaOptions(processRecords.filter((record) => record.processKey === "elevate_environment"))
-      : collectDashboardAreaOptions(orgUnits, processRecords, user),
-    [orgUnits, processRecords, selectedProcess, user]
-  );
+  useEffect(() => {
+    if (!canViewReports) return;
+    let cancelled = false;
+    Promise.all([api.dashboardConfiguration(), api.dashboardDimensions()])
+      .then(([nextConfiguration, nextFacts]) => {
+        if (cancelled) return;
+        setConfiguration(nextConfiguration);
+        setFacts(nextFacts.filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
+        setIntelligenceError("");
+      })
+      .catch(() => {
+        if (!cancelled) setIntelligenceError("Detailed outcome analysis is temporarily unavailable. Operational reporting remains visible.");
+      });
+    return () => { cancelled = true; };
+  }, [academicYear, canViewReports]);
 
-  const globallyFilteredRecords = useMemo(
-    () =>
-      processRecords.filter((record) => {
-        const recordDate = getRecordDate(record);
-        if (startDate && recordDate < startDate) {
-          return false;
-        }
-        if (endDate && recordDate > endDate) {
-          return false;
-        }
-        return recordMatchesArea(record, areaFilter);
-      }),
-    [areaFilter, endDate, processRecords, startDate]
-  );
+  const configuredProcesses = useMemo(() => configuration.processes
+    .filter((item) => item.isEnabled)
+    .sort((left, right) => left.displayOrder - right.displayOrder), [configuration]);
 
-  const processRecordsInScope = useMemo(
-    () => globallyFilteredRecords.filter((record) => record.processKey === selectedProcess),
-    [globallyFilteredRecords, selectedProcess]
-  );
+  useEffect(() => {
+    if (!configuredProcesses.some((item) => item.processKey === selectedProcess)) {
+      setSelectedProcess(configuredProcesses[0]?.processKey ?? "overview");
+    }
+  }, [configuredProcesses, selectedProcess]);
 
-  const statusOptions = useMemo(
-    () => uniqueValues(processRecordsInScope.map((record) => record.status)),
-    [processRecordsInScope]
-  );
-  const themeOptions = useMemo(
-    () => uniqueValues(processRecordsInScope.flatMap((record) => splitValues(record.theme))),
-    [processRecordsInScope]
-  );
+  const selectedDefinition = getProcessDefinition(selectedProcess);
+  const selectedConfiguration = configuration.processes.find((item) => item.processKey === selectedProcess)
+    ?? fallbackConfiguration.processes.find((item) => item.processKey === selectedProcess)!;
+  const areaOptions = useMemo(() => collectDashboardAreaOptions(orgUnits, processRecords, user), [orgUnits, processRecords, user]);
 
-  const analysisRecords = useMemo(
-    () =>
-      processRecordsInScope.filter((record) => {
-        const matchesStatus = statusFilter === "all" || record.status === statusFilter;
-        const matchesTheme = themeFilter === "all" || splitValues(record.theme).includes(themeFilter);
-        return matchesStatus && matchesTheme;
-      }),
-    [processRecordsInScope, statusFilter, themeFilter]
-  );
+  const dateAndAreaRecords = useMemo(() => processRecords.filter((record) => {
+    const recordDate = getRecordDate(record);
+    return (!startDate || recordDate >= startDate)
+      && (!endDate || recordDate <= endDate)
+      && recordMatchesArea(record, areaFilter);
+  }), [areaFilter, endDate, processRecords, startDate]);
+
+  const dateAndAreaFacts = useMemo(() => facts.filter((fact) =>
+    (!startDate || fact.occurredOn >= startDate)
+    && (!endDate || fact.occurredOn <= endDate)
+    && (areaFilter === "all" || fact.areaCode === areaFilter || fact.parentAreaCode === areaFilter)
+  ), [areaFilter, endDate, facts, startDate]);
+
+  const processRecordsInScope = selectedProcess === "overview"
+    ? dateAndAreaRecords
+    : selectedProcess === "actions" ? [] : dateAndAreaRecords.filter((record) => record.processKey === selectedProcess);
+  const processFactsInScope = selectedProcess === "overview"
+    ? dateAndAreaFacts
+    : dateAndAreaFacts.filter((fact) => fact.processKey === selectedProcess);
+  const processActionsInScope = useMemo(() => actions.filter((action) => {
+    const actionDate = (action.createdAt || action.dueDate || "").slice(0, 10);
+    const matchesDate = (!startDate || actionDate >= startDate) && (!endDate || actionDate <= endDate);
+    const matchesArea = areaFilter === "all"
+      || action.facultyCode === areaFilter
+      || action.teamCode === areaFilter;
+    const matchesProcess = selectedProcess === "overview" || selectedProcess === "actions" || actionMatchesProcess(action, selectedProcess);
+    return matchesDate && matchesArea && matchesProcess;
+  }), [actions, areaFilter, endDate, selectedProcess, startDate]);
+
+  const statusOptions = useMemo(() => selectedProcess === "actions"
+    ? ["open", "overdue", "complete"]
+    : uniqueValues(processRecordsInScope.map((record) => record.status)), [processRecordsInScope, selectedProcess]);
+  const dimensionOptions = useMemo(() => uniqueValues([
+    ...processFactsInScope.map((fact) => fact.seriesLabel),
+    ...processRecordsInScope.flatMap((record) => splitValues(record.theme)),
+    ...(selectedProcess === "overview" || selectedProcess === "actions" ? processActionsInScope.map((action) => action.actionTheme) : [])
+  ]), [processActionsInScope, processFactsInScope, processRecordsInScope, selectedProcess]);
+
+  const dimensionRecordIds = useMemo(() => new Set(
+    dimensionFilter === "all" ? [] : processFactsInScope.filter((fact) => fact.seriesLabel === dimensionFilter).map((fact) => fact.sourceRecordId)
+  ), [dimensionFilter, processFactsInScope]);
+
+  const analysisRecords = useMemo(() => processRecordsInScope.filter((record) => {
+    const matchesStatus = statusFilter === "all" || record.status === statusFilter;
+    const matchesDimension = dimensionFilter === "all"
+      || splitValues(record.theme).includes(dimensionFilter)
+      || dimensionRecordIds.has(record.id);
+    return matchesStatus && matchesDimension;
+  }), [dimensionFilter, dimensionRecordIds, processRecordsInScope, statusFilter]);
+
+  const analysisActions = useMemo(() => processActionsInScope.filter((action) => {
+    const state = action.completedDate ? "complete" : action.isOverdue ? "overdue" : "open";
+    return (statusFilter === "all" || statusFilter === state)
+      && (dimensionFilter === "all" || action.actionTheme === dimensionFilter);
+  }), [dimensionFilter, processActionsInScope, statusFilter]);
 
   const visibleRecords = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase();
-    const filtered = analysisRecords.filter((record) => {
-      if (!query) {
-        return true;
-      }
-
-      return [
-        record.title,
-        record.areaCode,
-        record.parentAreaCode,
-        record.ownerDisplayName,
-        record.subjectDisplayName,
-        record.theme,
-        record.detail,
-        record.status
-      ].some((value) => value?.toLocaleLowerCase().includes(query));
-    });
-
-    return [...filtered].sort((left, right) => compareRecords(left, right, sortKey));
+    return [...analysisRecords].filter((record) => !query || [
+      record.title, record.areaCode, record.parentAreaCode, record.ownerDisplayName,
+      record.subjectDisplayName, record.theme, record.detail, record.status
+    ].some((value) => value?.toLocaleLowerCase().includes(query)))
+      .sort((left, right) => compareRecords(left, right, sortKey));
   }, [analysisRecords, searchTerm, sortKey]);
 
-  const selectedDefinition = processDefinitions.find((definition) => definition.key === selectedProcess)!;
-  const selectedRecordIds = useMemo(
-    () => new Set(analysisRecords.flatMap((record) => [record.id, record.relatedRecordId].filter((value): value is string => Boolean(value)))),
-    [analysisRecords]
-  );
-  const linkedActions = useMemo(
-    () => actions.filter((action) => action.sourceRecordId && selectedRecordIds.has(action.sourceRecordId)),
-    [actions, selectedRecordIds]
-  );
-  const openActions = linkedActions.filter((action) => !action.completedDate);
-  const overdueActions = openActions.filter((action) => action.isOverdue);
-  const attentionActions = [...openActions]
-    .filter((action) => action.isOverdue || isDueSoon(action.dueDate))
-    .sort((left, right) => (left.dueDate ?? "9999-12-31").localeCompare(right.dueDate ?? "9999-12-31"))
-    .slice(0, 6);
-  const actionStatusData = [
-    { label: "Open", value: openActions.length },
-    { label: "Complete", value: linkedActions.filter((action) => Boolean(action.completedDate)).length },
-    { label: "Overdue", value: overdueActions.length }
-  ];
+  const visibleActions = useMemo(() => {
+    const query = searchTerm.trim().toLocaleLowerCase();
+    return analysisActions.filter((action) => !query || [
+      action.title, action.actionTheme, action.ownerStaffName, action.subjectStaffName,
+      action.facultyCode, action.teamCode
+    ].some((value) => value?.toLocaleLowerCase().includes(query)));
+  }, [analysisActions, searchTerm]);
 
-  const trendData = useMemo(() => buildMonthlyTrend(analysisRecords), [analysisRecords]);
-  const areaData = useMemo(
-    () => buildAreaBreakdown(analysisRecords, selectedProcess, areaFilter),
-    [analysisRecords, areaFilter, selectedProcess]
-  );
-  const themeData = useMemo(() => buildThemeBreakdown(analysisRecords), [analysisRecords]);
-  const kpis = buildKpis(selectedProcess, analysisRecords, linkedActions, areaFilter);
+  const filteredFacts = useMemo(() => processFactsInScope.filter((fact) =>
+    dimensionFilter === "all" || fact.seriesLabel === dimensionFilter
+  ), [dimensionFilter, processFactsInScope]);
+
+  const trendData = buildMonthlyTrend(selectedProcess === "actions"
+    ? visibleActions.map((action) => ({ date: action.createdAt.slice(0, 10) }))
+    : analysisRecords.map((record) => ({ date: getRecordDate(record) })));
+  const areaData = selectedProcess === "actions"
+    ? buildActionAreaBreakdown(visibleActions)
+    : buildAreaBreakdown(analysisRecords);
+  const outcomeData = buildOutcomeBreakdown(filteredFacts);
+  const dimensionData = buildDimensionBreakdown(filteredFacts, analysisRecords);
+  const processData = buildProcessBreakdown(dateAndAreaRecords, processActionsInScope);
+  const openActions = analysisActions.filter((action) => !action.completedDate);
+  const overdueActions = openActions.filter((action) => action.isOverdue);
 
   async function refresh() {
     setIsRefreshing(true);
     await onRefresh();
-    setIsRefreshing(false);
-  }
-
-  function selectProcess(processKey: ProcessKey) {
-    setSelectedProcess(processKey);
-    setStatusFilter("all");
-    setThemeFilter("all");
-    setSearchTerm("");
-    setSortKey("date_desc");
+    try {
+      const [nextConfiguration, nextFacts] = await Promise.all([api.dashboardConfiguration(), api.dashboardDimensions()]);
+      setConfiguration(nextConfiguration);
+      setFacts(nextFacts.filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
+      setIntelligenceError("");
+    } catch {
+      setIntelligenceError("Detailed outcome analysis is temporarily unavailable. Operational reporting remains visible.");
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   function clearFilters() {
-    setStartDate("");
-    setEndDate("");
-    setAreaFilter("all");
-    setStatusFilter("all");
-    setThemeFilter("all");
-    setSearchTerm("");
-    setSortKey("date_desc");
+    setStartDate(""); setEndDate(""); setAreaFilter("all"); setStatusFilter("all");
+    setDimensionFilter("all"); setSearchTerm(""); setSortKey("date_desc");
+  }
+
+  function selectProcess(processKey: DashboardProcessKey) {
+    setSelectedProcess(processKey); setStatusFilter("all"); setDimensionFilter("all");
+    setSearchTerm(""); setSortKey("date_desc");
+  }
+
+  function exportCurrentView() {
+    if (selectedProcess === "actions") {
+      downloadCsv(`i-elevate-actions-${academicYear.replace("/", "-")}.csv`, [
+        ["Theme", "Action", "Owner", "Area", "Due", "Status"],
+        ...visibleActions.map((action) => [
+          action.actionTheme, action.title, action.ownerStaffName ?? "Unassigned",
+          action.teamCode ?? action.facultyCode ?? "Unassigned", action.dueDate ?? "",
+          action.completedDate ? "Complete" : action.isOverdue ? "Overdue" : "Open"
+        ])
+      ]);
+      return;
+    }
+    downloadCsv(`i-elevate-${selectedProcess}-${academicYear.replace("/", "-")}.csv`, [
+      ["Process", "Record", "Date", "Area", "Status", "Theme or focus", "Measure"],
+      ...visibleRecords.map((record) => [
+        getProcessDefinition(record.processKey).label, record.title, getRecordDate(record), formatArea(record),
+        formatLabel(record.status), splitValues(record.theme).join(", "), formatRecordMeasure(record)
+      ])
+    ]);
   }
 
   if (!canViewReports) {
-    return (
-      <div className="route-stack">
-        <div className="route-header">
-          <div>
-            <p className="eyebrow">i-Elevate</p>
-            <h1>Dashboard</h1>
-          </div>
-        </div>
-        <section className="panel dashboard-access-panel">
-          <AlertTriangle size={20} aria-hidden="true" />
-          <div>
-            <h2>Reporting access is not assigned</h2>
-            <p>Your actions and staff profile remain available from the main navigation.</p>
-          </div>
-        </section>
-      </div>
-    );
+    return <div className="route-stack"><div className="route-header"><div><p className="eyebrow">Leadership intelligence</p><h1>Dashboard</h1></div></div><section className="panel dashboard-access-panel"><AlertTriangle size={20} aria-hidden="true" /><div><h2>Reporting access is not assigned</h2><p>Your actions and staff profile remain available from the main navigation.</p></div></section></div>;
   }
 
   return (
-    <div className="route-stack dashboard-route">
-      <div className="route-header">
+    <div className="route-stack intelligence-dashboard">
+      <header className="intelligence-header">
         <div>
-          <p className="eyebrow">i-Elevate</p>
-          <h1>{canViewAll ? "Whole organisation dashboard" : "Quality dashboard"}</h1>
-          <span className="dashboard-scope-label">
-            {canViewAll ? "Whole organisation" : formatScopeLabel(user)}
-          </span>
+          <p className="eyebrow">Leadership intelligence · {academicYear}</p>
+          <h1>{canViewAll ? "Whole organisation performance" : "Quality performance"}</h1>
+          <p>Quality, professional development and delivery assurance across {canViewAll ? "the college" : formatScopeLabel(user)}.</p>
         </div>
-        <Button disabled={isRefreshing} icon={RefreshCw} onClick={() => void refresh()}>
-          Refresh
-        </Button>
-      </div>
+        <div className="intelligence-header-actions">
+          <span className="intelligence-data-state"><i />Permission-scoped live data</span>
+          <Button icon={Download} onClick={exportCurrentView} variant="secondary">Export view</Button>
+          <Button disabled={isRefreshing} icon={RefreshCw} onClick={() => void refresh()}>{isRefreshing ? "Refreshing" : "Refresh"}</Button>
+        </div>
+      </header>
 
-      <section className="process-tile-grid" aria-label="Quality process dashboards">
-        {processDefinitions.map((definition) => {
+      {intelligenceError ? <div className="intelligence-warning"><AlertTriangle size={16} />{intelligenceError}</div> : null}
+
+      <nav className="intelligence-process-nav" aria-label="Dashboard views">
+        {configuredProcesses.map((item) => {
+          const definition = getProcessDefinition(item.processKey);
           const Icon = definition.icon;
-          const records = globallyFilteredRecords.filter((record) => record.processKey === definition.key);
-          const supportingMetric = getTileSupportingMetric(definition.key, records, areaFilter);
-          return (
-            <button
-              aria-pressed={selectedProcess === definition.key}
-              className={`process-tile process-tile-${definition.tone} ${selectedProcess === definition.key ? "process-tile-active" : ""}`}
-              key={definition.key}
-              onClick={() => selectProcess(definition.key)}
-              type="button"
-            >
-              <span className="process-tile-icon"><Icon size={21} aria-hidden="true" /></span>
-              <span className="process-tile-copy">
-                <strong>{definition.label}</strong>
-                <small>{supportingMetric}</small>
-              </span>
-              <span className="process-tile-value">{definition.key === "probation_case" ? records.filter((record) => record.sampleSize > 0).length : records.length}</span>
-            </button>
-          );
+          const count = item.processKey === "overview"
+            ? dateAndAreaRecords.length
+            : item.processKey === "actions" ? processActionsInScope.length : dateAndAreaRecords.filter((record) => record.processKey === item.processKey).length;
+          return <button aria-pressed={selectedProcess === item.processKey} key={item.processKey} onClick={() => selectProcess(item.processKey)} type="button"><Icon size={17} /><span>{item.label || definition.shortLabel}</span><strong>{count}</strong></button>;
         })}
-      </section>
+      </nav>
 
-      <section className="panel dashboard-filter-panel">
-        <div className={`dashboard-filter-grid${selectedProcess === "work_scrutiny" ? " dashboard-filter-grid-work-scrutiny" : ""}`}>
-          <label className="record-filter-field">
-            <span>From</span>
-            <input onChange={(event) => setStartDate(event.target.value)} type="date" value={startDate} />
-          </label>
-          <label className="record-filter-field">
-            <span>To</span>
-            <input onChange={(event) => setEndDate(event.target.value)} type="date" value={endDate} />
-          </label>
-          <label className="record-filter-field">
-            <span>{selectedProcess === "elevate_environment" ? "Building / room" : "Organisation area"}</span>
-            <select onChange={(event) => setAreaFilter(event.target.value)} value={areaFilter}>
-              <option value="all">All permitted areas</option>
-              {areaOptions.map((area) => <option key={area.code} value={area.code}>{area.label}</option>)}
-            </select>
-          </label>
-          <label className="record-filter-field">
-            <span>Status</span>
-            <select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}>
-              <option value="all">All statuses</option>
-              {statusOptions.map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}
-            </select>
-          </label>
-          {selectedProcess !== "work_scrutiny" ? (
-            <label className="record-filter-field">
-              <span>{selectedProcess === "elevate_environment" ? "Overall standard" : selectedProcess === "coaching_session" ? "Focus" : "Theme"}</span>
-              <select onChange={(event) => setThemeFilter(event.target.value)} value={themeFilter}>
-                <option value="all">All {selectedProcess === "elevate_environment" ? "standards" : selectedProcess === "coaching_session" ? "focus areas" : "themes"}</option>
-                {themeOptions.map((theme) => <option key={theme} value={theme}>{theme}</option>)}
-              </select>
-            </label>
-          ) : null}
+      <section className="panel intelligence-filter-panel">
+        <div className="intelligence-filter-heading"><div><span>Current view</span><strong>{selectedConfiguration.label || selectedDefinition.label}</strong></div><small>All visuals and exports use these filters</small></div>
+        <div className="intelligence-filter-grid">
+          <label><span>From</span><input onChange={(event) => setStartDate(event.target.value)} type="date" value={startDate} /></label>
+          <label><span>To</span><input onChange={(event) => setEndDate(event.target.value)} type="date" value={endDate} /></label>
+          <label><span>Organisation area</span><select onChange={(event) => setAreaFilter(event.target.value)} value={areaFilter}><option value="all">All permitted areas</option>{areaOptions.map((area) => <option key={area.code} value={area.code}>{area.label}</option>)}</select></label>
+          <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option>{statusOptions.map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label>
+          <label><span>Theme, focus or area</span><select onChange={(event) => setDimensionFilter(event.target.value)} value={dimensionFilter}><option value="all">All recorded dimensions</option>{dimensionOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
           <Button icon={RotateCcw} onClick={clearFilters} variant="secondary">Reset</Button>
         </div>
       </section>
 
-      <div className="dashboard-section-heading">
-        <div>
-          <h2>{selectedDefinition.label}</h2>
-          <span>{analysisRecords.length} {analysisRecords.length === 1 ? selectedDefinition.singular.toLocaleLowerCase() : "records"} in the current view</span>
-        </div>
-      </div>
-
-      <KpiStrip items={kpis} />
-
-      <div className="dashboard-visual-grid">
-        <ActivityOverTimeChart data={trendData} />
-        <DashboardPie
-          title="Organisation breakdown"
-          subtitle={selectedProcess === "cpd_event" ? "Participants by area" : selectedProcess === "elevate_environment" ? "Checks by building" : "Records by area"}
-          data={areaData}
+      {selectedProcess === "overview" ? (
+        <ExecutiveOverview
+          actions={processActionsInScope}
+          areaData={areaData}
+          facts={dateAndAreaFacts}
+          processData={processData}
+          records={dateAndAreaRecords}
+          trendData={trendData}
         />
-        {selectedProcess === "work_scrutiny" ? (
-          <DashboardBars title="Action status" subtitle="Actions linked to scrutinies" data={actionStatusData} />
-        ) : selectedProcess !== "probation_case" ? (
-          <DashboardPie
-            title={selectedProcess === "elevate_environment" ? "Overall standards" : selectedProcess === "coaching_session" ? "Session focus" : "Themes and focus"}
-            subtitle="Frequency in the current view"
-            data={themeData}
-          />
-        ) : null}
-        <section className="panel dashboard-attention-panel">
-          <div className="panel-heading">
-            <h2>Upcoming Actions</h2>
-            <span>{attentionActions.length} due or overdue</span>
-          </div>
-          {attentionActions.length === 0 ? (
-            <div className="empty-row">No linked actions are due soon or overdue.</div>
-          ) : (
-            <div className="dashboard-attention-list">
-              {attentionActions.map((action) => (
-                <div className="dashboard-attention-row" key={action.id}>
-                  <span className={action.isOverdue ? "attention-state attention-state-overdue" : "attention-state"}>
-                    {action.isOverdue ? "Overdue" : "Due soon"}
-                  </span>
-                  <div>
-                    <strong>{action.title}</strong>
-                    <span>{action.ownerStaffName ?? "Unassigned"} · {formatDate(action.dueDate)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
+      ) : (
+        <ProcessOverview
+          actions={analysisActions}
+          areaData={areaData}
+          configuration={selectedConfiguration}
+          dimensionData={dimensionData}
+          definition={selectedDefinition}
+          outcomeData={outcomeData}
+          records={analysisRecords}
+          trendData={trendData}
+        />
+      )}
 
       <CollapsibleSection
-        className="dashboard-record-panel"
-        count={visibleRecords.length}
+        className="intelligence-record-panel"
+        count={selectedProcess === "actions" ? visibleActions.length : visibleRecords.length}
         defaultExpanded={false}
-        isEmpty={visibleRecords.length === 0}
+        isEmpty={(selectedProcess === "actions" ? visibleActions.length : visibleRecords.length) === 0}
         emptyMessage={`No ${selectedDefinition.label.toLocaleLowerCase()} match the current filters.`}
-        statusSummary={`${visibleRecords.length} shown · search, filter and sort available`}
-        storageKey={`dashboard-records-${selectedProcess}`}
-        title={`${selectedDefinition.label} records`}
+        statusSummary="Search, sort and export-ready detail"
+        storageKey={`leadership-dashboard-records-${selectedProcess}`}
+        title={selectedProcess === "overview" ? "All quality records" : `${selectedDefinition.label} detail`}
       >
-        <div className="dashboard-record-heading">
-          <div className="dashboard-record-tools">
-            <label className="search-box dashboard-record-search">
-              <Search size={16} aria-hidden="true" />
-              <input
-                aria-label={`Search ${selectedDefinition.label}`}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search records"
-                value={searchTerm}
-              />
-            </label>
-            <label className="record-sort-field">
-              <span>Sort by</span>
-              <select onChange={(event) => setSortKey(event.target.value as SortKey)} value={sortKey}>
-                <option value="date_desc">Newest first</option>
-                <option value="date_asc">Oldest first</option>
-                <option value="title">Title</option>
-                <option value="area">Area</option>
-                <option value="status">Status</option>
-              </select>
-            </label>
-          </div>
-        </div>
-        <DataTable
-          rows={visibleRecords}
-          rowKey={(record) => record.id}
-          columns={[
-            { key: "title", header: "Record", render: (record) => <strong>{record.title}</strong> },
-            { key: "date", header: "Date", render: (record) => formatDate(getRecordDate(record)) },
-            { key: "area", header: "Area", render: (record) => formatArea(record) },
-            {
-              key: "focus",
-              header: selectedProcess === "work_scrutiny" ? "Courses sampled" : selectedProcess === "elevate_environment" ? "Overall standard" : selectedProcess === "coaching_session" ? "Focus / session" : "Theme / detail",
-              render: (record) => formatRecordFocus(record)
-            },
-            {
-              key: "measure",
-              header: getMeasureHeader(selectedProcess),
-              render: (record) => selectedProcess === "work_scrutiny"
-                ? actions.filter((action) => action.sourceRecordId === record.id).length
-                : getRecordMeasure(record, selectedProcess, areaFilter)
-            },
-            { key: "status", header: "Status", render: (record) => <span className="status-pill">{formatLabel(record.status)}</span> },
-            {
-              key: "actions",
-              header: "Open actions",
-              render: (record) => actions.filter((action) => action.sourceRecordId === record.id && !action.completedDate).length
-            }
-          ]}
-        />
+        <div className="dashboard-record-heading"><div className="dashboard-record-tools"><label className="search-box dashboard-record-search"><Search size={16} /><input aria-label="Search dashboard detail" onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search current view" value={searchTerm} /></label>{selectedProcess !== "actions" ? <label className="record-sort-field"><span>Sort by</span><select onChange={(event) => setSortKey(event.target.value as SortKey)} value={sortKey}><option value="date_desc">Newest first</option><option value="date_asc">Oldest first</option><option value="title">Title</option><option value="area">Area</option><option value="status">Status</option></select></label> : null}</div></div>
+        {selectedProcess === "actions" ? <ActionDetailTable actions={visibleActions} /> : <RecordDetailTable records={visibleRecords} />}
       </CollapsibleSection>
     </div>
   );
 }
 
-function DashboardBars({ title, subtitle, data }: { title: string; subtitle: string; data: Array<{ label: string; value: number }> }) {
-  const maximum = Math.max(...data.map((item) => item.value), 1);
-  return (
-    <section className="panel dashboard-chart-panel">
-      <div className="panel-heading">
-        <h2>{title}</h2>
-        <span>{subtitle}</span>
-      </div>
-      {data.length === 0 ? (
-        <div className="empty-row">No data in the current view.</div>
-      ) : (
-        <div className="dashboard-bar-list">
-          {data.slice(0, 8).map((item) => (
-            <div className="dashboard-bar-row" key={item.label}>
-              <span title={item.label}>{item.label}</span>
-              <div className="dashboard-bar-track" aria-label={`${item.label}: ${item.value}`}>
-                <div className="dashboard-bar-fill" style={{ width: `${Math.max((item.value / maximum) * 100, 3)}%` }} />
-              </div>
-              <strong>{item.value}</strong>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function ActivityOverTimeChart({ data }: { data: Array<{ label: string; value: number }> }) {
-  const maximum = Math.max(...data.map((item) => item.value), 1);
-  const tickStep = Math.max(1, Math.ceil(maximum / 4));
-  const axisMaximum = tickStep * 4;
-  const ticks = Array.from({ length: 5 }, (_, index) => axisMaximum - index * tickStep);
-  const plotLeft = 66;
-  const plotRight = 624;
-  const plotTop = 16;
-  const plotBottom = 204;
-  const plotHeight = plotBottom - plotTop;
-  const slotWidth = (plotRight - plotLeft) / Math.max(data.length, 1);
-  const barWidth = Math.min(slotWidth * 0.58, 48);
-
-  return (
-    <section className="panel dashboard-chart-panel">
-      <div className="panel-heading">
-        <h2>Activity over time</h2>
-        <span>Events / records per month</span>
-      </div>
-      {data.length === 0 ? (
-        <div className="empty-row">No data in the current view.</div>
-      ) : (
-        <svg
-          aria-label={`Activity over time. ${data.map((item) => `${item.label}: ${item.value}`).join(", ")}.`}
-          className="dashboard-activity-chart"
-          role="img"
-          viewBox="0 0 640 258"
-        >
-          <text className="dashboard-axis-title" textAnchor="middle" transform="translate(16 110) rotate(-90)">Number of events / records</text>
-          {ticks.map((tick, index) => {
-            const y = plotTop + (index / 4) * plotHeight;
-            return (
-              <g key={tick}>
-                <line className="dashboard-chart-gridline" x1={plotLeft} x2={plotRight} y1={y} y2={y} />
-                <text className="dashboard-axis-tick" textAnchor="end" x={plotLeft - 10} y={y + 4}>{tick}</text>
-              </g>
-            );
-          })}
-          <line className="dashboard-chart-axis" x1={plotLeft} x2={plotLeft} y1={plotTop} y2={plotBottom} />
-          <line className="dashboard-chart-axis" x1={plotLeft} x2={plotRight} y1={plotBottom} y2={plotBottom} />
-          {data.map((item, index) => {
-            const height = (item.value / axisMaximum) * plotHeight;
-            const x = plotLeft + index * slotWidth + (slotWidth - barWidth) / 2;
-            const y = plotBottom - height;
-            return (
-              <g key={item.label}>
-                <rect className="dashboard-activity-bar" height={height} rx="4" width={barWidth} x={x} y={y} />
-                <text className="dashboard-bar-value" textAnchor="middle" x={x + barWidth / 2} y={Math.max(y - 6, plotTop + 11)}>{item.value}</text>
-                <text className="dashboard-month-label" textAnchor="middle" x={x + barWidth / 2} y="224">{item.label}</text>
-              </g>
-            );
-          })}
-          <text className="dashboard-axis-title" textAnchor="middle" x={(plotLeft + plotRight) / 2} y="252">Month</text>
-        </svg>
-      )}
-    </section>
-  );
-}
-
-const pieColours = ["#0f766e", "#2563a8", "#d97706", "#6d4aa2", "#228b5a", "#c2416c", "#64748b", "#8a6a20"];
-
-function DashboardPie({ title, subtitle, data }: { title: string; subtitle: string; data: Array<{ label: string; value: number }> }) {
-  const slices = consolidatePieData(data);
-  const total = slices.reduce((sum, item) => sum + item.value, 0);
-  let cumulativePercent = 0;
-  const gradient = slices.map((item, index) => {
-    const start = cumulativePercent;
-    cumulativePercent += total ? (item.value / total) * 100 : 0;
-    return `${pieColours[index % pieColours.length]} ${start}% ${cumulativePercent}%`;
-  }).join(", ");
-
-  return (
-    <section className="panel dashboard-chart-panel">
-      <div className="panel-heading">
-        <h2>{title}</h2>
-        <span>{subtitle}</span>
-      </div>
-      {total === 0 ? (
-        <div className="empty-row">No data in the current view.</div>
-      ) : (
-        <div className="dashboard-pie-layout">
-          <div
-            aria-label={`${title}. ${slices.map((item) => `${item.label}: ${item.value}`).join(", ")}.`}
-            className="dashboard-pie"
-            role="img"
-            style={{ background: `conic-gradient(${gradient})` }}
-          >
-            <span>{total}</span>
-          </div>
-          <div className="dashboard-pie-legend">
-            {slices.map((item, index) => (
-              <div key={item.label}>
-                <i aria-hidden="true" style={{ background: pieColours[index % pieColours.length] }} />
-                <span title={item.label}>{item.label}</span>
-                <strong>{item.value}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function consolidatePieData(data: Array<{ label: string; value: number }>) {
-  const positiveData = data.filter((item) => item.value > 0);
-  if (positiveData.length <= 8) {
-    return positiveData;
-  }
-  return [
-    ...positiveData.slice(0, 7),
-    { label: "Other", value: positiveData.slice(7).reduce((sum, item) => sum + item.value, 0) }
-  ];
-}
-
-function buildKpis(
-  processKey: ProcessKey,
-  records: ProcessDashboardRecordSummary[],
-  actions: ActionSummary[],
-  areaFilter: string
-) {
+function ExecutiveOverview({ records, facts, actions, trendData, areaData, processData }: {
+  records: ProcessDashboardRecordSummary[]; facts: DashboardDimensionFact[]; actions: ActionSummary[];
+  trendData: ChartDatum[]; areaData: ChartDatum[]; processData: ChartDatum[];
+}) {
+  const scoredRecords = records.filter((record) => record.scoreCount > 0);
+  const totalRatings = scoredRecords.reduce((total, record) => total + record.scoreCount, 0);
+  const averageScore = totalRatings > 0 ? scoredRecords.reduce((total, record) => total + record.scoreTotal, 0) / totalRatings : 0;
   const openActions = actions.filter((action) => !action.completedDate);
   const overdueActions = openActions.filter((action) => action.isOverdue);
-  const areaCount = countRecordAreas(records);
+  const completionRate = actions.length ? Math.round((actions.filter((action) => action.completedDate).length / actions.length) * 100) : 0;
+  const areas = new Set(records.flatMap((record) => [record.areaCode, record.parentAreaCode]).filter(Boolean)).size;
+  const peopleReached = records.reduce((total, record) => total + (record.processKey === "cpd_event" ? record.participantCount : record.subjectDisplayName ? 1 : 0), 0);
+  const topFocus = buildFocusFrequency(facts)[0];
 
-  if (processKey === "elevate_environment") {
-    const scoredRecords = records.filter((record) => record.scoreCount > 0);
-    const scoreCount = scoredRecords.reduce((total, record) => total + record.scoreCount, 0);
-    const averageScore = scoreCount
-      ? scoredRecords.reduce((total, record) => total + (getEnvironmentScoreOnFivePointScale(record) * record.scoreCount), 0) / scoreCount
-      : 0;
-    return [
-      { label: "Completed checks", value: records.length, tone: "blue" as const },
-      { label: "Rooms checked", value: new Set(records.map((record) => record.areaCode).filter(Boolean)).size, tone: "green" as const },
-      { label: "Buildings covered", value: new Set(records.map((record) => record.parentAreaCode).filter(Boolean)).size, tone: "blue" as const },
-      { label: "Average score", value: averageScore.toFixed(1), tone: averageScore >= 3 ? "green" as const : "amber" as const },
-      { label: "Priority improvement findings", value: records.reduce((total, record) => total + record.barrierCount, 0), tone: records.some((record) => record.barrierCount > 0) ? "red" as const : "green" as const }
-    ];
-  }
-
-  if (processKey === "cpd_event") {
-    const cpdTotals = records.reduce(
-      (totals, record) => {
-        const metrics = getCpdMetrics(record, areaFilter);
-        totals.participants += metrics.participants;
-        totals.credits += metrics.credits;
-        totals.learningMinutes += metrics.learningMinutes;
-        return totals;
-      },
-      { participants: 0, credits: 0, learningMinutes: 0 }
-    );
-    return [
-      { label: "CPD events", value: records.length, tone: "blue" as const },
-      { label: "Participants", value: cpdTotals.participants, tone: "green" as const },
-      { label: "Learning time", value: formatDurationMinutes(cpdTotals.learningMinutes), tone: "blue" as const },
-      { label: "Open actions", value: openActions.length, tone: "amber" as const },
-      { label: "Overdue actions", value: overdueActions.length, tone: overdueActions.length ? "red" as const : "green" as const }
-    ];
-  }
-
-  if (processKey === "work_scrutiny") {
-    return [
-      { label: "Completed scrutinies", value: records.filter((record) => record.status === "submitted").length, tone: "blue" as const },
-      { label: "Linked actions", value: actions.length, tone: "blue" as const },
-      { label: "Open actions", value: openActions.length, tone: "amber" as const },
-      { label: "Completed actions", value: actions.filter((action) => Boolean(action.completedDate)).length, tone: "green" as const },
-      { label: "Overdue actions", value: overdueActions.length, tone: overdueActions.length ? "red" as const : "green" as const }
-    ];
-  }
-
-  if (processKey === "coaching_session") {
-    return [
-      { label: "Completed sessions", value: records.filter((record) => record.status === "completed").length, tone: "blue" as const },
-      { label: "Staff supported", value: new Set(records.map((record) => record.subjectDisplayName).filter(Boolean)).size, tone: "green" as const },
-      { label: "Agreed actions", value: actions.length, tone: "blue" as const },
-      { label: "Open actions", value: openActions.length, tone: "amber" as const },
-      { label: "Overdue actions", value: overdueActions.length, tone: overdueActions.length ? "red" as const : "green" as const }
-    ];
-  }
-
-  if (processKey === "probation_case") {
-    return [
-      { label: "Completed Observation 1", value: records.filter((record) => record.sampleSize === 1).length, tone: "blue" as const },
-      { label: "Completed Observation 2", value: records.filter((record) => record.sampleSize === 2).length, tone: "amber" as const },
-      { label: "Completed Observation 3", value: records.filter((record) => record.sampleSize === 3).length, tone: "green" as const },
-      { label: "Open actions", value: openActions.length, tone: "amber" as const },
-      { label: "Overdue actions", value: overdueActions.length, tone: overdueActions.length ? "red" as const : "green" as const }
-    ];
-  }
-
-  return [
-    { label: "Learning walks", value: records.length, tone: "blue" as const },
-    { label: "Areas covered", value: areaCount, tone: "blue" as const },
-    { label: "Themes covered", value: new Set(records.flatMap((record) => splitValues(record.theme))).size, tone: "green" as const },
-    { label: "Open actions", value: openActions.length, tone: "amber" as const },
-    { label: "Overdue actions", value: overdueActions.length, tone: overdueActions.length ? "red" as const : "green" as const }
-  ];
+  return <>
+    <section className="intelligence-briefing panel">
+      <div><span className="intelligence-section-label"><ShieldCheck size={15} />Executive briefing</span><h2>{records.length ? `${records.length} quality and development records are in scope.` : "No activity has been recorded for this view yet."}</h2><p>{areas} organisation areas represented · {peopleReached} staff interactions or CPD attendances · {openActions.length} open actions.</p></div>
+      <div className="intelligence-briefing-signal"><span>Most visible focus</span><strong>{topFocus?.label ?? "Insufficient data"}</strong><small>{topFocus ? `${topFocus.value} recorded instances` : "Focus data will appear as forms are completed"}</small></div>
+    </section>
+    <div className="intelligence-kpi-grid">
+      <MetricCard label="Recorded activity" value={records.length} detail={`${processData.filter((item) => item.value > 0).length} active processes`} tone="teal" />
+      <MetricCard label="Areas represented" value={areas} detail="Across the permitted scope" tone="blue" />
+      <MetricCard label="Average quality signal" value={averageScore ? averageScore.toFixed(1) : "—"} detail={averageScore ? "Five-point comparable scale" : "Awaiting scored activity"} tone="violet" />
+      <MetricCard label="Action completion" value={actions.length ? `${completionRate}%` : "—"} detail={`${openActions.length} open · ${overdueActions.length} overdue`} tone={overdueActions.length ? "amber" : "green"} />
+    </div>
+    <div className="intelligence-chart-grid intelligence-chart-grid-wide">
+      <TrendChart title="Activity trajectory" subtitle="Monthly completed and in-progress records" data={trendData} />
+      <RankedBars title="Process mix" subtitle="Volume by quality and development process" data={processData} />
+      <RankedBars title="Organisation coverage" subtitle="Recorded activity across curriculum areas" data={areaData} />
+      <ActionAssurance actions={actions} />
+    </div>
+  </>;
 }
 
-function getTileSupportingMetric(processKey: ProcessKey, records: ProcessDashboardRecordSummary[], areaFilter: string) {
-  if (processKey === "elevate_environment") {
-    const scoreCount = records.reduce((total, record) => total + record.scoreCount, 0);
-    const average = scoreCount
-      ? records.reduce((total, record) => total + (getEnvironmentScoreOnFivePointScale(record) * record.scoreCount), 0) / scoreCount
-      : 0;
-    return scoreCount ? `${average.toFixed(1)} average score` : "No scored checks";
-  }
-  if (processKey === "cpd_event") {
-    const participants = records.reduce((total, record) => total + getCpdMetrics(record, areaFilter).participants, 0);
-    return `${participants} participant${participants === 1 ? "" : "s"}`;
-  }
-  if (processKey === "work_scrutiny") {
-    const completed = records.filter((record) => record.status === "submitted").length;
-    return `${completed} completed`;
-  }
-  if (processKey === "coaching_session") {
-    const completed = records.filter((record) => record.status === "completed").length;
-    return `${completed} completed`;
-  }
-  if (processKey === "probation_case") {
-    const counts = [1, 2, 3].map((number) => records.filter((record) => record.sampleSize === number).length);
-    return `1: ${counts[0]} / 2: ${counts[1]} / 3: ${counts[2]}`;
-  }
-  const areas = countRecordAreas(records);
-  return `${areas} area${areas === 1 ? "" : "s"} covered`;
+function ProcessOverview({ definition, configuration, records, actions, trendData, areaData, outcomeData, dimensionData }: {
+  definition: ProcessDefinition; configuration: DashboardProcessConfiguration; records: ProcessDashboardRecordSummary[];
+  actions: ActionSummary[]; trendData: ChartDatum[]; areaData: ChartDatum[]; outcomeData: ChartDatum[]; dimensionData: ChartDatum[];
+}) {
+  const scored = records.filter((record) => record.scoreCount > 0);
+  const scoreCount = scored.reduce((total, record) => total + record.scoreCount, 0);
+  const average = scoreCount ? scored.reduce((total, record) => total + record.scoreTotal, 0) / scoreCount : 0;
+  const complete = records.filter((record) => ["completed", "submitted", "closed"].includes(record.status)).length;
+  const areas = new Set(records.map((record) => record.areaCode).filter(Boolean)).size;
+  const open = actions.filter((action) => !action.completedDate);
+  const totalItems = definition.key === "actions" ? actions.length : records.length;
+  const completedItems = definition.key === "actions" ? actions.filter((action) => action.completedDate).length : complete;
+  return <>
+    <div className="intelligence-section-title"><div><span>{definition.shortLabel}</span><h2>Performance and assurance</h2></div><p>Structured answers are aggregated; narrative notes are excluded from dashboard analysis.</p></div>
+    <div className="intelligence-kpi-grid">
+      <MetricCard label="Records in view" value={definition.key === "actions" ? actions.length : records.length} detail={`${areas} organisation areas`} tone="teal" />
+      <MetricCard label="Completed" value={completedItems} detail={totalItems ? `${Math.round((completedItems / totalItems) * 100)}% of ${definition.key === "actions" ? "actions" : "records"}` : "No records in view"} tone="green" />
+      <MetricCard label="Average outcome" value={average ? average.toFixed(1) : "—"} detail={average ? "Five-point comparable scale" : "No scored outcomes"} tone="violet" />
+      <MetricCard label="Open actions" value={open.length} detail={`${open.filter((action) => action.isOverdue).length} overdue`} tone={open.some((action) => action.isOverdue) ? "amber" : "blue"} />
+    </div>
+    <div className="intelligence-chart-grid">
+      {configuration.showTrend ? <TrendChart title="Activity over time" subtitle="Monthly records in the current view" data={trendData} /> : null}
+      {configuration.showAreaComparison ? <RankedBars title="Organisation comparison" subtitle="Volume by organisation area" data={areaData} /> : null}
+      {configuration.showOutcomes ? configuration.primaryVisual === "donut"
+        ? <DonutChart title="Recorded outcomes" subtitle="Distribution of configured responses" data={outcomeData.length ? outcomeData : dimensionData} />
+        : <OutcomeProfile data={dimensionData} /> : null}
+      {configuration.showActions ? <ActionAssurance actions={actions} /> : null}
+    </div>
+  </>;
 }
 
-function countRecordAreas(records: ProcessDashboardRecordSummary[]) {
-  const areaCodes = records.flatMap((record) =>
-    record.processKey === "cpd_event"
-      ? parseCpdAreaMetrics(record.participantAreaBreakdown).map((metric) => metric.areaCode)
-      : record.areaCode ? [record.areaCode] : []
-  );
-  return new Set(areaCodes.filter((code) => code !== "Multiple" && code !== "Unassigned")).size;
+function MetricCard({ label, value, detail, tone }: { label: string; value: string | number; detail: string; tone: string }) {
+  return <section className={`intelligence-metric intelligence-metric-${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></section>;
 }
 
-function collectAreaOptions(records: ProcessDashboardRecordSummary[]) {
-  const areas = new Map<string, string>();
-  for (const record of records) {
-    if (record.parentAreaCode) {
-      areas.set(record.parentAreaCode, record.parentAreaCode);
-    }
-    if (record.areaCode && record.areaCode !== "Multiple") {
-      areas.set(record.areaCode, record.areaName ? `${record.areaCode} · ${record.areaName}` : record.areaCode);
-    }
-    for (const metric of parseCpdAreaMetrics(record.participantAreaBreakdown)) {
-      if (metric.parentCode) {
-        areas.set(metric.parentCode, metric.parentCode);
-      }
-      areas.set(metric.areaCode, metric.areaCode);
-    }
-  }
-  return [...areas.entries()]
-    .map(([code, label]) => ({ code, label }))
-    .sort((left, right) => left.code.localeCompare(right.code));
-}
-
-function collectDashboardAreaOptions(
-  orgUnits: OrgUnitSummary[],
-  records: ProcessDashboardRecordSummary[],
-  user: CurrentUser
-) {
-  const activeUnits = orgUnits.filter(
-    (orgUnit) => orgUnit.isActive && ["faculty", "team", "faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType)
-  );
-  if (activeUnits.length === 0) {
-    return collectAreaOptions(records);
-  }
-
-  const canViewAll = user.permissions.includes("reports.view_all");
-  const assignedIds = new Set(
-    user.scopes
-      .filter((scope) => scope.scopeType === "assigned_org_units" && scope.orgUnitId)
-      .map((scope) => scope.orgUnitId!)
-  );
-  const permittedIds = new Set<string>(assignedIds);
-
-  if (canViewAll) {
-    for (const orgUnit of activeUnits) {
-      permittedIds.add(orgUnit.id);
-    }
-  } else {
-    let addedChild = true;
-    while (addedChild) {
-      addedChild = false;
-      for (const orgUnit of activeUnits) {
-        if (orgUnit.parentOrgUnitId && permittedIds.has(orgUnit.parentOrgUnitId) && !permittedIds.has(orgUnit.id)) {
-          permittedIds.add(orgUnit.id);
-          addedChild = true;
-        }
-      }
-    }
-  }
-
-  const permittedUnits = activeUnits.filter((orgUnit) => permittedIds.has(orgUnit.id));
-  if (permittedUnits.length === 0) {
-    return collectAreaOptions(records);
-  }
-
-  const areas = new Map<string, string>();
-  for (const orgUnit of permittedUnits.sort(compareOrgUnits)) {
-    const parent = activeUnits.find((candidate) => candidate.id === orgUnit.parentOrgUnitId);
-    const label = parent
-      ? `${parent.code} / ${orgUnit.code} · ${orgUnit.name}`
-      : `${orgUnit.code} · ${orgUnit.name}`;
-    areas.set(orgUnit.code, label);
-  }
-
-  return [...areas.entries()].map(([code, label]) => ({ code, label }));
-}
-
-function compareOrgUnits(left: OrgUnitSummary, right: OrgUnitSummary) {
-  const leftLevel = left.orgUnitType === "faculty" ? 0 : 1;
-  const rightLevel = right.orgUnitType === "faculty" ? 0 : 1;
-  return leftLevel - rightLevel || left.code.localeCompare(right.code) || left.name.localeCompare(right.name);
-}
-
-function recordMatchesArea(record: ProcessDashboardRecordSummary, areaFilter: string) {
-  if (areaFilter === "all") {
-    return true;
-  }
-  if (record.processKey === "cpd_event") {
-    return parseCpdAreaMetrics(record.participantAreaBreakdown)
-      .some((metric) => metric.areaCode === areaFilter || metric.parentCode === areaFilter);
-  }
-  return record.areaCode === areaFilter || record.parentAreaCode === areaFilter;
-}
-
-function getCpdMetrics(record: ProcessDashboardRecordSummary, areaFilter: string) {
-  if (areaFilter === "all") {
-    return {
-      participants: record.participantCount,
-      credits: record.attendanceCredits,
-      learningMinutes: record.learningMinutes
-    };
-  }
-  return parseCpdAreaMetrics(record.participantAreaBreakdown)
-    .filter((metric) => metric.areaCode === areaFilter || metric.parentCode === areaFilter)
-    .reduce(
-      (totals, metric) => ({
-        participants: totals.participants + metric.participants,
-        credits: totals.credits + metric.credits,
-        learningMinutes: totals.learningMinutes + metric.learningMinutes
-      }),
-      { participants: 0, credits: 0, learningMinutes: 0 }
-    );
-}
-
-function parseCpdAreaMetrics(value?: string): CpdAreaMetric[] {
-  if (!value) {
-    return [];
-  }
-  return value.split("|").map((item) => {
-    const [parentCode, areaCode, participants, credits, learningMinutes] = item.split("~");
-    return {
-      parentCode: parentCode ?? "",
-      areaCode: areaCode || "Unassigned",
-      participants: Number(participants) || 0,
-      credits: Number(credits) || 0,
-      learningMinutes: Number(learningMinutes) || 0
-    };
+function TrendChart({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
+  const values = data.length ? data : [{ label: "No data", value: 0 }];
+  const max = Math.max(...values.map((item) => item.value), 1);
+  const points = values.map((item, index) => {
+    const x = values.length === 1 ? 50 : 8 + (index / (values.length - 1)) * 84;
+    const y = 82 - (item.value / max) * 62;
+    return { ...item, x, y };
   });
+  const line = points.length === 1 ? `42,${points[0].y} 58,${points[0].y}` : points.map((point) => `${point.x},${point.y}`).join(" ");
+  const area = points.length === 1 ? `42,86 42,${points[0].y} 58,${points[0].y} 58,86` : `8,86 ${line} ${points.at(-1)?.x ?? 92},86`;
+  return <section className="panel intelligence-chart-card intelligence-trend-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><Activity size={18} /></div>{data.length ? <><svg aria-label={`${title}. ${data.map((item) => `${item.label}: ${item.value}`).join(", ")}`} role="img" viewBox="0 0 100 100" preserveAspectRatio="none"><defs><linearGradient id={`trend-${title.replaceAll(" ", "-")}`} x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="var(--accent)" stopOpacity=".32"/><stop offset="1" stopColor="var(--accent)" stopOpacity="0"/></linearGradient></defs><polygon fill={`url(#trend-${title.replaceAll(" ", "-")})`} points={area}/><polyline fill="none" points={line}/>{points.map((point) => <circle cx={point.x} cy={point.y} key={point.label} r="1.5"><title>{point.label}: {point.value}</title></circle>)}</svg><div className="intelligence-chart-axis">{points.map((point) => <span key={point.label}>{point.label}</span>)}</div></> : <EmptyChart />}</section>;
 }
 
-function buildMonthlyTrend(records: ProcessDashboardRecordSummary[]) {
+function RankedBars({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
+  const visible = data.slice(0, 8); const max = Math.max(...visible.map((item) => item.value), 1);
+  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><BarChart3 size={18} /></div>{visible.length ? <div className="intelligence-ranked-bars">{visible.map((item) => <div key={item.label}><span title={item.label}>{item.label}</span><div><i style={{ width: `${Math.max(4, (item.value / max) * 100)}%` }}/></div><strong>{item.value}</strong></div>)}</div> : <EmptyChart />}</section>;
+}
+
+function OutcomeProfile({ data }: { data: ChartDatum[] }) {
+  const visible = data.slice(0, 8);
+  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>Focus and outcome profile</h3><span>Average score by configured focus, pillar or practice area</span></div><Target size={18} /></div>{visible.length ? <div className="intelligence-outcome-list">{visible.map((item) => <div key={item.label}><div><strong>{item.label}</strong><span>{item.secondary}</span></div><div className="intelligence-five-scale"><i style={{ width: `${Math.max(3, (item.value / 5) * 100)}%` }}/></div><b>{item.value.toFixed(1)}</b></div>)}</div> : <EmptyChart message="No structured outcome data in this view." />}</section>;
+}
+
+function DonutChart({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
+  const visible = data.slice(0, 6); const total = visible.reduce((sum, item) => sum + item.value, 0);
+  let cursor = 0;
+  const gradient = visible.length ? visible.map((item, index) => { const start = cursor; cursor += (item.value / total) * 100; return `var(--chart-${(index % 6) + 1}) ${start}% ${cursor}%`; }).join(",") : "var(--panel-border) 0 100%";
+  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><Target size={18} /></div>{visible.length ? <div className="intelligence-donut-layout"><div className="intelligence-donut" style={{ background: `conic-gradient(${gradient})` }}><span><strong>{total}</strong><small>responses</small></span></div><div className="intelligence-donut-legend">{visible.map((item, index) => <div key={item.label}><i style={{ background: `var(--chart-${(index % 6) + 1})` }}/><span>{item.label}</span><strong>{item.value}</strong></div>)}</div></div> : <EmptyChart />}</section>;
+}
+
+function ActionAssurance({ actions }: { actions: ActionSummary[] }) {
+  const complete = actions.filter((action) => action.completedDate).length;
+  const overdue = actions.filter((action) => !action.completedDate && action.isOverdue).length;
+  const open = actions.length - complete;
+  const completion = actions.length ? Math.round((complete / actions.length) * 100) : 0;
+  const attention = actions.filter((action) => !action.completedDate).sort((left, right) => (left.dueDate ?? "9999").localeCompare(right.dueDate ?? "9999")).slice(0, 4);
+  return <section className="panel intelligence-chart-card intelligence-assurance-card"><div className="intelligence-card-heading"><div><h3>Action assurance</h3><span>Delivery confidence and immediate attention</span></div><ShieldCheck size={18} /></div>{actions.length ? <><div className="intelligence-assurance-score"><div><strong>{completion}%</strong><span>completion</span></div><div><b>{open}</b><span>open</span></div><div className={overdue ? "is-risk" : ""}><b>{overdue}</b><span>overdue</span></div></div><div className="intelligence-attention-list">{attention.map((action) => <div key={action.id}><i className={action.isOverdue ? "is-overdue" : ""}/><span><strong>{action.title}</strong><small>{action.ownerStaffName ?? "Unassigned"} · {formatDate(action.dueDate)}</small></span></div>)}</div></> : <EmptyChart message="No actions are linked to this view." />}</section>;
+}
+
+function EmptyChart({ message = "No data in the current view." }: { message?: string }) { return <div className="intelligence-empty"><Activity size={18}/><span>{message}</span></div>; }
+
+function RecordDetailTable({ records }: { records: ProcessDashboardRecordSummary[] }) {
+  return <DataTable rows={records} rowKey={(record) => record.id} columns={[
+    { key: "process", header: "Process", render: (record) => getProcessDefinition(record.processKey).shortLabel },
+    { key: "title", header: "Record", render: (record) => <strong>{record.title}</strong> },
+    { key: "date", header: "Date", render: (record) => formatDate(getRecordDate(record)) },
+    { key: "area", header: "Area", render: (record) => formatArea(record) },
+    { key: "focus", header: "Theme / focus", render: (record) => formatRecordFocus(record) },
+    { key: "measure", header: "Key measure", render: (record) => formatRecordMeasure(record) },
+    { key: "status", header: "Status", render: (record) => <span className="status-pill">{formatLabel(record.status)}</span> }
+  ]}/>;
+}
+
+function ActionDetailTable({ actions }: { actions: ActionSummary[] }) {
+  return <DataTable rows={actions} rowKey={(action) => action.id} columns={[
+    { key: "theme", header: "Theme", render: (action) => action.actionTheme },
+    { key: "title", header: "Action", render: (action) => <strong>{action.title}</strong> },
+    { key: "owner", header: "Owner", render: (action) => action.ownerStaffName ?? "Unassigned" },
+    { key: "area", header: "Area", render: (action) => action.teamCode ?? action.facultyCode ?? "Unassigned" },
+    { key: "due", header: "Due", render: (action) => formatDate(action.dueDate) },
+    { key: "status", header: "Status", render: (action) => <span className={`status-pill ${action.isOverdue && !action.completedDate ? "status-risk" : ""}`}>{action.completedDate ? "Complete" : action.isOverdue ? "Overdue" : "Open"}</span> }
+  ]}/>;
+}
+
+function buildMonthlyTrend(items: Array<{ date: string }>): ChartDatum[] {
   const counts = new Map<string, number>();
-  for (const record of records) {
-    const monthKey = getRecordDate(record).slice(0, 7);
-    counts.set(monthKey, (counts.get(monthKey) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .slice(-8)
-    .map(([month, value]) => ({ label: formatMonth(month), value }));
+  for (const item of items) { const key = item.date.slice(0, 7); counts.set(key, (counts.get(key) ?? 0) + 1); }
+  return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)).slice(-10).map(([month, value]) => ({ label: formatMonth(month), value }));
 }
 
-function buildAreaBreakdown(records: ProcessDashboardRecordSummary[], processKey: ProcessKey, areaFilter: string) {
+function buildAreaBreakdown(records: ProcessDashboardRecordSummary[]): ChartDatum[] {
   const counts = new Map<string, number>();
-  if (processKey === "cpd_event") {
-    for (const record of records) {
-      const metrics = parseCpdAreaMetrics(record.participantAreaBreakdown)
-        .filter((metric) => areaFilter === "all" || metric.areaCode === areaFilter || metric.parentCode === areaFilter);
-      for (const metric of metrics) {
-        counts.set(metric.areaCode, (counts.get(metric.areaCode) ?? 0) + metric.participants);
-      }
-    }
-  } else if (processKey === "elevate_environment") {
-    for (const record of records) {
-      const label = record.parentAreaCode ?? record.areaName ?? "Unassigned";
-      counts.set(label, (counts.get(label) ?? 0) + 1);
-    }
-  } else {
-    for (const record of records) {
-      const label = record.areaCode ?? "Unassigned";
-      counts.set(label, (counts.get(label) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()]
-    .map(([label, value]) => ({ label, value }))
-    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
+  for (const record of records) { const label = record.areaCode ?? record.parentAreaCode ?? "Unassigned"; const value = record.processKey === "cpd_event" ? Math.max(record.participantCount, 1) : 1; counts.set(label, (counts.get(label) ?? 0) + value); }
+  return mapSortedCounts(counts);
 }
 
-function buildThemeBreakdown(records: ProcessDashboardRecordSummary[]) {
+function buildActionAreaBreakdown(actions: ActionSummary[]): ChartDatum[] {
   const counts = new Map<string, number>();
-  for (const record of records) {
-    const values = splitValues(record.theme);
-    for (const value of values.length ? values : ["Not recorded"]) {
-      counts.set(value, (counts.get(value) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()]
-    .map(([label, value]) => ({ label, value }))
-    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
+  for (const action of actions) { const label = action.teamCode ?? action.facultyCode ?? "Unassigned"; counts.set(label, (counts.get(label) ?? 0) + 1); }
+  return mapSortedCounts(counts);
 }
 
-function compareRecords(left: ProcessDashboardRecordSummary, right: ProcessDashboardRecordSummary, sortKey: SortKey) {
-  if (sortKey === "date_asc") {
-    return getRecordDate(left).localeCompare(getRecordDate(right));
-  }
-  if (sortKey === "title") {
-    return left.title.localeCompare(right.title);
-  }
-  if (sortKey === "area") {
-    return (left.areaCode ?? "").localeCompare(right.areaCode ?? "");
-  }
-  if (sortKey === "status") {
-    return left.status.localeCompare(right.status);
-  }
-  return getRecordDate(right).localeCompare(getRecordDate(left));
+function buildProcessBreakdown(records: ProcessDashboardRecordSummary[], actions: ActionSummary[]): ChartDatum[] {
+  return processDefinitions.filter((definition) => !["overview", "actions"].includes(definition.key)).map((definition) => ({ label: definition.shortLabel, value: records.filter((record) => record.processKey === definition.key).length })).concat({ label: "Actions", value: actions.length }).sort((left, right) => right.value - left.value);
 }
 
-function getRecordMeasure(record: ProcessDashboardRecordSummary, processKey: ProcessKey, areaFilter: string) {
-  if (processKey === "cpd_event") {
-    return getCpdMetrics(record, areaFilter).participants;
-  }
-  if (processKey === "work_scrutiny") {
-    return record.sampleSize;
-  }
-  if (processKey === "elevate_environment") {
-    return record.scoreCount ? `${getEnvironmentScoreOnFivePointScale(record).toFixed(1)} / 5` : "Not scored";
-  }
-  if (processKey === "coaching_session") {
-    return record.ownerDisplayName ?? "Not recorded";
-  }
-  if (processKey === "probation_case") {
-    return record.sampleSize > 0 ? `Observation ${record.sampleSize}` : "Started";
-  }
-  return record.ownerDisplayName ?? "Not recorded";
+function buildDimensionBreakdown(facts: DashboardDimensionFact[], records: ProcessDashboardRecordSummary[]): ChartDatum[] {
+  const scored = new Map<string, { total: number; count: number }>();
+  for (const fact of facts.filter((item) => item.numericValue !== undefined && item.numericValue !== null)) { const current = scored.get(fact.seriesLabel) ?? { total: 0, count: 0 }; current.total += Number(fact.numericValue); current.count += 1; scored.set(fact.seriesLabel, current); }
+  if (scored.size) return [...scored.entries()].map(([label, metric]) => ({ label, value: metric.total / metric.count, secondary: `${metric.count} rated response${metric.count === 1 ? "" : "s"}` })).sort((left, right) => left.value - right.value);
+  const counts = new Map<string, number>();
+  for (const fact of facts) counts.set(fact.seriesLabel, (counts.get(fact.seriesLabel) ?? 0) + 1);
+  for (const record of records) for (const theme of splitValues(record.theme)) counts.set(theme, (counts.get(theme) ?? 0) + 1);
+  return mapSortedCounts(counts);
 }
 
-function getEnvironmentScoreOnFivePointScale(record: ProcessDashboardRecordSummary) {
-  if (!record.scoreCount) {
-    return 0;
-  }
-  const average = record.scoreTotal / record.scoreCount;
-  return record.scoreMaximum === 5 ? average : 1 + ((average * 4) / 3);
+function buildOutcomeBreakdown(facts: DashboardDimensionFact[]): ChartDatum[] {
+  const counts = new Map<string, number>();
+  for (const fact of facts.filter((item) => item.numericValue !== undefined && item.numericValue !== null)) counts.set(fact.valueLabel, (counts.get(fact.valueLabel) ?? 0) + 1);
+  return mapSortedCounts(counts);
 }
 
-function getMeasureHeader(processKey: ProcessKey) {
-  if (processKey === "cpd_event") {
-    return "Participants";
+function buildFocusFrequency(facts: DashboardDimensionFact[]): ChartDatum[] {
+  const counts = new Map<string, number>();
+  for (const fact of facts.filter((item) => ["focus", "focus_outcome", "practice_area_outcome", "pillar_outcome", "theme"].includes(item.dimensionKey))) {
+    counts.set(fact.seriesLabel, (counts.get(fact.seriesLabel) ?? 0) + 1);
   }
-  if (processKey === "work_scrutiny") {
-    return "Linked actions";
-  }
-  if (processKey === "elevate_environment") {
-    return "Average score";
-  }
-  if (processKey === "coaching_session") {
-    return "Coach or mentor";
-  }
-  if (processKey === "probation_case") {
-    return "Highest completed";
-  }
-  return "Recorded by";
+  return mapSortedCounts(counts);
 }
 
-function formatRecordFocus(record: ProcessDashboardRecordSummary) {
-  const theme = splitValues(record.theme).join(", ");
-  if (theme && record.detail) {
-    return `${theme} · ${record.detail}`;
-  }
-  return theme || record.detail || record.summary || "Not recorded";
+function mapSortedCounts(counts: Map<string, number>): ChartDatum[] { return [...counts.entries()].map(([label, value]) => ({ label, value })).sort((left, right) => right.value - left.value || left.label.localeCompare(right.label)); }
+
+function actionMatchesProcess(action: ActionSummary, processKey: DashboardProcessKey) {
+  const map: Partial<Record<DashboardProcessKey, string[]>> = {
+    learning_walk: ["learning_walk"], liv: ["liv"], probation_case: ["probation_observation"],
+    elevate_environment: ["elevate_environment"], coaching_session: ["coaching_mentoring"],
+    work_scrutiny: ["work_scrutiny"], cpd_event: ["cpd", "cpd_event"]
+  };
+  return map[processKey]?.includes(action.sourceFormType) ?? false;
 }
 
-function formatDurationMinutes(value: number) {
-  const totalMinutes = Math.max(0, Math.round(value));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours === 0) return `${minutes}m`;
-  if (minutes === 0) return `${hours}h`;
-  return `${hours}h ${minutes}m`;
+function getProcessDefinition(processKey: DashboardProcessKey | RecordProcessKey) { return processDefinitions.find((item) => item.key === processKey) ?? processDefinitions[0]; }
+function recordMatchesArea(record: ProcessDashboardRecordSummary, area: string) { return area === "all" || record.areaCode === area || record.parentAreaCode === area; }
+function splitValues(value?: string) { return value?.split("|").map((item) => item.trim()).filter(Boolean) ?? []; }
+function uniqueValues(values: string[]) { return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right)); }
+function getRecordDate(record: ProcessDashboardRecordSummary) { return record.recordDate ?? record.createdAt.slice(0, 10); }
+function compareRecords(left: ProcessDashboardRecordSummary, right: ProcessDashboardRecordSummary, sort: SortKey) { if (sort === "date_asc") return getRecordDate(left).localeCompare(getRecordDate(right)); if (sort === "title") return left.title.localeCompare(right.title); if (sort === "area") return (left.areaCode ?? "").localeCompare(right.areaCode ?? ""); if (sort === "status") return left.status.localeCompare(right.status); return getRecordDate(right).localeCompare(getRecordDate(left)); }
+function formatArea(record: ProcessDashboardRecordSummary) { return record.parentAreaCode && record.areaCode && record.parentAreaCode !== record.areaCode ? `${record.parentAreaCode} / ${record.areaCode}` : record.areaCode ?? "Unassigned"; }
+function formatRecordFocus(record: ProcessDashboardRecordSummary) { return splitValues(record.theme).join(", ") || record.detail || record.summary || "Not recorded"; }
+function formatRecordMeasure(record: ProcessDashboardRecordSummary) { if (record.processKey === "cpd_event") return `${record.participantCount} participants · ${formatDuration(record.learningMinutes)}`; if (record.scoreCount) return `${(record.scoreTotal / record.scoreCount).toFixed(1)} / ${record.scoreMaximum}`; if (record.processKey === "probation_case") return record.sampleSize ? `Observation ${record.sampleSize}` : "Started"; if (record.processKey === "liv") return `${record.sampleSize} visits`; if (record.processKey === "work_scrutiny") return `${record.sampleSize} sampled`; return record.ownerDisplayName ?? record.subjectDisplayName ?? "Recorded"; }
+function formatDuration(minutes: number) { const hours = Math.floor(minutes / 60); const remainder = minutes % 60; return hours ? `${hours}h${remainder ? ` ${remainder}m` : ""}` : `${remainder}m`; }
+function formatLabel(value: string) { return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase()); }
+function formatDate(value?: string) { return value ? new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${value.slice(0, 10)}T00:00:00`)) : "No date"; }
+function formatMonth(value: string) { return new Intl.DateTimeFormat("en-GB", { month: "short", year: "2-digit" }).format(new Date(`${value}-01T00:00:00`)); }
+function academicYearForDate(value: string) { const date = new Date(value); const year = date.getFullYear(); const start = date.getMonth() >= 7 ? year : year - 1; return `${start}/${String(start + 1).slice(-2)}`; }
+function formatScopeLabel(user: CurrentUser) { const count = user.scopes.filter((scope) => scope.scopeType === "assigned_org_units").length; return count ? `${count} assigned organisation area${count === 1 ? "" : "s"}` : "your permitted records"; }
+
+function collectDashboardAreaOptions(orgUnits: OrgUnitSummary[], records: ProcessDashboardRecordSummary[], user: CurrentUser) {
+  const active = orgUnits.filter((unit) => unit.isActive && ["faculty", "team", "faculty_child_code", "faculty_child"].includes(unit.orgUnitType));
+  const permitted = new Set(user.permissions.includes("reports.view_all") ? active.map((unit) => unit.id) : user.scopes.filter((scope) => scope.scopeType === "assigned_org_units" && scope.orgUnitId).map((scope) => scope.orgUnitId!));
+  let changed = true; while (changed) { changed = false; for (const unit of active) if (unit.parentOrgUnitId && permitted.has(unit.parentOrgUnitId) && !permitted.has(unit.id)) { permitted.add(unit.id); changed = true; } }
+  const options = active.filter((unit) => permitted.has(unit.id)).map((unit) => { const parent = active.find((candidate) => candidate.id === unit.parentOrgUnitId); return { code: unit.code, label: parent ? `${parent.code} / ${unit.code} · ${unit.name}` : `${unit.code} · ${unit.name}` }; });
+  if (options.length) return options.sort((left, right) => left.label.localeCompare(right.label));
+  return uniqueValues(records.flatMap((record) => [record.parentAreaCode ?? "", record.areaCode ?? ""])).map((code) => ({ code, label: code }));
 }
 
-function formatArea(record: ProcessDashboardRecordSummary) {
-  if (record.parentAreaCode && record.areaCode && record.parentAreaCode !== record.areaCode) {
-    return `${record.parentAreaCode} / ${record.areaCode}`;
-  }
-  return record.areaCode ?? "Unassigned";
-}
-
-function formatScopeLabel(user: CurrentUser) {
-  const assignedAreas = user.scopes.filter((scope) => scope.scopeType === "assigned_org_units").length;
-  if (assignedAreas === 1) {
-    return "Assigned organisation area";
-  }
-  if (assignedAreas > 1) {
-    return `${assignedAreas} assigned organisation areas`;
-  }
-  return "Your permitted records";
-}
-
-function splitValues(value?: string) {
-  return value?.split("|").map((item) => item.trim()).filter(Boolean) ?? [];
-}
-
-function uniqueValues(values: string[]) {
-  return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
-}
-
-function getRecordDate(record: ProcessDashboardRecordSummary) {
-  return record.recordDate ?? record.createdAt.slice(0, 10);
-}
-
-function formatDate(value?: string) {
-  if (!value) {
-    return "No date";
-  }
-  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" })
-    .format(new Date(`${value.slice(0, 10)}T00:00:00`));
-}
-
-function formatMonth(value: string) {
-  return new Intl.DateTimeFormat("en-GB", { month: "short", year: "2-digit" })
-    .format(new Date(`${value}-01T00:00:00`));
-}
-
-function formatLabel(value: string) {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
-function isDueSoon(dateValue?: string) {
-  if (!dateValue) {
-    return false;
-  }
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const targetDate = new Date(`${dateValue}T00:00:00`);
-  const daysUntilDue = (targetDate.getTime() - today.getTime()) / 86400000;
-  return daysUntilDue >= 0 && daysUntilDue <= 14;
+function downloadCsv(filename: string, rows: Array<Array<string | number>>) {
+  const content = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["\ufeff", content], { type: "text/csv;charset=utf-8" }));
+  const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url);
 }

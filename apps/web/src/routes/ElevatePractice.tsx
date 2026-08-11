@@ -359,6 +359,7 @@ function LivInformationEditor({ information, onChange, ratings, workspace }: {
 }) {
   const secondaryOther = information.secondaryFocusKey === "other";
   const recommendedAreas = recommendedLivAreas(workspace, ratings);
+  const preferredMonthOptions = livPreferredMonthOptions(workspace.academicYear);
   return (
     <div className="practice-area-section">
       <div className="panel-heading"><div><p className="eyebrow">Learning, Innovation and Vision visit</p><h2>LIV Information</h2></div><span>Supports your future LIV</span></div>
@@ -367,7 +368,14 @@ function LivInformationEditor({ information, onChange, ratings, workspace }: {
         <ol>{recommendedAreas.length ? recommendedAreas.map((area) => <li key={area.areaKey}>{area.name}</li>) : <li>Complete the ELI statements to see recommendations.</li>}</ol>
       </section>
       <div className="form-grid form-grid-two">
-        <label className="entry-field"><span>Preferred month</span><input onChange={(event) => onChange({ preferredVisitMonth: event.target.value })} type="month" value={information.preferredVisitMonth ?? ""} /></label>
+        <label className="entry-field">
+          <span>Preferred month</span>
+          <select onChange={(event) => onChange({ preferredVisitMonth: event.target.value })} value={information.preferredVisitMonth ?? ""}>
+            <option value="">Select preferred month</option>
+            {preferredMonthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <small>The Teaching and Learning team will attempt to accommodate your preferred month where possible, but this cannot be guaranteed.</small>
+        </label>
         <label className="entry-field"><span>Primary focus</span><select onChange={(event) => onChange({ primaryFocusKey: event.target.value })} value={information.primaryFocusKey ?? ""}><option value="">Select primary focus</option>{workspace.livInformation.focusOptions.filter((option) => option.key !== "other").map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
         <label className="entry-field"><span>Secondary focus <small>Optional</small></span><select onChange={(event) => onChange({ secondaryFocusKey: event.target.value, secondaryFocusOther: event.target.value === "other" ? information.secondaryFocusOther : "" })} value={information.secondaryFocusKey ?? ""}><option value="">No secondary focus</option>{workspace.livInformation.focusOptions.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
       </div>
@@ -539,3 +547,12 @@ function formatAuditAction(action: string) { return action.split(/[._]/).filter(
 function formatAuditJson(value?: string) { if (!value) return "No record snapshot"; try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; } }
 function formatDate(value: string) { return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
 function formatPreferredMonth(value?: string) { if (!value) return "Not provided"; const [year, month] = value.split("-").map(Number); return new Date(year, month - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" }); }
+function livPreferredMonthOptions(academicYear: string) {
+  const startYear = /^\d{4}/.exec(academicYear)?.[0] ?? String(new Date().getFullYear());
+  return [
+    { value: `${startYear}-09`, label: `September ${startYear}` },
+    { value: `${startYear}-10`, label: `October ${startYear}` },
+    { value: `${startYear}-11`, label: `November ${startYear}` },
+    { value: `${startYear}-12`, label: `December ${startYear}` }
+  ];
+}

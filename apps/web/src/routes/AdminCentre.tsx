@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -7,6 +7,7 @@ import type {
   AdminRecord,
   AdminUserSummary,
   CurrentUser,
+  DashboardProcessConfiguration,
   LearningWalkTheme,
   LearningWalkThemeGroup,
   ModuleSummary,
@@ -1458,23 +1459,74 @@ function formatOrgUnitOption(orgUnit: OrgUnitSummary) {
 }
 
 function DashboardAdminPanel() {
+  const [processes, setProcesses] = useState<DashboardProcessConfiguration[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    api.dashboardConfiguration()
+      .then((configuration) => setProcesses([...configuration.processes].sort((left, right) => left.displayOrder - right.displayOrder)))
+      .catch(() => setMessage("Dashboard configuration could not be loaded."))
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  function update(processKey: string, changes: Partial<DashboardProcessConfiguration>) {
+    setProcesses((current) => current.map((process) => process.processKey === processKey ? { ...process, ...changes } : process));
+  }
+
+  function move(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= processes.length) return;
+    setProcesses((current) => {
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next.map((process, order) => ({ ...process, displayOrder: (order + 1) * 10 }));
+    });
+  }
+
+  async function save() {
+    setIsSaving(true); setMessage("");
+    try {
+      await api.saveDashboardConfiguration(processes);
+      const saved = await api.dashboardConfiguration();
+      setProcesses([...saved.processes].sort((left, right) => left.displayOrder - right.displayOrder));
+      setMessage("Dashboard configuration saved. Leadership views will use the new layout on refresh.");
+    } catch {
+      setMessage("Dashboard configuration could not be saved.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   return (
-    <section className="panel">
-      <div className="panel-heading">
-        <h2>Dashboard governance</h2>
-        <span>Fixed dashboards first</span>
-      </div>
-      <div className="admin-task-grid">
-        {[
-          "Use fixed dashboards with role-based visibility for the first release",
-          "Apply academic year and custom date range filters to reporting views",
-          "Control dashboard visibility by role, faculty, team, child code and directorate",
-          "Support CSV and Excel exports where permission allows",
-          "Treat custom dashboard building as a future phase"
-        ].map((item) => (
-          <div className="admin-task-row" key={item}>{item}</div>
-        ))}
-      </div>
-    </section>
+    <div className="admin-dashboard-config">
+      <section className="panel admin-dashboard-intro">
+        <div><p className="eyebrow">Reporting governance</p><h2>Leadership dashboard</h2><p>Control the order, naming and analytical emphasis of approved dashboard views. Metrics and permission rules remain protected.</p></div>
+        <Button disabled={isLoading || isSaving || processes.length === 0} icon={Save} onClick={() => void save()} variant="primary">{isSaving ? "Saving" : "Save configuration"}</Button>
+      </section>
+      {message ? <div className="form-message">{message}</div> : null}
+      {isLoading ? <section className="panel"><p className="muted-copy">Loading dashboard configuration...</p></section> : (
+        <section className="panel admin-dashboard-processes">
+          <div className="panel-heading"><h2>Dashboard views</h2><span>{processes.filter((process) => process.isEnabled).length} visible</span></div>
+          <p className="muted-copy">Disabling a view hides it from navigation; it does not delete records or reporting data. Labels may be changed without changing stable process keys.</p>
+          <div className="admin-dashboard-process-list">
+            {processes.map((process, index) => <article className={process.isEnabled ? "" : "is-disabled"} key={process.processKey}>
+              <div className="admin-dashboard-order"><Button aria-label="Move up" disabled={index === 0} icon={ArrowUp} onClick={() => move(index, -1)} variant="secondary">Up</Button><Button aria-label="Move down" disabled={index === processes.length - 1} icon={ArrowDown} onClick={() => move(index, 1)} variant="secondary">Down</Button></div>
+              <div className="admin-dashboard-identity"><small>{process.processKey}</small><input aria-label={`${process.label} dashboard label`} maxLength={80} onChange={(event) => update(process.processKey, { label: event.target.value })} value={process.label}/></div>
+              <label className="admin-dashboard-visual"><span>Primary visual</span><select onChange={(event) => update(process.processKey, { primaryVisual: event.target.value as "bar" | "donut" })} value={process.primaryVisual}><option value="bar">Ranked profile</option><option value="donut">Distribution</option></select></label>
+              <div className="admin-dashboard-widgets" aria-label={`${process.label} visible analysis`}>
+                <label><input checked={process.showTrend} onChange={(event) => update(process.processKey, { showTrend: event.target.checked })} type="checkbox"/>Trend</label>
+                <label><input checked={process.showAreaComparison} onChange={(event) => update(process.processKey, { showAreaComparison: event.target.checked })} type="checkbox"/>Areas</label>
+                <label><input checked={process.showOutcomes} onChange={(event) => update(process.processKey, { showOutcomes: event.target.checked })} type="checkbox"/>Outcomes</label>
+                <label><input checked={process.showActions} onChange={(event) => update(process.processKey, { showActions: event.target.checked })} type="checkbox"/>Actions</label>
+              </div>
+              <label className="admin-dashboard-enabled"><input checked={process.isEnabled} disabled={process.processKey === "overview"} onChange={(event) => update(process.processKey, { isEnabled: event.target.checked })} type="checkbox"/><span>{process.processKey === "overview" ? "Required" : process.isEnabled ? "Visible" : "Hidden"}</span></label>
+            </article>)}
+          </div>
+        </section>
+      )}
+      <section className="panel admin-dashboard-guardrails"><ShieldCheck size={20}/><div><h3>Protected reporting guardrails</h3><p>Administrators can change presentation, but cannot expose restricted narrative responses, alter scope permissions, introduce arbitrary database queries or delete historical reporting labels.</p></div></section>
+    </div>
   );
 }

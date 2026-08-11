@@ -49,6 +49,7 @@ public sealed partial class SqlFoundationDataStore
 
         return new ProbationConfigurationSummary(
             liv.DeliveryAreas,
+            liv.CourseLevels,
             liv.FocusAreas.Where(option => !option.IsOther).ToArray(),
             liv.DevelopmentOpportunities,
             liv.Rubric,

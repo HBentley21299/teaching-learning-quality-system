@@ -9,6 +9,7 @@ import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { WorkScrutinyCreateForm } from "../components/WorkScrutinyCreateForm";
 import { api } from "../services/api";
 import type {
+  ActionOwnerOption,
   ActionSummary,
   CoachingRubricOption,
   CurrentUser,
@@ -105,6 +106,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const [cpdWorkspaceView, setCpdWorkspaceView] = useState<CpdWorkspaceView>(canManageCpd ? "managed" : "external");
   const isExternalCpd = mode === "cpd" && (!canManageCpd || cpdWorkspaceView === "external");
   const config = isExternalCpd ? externalCpdConfig : workspaceConfig[mode];
+  const requiresLeaderActionOwner = mode === "learning" || mode === "elevate";
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -117,6 +119,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const [learningWalkThemeGroups, setLearningWalkThemeGroups] = useState<LearningWalkThemeGroup[]>([]);
   const [practiceRubric, setPracticeRubric] = useState<CoachingRubricOption[]>([]);
   const [draftActions, setDraftActions] = useState<DraftLinkedAction[]>([]);
+  const [leaderActionOwners, setLeaderActionOwners] = useState<ActionOwnerOption[]>([]);
   const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(false);
@@ -165,6 +168,11 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const selectedLearningWalkFocuses = parseLearningWalkThemeSelections(
     getResponseValue(createSections, responses, "additional_focus_context")
   );
+  const actionOwnerStaff = useMemo(() => {
+    if (!requiresLeaderActionOwner) return staff;
+    const permittedIds = new Set(leaderActionOwners.map((option) => option.staffId));
+    return staff.filter((staffMember) => permittedIds.has(staffMember.id));
+  }, [leaderActionOwners, requiresLeaderActionOwner, staff]);
 
   const editSections = selectedDetail?.sections ?? [];
   const editEntrySections = getEnvironmentEntrySections(mode, editSections, environmentPillars);
@@ -281,6 +289,11 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   }, [academicYear, mode]);
 
   useEffect(() => {
+    if (!requiresLeaderActionOwner) return;
+    setActionOwnerId((current) => leaderActionOwners.some((option) => option.staffId === current) ? current : "");
+  }, [leaderActionOwners, requiresLeaderActionOwner]);
+
+  useEffect(() => {
     if (initialRecordId && openedInitialRecord.current !== initialRecordId) {
       openedInitialRecord.current = initialRecordId;
       void openRecord(initialRecordId);
@@ -303,13 +316,16 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
   async function refreshData() {
     try {
-      const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups, nextEnvironmentPillars] = await Promise.all([
+      const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups, nextEnvironmentPillars, nextLeaderActionOwners] = await Promise.all([
         api.records(academicYear),
         api.orgUnits(),
         api.actions(),
         mode === "elevate" ? api.rooms() : Promise.resolve([] as RoomSummary[]),
         mode === "cpd" ? api.lookups() : Promise.resolve([]),
-        mode === "elevate" ? api.elevateEnvironmentPillars() : Promise.resolve([] as ElevateEnvironmentPillarSummary[])
+        mode === "elevate" ? api.elevateEnvironmentPillars() : Promise.resolve([] as ElevateEnvironmentPillarSummary[]),
+        requiresLeaderActionOwner
+          ? api.actionOwnerOptions(undefined, undefined, config.recordType)
+          : Promise.resolve([] as ActionOwnerOption[])
       ]);
       setRecords(nextRecords.filter((record) => record.recordType === config.recordType));
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
@@ -317,6 +333,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       setRooms(nextRooms);
       setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
       setEnvironmentPillars(nextEnvironmentPillars);
+      setLeaderActionOwners(nextLeaderActionOwners);
 
       if (mode === "learning") {
         const [nextMappings, nextThemeGroups, coachingConfiguration] = await Promise.all([
@@ -949,9 +966,10 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                             <StaffSearchSelect
                               id={`submission-action-owner-${action.id}`}
                               onChange={(ownerStaffId) => updateDraftAction(action.id, { ownerStaffId })}
-                              staff={staff}
+                              staff={actionOwnerStaff}
                               value={action.ownerStaffId}
                             />
+                            {requiresLeaderActionOwner ? <small>Programme Leaders and above only.</small> : null}
                           </label>
                           <label className="entry-field">
                             <span>{mode === "elevate" ? "Date for review" : "Date to be implemented by"} <strong>Required</strong></span>
@@ -1223,9 +1241,10 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                   <StaffSearchSelect
                     id={`linked-action-owner-${selectedDetail.id}`}
                     onChange={setActionOwnerId}
-                    staff={staff}
+                    staff={actionOwnerStaff}
                     value={actionOwnerId}
                   />
+                  {requiresLeaderActionOwner ? <small>Programme Leaders and above only.</small> : null}
                 </label>
                 <label className="entry-field">
                   <span>

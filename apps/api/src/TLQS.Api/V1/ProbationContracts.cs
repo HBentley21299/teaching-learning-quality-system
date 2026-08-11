@@ -8,6 +8,7 @@ public sealed record ProbationReviewerOptionSummary(
 
 public sealed record ProbationConfigurationSummary(
     IReadOnlyList<LivLookupOptionSummary> DeliveryAreas,
+    IReadOnlyList<LivLookupOptionSummary> CourseLevels,
     IReadOnlyList<LivLookupOptionSummary> FocusAreas,
     IReadOnlyList<LivLookupOptionSummary> DevelopmentOpportunities,
     IReadOnlyList<ElevatePracticeRatingScaleSummary> Rubric,

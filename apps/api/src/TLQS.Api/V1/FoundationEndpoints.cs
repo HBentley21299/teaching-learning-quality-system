@@ -553,10 +553,10 @@ public static class FoundationEndpoints
             return Results.Ok(await store.GetActionsAsync(currentUser, includeDeleted == true, cancellationToken));
         });
 
-        api.MapGet("/actions/owner-options", async (Guid? sourceRecordId, Guid? subjectStaffId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/actions/owner-options", async (Guid? sourceRecordId, Guid? subjectStaffId, string? sourceFormType, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return Results.Ok(await store.GetActionOwnerOptionsAsync(sourceRecordId, subjectStaffId, currentUser, cancellationToken));
+            return Results.Ok(await store.GetActionOwnerOptionsAsync(sourceRecordId, subjectStaffId, sourceFormType, currentUser, cancellationToken));
         });
 
         api.MapPost("/actions", async (CreateActionRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -870,6 +870,42 @@ public static class FoundationEndpoints
             }
 
             return Results.Ok(await store.GetProcessDashboardRecordsAsync(currentUser, cancellationToken));
+        });
+
+        api.MapGet("/reports/dashboard-configuration", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                && !currentUser.HasPermission(PermissionKeys.ReportsViewScoped))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetDashboardConfigurationAsync(cancellationToken));
+        });
+
+        api.MapGet("/reports/dashboard-dimensions", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                && !currentUser.HasPermission(PermissionKeys.ReportsViewScoped))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetDashboardDimensionFactsAsync(currentUser, cancellationToken));
+        });
+
+        api.MapPut("/admin/reports/dashboard-configuration", async (SaveDashboardConfigurationRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser))
+            {
+                return Results.Forbid();
+            }
+
+            await store.SaveDashboardConfigurationAsync(request, currentUser, cancellationToken);
+            return Results.NoContent();
         });
 
         api.MapGet("/reports/learning-walk-rollup", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -1913,6 +1949,7 @@ public sealed record LivCaseSummary(
 public sealed record LivLookupOptionSummary(string Key, string Name, int DisplayOrder, bool IsOther = false);
 public sealed record LivConfigurationSummary(
     IReadOnlyList<LivLookupOptionSummary> DeliveryAreas,
+    IReadOnlyList<LivLookupOptionSummary> CourseLevels,
     IReadOnlyList<LivLookupOptionSummary> FocusAreas,
     IReadOnlyList<LivLookupOptionSummary> DevelopmentOpportunities,
     IReadOnlyList<ElevatePracticeRatingScaleSummary> Rubric);

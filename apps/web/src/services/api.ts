@@ -36,6 +36,9 @@ import type {
   CreateFormTemplateRequest,
   CurrentUser,
   DashboardSummary,
+  DashboardConfiguration,
+  DashboardDimensionFact,
+  DashboardProcessConfiguration,
   ElevateEnvironmentPillarSummary,
   ElevatePracticeProgress,
   ElevatePracticeAudit,
@@ -294,10 +297,11 @@ export const api = {
   restoreWorkScrutinyRecord: (id: string) =>
     sendJson(`/api/v1/admin/work-scrutiny/records/${id}/restore`, "POST"),
   actions: (includeDeleted = false) => getJson<ActionSummary[]>(`/api/v1/actions${includeDeleted ? "?includeDeleted=true" : ""}`),
-  actionOwnerOptions: (sourceRecordId?: string, subjectStaffId?: string) => {
+  actionOwnerOptions: (sourceRecordId?: string, subjectStaffId?: string, sourceFormType?: string) => {
     const parameters = new URLSearchParams();
     if (sourceRecordId) parameters.set("sourceRecordId", sourceRecordId);
     if (subjectStaffId) parameters.set("subjectStaffId", subjectStaffId);
+    if (sourceFormType) parameters.set("sourceFormType", sourceFormType);
     const query = parameters.toString();
     return getJson<ActionOwnerOption[]>(`/api/v1/actions/owner-options${query ? `?${query}` : ""}`);
   },
@@ -310,6 +314,12 @@ export const api = {
   dashboards: () => getJson<DashboardSummary[]>("/api/v1/reports/dashboards"),
   processDashboardRecords: () =>
     getJson<ProcessDashboardRecordSummary[]>("/api/v1/reports/process-records"),
+  dashboardConfiguration: () =>
+    getJson<DashboardConfiguration>("/api/v1/reports/dashboard-configuration"),
+  dashboardDimensions: () =>
+    getJson<DashboardDimensionFact[]>("/api/v1/reports/dashboard-dimensions"),
+  saveDashboardConfiguration: (processes: DashboardProcessConfiguration[]) =>
+    sendJson("/api/v1/admin/reports/dashboard-configuration", "PUT", { processes }),
   learningWalkRollup: () =>
     getJson<LearningWalkRollupSummary[]>("/api/v1/reports/learning-walk-rollup"),
   formTemplates: () => getJson<FormTemplateSummary[]>("/api/v1/form-templates"),

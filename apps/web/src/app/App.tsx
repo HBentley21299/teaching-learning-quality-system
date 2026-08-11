@@ -469,6 +469,7 @@ export function App() {
               ) : null}
               {route === "dashboard" ? (
                 <Dashboard
+                  academicYear={academicYear}
                   actions={yearActions}
                   orgUnits={orgUnits}
                   processRecords={yearProcessRecords}

@@ -193,7 +193,6 @@ export type LivVisitSummary = {
   visitTime?: string;
   visitType: "initial" | "follow_up";
   courseName?: string;
-  courseGroup?: string;
   courseLevel?: string;
   reflectionNotes?: string;
   findings?: string;
@@ -234,6 +233,7 @@ export type LivCycle = {
 };
 export type LivConfiguration = {
   deliveryAreas: LivLookupOption[];
+  courseLevels: LivLookupOption[];
   focusAreas: LivLookupOption[];
   developmentOpportunities: LivLookupOption[];
   rubric: ElevatePracticeRatingScale[];
@@ -297,7 +297,6 @@ export type SaveLivVisitRequest = {
   visitDate?: string;
   visitTime?: string;
   courseName?: string;
-  courseGroup?: string;
   courseLevel?: string;
   reflectionNotes?: string;
   findings?: string;
@@ -556,7 +555,7 @@ export type DashboardSummary = {
 
 export type ProcessDashboardRecordSummary = {
   id: string;
-  processKey: "learning_walk" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session" | "probation_case";
+  processKey: "learning_walk" | "liv" | "eli" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session" | "probation_case";
   title: string;
   summary?: string;
   recordDate?: string;
@@ -580,6 +579,40 @@ export type ProcessDashboardRecordSummary = {
   barrierCount: number;
   scoreMaximum: number;
   relatedRecordId?: string;
+};
+
+export type DashboardProcessConfiguration = {
+  processKey: "overview" | "learning_walk" | "liv" | "eli" | "probation_case" | "elevate_environment" | "coaching_session" | "work_scrutiny" | "cpd_event" | "actions";
+  label: string;
+  isEnabled: boolean;
+  displayOrder: number;
+  primaryVisual: "bar" | "donut";
+  showTrend: boolean;
+  showAreaComparison: boolean;
+  showOutcomes: boolean;
+  showActions: boolean;
+};
+
+export type DashboardConfiguration = {
+  schemaVersion: number;
+  updatedAt?: string;
+  processes: DashboardProcessConfiguration[];
+};
+
+export type DashboardDimensionFact = {
+  sourceRecordId: string;
+  processKey: Exclude<DashboardProcessConfiguration["processKey"], "overview" | "actions">;
+  occurredOn: string;
+  orgUnitId?: string;
+  areaCode?: string;
+  areaName?: string;
+  parentAreaCode?: string;
+  dimensionKey: string;
+  seriesKey: string;
+  seriesLabel: string;
+  valueKey: string;
+  valueLabel: string;
+  numericValue?: number;
 };
 
 export type RecordNavigation = {

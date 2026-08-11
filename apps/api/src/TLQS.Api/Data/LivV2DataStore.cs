@@ -12,6 +12,7 @@ public sealed partial class SqlFoundationDataStore
     public async Task<LivConfigurationSummary> GetLivConfigurationAsync(CancellationToken cancellationToken)
     {
         var deliveryAreas = await GetLivLookupOptionsAsync("liv_delivery_area", cancellationToken);
+        var courseLevels = await GetLivLookupOptionsAsync("liv_course_level", cancellationToken);
         var focusAreas = await GetLivLookupOptionsAsync("liv_focus_area", cancellationToken);
         var opportunities = await GetLivLookupOptionsAsync("liv_development_opportunity", cancellationToken);
         var rubric = await QueryAsync(
@@ -29,7 +30,7 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                 reader.GetInt32(4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6), reader.GetBoolean(7)),
             cancellationToken);
-        return new LivConfigurationSummary(deliveryAreas, focusAreas, opportunities, rubric);
+        return new LivConfigurationSummary(deliveryAreas, courseLevels, focusAreas, opportunities, rubric);
     }
 
     public async Task<LivStaffContextSummary?> GetLivStaffContextAsync(
@@ -268,7 +269,7 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT visit.liv_record_id, visit.id, visit.visit_number, visit.visit_date,
                    CONVERT(nvarchar(5), visit.visit_time, 108), visit.visit_type,
-                   visit.course_name, visit.course_group, visit.course_level,
+                   visit.course_name, CAST(NULL AS nvarchar(200)), visit.course_level,
                    visit.reflection_notes, visit.findings, visit.visit_status,
                    visit.created_at, visit.updated_at, visit.cycle_id,
                    delivery.value_key, delivery.display_name
@@ -325,7 +326,7 @@ public sealed partial class SqlFoundationDataStore
                     AreaOfPracticeThemeIds = item.CanViewSensitive
                         ? themes.Where(theme => theme.LivRecordId == item.Id).Select(theme => theme.ThemeId).ToArray()
                         : [],
-                    Visits = visitsByCase.GetValueOrDefault(item.Id, []),
+                    Visits = item.CanViewSensitive ? visitsByCase.GetValueOrDefault(item.Id, []) : [],
                     Cycles = itemCycles
                 };
             })
@@ -647,12 +648,14 @@ public sealed partial class SqlFoundationDataStore
             if (!CanEditLivMetadata(metadata, currentUser)) return FormSubmissionUpdateResult.Forbidden;
             var deliveryAreaId = await ReadActiveLookupValueIdAsync(
                 connection, transaction, "liv_delivery_area", request.DeliveryAreaKey, true, cancellationToken);
+            _ = await ReadActiveLookupValueIdAsync(
+                connection, transaction, "liv_course_level", request.CourseLevel, false, cancellationToken);
 
             await using (var command = new SqlCommand(
                 """
                 UPDATE quality.liv_visits
                 SET visit_date = @visitDate, visit_time = @visitTime,
-                    course_name = @courseName, course_group = @courseGroup,
+                    course_name = @courseName, course_group = NULL,
                     course_level = @courseLevel, reflection_notes = @reflectionNotes,
                     findings = @findings, delivery_area_lookup_value_id = @deliveryAreaId,
                     updated_by_user_account_id = @updatedBy,
@@ -1098,6 +1101,8 @@ public sealed partial class SqlFoundationDataStore
             deliveryAreaId = await ReadActiveLookupValueIdAsync(
                 connection, transaction, "liv_delivery_area", request.DeliveryAreaKey, true, cancellationToken);
         }
+        _ = await ReadActiveLookupValueIdAsync(
+            connection, transaction, "liv_course_level", request.CourseLevel, false, cancellationToken);
         await using var command = new SqlCommand(
             """
             INSERT INTO quality.liv_visits (
@@ -1107,7 +1112,7 @@ public sealed partial class SqlFoundationDataStore
             ) VALUES (
                 @id, @livId, @cycleId, @visitNumber, @visitDate, @visitTime,
                 CASE WHEN @visitNumber = 1 THEN N'initial' ELSE N'follow_up' END,
-                @courseName, @courseGroup, @courseLevel, @reflectionNotes,
+                @courseName, NULL, @courseLevel, @reflectionNotes,
                 @findings, @deliveryAreaId, N'in_progress', @createdBy
             );
             """, connection, (SqlTransaction)transaction);

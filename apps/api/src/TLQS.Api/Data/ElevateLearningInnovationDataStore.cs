@@ -65,20 +65,7 @@ public sealed partial class SqlFoundationDataStore
             throw new WorkflowValidationException("Describe the secondary LIV focus when Other is selected.");
         }
 
-        DateOnly? preferredVisitMonth = null;
-        if (!string.IsNullOrWhiteSpace(livInformation.PreferredVisitMonth))
-        {
-            if (!DateOnly.TryParseExact(
-                    $"{livInformation.PreferredVisitMonth}-01",
-                    "yyyy-MM-dd",
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.None,
-                    out var parsedMonth))
-            {
-                throw new WorkflowValidationException("The preferred LIV month is invalid.");
-            }
-            preferredVisitMonth = parsedMonth;
-        }
+        var preferredVisitMonth = ParsePreferredLivMonth(livInformation.PreferredVisitMonth, academicYear);
 
         if (request.Submit)
         {
@@ -315,6 +302,34 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@secondaryFocusOther", ToDbValue(request.SecondaryFocusOther?.Trim()));
         command.Parameters.AddWithValue("@desiredOutcome", ToDbValue(request.DesiredOutcome?.Trim()));
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static DateOnly? ParsePreferredLivMonth(string? value, string academicYear)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (!DateOnly.TryParseExact(
+                $"{value}-01",
+                "yyyy-MM-dd",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var parsedMonth))
+        {
+            throw new WorkflowValidationException("The preferred LIV month is invalid.");
+        }
+
+        if (!AcademicYearPolicy.TryGetBounds(academicYear, out var academicYearStart, out _)
+            || parsedMonth.Year != academicYearStart.Year
+            || parsedMonth.Month is < 9 or > 12)
+        {
+            throw new WorkflowValidationException(
+                "The preferred LIV month must be between September and December of the assessment academic year.");
+        }
+
+        return parsedMonth;
     }
 
     private static async Task InsertElevateStatementRatingAsync(

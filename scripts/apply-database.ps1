@@ -150,7 +150,9 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\046_register_action_theme_admin_lists.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\047_probation_unobserved_rubric_areas.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\048_eli_streamlined_statements.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\049_eli_unicode_punctuation.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\049_eli_unicode_punctuation.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\050_liv_visit_detail_configuration.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\051_leadership_dashboard_configuration.sql")
 )
 
 if ($ExcludeOfficialStaffData) {
