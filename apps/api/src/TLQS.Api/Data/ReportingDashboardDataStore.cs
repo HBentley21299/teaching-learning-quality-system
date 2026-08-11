@@ -367,6 +367,109 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetInt32(9)),
             cancellationToken);
 
+    public Task<IReadOnlyList<StaffParticipationDashboardSummary>> GetStaffParticipationDashboardAsync(
+        string academicYear,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken) =>
+        QueryAsync(
+            """
+            WITH selected_year AS (
+                SELECT start_date, end_date
+                FROM core.academic_years
+                WHERE academic_year_key = @academicYear
+                  AND is_active = 1
+                  AND archived_at IS NULL
+            ),
+            eligible_staff AS (
+                SELECT staff.id, staff.primary_org_unit_id,
+                       org_unit.code area_code, org_unit.name area_name,
+                       parent_org.code parent_area_code
+                FROM people.staff staff
+                LEFT JOIN org.org_units org_unit ON org_unit.id = staff.primary_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                WHERE staff.archived_at IS NULL
+                  AND staff.account_status = N'active'
+                  AND (staff.end_date IS NULL OR staff.end_date >= CONVERT(date, sysutcdatetime()))
+                  AND (
+                        @canViewAll = 1
+                        OR EXISTS (
+                            SELECT 1
+                            FROM org.fn_visible_staff(@currentUserAccountId) visible
+                            WHERE visible.staff_id = staff.id
+                        )
+                  )
+            ),
+            staff_metrics AS (
+                SELECT staff.*,
+                       CASE WHEN EXISTS (
+                           SELECT 1
+                           FROM quality.elevate_practice_assessments assessment
+                           WHERE assessment.staff_id = staff.id
+                             AND assessment.academic_year = @academicYear
+                             AND assessment.status = N'submitted'
+                             AND assessment.archived_at IS NULL
+                       ) THEN 1 ELSE 0 END eli_participation,
+                       CASE WHEN EXISTS (
+                           SELECT 1
+                           FROM quality.liv_records liv
+                           JOIN quality.liv_visits visit ON visit.liv_record_id = liv.id
+                           CROSS JOIN selected_year academic_year
+                           WHERE liv.subject_staff_id = staff.id
+                             AND liv.archived_at IS NULL
+                             AND visit.archived_at IS NULL
+                             AND visit.visit_status = N'completed'
+                             AND visit.visit_date BETWEEN academic_year.start_date AND academic_year.end_date
+                       ) THEN 1 ELSE 0 END liv_participation,
+                       CASE WHEN EXISTS (
+                           SELECT 1
+                           FROM cpd.cpd_attendance attendance
+                           JOIN cpd.cpd_events event ON event.id = attendance.cpd_event_id
+                           CROSS JOIN selected_year academic_year
+                           WHERE attendance.staff_id = staff.id
+                             AND attendance.attendance_status = N'Attended'
+                             AND attendance.archived_at IS NULL
+                             AND event.archived_at IS NULL
+                             AND event.event_date BETWEEN academic_year.start_date AND academic_year.end_date
+                       ) THEN 1 ELSE 0 END cpd_participation,
+                       CASE WHEN EXISTS (
+                           SELECT 1
+                           FROM quality.coaching_sessions session
+                           CROSS JOIN selected_year academic_year
+                           WHERE session.staff_id = staff.id
+                             AND session.status = N'completed'
+                             AND session.archived_at IS NULL
+                             AND session.session_date BETWEEN academic_year.start_date AND academic_year.end_date
+                       ) THEN 1 ELSE 0 END coaching_participation
+                FROM eligible_staff staff
+            )
+            SELECT metric.process_key, staff.primary_org_unit_id, staff.area_code, staff.area_name,
+                   staff.parent_area_code, COUNT_BIG(*) active_staff_count,
+                   SUM(metric.is_participating) participating_staff_count
+            FROM staff_metrics staff
+            CROSS APPLY (VALUES
+                (N'eli', staff.eli_participation),
+                (N'liv', staff.liv_participation),
+                (N'cpd_event', staff.cpd_participation),
+                (N'coaching_session', staff.coaching_participation)
+            ) metric(process_key, is_participating)
+            GROUP BY metric.process_key, staff.primary_org_unit_id, staff.area_code, staff.area_name, staff.parent_area_code
+            ORDER BY metric.process_key, staff.area_name, staff.area_code;
+            """,
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@academicYear", academicYear);
+            },
+            reader => new StaffParticipationDashboardSummary(
+                reader.GetString(0),
+                GetGuidOrNull(reader, 1),
+                GetStringOrNull(reader, 2),
+                GetStringOrNull(reader, 3),
+                GetStringOrNull(reader, 4),
+                reader.GetInt64(5),
+                reader.GetInt32(6)),
+            cancellationToken);
+
     private static IReadOnlyList<DashboardProcessConfigurationSummary> ParseDashboardProcesses(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return [];

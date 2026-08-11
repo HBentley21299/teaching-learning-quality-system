@@ -161,7 +161,7 @@ public sealed class ExportBrandingOptions
 {
     public string ProductName { get; set; } = "i-Elevate";
     public string OrganisationName { get; set; } = "Oldham College";
-    public string FooterText { get; set; } = "Teaching and Learning Quality System";
+    public string FooterText { get; set; } = "i-Elevate Teaching and Learning System";
     public string LogoPath { get; set; } = "";
     public string TemplateRoot { get; set; } = "";
 }

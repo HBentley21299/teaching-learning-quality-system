@@ -32,7 +32,8 @@ import type {
   DashboardProcessConfiguration,
   ElevateStatusDashboardSummary,
   OrgUnitSummary,
-  ProcessDashboardRecordSummary
+  ProcessDashboardRecordSummary,
+  StaffParticipationDashboardSummary
 } from "../services/types";
 
 type DashboardProcessKey = DashboardProcessConfiguration["processKey"];
@@ -59,6 +60,8 @@ type ProcessDefinition = {
 
 type ChartDatum = { label: string; value: number; secondary?: string };
 type ElevateStatusTotals = { staffCount: number; levelCounts: number[] };
+type StaffParticipationTotals = { activeStaffCount: number; participatingStaffCount: number };
+type DashboardOrgOption = { id: string; code: string; name: string; facultyId: string };
 
 const processDefinitions: ProcessDefinition[] = [
   { key: "overview", label: "Executive overview", shortLabel: "Overview", singular: "record", icon: Sparkles, tone: "teal" },
@@ -101,10 +104,12 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
   const [configuration, setConfiguration] = useState<DashboardConfiguration>(fallbackConfiguration);
   const [facts, setFacts] = useState<DashboardDimensionFact[]>([]);
   const [elevateStatus, setElevateStatus] = useState<ElevateStatusDashboardSummary[]>([]);
+  const [staffParticipation, setStaffParticipation] = useState<StaffParticipationDashboardSummary[]>([]);
   const [selectedProcess, setSelectedProcess] = useState<DashboardProcessKey>("overview");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [areaFilter, setAreaFilter] = useState("all");
+  const [facultyFilter, setFacultyFilter] = useState("all");
+  const [teamFilter, setTeamFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dimensionFilter, setDimensionFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
@@ -118,12 +123,13 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
   useEffect(() => {
     if (!canViewReports) return;
     let cancelled = false;
-    Promise.all([api.dashboardConfiguration(), api.dashboardDimensions(), api.elevateStatusDashboard(academicYear)])
-      .then(([nextConfiguration, nextFacts, nextElevateStatus]) => {
+    Promise.all([api.dashboardConfiguration(), api.dashboardDimensions(), api.elevateStatusDashboard(academicYear), api.staffParticipationDashboard(academicYear)])
+      .then(([nextConfiguration, nextFacts, nextElevateStatus, nextStaffParticipation]) => {
         if (cancelled) return;
         setConfiguration(nextConfiguration);
         setFacts(nextFacts.filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
         setElevateStatus(nextElevateStatus);
+        setStaffParticipation(nextStaffParticipation);
         setIntelligenceError("");
       })
       .catch(() => {
@@ -145,25 +151,38 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
   const selectedDefinition = getProcessDefinition(selectedProcess);
   const selectedConfiguration = configuration.processes.find((item) => item.processKey === selectedProcess)
     ?? fallbackConfiguration.processes.find((item) => item.processKey === selectedProcess)!;
-  const areaOptions = useMemo(() => collectDashboardAreaOptions(orgUnits, processRecords, user), [orgUnits, processRecords, user]);
+  const organisationOptions = useMemo(() => collectDashboardOrgOptions(orgUnits, user), [orgUnits, user]);
+  const selectedFaculty = organisationOptions.faculties.find((unit) => unit.id === facultyFilter);
+  const teamOptions = organisationOptions.teams.filter((unit) => unit.facultyId === facultyFilter);
+  const selectedTeam = teamOptions.find((unit) => unit.id === teamFilter);
 
   const dateAndAreaRecords = useMemo(() => processRecords.filter((record) => {
     const recordDate = getRecordDate(record);
     return (!startDate || recordDate >= startDate)
       && (!endDate || recordDate <= endDate)
-      && recordMatchesArea(record, areaFilter);
-  }), [areaFilter, endDate, processRecords, startDate]);
+      && recordMatchesOrganisation(record, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id);
+  }), [endDate, processRecords, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id, startDate]);
 
   const dateAndAreaFacts = useMemo(() => facts.filter((fact) =>
     (!startDate || fact.occurredOn >= startDate)
     && (!endDate || fact.occurredOn <= endDate)
-    && (areaFilter === "all" || fact.areaCode === areaFilter || fact.parentAreaCode === areaFilter)
-  ), [areaFilter, endDate, facts, startDate]);
+    && matchesOrganisation(fact.areaCode, fact.parentAreaCode, fact.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
+  ), [endDate, facts, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id, startDate]);
 
   const elevateStatusInScope = useMemo(() => elevateStatus.filter((row) =>
-    areaFilter === "all" || row.areaCode === areaFilter || row.parentAreaCode === areaFilter
-  ), [areaFilter, elevateStatus]);
+    matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
+  ), [elevateStatus, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id]);
   const elevateStatusTotals = useMemo(() => aggregateElevateStatus(elevateStatusInScope), [elevateStatusInScope]);
+  const staffParticipationInScope = useMemo(() => staffParticipation.filter((row) =>
+    row.processKey === selectedProcess
+    && matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
+  ), [selectedFaculty?.code, selectedProcess, selectedTeam?.code, selectedTeam?.id, staffParticipation]);
+  const staffParticipationTotals = useMemo(() => aggregateStaffParticipation(staffParticipationInScope), [staffParticipationInScope]);
+  const staffParticipationAreaData = useMemo(() => staffParticipationInScope.map((row) => ({
+    label: row.areaName ?? row.areaCode ?? "Unassigned",
+    value: percentage(row.participatingStaffCount, row.activeStaffCount),
+    secondary: `${row.participatingStaffCount} of ${row.activeStaffCount} staff`
+  })).sort((left, right) => right.value - left.value || left.label.localeCompare(right.label)), [staffParticipationInScope]);
 
   const processRecordsInScope = selectedProcess === "overview"
     ? dateAndAreaRecords
@@ -174,12 +193,11 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
   const processActionsInScope = useMemo(() => actions.filter((action) => {
     const actionDate = (action.createdAt || action.dueDate || "").slice(0, 10);
     const matchesDate = (!startDate || actionDate >= startDate) && (!endDate || actionDate <= endDate);
-    const matchesArea = areaFilter === "all"
-      || action.facultyCode === areaFilter
-      || action.teamCode === areaFilter;
+    const matchesArea = !selectedFaculty
+      || (selectedTeam ? action.teamCode === selectedTeam.code : action.facultyCode === selectedFaculty.code || action.teamCode === selectedFaculty.code);
     const matchesProcess = selectedProcess === "overview" || selectedProcess === "actions" || actionMatchesProcess(action, selectedProcess);
     return matchesDate && matchesArea && matchesProcess;
-  }), [actions, areaFilter, endDate, selectedProcess, startDate]);
+  }), [actions, endDate, selectedFaculty, selectedProcess, selectedTeam, startDate]);
 
   const statusOptions = useMemo(() => selectedProcess === "elevate_status" ? [] : selectedProcess === "actions"
     ? ["open", "overdue", "complete"]
@@ -245,10 +263,11 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
     setIsRefreshing(true);
     await onRefresh();
     try {
-      const [nextConfiguration, nextFacts, nextElevateStatus] = await Promise.all([api.dashboardConfiguration(), api.dashboardDimensions(), api.elevateStatusDashboard(academicYear)]);
+      const [nextConfiguration, nextFacts, nextElevateStatus, nextStaffParticipation] = await Promise.all([api.dashboardConfiguration(), api.dashboardDimensions(), api.elevateStatusDashboard(academicYear), api.staffParticipationDashboard(academicYear)]);
       setConfiguration(nextConfiguration);
       setFacts(nextFacts.filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
       setElevateStatus(nextElevateStatus);
+      setStaffParticipation(nextStaffParticipation);
       setIntelligenceError("");
     } catch {
       setIntelligenceError("Detailed outcome analysis is temporarily unavailable. Operational reporting remains visible.");
@@ -258,7 +277,7 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
   }
 
   function clearFilters() {
-    setStartDate(""); setEndDate(""); setAreaFilter("all"); setStatusFilter("all");
+    setStartDate(""); setEndDate(""); setFacultyFilter("all"); setTeamFilter("all"); setStatusFilter("all");
     setDimensionFilter("all"); setSearchTerm(""); setSortKey("date_desc");
   }
 
@@ -311,8 +330,8 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
       <header className="intelligence-header">
         <div>
           <p className="eyebrow">Leadership intelligence · {academicYear}</p>
-          <h1>{canViewAll ? "Whole organisation performance" : "Quality performance"}</h1>
-          <p>Quality, professional development and delivery assurance across {canViewAll ? "the college" : formatScopeLabel(user)}.</p>
+          <h1>{canViewAll ? "Whole organisation performance" : "Teaching and learning performance"}</h1>
+          <p>Teaching and learning, professional development and delivery assurance across {canViewAll ? "the college" : formatScopeLabel(user)}.</p>
         </div>
         <div className="intelligence-header-actions">
           <span className="intelligence-data-state"><i />Permission-scoped live data</span>
@@ -337,11 +356,12 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
       </nav>
 
       <section className="panel intelligence-filter-panel">
-        <div className="intelligence-filter-heading"><div><span>Current view</span><strong>{selectedConfiguration.label || selectedDefinition.label}</strong></div><small>All visuals and exports use these filters</small></div>
+        <div className="intelligence-filter-heading"><div><span>Current view</span><strong>{selectedConfiguration.label || selectedDefinition.label}</strong></div><small>{isStaffCoverageProcess(selectedProcess) ? "Staff coverage uses academic year and organisation area; record visuals also use the remaining filters" : "All visuals and exports use these filters"}</small></div>
         <div className={`intelligence-filter-grid${selectedProcess === "elevate_status" ? " intelligence-filter-grid-status" : ""}`}>
           {selectedProcess !== "elevate_status" ? <><label><span>From</span><input onChange={(event) => setStartDate(event.target.value)} type="date" value={startDate} /></label>
           <label><span>To</span><input onChange={(event) => setEndDate(event.target.value)} type="date" value={endDate} /></label></> : null}
-          <label><span>Organisation area</span><select onChange={(event) => setAreaFilter(event.target.value)} value={areaFilter}><option value="all">All permitted areas</option>{areaOptions.map((area) => <option key={area.code} value={area.code}>{area.label}</option>)}</select></label>
+          <label><span>Faculty</span><select onChange={(event) => { setFacultyFilter(event.target.value); setTeamFilter("all"); }} value={facultyFilter}><option value="all">All permitted faculties</option>{organisationOptions.faculties.map((faculty) => <option key={faculty.id} value={faculty.id}>{faculty.code} · {faculty.name}</option>)}</select></label>
+          <label><span>Team</span><select disabled={facultyFilter === "all" || teamOptions.length === 0} onChange={(event) => setTeamFilter(event.target.value)} value={teamFilter}><option value="all">{facultyFilter === "all" ? "Select a faculty first" : teamOptions.length ? "All teams in faculty" : "No teams available"}</option>{teamOptions.map((team) => <option key={team.id} value={team.id}>{team.code} · {team.name}</option>)}</select></label>
           {selectedProcess !== "elevate_status" ? <><label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option>{statusOptions.map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label>
           <label><span>Theme, focus or area</span><select onChange={(event) => setDimensionFilter(event.target.value)} value={dimensionFilter}><option value="all">All recorded dimensions</option>{dimensionOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label></> : <div className="elevate-status-filter-note"><span>Measurement</span><strong>{academicYear} · at or above each level</strong></div>}
           <Button icon={RotateCcw} onClick={clearFilters} variant="secondary">Reset</Button>
@@ -368,6 +388,8 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
           definition={selectedDefinition}
           outcomeData={outcomeData}
           records={analysisRecords}
+          staffParticipation={staffParticipationTotals.activeStaffCount ? staffParticipationTotals : undefined}
+          staffParticipationAreaData={staffParticipationAreaData}
           trendData={trendData}
         />
       )}
@@ -380,7 +402,7 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
         emptyMessage={`No ${selectedDefinition.label.toLocaleLowerCase()} match the current filters.`}
         statusSummary="Search, sort and export-ready detail"
         storageKey={`leadership-dashboard-records-${selectedProcess}`}
-        title={selectedProcess === "overview" ? "All quality records" : `${selectedDefinition.label} detail`}
+        title={selectedProcess === "overview" ? "All teaching and learning records" : `${selectedDefinition.label} detail`}
       >
         <div className="dashboard-record-heading"><div className="dashboard-record-tools"><label className="search-box dashboard-record-search"><Search size={16} /><input aria-label="Search dashboard detail" onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search current view" value={searchTerm} /></label>{selectedProcess !== "actions" ? <label className="record-sort-field"><span>Sort by</span><select onChange={(event) => setSortKey(event.target.value as SortKey)} value={sortKey}><option value="date_desc">Newest first</option><option value="date_asc">Oldest first</option><option value="title">Title</option><option value="area">Area</option><option value="status">Status</option></select></label> : null}</div></div>
         {selectedProcess === "actions" ? <ActionDetailTable actions={visibleActions} /> : <RecordDetailTable records={visibleRecords} />}
@@ -405,18 +427,18 @@ function ExecutiveOverview({ records, facts, actions, trendData, areaData, proce
 
   return <>
     <section className="intelligence-briefing panel">
-      <div><span className="intelligence-section-label"><ShieldCheck size={15} />Executive briefing</span><h2>{records.length ? `${records.length} quality and development records are in scope.` : "No activity has been recorded for this view yet."}</h2><p>{areas} organisation areas represented · {peopleReached} staff interactions or CPD attendances · {openActions.length} open actions.</p></div>
+      <div><span className="intelligence-section-label"><ShieldCheck size={15} />Executive briefing</span><h2>{records.length ? `${records.length} teaching and learning records are in scope.` : "No activity has been recorded for this view yet."}</h2><p>{areas} organisation areas represented · {peopleReached} staff interactions or CPD attendances · {openActions.length} open actions.</p></div>
       <div className="intelligence-briefing-signal"><span>Most visible focus</span><strong>{topFocus?.label ?? "Insufficient data"}</strong><small>{topFocus ? `${topFocus.value} recorded instances` : "Focus data will appear as forms are completed"}</small></div>
     </section>
     <div className="intelligence-kpi-grid">
       <MetricCard label="Recorded activity" value={records.length} detail={`${processData.filter((item) => item.value > 0).length} active processes`} tone="teal" />
       <MetricCard label="Areas represented" value={areas} detail="Across the permitted scope" tone="blue" />
-      <MetricCard label="Average quality signal" value={averageScore ? averageScore.toFixed(1) : "—"} detail={averageScore ? "Five-point comparable scale" : "Awaiting scored activity"} tone="violet" />
+      <MetricCard label="Average practice signal" value={averageScore ? averageScore.toFixed(1) : "—"} detail={averageScore ? "Five-point comparable scale" : "Awaiting scored activity"} tone="violet" />
       <MetricCard label="Action completion" value={actions.length ? `${completionRate}%` : "—"} detail={`${openActions.length} open · ${overdueActions.length} overdue`} tone={overdueActions.length ? "amber" : "green"} />
     </div>
     <div className="intelligence-chart-grid intelligence-chart-grid-wide">
       <TrendChart title="Activity trajectory" subtitle="Monthly completed and in-progress records" data={trendData} />
-      <RankedBars title="Process mix" subtitle="Volume by quality and development process" data={processData} />
+      <RankedBars title="Process mix" subtitle="Volume by teaching and learning process" data={processData} />
       <RankedBars title="Organisation coverage" subtitle="Recorded activity across curriculum areas" data={areaData} />
       <ActionAssurance actions={actions} />
     </div>
@@ -468,9 +490,10 @@ function ElevateStatusOverview({ academicYear, configuration, rows, totals }: {
   </>;
 }
 
-function ProcessOverview({ definition, configuration, records, actions, trendData, areaData, outcomeData, dimensionData }: {
+function ProcessOverview({ definition, configuration, records, actions, trendData, areaData, outcomeData, dimensionData, staffParticipation, staffParticipationAreaData }: {
   definition: ProcessDefinition; configuration: DashboardProcessConfiguration; records: ProcessDashboardRecordSummary[];
   actions: ActionSummary[]; trendData: ChartDatum[]; areaData: ChartDatum[]; outcomeData: ChartDatum[]; dimensionData: ChartDatum[];
+  staffParticipation?: StaffParticipationTotals; staffParticipationAreaData: ChartDatum[];
 }) {
   const scored = records.filter((record) => record.scoreCount > 0);
   const scoreCount = scored.reduce((total, record) => total + record.scoreCount, 0);
@@ -484,13 +507,16 @@ function ProcessOverview({ definition, configuration, records, actions, trendDat
     <div className="intelligence-section-title"><div><span>{definition.shortLabel}</span><h2>Performance and assurance</h2></div><p>Structured answers are aggregated; narrative notes are excluded from dashboard analysis.</p></div>
     <div className="intelligence-kpi-grid">
       <MetricCard label="Records in view" value={definition.key === "actions" ? actions.length : records.length} detail={`${areas} organisation areas`} tone="teal" />
-      <MetricCard label="Completed" value={completedItems} detail={totalItems ? `${Math.round((completedItems / totalItems) * 100)}% of ${definition.key === "actions" ? "actions" : "records"}` : "No records in view"} tone="green" />
+      {staffParticipation ? <MetricCard label={staffCoverageLabel(definition.key)} value={`${percentage(staffParticipation.participatingStaffCount, staffParticipation.activeStaffCount)}%`} detail={`${staffParticipation.participatingStaffCount} of ${staffParticipation.activeStaffCount} active staff`} tone="green" />
+        : <MetricCard label="Completed" value={completedItems} detail={totalItems ? `${Math.round((completedItems / totalItems) * 100)}% of ${definition.key === "actions" ? "actions" : "records"}` : "No records in view"} tone="green" />}
       <MetricCard label="Average outcome" value={average ? average.toFixed(1) : "—"} detail={average ? "Five-point comparable scale" : "No scored outcomes"} tone="violet" />
       <MetricCard label="Open actions" value={open.length} detail={`${open.filter((action) => action.isOverdue).length} overdue`} tone={open.some((action) => action.isOverdue) ? "amber" : "blue"} />
     </div>
     <div className="intelligence-chart-grid">
       {configuration.showTrend ? <TrendChart title="Activity over time" subtitle="Monthly records in the current view" data={trendData} /> : null}
-      {configuration.showAreaComparison ? <RankedBars title="Organisation comparison" subtitle="Volume by organisation area" data={areaData} /> : null}
+      {configuration.showAreaComparison ? staffParticipation
+        ? <PercentageBars title="Staff coverage by organisation" subtitle={`${staffCoverageLabel(definition.key)} as a percentage of active staff`} data={staffParticipationAreaData} />
+        : <RankedBars title="Organisation comparison" subtitle="Volume by organisation area" data={areaData} /> : null}
       {configuration.showOutcomes ? configuration.primaryVisual === "donut"
         ? <DonutChart title="Recorded outcomes" subtitle="Distribution of configured responses" data={outcomeData.length ? outcomeData : dimensionData} />
         : <OutcomeProfile data={dimensionData} /> : null}
@@ -519,6 +545,11 @@ function TrendChart({ title, subtitle, data }: { title: string; subtitle: string
 function RankedBars({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
   const visible = data.slice(0, 8); const max = Math.max(...visible.map((item) => item.value), 1);
   return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><BarChart3 size={18} /></div>{visible.length ? <div className="intelligence-ranked-bars">{visible.map((item) => <div key={item.label}><span title={item.label}>{item.label}</span><div><i style={{ width: `${Math.max(4, (item.value / max) * 100)}%` }}/></div><strong>{item.value}</strong></div>)}</div> : <EmptyChart />}</section>;
+}
+
+function PercentageBars({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
+  const visible = data.slice(0, 12);
+  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><UsersRound size={18} /></div>{visible.length ? <div className="intelligence-percentage-bars">{visible.map((item) => <div key={item.label}><span><strong title={item.label}>{item.label}</strong><small>{item.secondary}</small></span><div><i style={{ width: `${item.value}%` }} /></div><b>{item.value}%</b></div>)}</div> : <EmptyChart message="No active staff are available for this organisation scope." />}</section>;
 }
 
 function OutcomeProfile({ data }: { data: ChartDatum[] }) {
@@ -626,6 +657,27 @@ function aggregateElevateStatus(rows: ElevateStatusDashboardSummary[]): ElevateS
   }), { staffCount: 0, levelCounts: [0, 0, 0, 0, 0] });
 }
 
+function aggregateStaffParticipation(rows: StaffParticipationDashboardSummary[]): StaffParticipationTotals {
+  return rows.reduce<StaffParticipationTotals>((total, row) => ({
+    activeStaffCount: total.activeStaffCount + row.activeStaffCount,
+    participatingStaffCount: total.participatingStaffCount + row.participatingStaffCount
+  }), { activeStaffCount: 0, participatingStaffCount: 0 });
+}
+
+function staffCoverageLabel(processKey: DashboardProcessKey) {
+  const labels: Partial<Record<DashboardProcessKey, string>> = {
+    eli: "ELI submission rate",
+    liv: "Completed LIV coverage",
+    cpd_event: "CPD participation",
+    coaching_session: "Coaching and mentoring reach"
+  };
+  return labels[processKey] ?? "Staff coverage";
+}
+
+function isStaffCoverageProcess(processKey: DashboardProcessKey) {
+  return ["eli", "liv", "cpd_event", "coaching_session"].includes(processKey);
+}
+
 function percentage(count: number, total: number) {
   return total > 0 ? Math.round((count / total) * 1000) / 10 : 0;
 }
@@ -640,7 +692,12 @@ function actionMatchesProcess(action: ActionSummary, processKey: DashboardProces
 }
 
 function getProcessDefinition(processKey: DashboardProcessKey | RecordProcessKey) { return processDefinitions.find((item) => item.key === processKey) ?? processDefinitions[0]; }
-function recordMatchesArea(record: ProcessDashboardRecordSummary, area: string) { return area === "all" || record.areaCode === area || record.parentAreaCode === area; }
+function recordMatchesOrganisation(record: ProcessDashboardRecordSummary, facultyCode?: string, teamCode?: string, teamId?: string) { return matchesOrganisation(record.areaCode, record.parentAreaCode, record.orgUnitId, facultyCode, teamCode, teamId); }
+function matchesOrganisation(areaCode?: string, parentAreaCode?: string, orgUnitId?: string, facultyCode?: string, teamCode?: string, teamId?: string) {
+  if (teamCode) return orgUnitId === teamId || areaCode === teamCode;
+  if (facultyCode) return areaCode === facultyCode || parentAreaCode === facultyCode;
+  return true;
+}
 function splitValues(value?: string) { return value?.split("|").map((item) => item.trim()).filter(Boolean) ?? []; }
 function uniqueValues(values: string[]) { return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right)); }
 function getRecordDate(record: ProcessDashboardRecordSummary) { return record.recordDate ?? record.createdAt.slice(0, 10); }
@@ -655,13 +712,41 @@ function formatMonth(value: string) { return new Intl.DateTimeFormat("en-GB", { 
 function academicYearForDate(value: string) { const date = new Date(value); const year = date.getFullYear(); const start = date.getMonth() >= 7 ? year : year - 1; return `${start}/${String(start + 1).slice(-2)}`; }
 function formatScopeLabel(user: CurrentUser) { const count = user.scopes.filter((scope) => scope.scopeType === "assigned_org_units").length; return count ? `${count} assigned organisation area${count === 1 ? "" : "s"}` : "your permitted records"; }
 
-function collectDashboardAreaOptions(orgUnits: OrgUnitSummary[], records: ProcessDashboardRecordSummary[], user: CurrentUser) {
+function collectDashboardOrgOptions(orgUnits: OrgUnitSummary[], user: CurrentUser) {
   const active = orgUnits.filter((unit) => unit.isActive && ["faculty", "team", "faculty_child_code", "faculty_child"].includes(unit.orgUnitType));
-  const permitted = new Set(user.permissions.includes("reports.view_all") ? active.map((unit) => unit.id) : user.scopes.filter((scope) => scope.scopeType === "assigned_org_units" && scope.orgUnitId).map((scope) => scope.orgUnitId!));
-  let changed = true; while (changed) { changed = false; for (const unit of active) if (unit.parentOrgUnitId && permitted.has(unit.parentOrgUnitId) && !permitted.has(unit.id)) { permitted.add(unit.id); changed = true; } }
-  const options = active.filter((unit) => permitted.has(unit.id)).map((unit) => { const parent = active.find((candidate) => candidate.id === unit.parentOrgUnitId); return { code: unit.code, label: parent ? `${parent.code} / ${unit.code} · ${unit.name}` : `${unit.code} · ${unit.name}` }; });
-  if (options.length) return options.sort((left, right) => left.label.localeCompare(right.label));
-  return uniqueValues(records.flatMap((record) => [record.parentAreaCode ?? "", record.areaCode ?? ""])).map((code) => ({ code, label: code }));
+  const byId = new Map(active.map((unit) => [unit.id, unit]));
+  const permitted = new Set(user.permissions.includes("reports.view_all")
+    ? active.map((unit) => unit.id)
+    : user.scopes.filter((scope) => scope.scopeType === "assigned_org_units" && scope.orgUnitId).map((scope) => scope.orgUnitId!));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const unit of active) {
+      if (unit.parentOrgUnitId && permitted.has(unit.parentOrgUnitId) && !permitted.has(unit.id)) {
+        permitted.add(unit.id);
+        changed = true;
+      }
+    }
+  }
+  function facultyFor(unit: OrgUnitSummary) {
+    let current: OrgUnitSummary | undefined = unit;
+    while (current && current.orgUnitType !== "faculty") current = current.parentOrgUnitId ? byId.get(current.parentOrgUnitId) : undefined;
+    return current;
+  }
+  const teams: DashboardOrgOption[] = active.filter((unit) => unit.orgUnitType !== "faculty" && permitted.has(unit.id)).flatMap((unit) => {
+    const faculty = facultyFor(unit);
+    return faculty ? [{ id: unit.id, code: unit.code, name: unit.name, facultyId: faculty.id }] : [];
+  });
+  const facultyIds = new Set([...permitted].flatMap((id) => {
+    const unit = byId.get(id);
+    const faculty = unit ? facultyFor(unit) : undefined;
+    return faculty ? [faculty.id] : [];
+  }));
+  const faculties: DashboardOrgOption[] = active.filter((unit) => unit.orgUnitType === "faculty" && facultyIds.has(unit.id)).map((unit) => ({ id: unit.id, code: unit.code, name: unit.name, facultyId: unit.id }));
+  return {
+    faculties: faculties.sort((left, right) => left.name.localeCompare(right.name)),
+    teams: teams.sort((left, right) => left.name.localeCompare(right.name))
+  };
 }
 
 function downloadCsv(filename: string, rows: Array<Array<string | number>>) {

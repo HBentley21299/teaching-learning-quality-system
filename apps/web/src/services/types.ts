@@ -628,6 +628,16 @@ export type ElevateStatusDashboardSummary = {
   level5OrAbove: number;
 };
 
+export type StaffParticipationDashboardSummary = {
+  processKey: "eli" | "liv" | "cpd_event" | "coaching_session";
+  orgUnitId?: string;
+  areaCode?: string;
+  areaName?: string;
+  parentAreaCode?: string;
+  activeStaffCount: number;
+  participatingStaffCount: number;
+};
+
 export type RecordNavigation = {
   id: string;
   recordType: string;

@@ -481,7 +481,7 @@ export function App() {
               {route === "team" ? <MyTeam onOpenActions={openTeamActions} onOpenProfile={openTeamProfile} /> : null}
               {route === "admin" ? <AdminCentre initialTab={adminTab} modules={modules} onOpenRecord={openAdminRecord} onTabChange={handleAdminTabChanged} profiles={profiles} staff={staff} user={user} /> : null}
               {route === "learning" ? (
-                <ModuleWorkspace academicYear={academicYear} eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="learning" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("learning")} onRecordOpened={handleRecordOpened} staff={staff} title="Learning Walks" user={user} />
+                <ModuleWorkspace academicYear={academicYear} eyebrow="Teaching and learning activity" initialRecordId={sourceRecordId} mode="learning" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("learning")} onRecordOpened={handleRecordOpened} staff={staff} title="Learning Walks" user={user} />
               ) : null}
               {route === "liv" ? (
                 <LivVisits
@@ -512,7 +512,7 @@ export function App() {
                 <ModuleWorkspace
                   academicYear={academicYear}
                   title="Elevate Your Learning Environment"
-                  eyebrow="Learning environment quality"
+                  eyebrow="Learning environment review"
                   initialRecordId={sourceRecordId}
                   mode="elevate"
                   onRecordClosed={() => handleRecordClosed("elevate")}
@@ -527,7 +527,7 @@ export function App() {
                 <CoachingMentoring initialRecordId={sourceRecordId} onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("coaching")} onRecordOpened={handleRecordOpened} orgUnits={orgUnits} staff={staff} user={user} />
               ) : null}
               {route === "scrutiny" ? (
-                <ModuleWorkspace academicYear={academicYear} eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="scrutiny" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("scrutiny")} onRecordOpened={handleRecordOpened} staff={staff} title="Work Scrutiny" user={user} />
+                <ModuleWorkspace academicYear={academicYear} eyebrow="Teaching and learning activity" initialRecordId={sourceRecordId} mode="scrutiny" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("scrutiny")} onRecordOpened={handleRecordOpened} staff={staff} title="Work Scrutiny" user={user} />
               ) : null}
               {route === "cpd" ? (
                 <ModuleWorkspace academicYear={academicYear} eyebrow="Professional learning" initialRecordId={sourceRecordId} mode="cpd" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("cpd")} onRecordOpened={handleRecordOpened} staff={staff} title="CPD Management" user={user} />

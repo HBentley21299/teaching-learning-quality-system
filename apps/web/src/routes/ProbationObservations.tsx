@@ -202,7 +202,7 @@ export function ProbationObservations({
   return (
     <div className="route-stack probation-route">
       <div className="route-header">
-        <div><p className="eyebrow">Staff probation quality process</p><h1>Probationary Observations</h1></div>
+        <div><p className="eyebrow">Staff probation observation process</p><h1>Probationary Observations</h1></div>
         {canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create probation case</Button> : null}
       </div>
       {message ? <div className="notice-row">{message}</div> : null}

@@ -1,4 +1,4 @@
-# Teaching & Learning Quality System
+# i-Elevate Teaching and Learning System
 
 Web application for managing a college's Teaching & Learning workflows: Learning Walks, Work Scrutiny, managed and self-logged CPD, LIV (Learning and Innovation Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
 
@@ -62,7 +62,7 @@ development and the current origin in a production build.
 | Role | Access |
 | --- | --- |
 | Admin (`super_admin`) | Everything, including users, permissions and template administration |
-| Teaching & Learning (`teaching_learning_team`) | Quality workflows, global reporting, LIV and actions |
+| Teaching & Learning (`teaching_learning_team`) | Teaching and learning workflows, global reporting, LIV and actions |
 | Director (`director`) | Scoped reporting across assigned faculties, LIV submit |
 | Head of Faculty (`head_of_faculty`) | Faculty records, team managers, actions and dashboards |
 | Programme Leader (`programme_leader`) | Team records, actions and dashboards |

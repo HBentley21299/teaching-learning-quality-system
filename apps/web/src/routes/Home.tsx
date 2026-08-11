@@ -21,7 +21,7 @@ type HomeProps = {
 
 const tileDescriptions: Partial<Record<AppRoute, string>> = {
   dashboard: "KPIs, trends and activity across your scope",
-  staff: "Browse staff and their quality profiles",
+  staff: "Browse staff and their teaching and learning profiles",
   team: "Your team's records and actions at a glance",
   admin: "Users, permissions, templates and settings",
   learning: "Record and review learning walks",
@@ -32,7 +32,7 @@ const tileDescriptions: Partial<Record<AppRoute, string>> = {
   coaching: "Coaching cycles and mentoring sessions",
   scrutiny: "Sample and review learners' work",
   cpd: "Log and manage professional development",
-  profile: "Your quality profile and reflections",
+  profile: "Your teaching and learning profile and reflections",
   actions: "Track actions assigned to you and your teams"
 };
 
@@ -53,12 +53,12 @@ const afternoonMessages = [
 const eveningMessages = [
   "A late one? Your dedication doesn't go unnoticed.",
   "Even ELI is winding down. Great work today.",
-  "Quality work takes time — thanks for putting it in.",
+  "Thoughtful development takes time — thanks for putting it in.",
   "Wrapping up — tomorrow is already looking brighter."
 ];
 
 const fridayMessage = "Happy Friday — finish the week strong!";
-const weekendMessage = "Weekend mode: even quality legends deserve a rest.";
+const weekendMessage = "Weekend mode: even great educators deserve a rest.";
 
 function greetingFor(now: Date) {
   const hour = now.getHours();

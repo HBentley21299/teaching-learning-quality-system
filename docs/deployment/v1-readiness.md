@@ -1,7 +1,7 @@
 # V1 Deployment Readiness
 
-This is the release gate for the first production deployment of the Teaching &
-Learning Quality System. A successful build is necessary, but it is not the
+This is the release gate for the first production deployment of the i-Elevate
+Teaching and Learning System. A successful build is necessary, but it is not the
 same as approval to use live staff data.
 
 ## V1 Topology

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The leadership dashboard provides permission-scoped operational, quality and assurance reporting. It deliberately distinguishes structured responses that can be compared from narrative responses that require professional interpretation.
+The leadership dashboard provides permission-scoped operational, teaching and learning, and assurance reporting. It deliberately distinguishes structured responses that can be compared from narrative responses that require professional interpretation.
 
 The dashboard never broadens record access. Whole-organisation and scoped users receive the same dashboard design, but the API constructs every dataset from their permitted staff and organisation scope.
 

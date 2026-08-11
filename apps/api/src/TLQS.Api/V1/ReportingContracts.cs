@@ -45,3 +45,12 @@ public sealed record ElevateStatusDashboardSummary(
     int Level3OrAbove,
     int Level4OrAbove,
     int Level5OrAbove);
+
+public sealed record StaffParticipationDashboardSummary(
+    string ProcessKey,
+    Guid? OrgUnitId,
+    string? AreaCode,
+    string? AreaName,
+    string? ParentAreaCode,
+    long ActiveStaffCount,
+    int ParticipatingStaffCount);

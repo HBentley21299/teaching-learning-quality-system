@@ -1333,7 +1333,7 @@ function LearningWalkThemeAdminPanel() {
       <div className="panel-heading">
         <div>
           <h2>Teaching &amp; Learning themes</h2>
-          <span>Shared by Learning Walks, LIV and quality reporting</span>
+          <span>Shared by Learning Walks, LIV and teaching and learning reporting</span>
         </div>
         <strong>{activeGroups.length} active areas · {activeThemeCount} active themes</strong>
       </div>

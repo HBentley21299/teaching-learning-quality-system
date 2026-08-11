@@ -2463,11 +2463,11 @@ td {
   align-items: end;
   display: grid;
   gap: 9px;
-  grid-template-columns: minmax(125px, .7fr) minmax(125px, .7fr) minmax(210px, 1.35fr) minmax(150px, .8fr) minmax(210px, 1.3fr) auto;
+  grid-template-columns: minmax(115px, .65fr) minmax(115px, .65fr) minmax(175px, 1fr) minmax(175px, 1fr) minmax(135px, .75fr) minmax(190px, 1.2fr) auto;
 }
 
 .intelligence-filter-grid-status {
-  grid-template-columns: minmax(260px, 1.4fr) minmax(260px, 1fr) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(260px, 1fr) auto;
 }
 
 .elevate-status-filter-note {
@@ -2738,7 +2738,8 @@ td {
 }
 
 .intelligence-ranked-bars,
-.intelligence-outcome-list {
+.intelligence-outcome-list,
+.intelligence-percentage-bars {
   display: grid;
   gap: 13px;
   margin-top: 22px;
@@ -2776,6 +2777,52 @@ td {
 
 .intelligence-ranked-bars strong {
   font-size: .75rem;
+  text-align: right;
+}
+
+.intelligence-percentage-bars > div {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(115px, 170px) minmax(100px, 1fr) 45px;
+}
+
+.intelligence-percentage-bars > div > span,
+.intelligence-percentage-bars > div > span > strong,
+.intelligence-percentage-bars > div > span > small {
+  display: block;
+  min-width: 0;
+}
+
+.intelligence-percentage-bars > div > span > strong {
+  font-size: .7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intelligence-percentage-bars > div > span > small {
+  color: var(--text-muted);
+  font-size: .6rem;
+  margin-top: 2px;
+}
+
+.intelligence-percentage-bars > div > div {
+  background: var(--surface-muted);
+  border-radius: 999px;
+  height: 7px;
+  overflow: hidden;
+}
+
+.intelligence-percentage-bars i {
+  background: linear-gradient(90deg, #31a66a, var(--accent));
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
+.intelligence-percentage-bars b {
+  font-size: .72rem;
   text-align: right;
 }
 

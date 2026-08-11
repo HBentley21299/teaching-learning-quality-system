@@ -1,4 +1,4 @@
-# Starting and Running the Teaching & Learning Quality System
+# Starting and Running the i-Elevate Teaching and Learning System
 
 This guide is for starting the application locally on Harry's machine.
 
