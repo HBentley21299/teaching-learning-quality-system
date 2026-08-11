@@ -39,6 +39,7 @@ import type {
   DashboardConfiguration,
   DashboardDimensionFact,
   DashboardProcessConfiguration,
+  ElevateStatusDashboardSummary,
   ElevateEnvironmentPillarSummary,
   ElevatePracticeProgress,
   ElevatePracticeAudit,
@@ -318,6 +319,8 @@ export const api = {
     getJson<DashboardConfiguration>("/api/v1/reports/dashboard-configuration"),
   dashboardDimensions: () =>
     getJson<DashboardDimensionFact[]>("/api/v1/reports/dashboard-dimensions"),
+  elevateStatusDashboard: (academicYear: string) =>
+    getJson<ElevateStatusDashboardSummary[]>(`/api/v1/reports/elevate-status?academicYear=${encodeURIComponent(academicYear)}`),
   saveDashboardConfiguration: (processes: DashboardProcessConfiguration[]) =>
     sendJson("/api/v1/admin/reports/dashboard-configuration", "PUT", { processes }),
   learningWalkRollup: () =>

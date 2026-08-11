@@ -18,7 +18,8 @@ public sealed partial class SqlFoundationDataStore
         new("coaching_session", "Coaching and Mentoring", true, 70, "donut", true, true, true, true),
         new("work_scrutiny", "Work Scrutiny", true, 80, "bar", true, true, true, true),
         new("cpd_event", "CPD", true, 90, "bar", true, true, true, false),
-        new("actions", "Actions", true, 100, "donut", true, true, true, true)
+        new("elevate_status", "Elevate Status", true, 100, "bar", false, true, true, false),
+        new("actions", "Actions", true, 110, "donut", true, true, true, true)
     ];
 
     private static readonly HashSet<string> DashboardVisualTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -302,6 +303,68 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(10),
                 reader.GetString(11),
                 reader.IsDBNull(12) ? null : reader.GetDecimal(12)),
+            cancellationToken);
+
+    public Task<IReadOnlyList<ElevateStatusDashboardSummary>> GetElevateStatusDashboardAsync(
+        string academicYear,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken) =>
+        QueryAsync(
+            """
+            WITH eligible_staff AS (
+                SELECT staff.id, staff.primary_org_unit_id,
+                       org_unit.code area_code, org_unit.name area_name,
+                       parent_org.code parent_area_code
+                FROM people.staff staff
+                LEFT JOIN org.org_units org_unit ON org_unit.id = staff.primary_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                WHERE staff.archived_at IS NULL
+                  AND staff.account_status = N'active'
+                  AND (staff.end_date IS NULL OR staff.end_date >= CONVERT(date, sysutcdatetime()))
+                  AND (
+                        @canViewAll = 1
+                        OR EXISTS (
+                            SELECT 1
+                            FROM org.fn_visible_staff(@currentUserAccountId) visible
+                            WHERE visible.staff_id = staff.id
+                        )
+                  )
+            ),
+            highest_award AS (
+                SELECT award.staff_id, MAX(CONVERT(int, award.level_number)) level_number
+                FROM cpd.elevate_status_awards award
+                WHERE award.academic_year_key = @academicYear
+                  AND award.archived_at IS NULL
+                GROUP BY award.staff_id
+            )
+            SELECT eligible.primary_org_unit_id, eligible.area_code, eligible.area_name,
+                   eligible.parent_area_code, COUNT_BIG(*) staff_count,
+                   SUM(CASE WHEN COALESCE(award.level_number, 0) >= 1 THEN 1 ELSE 0 END) level_1_or_above,
+                   SUM(CASE WHEN COALESCE(award.level_number, 0) >= 2 THEN 1 ELSE 0 END) level_2_or_above,
+                   SUM(CASE WHEN COALESCE(award.level_number, 0) >= 3 THEN 1 ELSE 0 END) level_3_or_above,
+                   SUM(CASE WHEN COALESCE(award.level_number, 0) >= 4 THEN 1 ELSE 0 END) level_4_or_above,
+                   SUM(CASE WHEN COALESCE(award.level_number, 0) >= 5 THEN 1 ELSE 0 END) level_5_or_above
+            FROM eligible_staff eligible
+            LEFT JOIN highest_award award ON award.staff_id = eligible.id
+            GROUP BY eligible.primary_org_unit_id, eligible.area_code, eligible.area_name, eligible.parent_area_code
+            ORDER BY eligible.area_name, eligible.area_code;
+            """,
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@academicYear", academicYear);
+            },
+            reader => new ElevateStatusDashboardSummary(
+                GetGuidOrNull(reader, 0),
+                GetStringOrNull(reader, 1),
+                GetStringOrNull(reader, 2),
+                GetStringOrNull(reader, 3),
+                reader.GetInt64(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9)),
             cancellationToken);
 
     private static IReadOnlyList<DashboardProcessConfigurationSummary> ParseDashboardProcesses(string? json)

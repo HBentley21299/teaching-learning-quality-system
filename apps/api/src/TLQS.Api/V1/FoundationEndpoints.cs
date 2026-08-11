@@ -896,6 +896,18 @@ public static class FoundationEndpoints
             return Results.Ok(await store.GetDashboardDimensionFactsAsync(currentUser, cancellationToken));
         });
 
+        api.MapGet("/reports/elevate-status", async (string academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                && !currentUser.HasPermission(PermissionKeys.ReportsViewScoped))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetElevateStatusDashboardAsync(academicYear, currentUser, cancellationToken));
+        });
+
         api.MapPut("/admin/reports/dashboard-configuration", async (SaveDashboardConfigurationRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);

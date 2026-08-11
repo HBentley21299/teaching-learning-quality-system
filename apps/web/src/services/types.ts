@@ -582,7 +582,7 @@ export type ProcessDashboardRecordSummary = {
 };
 
 export type DashboardProcessConfiguration = {
-  processKey: "overview" | "learning_walk" | "liv" | "eli" | "probation_case" | "elevate_environment" | "coaching_session" | "work_scrutiny" | "cpd_event" | "actions";
+  processKey: "overview" | "learning_walk" | "liv" | "eli" | "probation_case" | "elevate_environment" | "coaching_session" | "work_scrutiny" | "cpd_event" | "elevate_status" | "actions";
   label: string;
   isEnabled: boolean;
   displayOrder: number;
@@ -613,6 +613,19 @@ export type DashboardDimensionFact = {
   valueKey: string;
   valueLabel: string;
   numericValue?: number;
+};
+
+export type ElevateStatusDashboardSummary = {
+  orgUnitId?: string;
+  areaCode?: string;
+  areaName?: string;
+  parentAreaCode?: string;
+  staffCount: number;
+  level1OrAbove: number;
+  level2OrAbove: number;
+  level3OrAbove: number;
+  level4OrAbove: number;
+  level5OrAbove: number;
 };
 
 export type RecordNavigation = {
@@ -702,7 +715,7 @@ export type ElevateStatusCpdSummary = {
 
 export type ElevateStatusLevelSummary = {
   levelNumber: number;
-  levelKey: "explorer" | "storyteller" | "champion" | "trailblazer" | "changemaker";
+  levelKey: "explorer" | "storyteller" | "innovator" | "champion" | "changemaker";
   name: string;
   requiredSessions: number;
   requirementLabel?: string;

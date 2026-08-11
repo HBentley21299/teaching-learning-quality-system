@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertTriangle,
+  Award,
   BarChart3,
   BookOpenCheck,
   Building2,
@@ -29,6 +30,7 @@ import type {
   DashboardConfiguration,
   DashboardDimensionFact,
   DashboardProcessConfiguration,
+  ElevateStatusDashboardSummary,
   OrgUnitSummary,
   ProcessDashboardRecordSummary
 } from "../services/types";
@@ -56,6 +58,7 @@ type ProcessDefinition = {
 };
 
 type ChartDatum = { label: string; value: number; secondary?: string };
+type ElevateStatusTotals = { staffCount: number; levelCounts: number[] };
 
 const processDefinitions: ProcessDefinition[] = [
   { key: "overview", label: "Executive overview", shortLabel: "Overview", singular: "record", icon: Sparkles, tone: "teal" },
@@ -67,8 +70,17 @@ const processDefinitions: ProcessDefinition[] = [
   { key: "coaching_session", label: "Coaching and Mentoring", shortLabel: "Coaching", singular: "session", icon: MessagesSquare, tone: "teal" },
   { key: "work_scrutiny", label: "Work Scrutiny", shortLabel: "Scrutiny", singular: "scrutiny", icon: ClipboardCheck, tone: "blue" },
   { key: "cpd_event", label: "CPD", shortLabel: "CPD", singular: "CPD event", icon: GraduationCap, tone: "green" },
+  { key: "elevate_status", label: "Elevate Status", shortLabel: "Elevate Status", singular: "staff status", icon: Award, tone: "violet" },
   { key: "actions", label: "Actions", shortLabel: "Actions", singular: "action", icon: ClipboardList, tone: "amber" }
 ];
+
+const elevateLevelDefinitions = [
+  { level: 1, key: "explorer", name: "Elevate Explorer", sessions: 3 },
+  { level: 2, key: "storyteller", name: "Elevate Storyteller", sessions: 6 },
+  { level: 3, key: "innovator", name: "Elevate Innovator", sessions: 9 },
+  { level: 4, key: "champion", name: "Elevate Champion", sessions: 12 },
+  { level: 5, key: "changemaker", name: "Elevate Changemaker", sessions: 15 }
+] as const;
 
 const fallbackConfiguration: DashboardConfiguration = {
   schemaVersion: 2,
@@ -77,7 +89,7 @@ const fallbackConfiguration: DashboardConfiguration = {
     label: definition.label,
     isEnabled: true,
     displayOrder: (index + 1) * 10,
-    primaryVisual: ["overview", "learning_walk", "liv", "eli", "probation_case", "elevate_environment", "work_scrutiny", "cpd_event"].includes(definition.key) ? "bar" : "donut",
+    primaryVisual: ["overview", "learning_walk", "liv", "eli", "probation_case", "elevate_environment", "work_scrutiny", "cpd_event", "elevate_status"].includes(definition.key) ? "bar" : "donut",
     showTrend: true,
     showAreaComparison: true,
     showOutcomes: true,
@@ -88,6 +100,7 @@ const fallbackConfiguration: DashboardConfiguration = {
 export function Dashboard({ academicYear, actions, orgUnits, processRecords, user, onRefresh }: DashboardProps) {
   const [configuration, setConfiguration] = useState<DashboardConfiguration>(fallbackConfiguration);
   const [facts, setFacts] = useState<DashboardDimensionFact[]>([]);
+  const [elevateStatus, setElevateStatus] = useState<ElevateStatusDashboardSummary[]>([]);
   const [selectedProcess, setSelectedProcess] = useState<DashboardProcessKey>("overview");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -105,11 +118,12 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
   useEffect(() => {
     if (!canViewReports) return;
     let cancelled = false;
-    Promise.all([api.dashboardConfiguration(), api.dashboardDimensions()])
-      .then(([nextConfiguration, nextFacts]) => {
+    Promise.all([api.dashboardConfiguration(), api.dashboardDimensions(), api.elevateStatusDashboard(academicYear)])
+      .then(([nextConfiguration, nextFacts, nextElevateStatus]) => {
         if (cancelled) return;
         setConfiguration(nextConfiguration);
         setFacts(nextFacts.filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
+        setElevateStatus(nextElevateStatus);
         setIntelligenceError("");
       })
       .catch(() => {
@@ -146,6 +160,11 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
     && (areaFilter === "all" || fact.areaCode === areaFilter || fact.parentAreaCode === areaFilter)
   ), [areaFilter, endDate, facts, startDate]);
 
+  const elevateStatusInScope = useMemo(() => elevateStatus.filter((row) =>
+    areaFilter === "all" || row.areaCode === areaFilter || row.parentAreaCode === areaFilter
+  ), [areaFilter, elevateStatus]);
+  const elevateStatusTotals = useMemo(() => aggregateElevateStatus(elevateStatusInScope), [elevateStatusInScope]);
+
   const processRecordsInScope = selectedProcess === "overview"
     ? dateAndAreaRecords
     : selectedProcess === "actions" ? [] : dateAndAreaRecords.filter((record) => record.processKey === selectedProcess);
@@ -162,10 +181,10 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
     return matchesDate && matchesArea && matchesProcess;
   }), [actions, areaFilter, endDate, selectedProcess, startDate]);
 
-  const statusOptions = useMemo(() => selectedProcess === "actions"
+  const statusOptions = useMemo(() => selectedProcess === "elevate_status" ? [] : selectedProcess === "actions"
     ? ["open", "overdue", "complete"]
     : uniqueValues(processRecordsInScope.map((record) => record.status)), [processRecordsInScope, selectedProcess]);
-  const dimensionOptions = useMemo(() => uniqueValues([
+  const dimensionOptions = useMemo(() => selectedProcess === "elevate_status" ? [] : uniqueValues([
     ...processFactsInScope.map((fact) => fact.seriesLabel),
     ...processRecordsInScope.flatMap((record) => splitValues(record.theme)),
     ...(selectedProcess === "overview" || selectedProcess === "actions" ? processActionsInScope.map((action) => action.actionTheme) : [])
@@ -226,9 +245,10 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
     setIsRefreshing(true);
     await onRefresh();
     try {
-      const [nextConfiguration, nextFacts] = await Promise.all([api.dashboardConfiguration(), api.dashboardDimensions()]);
+      const [nextConfiguration, nextFacts, nextElevateStatus] = await Promise.all([api.dashboardConfiguration(), api.dashboardDimensions(), api.elevateStatusDashboard(academicYear)]);
       setConfiguration(nextConfiguration);
       setFacts(nextFacts.filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
+      setElevateStatus(nextElevateStatus);
       setIntelligenceError("");
     } catch {
       setIntelligenceError("Detailed outcome analysis is temporarily unavailable. Operational reporting remains visible.");
@@ -248,6 +268,20 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
   }
 
   function exportCurrentView() {
+    if (selectedProcess === "elevate_status") {
+      downloadCsv(`i-elevate-status-${academicYear.replace("/", "-")}.csv`, [
+        ["Organisation area", "Active staff", ...elevateLevelDefinitions.map((level) => `Level ${level.level} or above`)],
+        ...elevateStatusInScope.map((row) => [
+          row.areaName ?? row.areaCode ?? "Unassigned", row.staffCount,
+          ...elevateLevelDefinitions.map((level) => {
+            const count = elevateStatusLevelCount(row, level.level);
+            return `${count} (${percentage(count, row.staffCount)}%)`;
+          })
+        ]),
+        ["Overall", elevateStatusTotals.staffCount, ...elevateStatusTotals.levelCounts.map((count) => `${count} (${percentage(count, elevateStatusTotals.staffCount)}%)`)]
+      ]);
+      return;
+    }
     if (selectedProcess === "actions") {
       downloadCsv(`i-elevate-actions-${academicYear.replace("/", "-")}.csv`, [
         ["Theme", "Action", "Owner", "Area", "Due", "Status"],
@@ -295,19 +329,21 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
           const Icon = definition.icon;
           const count = item.processKey === "overview"
             ? dateAndAreaRecords.length
-            : item.processKey === "actions" ? processActionsInScope.length : dateAndAreaRecords.filter((record) => record.processKey === item.processKey).length;
+            : item.processKey === "actions" ? processActionsInScope.length
+              : item.processKey === "elevate_status" ? elevateStatusTotals.staffCount
+                : dateAndAreaRecords.filter((record) => record.processKey === item.processKey).length;
           return <button aria-pressed={selectedProcess === item.processKey} key={item.processKey} onClick={() => selectProcess(item.processKey)} type="button"><Icon size={17} /><span>{item.label || definition.shortLabel}</span><strong>{count}</strong></button>;
         })}
       </nav>
 
       <section className="panel intelligence-filter-panel">
         <div className="intelligence-filter-heading"><div><span>Current view</span><strong>{selectedConfiguration.label || selectedDefinition.label}</strong></div><small>All visuals and exports use these filters</small></div>
-        <div className="intelligence-filter-grid">
-          <label><span>From</span><input onChange={(event) => setStartDate(event.target.value)} type="date" value={startDate} /></label>
-          <label><span>To</span><input onChange={(event) => setEndDate(event.target.value)} type="date" value={endDate} /></label>
+        <div className={`intelligence-filter-grid${selectedProcess === "elevate_status" ? " intelligence-filter-grid-status" : ""}`}>
+          {selectedProcess !== "elevate_status" ? <><label><span>From</span><input onChange={(event) => setStartDate(event.target.value)} type="date" value={startDate} /></label>
+          <label><span>To</span><input onChange={(event) => setEndDate(event.target.value)} type="date" value={endDate} /></label></> : null}
           <label><span>Organisation area</span><select onChange={(event) => setAreaFilter(event.target.value)} value={areaFilter}><option value="all">All permitted areas</option>{areaOptions.map((area) => <option key={area.code} value={area.code}>{area.label}</option>)}</select></label>
-          <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option>{statusOptions.map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label>
-          <label><span>Theme, focus or area</span><select onChange={(event) => setDimensionFilter(event.target.value)} value={dimensionFilter}><option value="all">All recorded dimensions</option>{dimensionOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+          {selectedProcess !== "elevate_status" ? <><label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option>{statusOptions.map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label>
+          <label><span>Theme, focus or area</span><select onChange={(event) => setDimensionFilter(event.target.value)} value={dimensionFilter}><option value="all">All recorded dimensions</option>{dimensionOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label></> : <div className="elevate-status-filter-note"><span>Measurement</span><strong>{academicYear} · at or above each level</strong></div>}
           <Button icon={RotateCcw} onClick={clearFilters} variant="secondary">Reset</Button>
         </div>
       </section>
@@ -321,6 +357,8 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
           records={dateAndAreaRecords}
           trendData={trendData}
         />
+      ) : selectedProcess === "elevate_status" ? (
+        <ElevateStatusOverview academicYear={academicYear} configuration={selectedConfiguration} rows={elevateStatusInScope} totals={elevateStatusTotals} />
       ) : (
         <ProcessOverview
           actions={analysisActions}
@@ -334,7 +372,7 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
         />
       )}
 
-      <CollapsibleSection
+      {selectedProcess !== "elevate_status" ? <CollapsibleSection
         className="intelligence-record-panel"
         count={selectedProcess === "actions" ? visibleActions.length : visibleRecords.length}
         defaultExpanded={false}
@@ -346,7 +384,7 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
       >
         <div className="dashboard-record-heading"><div className="dashboard-record-tools"><label className="search-box dashboard-record-search"><Search size={16} /><input aria-label="Search dashboard detail" onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search current view" value={searchTerm} /></label>{selectedProcess !== "actions" ? <label className="record-sort-field"><span>Sort by</span><select onChange={(event) => setSortKey(event.target.value as SortKey)} value={sortKey}><option value="date_desc">Newest first</option><option value="date_asc">Oldest first</option><option value="title">Title</option><option value="area">Area</option><option value="status">Status</option></select></label> : null}</div></div>
         {selectedProcess === "actions" ? <ActionDetailTable actions={visibleActions} /> : <RecordDetailTable records={visibleRecords} />}
-      </CollapsibleSection>
+      </CollapsibleSection> : null}
     </div>
   );
 }
@@ -382,6 +420,51 @@ function ExecutiveOverview({ records, facts, actions, trendData, areaData, proce
       <RankedBars title="Organisation coverage" subtitle="Recorded activity across curriculum areas" data={areaData} />
       <ActionAssurance actions={actions} />
     </div>
+  </>;
+}
+
+function ElevateStatusOverview({ academicYear, configuration, rows, totals }: {
+  academicYear: string;
+  configuration: DashboardProcessConfiguration;
+  rows: ElevateStatusDashboardSummary[];
+  totals: ElevateStatusTotals;
+}) {
+  const anyStatus = totals.levelCounts[0] ?? 0;
+  const highestLevel = [...elevateLevelDefinitions].reverse().find((level) => (totals.levelCounts[level.level - 1] ?? 0) > 0);
+  return <>
+    <section className="intelligence-briefing panel elevate-status-briefing">
+      <div>
+        <span className="intelligence-section-label"><Award size={15} />Cumulative attainment</span>
+        <h2>{totals.staffCount ? `${anyStatus} of ${totals.staffCount} active staff have achieved Elevate Status.` : "No active staff are in the selected organisation scope."}</h2>
+        <p>Each level includes staff at that level and every higher level. Percentages use all active staff in the selected permitted organisation area as the denominator.</p>
+      </div>
+      <div className="intelligence-briefing-signal"><span>Highest represented level</span><strong>{highestLevel?.name ?? "No awards recorded"}</strong><small>{academicYear} academic year</small></div>
+    </section>
+    <div className="intelligence-kpi-grid">
+      <MetricCard label="Active staff in scope" value={totals.staffCount} detail="Permission and organisation filtered" tone="teal" />
+      <MetricCard label="Status participation" value={totals.staffCount ? `${percentage(anyStatus, totals.staffCount)}%` : "—"} detail={`${anyStatus} staff at Level 1 or above`} tone="blue" />
+      <MetricCard label="Innovators or above" value={totals.staffCount ? `${percentage(totals.levelCounts[2] ?? 0, totals.staffCount)}%` : "—"} detail={`${totals.levelCounts[2] ?? 0} staff at Level 3 or above`} tone="violet" />
+      <MetricCard label="Champions or above" value={totals.staffCount ? `${percentage(totals.levelCounts[3] ?? 0, totals.staffCount)}%` : "—"} detail={`${totals.levelCounts[3] ?? 0} staff at Level 4 or above`} tone="amber" />
+    </div>
+    {configuration.showOutcomes ? <section className="panel intelligence-chart-card elevate-status-attainment-card">
+      <div className="intelligence-card-heading"><div><h3>Attainment by level</h3><span>At or above each threshold · count and percentage of active staff</span></div><BarChart3 size={18} /></div>
+      {totals.staffCount ? <div className="elevate-attainment-grid">
+        {elevateLevelDefinitions.map((level) => {
+          const count = totals.levelCounts[level.level - 1] ?? 0;
+          const value = percentage(count, totals.staffCount);
+          return <article key={level.level}>
+            <img alt="" aria-hidden="true" src={`/system-assets/elevate-status/${level.key}.png`} />
+            <div className="elevate-attainment-heading"><span>Level {level.level}</span><strong>{level.name}</strong><small>{level.sessions} sessions required</small></div>
+            <div className="elevate-attainment-value"><strong>{value}%</strong><span>{count} of {totals.staffCount} staff</span></div>
+            <div className="elevate-attainment-track" aria-label={`${level.name}: ${value}%, ${count} of ${totals.staffCount} staff`} role="img"><i style={{ width: `${value}%` }} /></div>
+          </article>;
+        })}
+      </div> : <EmptyChart message="No active staff are available for this organisation scope." />}
+    </section> : null}
+    {configuration.showAreaComparison ? <section className="panel elevate-status-area-card">
+      <div className="intelligence-card-heading"><div><h3>Organisation comparison</h3><span>Cumulative attainment within each primary organisation area</span></div><Building2 size={18} /></div>
+      {rows.length ? <div className="table-scroll"><table className="elevate-status-area-table"><thead><tr><th>Organisation area</th><th>Active staff</th>{elevateLevelDefinitions.map((level) => <th key={level.level}>L{level.level}+</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={row.orgUnitId ?? "unassigned"}><td><strong>{row.areaName ?? "Unassigned"}</strong><span>{row.areaCode ?? "No primary area"}</span></td><td>{row.staffCount}</td>{elevateLevelDefinitions.map((level) => { const count = elevateStatusLevelCount(row, level.level); return <td key={level.level}><strong>{percentage(count, row.staffCount)}%</strong><span>{count} staff</span></td>; })}</tr>)}</tbody></table></div> : <EmptyChart message="No organisation areas are available in this view." />}
+    </section> : null}
   </>;
 }
 
@@ -531,6 +614,21 @@ function buildFocusFrequency(facts: DashboardDimensionFact[]): ChartDatum[] {
 }
 
 function mapSortedCounts(counts: Map<string, number>): ChartDatum[] { return [...counts.entries()].map(([label, value]) => ({ label, value })).sort((left, right) => right.value - left.value || left.label.localeCompare(right.label)); }
+
+function elevateStatusLevelCount(row: ElevateStatusDashboardSummary, level: number) {
+  return [row.level1OrAbove, row.level2OrAbove, row.level3OrAbove, row.level4OrAbove, row.level5OrAbove][level - 1] ?? 0;
+}
+
+function aggregateElevateStatus(rows: ElevateStatusDashboardSummary[]): ElevateStatusTotals {
+  return rows.reduce<ElevateStatusTotals>((total, row) => ({
+    staffCount: total.staffCount + row.staffCount,
+    levelCounts: total.levelCounts.map((count, index) => count + elevateStatusLevelCount(row, index + 1))
+  }), { staffCount: 0, levelCounts: [0, 0, 0, 0, 0] });
+}
+
+function percentage(count: number, total: number) {
+  return total > 0 ? Math.round((count / total) * 1000) / 10 : 0;
+}
 
 function actionMatchesProcess(action: ActionSummary, processKey: DashboardProcessKey) {
   const map: Partial<Record<DashboardProcessKey, string[]>> = {

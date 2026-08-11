@@ -348,7 +348,7 @@ export function StaffProfilePanel({
           <div className="elevate-status-badges">
             {detail.elevateStatus.levels.map((level) => (
               level.isAwarded ? (
-                <img alt={`Elevate ${level.name}`} key={level.levelNumber} src={elevateStatusAsset(level.levelKey)} />
+                <img alt={level.name} key={level.levelNumber} src={elevateStatusAsset(level.levelKey)} />
               ) : (
                 <span aria-hidden="true" className="elevate-status-badge-placeholder" key={level.levelNumber} />
               )
@@ -374,6 +374,7 @@ export function StaffProfilePanel({
                 <span>Level {level.levelNumber}</span>
                 <strong>{level.name}</strong>
                 <small>{level.requiredSessions} sessions</small>
+                <p>{level.requirementLabel}</p>
               </div>
             ))}
           </div>
@@ -383,7 +384,7 @@ export function StaffProfilePanel({
               <div className="elevate-level-editor-heading">
                 <div>
                   <span>Level 1</span>
-                  <h3>Explorer evidence</h3>
+                  <h3>Elevate Explorer evidence</h3>
                 </div>
                 <span className={`status-pill ${level.isAwarded ? "status-complete" : level.isEligible ? "status-open" : "status-draft"}`}>
                   {level.isAwarded ? "Awarded" : level.isEligible ? "Ready for evidence" : `${level.requiredSessions} sessions required`}
@@ -424,7 +425,7 @@ export function StaffProfilePanel({
                     onClick={() => void saveElevateLevel(level)}
                     variant="primary"
                   >
-                    {savingElevateLevel === 1 ? "Saving..." : level.isAwarded ? "Update Explorer evidence" : "Save Explorer evidence"}
+                    {savingElevateLevel === 1 ? "Saving..." : level.isAwarded ? "Update Elevate Explorer evidence" : "Save Elevate Explorer evidence"}
                   </Button>
                 </div>
               ) : null}

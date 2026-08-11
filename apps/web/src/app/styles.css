@@ -2466,6 +2466,32 @@ td {
   grid-template-columns: minmax(125px, .7fr) minmax(125px, .7fr) minmax(210px, 1.35fr) minmax(150px, .8fr) minmax(210px, 1.3fr) auto;
 }
 
+.intelligence-filter-grid-status {
+  grid-template-columns: minmax(260px, 1.4fr) minmax(260px, 1fr) auto;
+}
+
+.elevate-status-filter-note {
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  gap: 2px;
+  min-height: 38px;
+  padding: 6px 10px;
+}
+
+.elevate-status-filter-note > span {
+  color: var(--text-muted);
+  font-size: .6rem;
+  font-weight: 750;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+
+.elevate-status-filter-note > strong {
+  font-size: .7rem;
+}
+
 .intelligence-filter-grid label {
   display: grid;
   gap: 5px;
@@ -2886,6 +2912,128 @@ td {
   border-radius: 9px;
 }
 
+.elevate-status-attainment-card {
+  min-height: 0;
+}
+
+.elevate-attainment-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 20px;
+}
+
+.elevate-attainment-grid article {
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 10px;
+}
+
+.elevate-attainment-grid article > img {
+  aspect-ratio: 1.45 / 1;
+  border-radius: 5px;
+  object-fit: cover;
+  width: 100%;
+}
+
+.elevate-attainment-heading,
+.elevate-attainment-value {
+  display: grid;
+  gap: 3px;
+}
+
+.elevate-attainment-heading > span,
+.elevate-attainment-heading > small,
+.elevate-attainment-value > span {
+  color: var(--text-muted);
+  font-size: .64rem;
+}
+
+.elevate-attainment-heading > span {
+  font-weight: 800;
+  letter-spacing: .055em;
+  text-transform: uppercase;
+}
+
+.elevate-attainment-heading > strong {
+  font-size: .78rem;
+}
+
+.elevate-attainment-value > strong {
+  color: var(--accent-strong);
+  font-size: 1.35rem;
+  letter-spacing: -.035em;
+}
+
+.elevate-attainment-track {
+  background: var(--surface);
+  border-radius: 999px;
+  height: 7px;
+  overflow: hidden;
+}
+
+.elevate-attainment-track > i {
+  background: linear-gradient(90deg, #3d8bfd, #8b77f1);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
+.elevate-status-area-card {
+  min-height: 0;
+  padding: 18px;
+}
+
+.elevate-status-area-card .table-scroll {
+  margin-top: 18px;
+  overflow-x: auto;
+}
+
+.elevate-status-area-table {
+  border-collapse: collapse;
+  min-width: 760px;
+  width: 100%;
+}
+
+.elevate-status-area-table th,
+.elevate-status-area-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 11px 12px;
+  text-align: right;
+}
+
+.elevate-status-area-table th:first-child,
+.elevate-status-area-table td:first-child {
+  text-align: left;
+}
+
+.elevate-status-area-table th {
+  color: var(--text-muted);
+  font-size: .65rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.elevate-status-area-table td > strong,
+.elevate-status-area-table td > span {
+  display: block;
+}
+
+.elevate-status-area-table td > strong {
+  font-size: .76rem;
+}
+
+.elevate-status-area-table td > span {
+  color: var(--text-muted);
+  font-size: .62rem;
+  margin-top: 2px;
+}
+
 .admin-dashboard-config {
   display: grid;
   gap: 14px;
@@ -2965,6 +3113,7 @@ td {
   .intelligence-chart-grid-wide { grid-template-columns: 1fr; }
   .intelligence-section-title { align-items: flex-start; flex-direction: column; gap: 7px; }
   .intelligence-section-title p { text-align: left; }
+  .elevate-attainment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 680px) {
@@ -2973,6 +3122,7 @@ td {
   .intelligence-kpi-grid { grid-template-columns: 1fr; }
   .intelligence-donut-layout { grid-template-columns: 1fr; }
   .intelligence-donut { justify-self: center; width: 150px; }
+  .elevate-attainment-grid { grid-template-columns: 1fr; }
   .admin-dashboard-intro { align-items: flex-start; flex-direction: column; }
   .admin-dashboard-process-list article { grid-template-columns: 1fr; }
   .admin-dashboard-widgets { grid-column: auto; }
@@ -3499,7 +3649,7 @@ td {
   border-left: 4px solid var(--line-strong);
   display: grid;
   gap: 3px;
-  min-height: 72px;
+  min-height: 150px;
   padding: 9px 10px;
 }
 
@@ -3518,6 +3668,13 @@ td {
 .elevate-controlled-row > div > span {
   color: var(--text-muted);
   font-size: 0.74rem;
+}
+
+.elevate-level-track p {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  margin: 8px 0 0;
 }
 
 .elevate-level-editor,

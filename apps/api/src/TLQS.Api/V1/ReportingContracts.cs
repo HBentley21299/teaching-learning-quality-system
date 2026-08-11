@@ -33,3 +33,15 @@ public sealed record DashboardDimensionFactSummary(
     string ValueKey,
     string ValueLabel,
     decimal? NumericValue);
+
+public sealed record ElevateStatusDashboardSummary(
+    Guid? OrgUnitId,
+    string? AreaCode,
+    string? AreaName,
+    string? ParentAreaCode,
+    long StaffCount,
+    int Level1OrAbove,
+    int Level2OrAbove,
+    int Level3OrAbove,
+    int Level4OrAbove,
+    int Level5OrAbove);
