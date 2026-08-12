@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarDays, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun } from "lucide-react";
-import { navigationItems, type AppRoute } from "./navigation";
+import { canAccessRoute, navigationItems, type AppRoute } from "./navigation";
 import {
   actionPath,
   adminPath,
@@ -139,7 +139,7 @@ export function App() {
         .catch(() => setProcessRecords([]));
     } catch {
       setLoadError(
-        "The Teaching & Learning API could not be reached. Start the API (scripts\\run-api.ps1) and check the database, then refresh."
+        "The Teaching and Learning API could not be reached. Start the API (scripts\\run-api.ps1) and check the database, then refresh."
       );
     } finally {
       setIsLoading(false);
@@ -190,24 +190,29 @@ export function App() {
   }, []);
 
   const visibleNavigationItems = useMemo(
-    () => navigationItems.filter((item) => {
-      if (item.key === "team") return user.permissions.includes("my_team.view");
-      if (item.key === "admin") {
-        return ["users.manage", "permissions.manage", "organisation.manage", "lists.manage", "forms.manage", "records.manage", "messaging.manage"]
-          .some((permission) => user.permissions.includes(permission));
-      }
-      return true;
-    }),
+    () => navigationItems.filter((item) => canAccessRoute(item.key, user.permissions)),
     [user.permissions]
   );
   const activeItem = useMemo(() => visibleNavigationItems.find((item) => item.key === route), [route, visibleNavigationItems]);
+
+  useEffect(() => {
+    if (isLoading || !user.userAccountId || pendingRecordId || sourceRecordId || canAccessRoute(route, user.permissions)) return;
+    setRoute("home");
+    setProfileStaffId("");
+    setActionStaffId("");
+    setActionDetailId("");
+    setAdminTab("overview");
+    setLinkError("You do not have permission to open that area.");
+    writePath(routePath("home"), true);
+  }, [isLoading, pendingRecordId, route, sourceRecordId, user.permissions, user.userAccountId, writePath]);
+
   const yearActions = useMemo(
     () => academicYear ? actions.filter((action) => action.academicYear === academicYear) : actions,
     [academicYear, actions]
   );
   const yearProcessRecords = useMemo(
     () => academicYear
-      ? processRecords.filter((record) => academicYearForDate(record.recordDate ?? record.createdAt) === academicYear)
+      ? processRecords.filter((record) => (record.academicYear ?? academicYearForDate(record.recordDate ?? record.createdAt)) === academicYear)
       : processRecords,
     [academicYear, processRecords]
   );
@@ -294,6 +299,12 @@ export function App() {
     setSourceRecordId("");
     setRoute("actions");
     writePath(actionPath(actionId));
+  }
+
+  function openDashboardRecord(recordId: string) {
+    setPendingRecordId(recordId);
+    setLinkError("");
+    writePath(recordPath(recordId));
   }
 
   function handleRecordOpened(recordId: string) {
@@ -475,6 +486,9 @@ export function App() {
                   processRecords={yearProcessRecords}
                   user={user}
                   onRefresh={loadCoreData}
+                  onOpenAction={openActionDetails}
+                  onOpenRecord={openDashboardRecord}
+                  onOpenStaff={openTeamProfile}
                 />
               ) : null}
               {route === "staff" ? <StaffProfiles academicYear={academicYear} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffSelected={(staffId) => writePath(staffPath(staffId))} profiles={profiles} staff={staff} user={user} /> : null}
@@ -530,7 +544,7 @@ export function App() {
                 <ModuleWorkspace academicYear={academicYear} eyebrow="Teaching and learning activity" initialRecordId={sourceRecordId} mode="scrutiny" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("scrutiny")} onRecordOpened={handleRecordOpened} staff={staff} title="Work Scrutiny" user={user} />
               ) : null}
               {route === "cpd" ? (
-                <ModuleWorkspace academicYear={academicYear} eyebrow="Professional learning" initialRecordId={sourceRecordId} mode="cpd" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("cpd")} onRecordOpened={handleRecordOpened} staff={staff} title="CPD Management" user={user} />
+                <ModuleWorkspace academicYear={academicYear} eyebrow="Professional learning" initialRecordId={sourceRecordId} mode="cpd" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("cpd")} onRecordOpened={handleRecordOpened} staff={staff} title={user.permissions.includes("cpd.manage") ? "CPD Management" : "CPD"} user={user} />
               ) : null}
               {route === "profile" ? <StaffProfileWorkspace academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffChanged={(staffId) => writePath(staffPath(staffId))} profiles={profiles} staff={staff} user={user} /> : null}
               {route === "actions" ? (

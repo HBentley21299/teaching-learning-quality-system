@@ -45,7 +45,7 @@ export function AdminCentre({
   const [activeTab, setActiveTab] = useState<AdminTabKey>(requestedTab);
   const permissionRows = [
     ["Admin", "System maintenance, users, records and labels", "Global"],
-    ["Teaching & Learning", "Forms, CPD, LIV, reports and actions", "Global"],
+    ["Teaching and Learning", "Forms, CPD, LIV, reports and actions", "Global"],
     ["Director", "Scoped reports and review activity", "Assigned org units"],
     ["Head of Faculty", "Faculty records, actions and dashboards", "Assigned faculty"],
     ["Programme Leader", "Team records, actions and dashboards", "Assigned team"],
@@ -1332,7 +1332,7 @@ function LearningWalkThemeAdminPanel() {
     <section className="panel learning-theme-admin">
       <div className="panel-heading">
         <div>
-          <h2>Teaching &amp; Learning themes</h2>
+          <h2>Teaching and Learning themes</h2>
           <span>Shared by Learning Walks, LIV and teaching and learning reporting</span>
         </div>
         <strong>{activeGroups.length} active areas · {activeThemeCount} active themes</strong>
@@ -1509,12 +1509,11 @@ function DashboardAdminPanel() {
       {isLoading ? <section className="panel"><p className="muted-copy">Loading dashboard configuration...</p></section> : (
         <section className="panel admin-dashboard-processes">
           <div className="panel-heading"><h2>Dashboard views</h2><span>{processes.filter((process) => process.isEnabled).length} visible</span></div>
-          <p className="muted-copy">Disabling a view hides it from navigation; it does not delete records or reporting data. Labels may be changed without changing stable process keys.</p>
+          <p className="muted-copy">Disabling a view hides it from navigation; it does not delete records or reporting data. Labels may be changed without changing stable process keys. Outcome matrices and frequency profiles are selected automatically from the type of structured data available.</p>
           <div className="admin-dashboard-process-list">
             {processes.map((process, index) => <article className={process.isEnabled ? "" : "is-disabled"} key={process.processKey}>
               <div className="admin-dashboard-order"><Button aria-label="Move up" disabled={index === 0} icon={ArrowUp} onClick={() => move(index, -1)} variant="secondary">Up</Button><Button aria-label="Move down" disabled={index === processes.length - 1} icon={ArrowDown} onClick={() => move(index, 1)} variant="secondary">Down</Button></div>
               <div className="admin-dashboard-identity"><small>{process.processKey}</small><input aria-label={`${process.label} dashboard label`} maxLength={80} onChange={(event) => update(process.processKey, { label: event.target.value })} value={process.label}/></div>
-              <label className="admin-dashboard-visual"><span>Primary visual</span><select onChange={(event) => update(process.processKey, { primaryVisual: event.target.value as "bar" | "donut" })} value={process.primaryVisual}><option value="bar">Ranked profile</option><option value="donut">Distribution</option></select></label>
               <div className="admin-dashboard-widgets" aria-label={`${process.label} visible analysis`}>
                 <label><input checked={process.showTrend} onChange={(event) => update(process.processKey, { showTrend: event.target.checked })} type="checkbox"/>Trend</label>
                 <label><input checked={process.showAreaComparison} onChange={(event) => update(process.processKey, { showAreaComparison: event.target.checked })} type="checkbox"/>Areas</label>

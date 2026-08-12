@@ -32,8 +32,9 @@ public sealed class LivAccessPolicyTests
     [InlineData(LivAccessPolicy.InProgress, true, false, true)]
     [InlineData(LivAccessPolicy.InProgress, false, true, true)]
     [InlineData(LivAccessPolicy.InProgress, false, false, false)]
-    [InlineData(LivAccessPolicy.Closed, true, false, false)]
-    public void EditingRequiresAnInProgressCaseAndCreatorOrManager(
+    [InlineData(LivAccessPolicy.Closed, true, false, true)]
+    [InlineData(LivAccessPolicy.Closed, false, true, true)]
+    public void EditingRequiresCreatorOrManagerRegardlessOfLifecycleStatus(
         string status,
         bool isCreator,
         bool canManage,

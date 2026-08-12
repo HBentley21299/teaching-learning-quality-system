@@ -184,6 +184,7 @@ export type RecordSummary = {
   createdAt: string;
   submissionStatus: string;
   academicYear: string;
+  isCreatedByCurrentUser: boolean;
 };
 
 export type LivVisitSummary = {
@@ -211,7 +212,7 @@ export type LivStage = {
   id: string;
   stageType: "pre_discussion" | "distance_impact" | "visit" | "post_reflection" | "actions" | "follow_up_review";
   stageOrder: number;
-  stageStatus: "in_progress" | "completed";
+  stageStatus: "in_progress" | "completed" | "not_applicable";
   contextText?: string;
   aimsText?: string;
   learnerActivityText?: string;
@@ -291,6 +292,7 @@ export type LivRecordSummary = {
   eliSecondaryFocusOther?: string;
   linkedProbationCaseId?: string;
   probationObservationNumber?: number;
+  isCreatedByCurrentUser: boolean;
 };
 
 export type SaveLivVisitRequest = {
@@ -423,6 +425,7 @@ export type ProbationCase = {
   createdAt: string;
   updatedAt?: string;
   canEdit: boolean;
+  isCreatedByCurrentUser: boolean;
   reviewers: ProbationReviewer[];
   observations: ProbationObservation[];
 };
@@ -579,6 +582,8 @@ export type ProcessDashboardRecordSummary = {
   barrierCount: number;
   scoreMaximum: number;
   relatedRecordId?: string;
+  subjectStaffId?: string;
+  academicYear?: string;
 };
 
 export type DashboardProcessConfiguration = {
@@ -636,6 +641,31 @@ export type StaffParticipationDashboardSummary = {
   parentAreaCode?: string;
   activeStaffCount: number;
   participatingStaffCount: number;
+};
+
+export type CpdAttendanceDashboardSummary = {
+  staffId: string;
+  staffName: string;
+  orgUnitId?: string;
+  areaCode?: string;
+  areaName?: string;
+  parentAreaCode?: string;
+  attendanceCount: number;
+};
+
+export type LivLifecycleDashboardSummary = {
+  orgUnitId?: string;
+  areaCode?: string;
+  areaName?: string;
+  parentAreaCode?: string;
+  requestedCount: number;
+  caseStartedCount: number;
+  scheduledCount: number;
+  visitedCount: number;
+  completedCount: number;
+  completedVisitCount: number;
+  practitionerStaffCount: number;
+  practitionerStaffDenominator: number;
 };
 
 export type RecordNavigation = {
@@ -1039,6 +1069,7 @@ export type CoachingSessionSummary = {
   createdAt: string;
   updatedAt?: string;
   canEdit: boolean;
+  isCreatedByCurrentUser: boolean;
 };
 
 export type CoachingSessionAction = {

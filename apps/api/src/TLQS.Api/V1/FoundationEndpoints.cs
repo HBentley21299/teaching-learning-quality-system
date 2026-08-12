@@ -702,11 +702,11 @@ public static class FoundationEndpoints
             };
         });
 
-        api.MapPost("/liv-records/{id:guid}/cycles/current/complete", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/liv-records/{id:guid}/cycles/current/complete", async (Guid id, CompleteLivCycleRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!CanSubmitLiv(currentUser)) return Results.Forbid();
-            var cycle = await store.CompleteLivCycleAsync(id, currentUser, cancellationToken);
+            var cycle = await store.CompleteLivCycleAsync(id, request.OpenFollowUp, currentUser, cancellationToken);
             return cycle is null ? Results.NotFound() : Results.Ok(cycle);
         });
 
@@ -884,7 +884,7 @@ public static class FoundationEndpoints
             return Results.Ok(await store.GetDashboardConfigurationAsync(cancellationToken));
         });
 
-        api.MapGet("/reports/dashboard-dimensions", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/reports/dashboard-dimensions", async (string? academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
@@ -893,7 +893,19 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            return Results.Ok(await store.GetDashboardDimensionFactsAsync(currentUser, cancellationToken));
+            return Results.Ok(await store.GetDashboardDimensionFactsAsync(academicYear, currentUser, cancellationToken));
+        });
+
+        api.MapGet("/reports/eli-statement-dimensions", async (string academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                && !currentUser.HasPermission(PermissionKeys.ReportsViewScoped))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetEliStatementDashboardFactsAsync(academicYear, currentUser, cancellationToken));
         });
 
         api.MapGet("/reports/elevate-status", async (string academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -918,6 +930,30 @@ public static class FoundationEndpoints
             }
 
             return Results.Ok(await store.GetStaffParticipationDashboardAsync(academicYear, currentUser, cancellationToken));
+        });
+
+        api.MapGet("/reports/cpd-attendance", async (string academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                && !currentUser.HasPermission(PermissionKeys.ReportsViewScoped))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetCpdAttendanceDashboardAsync(academicYear, currentUser, cancellationToken));
+        });
+
+        api.MapGet("/reports/liv-lifecycle", async (string academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                && !currentUser.HasPermission(PermissionKeys.ReportsViewScoped))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetLivLifecycleDashboardAsync(academicYear, currentUser, cancellationToken));
         });
 
         api.MapPut("/admin/reports/dashboard-configuration", async (SaveDashboardConfigurationRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -1659,7 +1695,7 @@ public sealed record MyTeamMemberSummary(
     string? ElevateJudgement,
     bool CanOpenProfile,
     bool CanManageActions);
-public sealed record RecordSummary(Guid Id, Guid ModuleId, string RecordType, string Title, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate, DateTimeOffset CreatedAt, string SubmissionStatus, string AcademicYear);
+public sealed record RecordSummary(Guid Id, Guid ModuleId, string RecordType, string Title, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate, DateTimeOffset CreatedAt, string SubmissionStatus, string AcademicYear, bool IsCreatedByCurrentUser);
 
 public sealed record RecordNavigationSummary(Guid Id, string RecordType, Guid? SubjectStaffId);
 public sealed record ActionSummary(
@@ -1782,7 +1818,9 @@ public sealed record ProcessDashboardRecordSummary(
     int ScoreCount,
     int BarrierCount,
     int ScoreMaximum,
-    Guid? RelatedRecordId = null);
+    Guid? RelatedRecordId = null,
+    Guid? SubjectStaffId = null,
+    string? AcademicYear = null);
 public sealed record LearningWalkRollupSummary(Guid? FacultyOrgUnitId, string? FacultyCode, string? FacultyName, Guid? ChildOrgUnitId, string? ChildCode, string? ChildName, long RecordCount, DateOnly? LatestRecordDate);
 public sealed record RecordDetailSummary(
     Guid Id,
@@ -1969,7 +2007,8 @@ public sealed record LivCaseSummary(
     string? EliSecondaryFocus = null,
     string? EliSecondaryFocusOther = null,
     Guid? LinkedProbationCaseId = null,
-    int? ProbationObservationNumber = null);
+    int? ProbationObservationNumber = null,
+    bool IsCreatedByCurrentUser = false);
 public sealed record LivLookupOptionSummary(string Key, string Name, int DisplayOrder, bool IsOther = false);
 public sealed record LivConfigurationSummary(
     IReadOnlyList<LivLookupOptionSummary> DeliveryAreas,
@@ -2026,6 +2065,7 @@ public sealed record LivCycleSummary(
     DateTimeOffset? CompletedAt,
     bool IsFollowUp,
     IReadOnlyList<LivStageSummary> Stages);
+public sealed record CompleteLivCycleRequest(bool OpenFollowUp = true);
 public sealed record LivRecordSummary(
     Guid Id,
     Guid RecordId,

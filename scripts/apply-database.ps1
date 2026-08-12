@@ -153,7 +153,10 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\049_eli_unicode_punctuation.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\050_liv_visit_detail_configuration.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\051_leadership_dashboard_configuration.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\052_teaching_and_learning_language.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\052_teaching_and_learning_language.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\053_liv_focus_and_record_editing.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\054_liv_focus_stable_keys.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\055_teaching_and_learning_label_consistency.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

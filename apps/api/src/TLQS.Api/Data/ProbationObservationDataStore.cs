@@ -186,13 +186,13 @@ public sealed partial class SqlFoundationDataStore
                    probation.status, probation.current_observation_number,
                    probation.source_elevate_assessment_id, assessment.record_id,
                    probation.created_at, probation.updated_at,
-                   CASE WHEN probation.status = N'in_progress' AND (
-                       @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
+                   CASE WHEN @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
                        OR EXISTS (
                            SELECT 1 FROM quality.probation_case_reviewers reviewer
                            WHERE reviewer.probation_case_id = probation.id AND reviewer.staff_id = @currentStaffId
                        )
-                   ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+                   THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,
+                   CONVERT(bit, CASE WHEN probation.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END)
             FROM quality.probation_cases probation
             JOIN people.staff subject ON subject.id = probation.subject_staff_id
             LEFT JOIN org.org_units area ON area.id = probation.org_unit_id
@@ -226,7 +226,7 @@ public sealed partial class SqlFoundationDataStore
                 GetGuidOrNull(reader, 4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6),
                 reader.GetString(7), reader.GetString(8), reader.GetByte(9), GetGuidOrNull(reader, 10),
                 GetGuidOrNull(reader, 11), reader.GetFieldValue<DateTimeOffset>(12),
-                GetDateTimeOffsetOrNull(reader, 13), reader.GetBoolean(14)),
+                GetDateTimeOffsetOrNull(reader, 13), reader.GetBoolean(14), reader.GetBoolean(15)),
             cancellationToken);
         if (caseRows.Count == 0) return [];
 
@@ -305,8 +305,7 @@ public sealed partial class SqlFoundationDataStore
                         stage.Id, stage.StageType, stage.StageOrder, stage.StageStatus, stage.ContextText,
                         stage.AimsText, stage.LearnerActivityText, stage.ReflectionText,
                         stage.DevelopmentOpportunityKeys, stage.IntendedNextObservationDate,
-                        caseRows.First(item => item.Id == row.CaseId).CanEdit
-                            && caseRows.First(item => item.Id == row.CaseId).CurrentObservationNumber == row.ObservationNumber))
+                        caseRows.First(item => item.Id == row.CaseId).CanEdit))
                     .ToArray();
                 var visit = visits.FirstOrDefault(item => item.ObservationId == row.Id);
                 return new ProbationObservationSummary(
@@ -323,6 +322,7 @@ public sealed partial class SqlFoundationDataStore
             row.Id, row.RecordId, row.SubjectStaffId, row.SubjectStaffName, row.OrgUnitId, row.OrgUnitCode,
             row.ParentOrgUnitCode, row.AcademicYear, row.Status, row.CurrentObservationNumber,
             row.SourceElevateAssessmentId, row.SourceElevateRecordId, row.CreatedAt, row.UpdatedAt, row.CanEdit,
+            row.IsCreatedByCurrentUser,
             reviewers.Where(reviewer => reviewer.CaseId == row.Id).Select(reviewer => reviewer.Reviewer).ToArray(),
             observationsByCase.GetValueOrDefault(row.Id, []))).ToArray();
     }
@@ -652,7 +652,7 @@ public sealed partial class SqlFoundationDataStore
                            descriptor.hidden_numeric_value, @evidence
                     FROM core.lookup_values focus
                     JOIN core.lookup_types focus_type ON focus_type.id = focus.lookup_type_id
-                      AND focus_type.lookup_key = N'liv_focus_area'
+                      AND focus_type.lookup_key = N'liv_visit_focus_area'
                     JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = @descriptorId
                       AND descriptor.is_active = 1 AND descriptor.archived_at IS NULL
                     WHERE focus.value_key = @focusKey AND focus.value_key <> N'other'
@@ -924,13 +924,12 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT probation.record_id, probation.status, probation.current_observation_number,
                    observation.observation_number, observation.status,
-                   CASE WHEN probation.status = N'in_progress' AND observation.status <> N'completed' AND (
-                       @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
+                   CASE WHEN @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
                        OR EXISTS (
                            SELECT 1 FROM quality.probation_case_reviewers reviewer
                            WHERE reviewer.probation_case_id = probation.id AND reviewer.staff_id = @currentStaffId
                        )
-                   ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+                   THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
             FROM quality.probation_cases probation
             JOIN quality.probation_observations observation ON observation.probation_case_id = probation.id
             WHERE probation.id = @caseId AND observation.id = @observationId AND probation.archived_at IS NULL;
@@ -960,7 +959,7 @@ public sealed partial class SqlFoundationDataStore
             SELECT value.value_key
             FROM core.lookup_values value
             JOIN core.lookup_types type ON type.id = value.lookup_type_id
-            WHERE type.lookup_key = N'liv_focus_area' AND value.value_key <> N'other'
+            WHERE type.lookup_key = N'liv_visit_focus_area' AND value.value_key <> N'other'
               AND value.is_active = 1 AND value.archived_at IS NULL;
             """, connection, (SqlTransaction)transaction);
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1004,7 +1003,7 @@ public sealed partial class SqlFoundationDataStore
         Guid Id, Guid RecordId, Guid SubjectStaffId, string SubjectStaffName, Guid? OrgUnitId,
         string? OrgUnitCode, string? ParentOrgUnitCode, string AcademicYear, string Status,
         int CurrentObservationNumber, Guid? SourceElevateAssessmentId, Guid? SourceElevateRecordId,
-        DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, bool CanEdit);
+        DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, bool CanEdit, bool IsCreatedByCurrentUser);
     private sealed record ProbationReviewerRow(Guid CaseId, ProbationReviewerSummary Reviewer);
     private sealed record ProbationObservationRow(
         Guid CaseId, Guid Id, int ObservationNumber, string ObservationType, string Status,

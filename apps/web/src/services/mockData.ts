@@ -93,7 +93,7 @@ export const mockStaff: StaffSummary[] = [
     externalId: "STAFF_0001",
     displayName: "Harry Bentley",
     email: "harryjbentley@outlook.com",
-    jobTitle: "Digital Teaching & Learning Lead",
+    jobTitle: "Digital Teaching and Learning Lead",
     accountStatus: "active",
     orgUnitIds: []
   },
@@ -168,7 +168,7 @@ export const mockStaffProfiles: StaffProfileSummary[] = [
     externalId: "STAFF_0001",
     displayName: "Harry Bentley",
     email: "harryjbentley@outlook.com",
-    jobTitle: "Digital Teaching & Learning Lead",
+    jobTitle: "Digital Teaching and Learning Lead",
     primaryOrgCode: "T&L",
     cpdSessionsAttended: 5,
     evidenceRecords: 3,
@@ -394,7 +394,8 @@ export const mockRecords: RecordSummary[] = [
     recordDate: "2026-09-18",
     createdAt: "2026-09-18T10:00:00Z",
     submissionStatus: "submitted",
-    academicYear: "2026/27"
+    academicYear: "2026/27",
+    isCreatedByCurrentUser: true
   }
 ];
 

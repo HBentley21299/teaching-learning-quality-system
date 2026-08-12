@@ -88,6 +88,7 @@ export function ProbationObservations({
   const [facultyFilter, setFacultyFilter] = useState("all");
   const [teamFilter, setTeamFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [recordOwnershipView, setRecordOwnershipView] = useState<"mine" | "scope">("mine");
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -151,9 +152,10 @@ export function ProbationObservations({
       const matchesTeam = teamFilter === "all" || staffMember?.orgUnitIds.includes(teamFilter)
         || item.orgUnitId === teamFilter;
       const matchesStatus = statusFilter === "all" || item.status === statusFilter;
-      return matchesSearch && matchesYear && matchesFaculty && matchesTeam && matchesStatus;
+      const matchesOwnership = recordOwnershipView === "scope" || item.isCreatedByCurrentUser;
+      return matchesSearch && matchesYear && matchesFaculty && matchesTeam && matchesStatus && matchesOwnership;
     });
-  }, [cases, facultyFilter, search, staff, statusFilter, teamFilter, yearFilter]);
+  }, [cases, facultyFilter, recordOwnershipView, search, staff, statusFilter, teamFilter, yearFilter]);
 
   const completionCounts = [1, 2, 3].map((number) => filteredCases.filter((item) => highestCompletedObservation(item) === number).length);
 
@@ -227,7 +229,8 @@ export function ProbationObservations({
       ]} />
 
       <details className="panel liv-v2-records">
-        <summary><span><strong>Active records</strong><small>{filteredCases.length} records in your scope</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: yearFilter === "all" ? undefined : yearFilter }} moduleKey="probation" orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
+        <summary><span><strong>{recordOwnershipView === "mine" ? "My probationary observation records" : "Probationary observation records in scope"}</strong><small>{filteredCases.length} records in this view</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: yearFilter === "all" ? undefined : yearFilter }} moduleKey="probation" orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
+        <div className="segmented-control record-ownership-switch" aria-label="Probation record ownership view"><button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My probation records</button><button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button></div>
         <div className="filter-toolbar probation-filter-toolbar">
           <label className="search-box"><Search size={16} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff or area" value={search} /></label>
           <label><span>Academic year</span><select onChange={(event) => setYearFilter(event.target.value)} value={yearFilter}><option value="all">All years</option>{years.map((year) => <option key={year}>{year}</option>)}</select></label>
@@ -236,7 +239,7 @@ export function ProbationObservations({
           <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label>
         </div>
         <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty / team</th><th>Academic year</th><th>Progress</th><th>Reviewers</th><th>Open</th></tr></thead><tbody>
-          {filteredCases.length === 0 ? <tr><td colSpan={6}>No probation records match these filters.</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => openCase(item)} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
+          {filteredCases.length === 0 ? <tr><td colSpan={6}>{recordOwnershipView === "mine" ? "You have not created any probation records matching these filters." : "No probation records match these filters."}</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => openCase(item)} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
         </tbody></table></div>
       </details>
     </div>

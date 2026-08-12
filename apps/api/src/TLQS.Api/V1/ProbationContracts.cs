@@ -123,6 +123,7 @@ public sealed record ProbationCaseSummary(
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
     bool CanEdit,
+    bool IsCreatedByCurrentUser,
     IReadOnlyList<ProbationReviewerSummary> Reviewers,
     IReadOnlyList<ProbationObservationSummary> Observations);
 

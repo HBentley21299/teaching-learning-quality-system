@@ -6,7 +6,7 @@ export function LoginScreen() {
     <main className="login-page">
       <section className="login-panel" aria-labelledby="login-title">
         <div className="login-brand" aria-hidden="true">iE</div>
-        <p className="eyebrow">Teaching &amp; Learning</p>
+        <p className="eyebrow">Teaching and Learning</p>
         <h1 id="login-title">Sign in to i-Elevate</h1>
         <p className="login-copy">
           Use your Oldham College Microsoft account to continue.

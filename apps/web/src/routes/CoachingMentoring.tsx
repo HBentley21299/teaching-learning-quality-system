@@ -83,6 +83,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
   const [typeFilter, setTypeFilter] = useState("all");
   const [sort, setSort] = useState("date_desc");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [recordOwnershipView, setRecordOwnershipView] = useState<"mine" | "scope">("mine");
   const openedInitialRecord = useRef("");
 
   useEffect(() => {
@@ -229,6 +230,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
       const matchesSearch = !query || [session.staffName, session.coachName, session.primaryFocus ?? ""]
         .some((value) => value.toLowerCase().includes(query));
       return matchesSearch
+        && (recordOwnershipView === "scope" || session.isCreatedByCurrentUser)
         && (statusFilter === "all" || session.status === statusFilter)
         && (typeFilter === "all" || session.sessionType === typeFilter);
     });
@@ -239,7 +241,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
         ? left.sessionDate.localeCompare(right.sessionDate)
         : right.sessionDate.localeCompare(left.sessionDate);
     });
-  }, [search, sessions, sort, statusFilter, typeFilter]);
+  }, [recordOwnershipView, search, sessions, sort, statusFilter, typeFilter]);
 
   if (view === "form" && form) {
     return (
@@ -282,13 +284,14 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
       <section className="panel coaching-history-panel">
         <div className="panel-heading">
           <button className="collapsible-heading" onClick={() => setHistoryOpen((current) => !current)} type="button">
-            <span>{historyOpen ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}Active records</span>
-            <strong>{sessions.length}</strong>
+            <span>{historyOpen ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}{recordOwnershipView === "mine" ? "My coaching and mentoring records" : "Records in scope"}</span>
+            <strong>{filteredSessions.length}</strong>
           </button>
           {user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="coaching" orgUnits={orgUnits} /> : null}
         </div>
         {historyOpen ? (
           <>
+            <div className="segmented-control record-ownership-switch" aria-label="Coaching record ownership view"><button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My coaching records</button><button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button></div>
             <div className="coaching-filter-bar">
               <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff, coach or focus" value={search} /></label>
               <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option><option value="draft">Draft</option><option value="completed">Completed</option></select></label>
@@ -300,7 +303,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
                 <thead><tr><th>Staff member</th><th>Cycle / session</th><th>Date</th><th>Type</th><th>Coach or mentor</th><th>Status</th><th><span className="sr-only">Open</span></th></tr></thead>
                 <tbody>
                   {isLoading ? <tr><td colSpan={7}>Loading sessions...</td></tr> : filteredSessions.length === 0 ? (
-                    <tr><td colSpan={7}>No coaching or mentoring sessions match these filters.</td></tr>
+                    <tr><td colSpan={7}>{recordOwnershipView === "mine" ? "You have not created any coaching or mentoring records matching these filters." : "No coaching or mentoring sessions match these filters."}</td></tr>
                   ) : filteredSessions.map((session) => (
                     <tr key={session.id}>
                       <td><strong>{session.staffName}</strong><small className="table-subline">{lookupLabel(configuration?.focusAreas, session.primaryFocus)}</small></td>

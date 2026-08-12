@@ -74,7 +74,8 @@ public sealed record CoachingSessionSummary(
     string? PrimaryFocus,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
-    bool CanEdit);
+    bool CanEdit,
+    bool IsCreatedByCurrentUser);
 
 public sealed record CoachingSessionDetail(
     Guid Id,

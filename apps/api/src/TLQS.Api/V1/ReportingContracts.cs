@@ -54,3 +54,26 @@ public sealed record StaffParticipationDashboardSummary(
     string? ParentAreaCode,
     long ActiveStaffCount,
     int ParticipatingStaffCount);
+
+public sealed record CpdAttendanceDashboardSummary(
+    Guid StaffId,
+    string StaffName,
+    Guid? OrgUnitId,
+    string? AreaCode,
+    string? AreaName,
+    string? ParentAreaCode,
+    int AttendanceCount);
+
+public sealed record LivLifecycleDashboardSummary(
+    Guid? OrgUnitId,
+    string? AreaCode,
+    string? AreaName,
+    string? ParentAreaCode,
+    int RequestedCount,
+    int CaseStartedCount,
+    int ScheduledCount,
+    int VisitedCount,
+    int CompletedCount,
+    int CompletedVisitCount,
+    int PractitionerStaffCount,
+    int PractitionerStaffDenominator);

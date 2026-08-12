@@ -84,9 +84,15 @@ public sealed partial class SqlFoundationDataStore
         foreach (var definition in ElevateStatusLevels)
         {
             awardsByLevel.TryGetValue(definition.LevelNumber, out var award);
+            // Elevate Status restarts each academic year. A stored confirmation is only
+            // an active award when its recorded qualifying attendance meets the threshold
+            // and every preceding level has also been awarded. This prevents incomplete
+            // or legacy rows from carrying badges into a new year.
             var isEligible = eligibleCpd.Count >= definition.RequiredSessions && previousLevelAwarded;
             var isConfirmed = award is not null;
-            var isAwarded = isConfirmed;
+            var isAwarded = isConfirmed
+                && award!.QualifyingAttendanceCount >= definition.RequiredSessions
+                && previousLevelAwarded;
             levelSummaries.Add(new ElevateStatusLevelSummary(
                 definition.LevelNumber,
                 definition.LevelKey,

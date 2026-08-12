@@ -123,6 +123,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(false);
+  const [recordOwnershipView, setRecordOwnershipView] = useState<"mine" | "scope">("mine");
   const [recordSearch, setRecordSearch] = useState("");
   const [recordStatusFilter, setRecordStatusFilter] = useState("all");
   const [recordAreaFilter, setRecordAreaFilter] = useState("all");
@@ -213,12 +214,15 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   );
 
   const displayedRecords = useMemo(() => {
+    const ownershipRecords = recordOwnershipView === "mine"
+      ? records.filter((record) => record.isCreatedByCurrentUser)
+      : records;
     if (mode !== "learning") {
-      return records;
+      return ownershipRecords;
     }
 
     const query = recordSearch.trim().toLocaleLowerCase();
-    const filtered = records.filter((record) => {
+    const filtered = ownershipRecords.filter((record) => {
       const areaLabel = getRecordAreaLabel(record, orgUnits);
       const matchesSearch =
         !query ||
@@ -241,7 +245,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       }
       return getRecordTimestamp(right) - getRecordTimestamp(left);
     });
-  }, [mode, orgUnits, recordAreaFilter, recordSearch, recordSort, recordStatusFilter, records]);
+  }, [mode, orgUnits, recordAreaFilter, recordOwnershipView, recordSearch, recordSort, recordStatusFilter, records, user.staffId]);
 
   const hasRecordFilters =
     recordSearch.trim().length > 0 || recordStatusFilter !== "all" || recordAreaFilter !== "all" || recordSort !== "newest";
@@ -256,6 +260,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     setDefinition(null);
     setDefinitionError("");
     setIsActiveRecordsOpen(false);
+    setRecordOwnershipView("mine");
     setRecordSearch("");
     setRecordStatusFilter("all");
     setRecordAreaFilter("all");
@@ -794,7 +799,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
           </div>
           <p className="muted-copy">
             {mode === "elevate"
-              ? "Elevate Learning Environment checks are completed by leaders, managers and the Teaching & Learning team."
+              ? "Elevate Learning Environment checks are completed by leaders, managers and the Teaching and Learning team."
               : "Learning Walks are recorded by programme leaders and above. Actions arising from a walk appear on your Actions tab, and your own development record is on the Staff Profile tab."}
           </p>
         </section>
@@ -1021,15 +1026,13 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
               type="button"
             >
               <ChevronDown aria-hidden="true" size={18} />
-              Active records
+              {recordOwnershipView === "mine" ? `My ${config.recordLabel}s` : `${config.recordLabel}s in scope`}
             </button>
           </h2>
           <div className="toolbar">
             <span>
-              {mode === "learning" && displayedRecords.length !== records.length
-                ? `${displayedRecords.length} of ${records.length}`
-                : records.length}{" "}
-              {config.recordLabel}{records.length === 1 ? "" : "s"}
+              {displayedRecords.length}{" "}
+              {config.recordLabel}{displayedRecords.length === 1 ? "" : "s"}
             </span>
             {canExport ? <ExportExcelButton filters={{ academicYear }} moduleKey={exportModuleKey} orgUnits={orgUnits} /> : null}
           </div>
@@ -1037,6 +1040,10 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
         {isActiveRecordsOpen ? (
           <div id={`${mode}-active-records`}>
+            <div className="segmented-control record-ownership-switch" aria-label="Record ownership view">
+              <button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My {config.recordLabel}s</button>
+              <button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button>
+            </div>
             {mode === "learning" ? (
               <div className="record-filter-bar">
                 <label className="record-filter-field record-filter-search">
@@ -1086,6 +1093,8 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                 <div className="empty-row">
                   No {config.recordLabel}s yet. Use "{config.createLabel}" to add the first one.
                 </div>
+              ) : recordOwnershipView === "mine" && displayedRecords.length === 0 ? (
+                <div className="empty-row">You have not created any {config.recordLabel}s in this view.</div>
               ) : displayedRecords.length === 0 ? (
                 <div className="empty-row">No {config.recordLabel}s match those filters.</div>
               ) : (

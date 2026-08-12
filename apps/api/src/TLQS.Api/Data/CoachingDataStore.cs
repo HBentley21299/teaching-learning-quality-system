@@ -251,7 +251,8 @@ public sealed partial class SqlFoundationDataStore
                             AND (session.created_by_user_account_id = @currentUserAccountId OR session.coach_staff_id = @currentStaffId)
                            THEN 1
                        ELSE 0
-                   END)
+                   END),
+                   CONVERT(bit, CASE WHEN session.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END)
             FROM quality.coaching_sessions session
             JOIN quality.coaching_cycles cycle ON cycle.id = session.cycle_id
             JOIN people.staff staff ON staff.id = session.staff_id
@@ -287,7 +288,8 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 12),
                 reader.GetFieldValue<DateTimeOffset>(13),
                 GetDateTimeOffsetOrNull(reader, 14),
-                reader.GetBoolean(15)),
+                reader.GetBoolean(15),
+                reader.GetBoolean(16)),
             cancellationToken);
 
     public async Task<CoachingSessionDetail?> GetCoachingSessionAsync(
@@ -408,8 +410,8 @@ public sealed partial class SqlFoundationDataStore
             cancellationToken);
 
         var canEdit = currentUser.HasPermission(PermissionKeys.CoachingManage)
-            || (row.Status == "draft"
-                && (row.CreatedByUserAccountId == currentUser.UserAccountId || row.CoachStaffId == currentUser.StaffId));
+            || row.CreatedByUserAccountId == currentUser.UserAccountId
+            || row.CoachStaffId == currentUser.StaffId;
 
         return new CoachingSessionDetail(
             row.Id, row.RecordId, row.CycleId, row.CycleNumber, row.StaffId, row.StaffName,
@@ -464,8 +466,8 @@ public sealed partial class SqlFoundationDataStore
                 var existing = await GetCoachingSessionForUpdateAsync(connection, transaction, sessionId.Value, cancellationToken)
                     ?? throw new WorkflowValidationException("The coaching session was not found.");
                 var canEdit = currentUser.HasPermission(PermissionKeys.CoachingManage)
-                    || (existing.Status == "draft"
-                        && (existing.CreatedByUserAccountId == currentUser.UserAccountId || existing.CoachStaffId == currentUser.StaffId));
+                    || existing.CreatedByUserAccountId == currentUser.UserAccountId
+                    || existing.CoachStaffId == currentUser.StaffId;
                 if (!canEdit)
                 {
                     throw new WorkflowValidationException("This coaching session is locked or belongs to another coach.");

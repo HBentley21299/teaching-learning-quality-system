@@ -15,6 +15,7 @@ type CollapsibleSectionProps = {
   actions?: ReactNode;
   onExpandedChange?: (expanded: boolean) => void;
   className?: string;
+  persistState?: boolean;
 };
 
 export function CollapsibleSection({
@@ -30,17 +31,18 @@ export function CollapsibleSection({
   children,
   actions,
   onExpandedChange,
-  className = ""
+  className = "",
+  persistState = true
 }: CollapsibleSectionProps) {
   const contentId = useId();
   const expandedChangeRef = useRef(onExpandedChange);
-  const [expanded, setExpanded] = useState(() => readSessionState(storageKey, defaultExpanded));
+  const [expanded, setExpanded] = useState(() => persistState ? readSessionState(storageKey, defaultExpanded) : defaultExpanded);
 
   expandedChangeRef.current = onExpandedChange;
 
   useEffect(() => {
-    setExpanded(readSessionState(storageKey, defaultExpanded));
-  }, [defaultExpanded, storageKey]);
+    setExpanded(persistState ? readSessionState(storageKey, defaultExpanded) : defaultExpanded);
+  }, [defaultExpanded, persistState, storageKey]);
 
   useEffect(() => {
     expandedChangeRef.current?.(expanded);
@@ -49,7 +51,7 @@ export function CollapsibleSection({
   function toggle() {
     setExpanded((current) => {
       const next = !current;
-      window.sessionStorage.setItem(`collapse:${storageKey}`, next ? "open" : "closed");
+      if (persistState) window.sessionStorage.setItem(`collapse:${storageKey}`, next ? "open" : "closed");
       return next;
     });
   }

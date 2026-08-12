@@ -1569,7 +1569,8 @@ public sealed partial class SqlFoundationDataStore(
             )
             SELECT r.id, r.module_id, r.record_type, r.title, r.subject_staff_id, r.owner_staff_id, r.org_unit_id, r.record_date, r.created_at,
                    COALESCE(latest_submission.status, 'submitted') AS submission_status,
-                   r.academic_year_key
+                   r.academic_year_key,
+                   CONVERT(bit, CASE WHEN r.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END)
             FROM core.records r
             OUTER APPLY (
                 SELECT TOP (1) fsub.status
@@ -1583,11 +1584,13 @@ public sealed partial class SqlFoundationDataStore(
               AND (
                     COALESCE(latest_submission.status, 'submitted') <> 'draft'
                     OR r.owner_staff_id = @currentStaffId
+                    OR r.created_by_user_account_id = @currentUserAccountId
                     OR @canViewAll = 1
               )
               AND (
                     @canViewAll = 1
                     OR r.owner_staff_id = @currentStaffId
+                    OR r.created_by_user_account_id = @currentUserAccountId
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
@@ -1629,7 +1632,8 @@ public sealed partial class SqlFoundationDataStore(
                 GetDateOnlyOrNull(reader, 7),
                 reader.GetFieldValue<DateTimeOffset>(8),
                 reader.GetString(9),
-                reader.GetString(10)),
+                reader.GetString(10),
+                reader.GetBoolean(11)),
             cancellationToken);
 
     public async Task<RecordDetailSummary?> GetRecordDetailAsync(
@@ -2157,19 +2161,16 @@ public sealed partial class SqlFoundationDataStore(
                 END AS submission_status,
                 COALESCE(r.org_unit_id, subject_staff.primary_org_unit_id, owner_staff.primary_org_unit_id),
                 CASE
-                    WHEN r.record_type = 'elevate_environment' THEN elevate_room.room_code
                     WHEN r.record_type = 'cpd_event' AND cpd_metrics.area_count > 1 THEN 'Multiple'
                     WHEN r.record_type = 'cpd_event' THEN cpd_metrics.area_code
                     ELSE org_unit.code
                 END AS area_code,
                 CASE
-                    WHEN r.record_type = 'elevate_environment' THEN elevate_room.building_name
                     WHEN r.record_type = 'cpd_event' AND cpd_metrics.area_count > 1 THEN 'Multiple areas'
                     WHEN r.record_type = 'cpd_event' THEN cpd_metrics.area_name
                     ELSE org_unit.name
                 END AS area_name,
                 CASE
-                    WHEN r.record_type = 'elevate_environment' THEN elevate_room.building_name
                     WHEN r.record_type = 'cpd_event' AND cpd_metrics.area_count = 1 THEN cpd_metrics.parent_area_code
                     WHEN r.record_type <> 'cpd_event' THEN parent_org.code
                     ELSE NULL
@@ -2247,7 +2248,9 @@ public sealed partial class SqlFoundationDataStore(
                 COALESCE(elevate_assessment.barrier_count, 0) AS barrier_count,
                 CASE WHEN r.record_type IN ('liv', 'elevate_practice_assessment', 'probation_case') THEN 5
                      WHEN environment_rating_metrics.rating_count > 0 THEN 5 ELSE 3 END AS score_maximum,
-                probation_metrics.linked_liv_source_record_id
+                probation_metrics.linked_liv_source_record_id,
+                r.subject_staff_id,
+                r.academic_year_key
             FROM core.records r
             LEFT JOIN people.staff owner_staff ON owner_staff.id = r.owner_staff_id
             LEFT JOIN people.staff subject_staff ON subject_staff.id = r.subject_staff_id
@@ -2518,7 +2521,9 @@ public sealed partial class SqlFoundationDataStore(
                 Convert.ToInt32(reader.GetValue(21)),
                 Convert.ToInt32(reader.GetValue(22)),
                 Convert.ToInt32(reader.GetValue(23)),
-                GetGuidOrNull(reader, 24)),
+                GetGuidOrNull(reader, 24),
+                GetGuidOrNull(reader, 25),
+                GetStringOrNull(reader, 26)),
             cancellationToken);
 
     public Task<IReadOnlyList<LearningWalkRollupSummary>> GetLearningWalkRollupAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
@@ -2889,6 +2894,11 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<Guid> CreateRecordAsync(CreateRecordRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
+        if (request.ModuleId == Guid.Empty || string.IsNullOrWhiteSpace(request.RecordType) || string.IsNullOrWhiteSpace(request.Title))
+        {
+            throw new WorkflowValidationException("A module, record type and title are required.");
+        }
+
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = new SqlCommand(
             """

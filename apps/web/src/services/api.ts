@@ -30,6 +30,7 @@ import type {
   CoachingSessionSaveSummary,
   CoachingSessionSummary,
   CompleteStaffOnboardingRequest,
+  CpdAttendanceDashboardSummary,
   CourseSummary,
   CreateActionRequest,
   CreateAdminUserRequest,
@@ -40,6 +41,7 @@ import type {
   DashboardDimensionFact,
   DashboardProcessConfiguration,
   ElevateStatusDashboardSummary,
+  LivLifecycleDashboardSummary,
   ElevateEnvironmentPillarSummary,
   ElevatePracticeProgress,
   ElevatePracticeAudit,
@@ -318,12 +320,18 @@ export const api = {
     getJson<ProcessDashboardRecordSummary[]>("/api/v1/reports/process-records"),
   dashboardConfiguration: () =>
     getJson<DashboardConfiguration>("/api/v1/reports/dashboard-configuration"),
-  dashboardDimensions: () =>
-    getJson<DashboardDimensionFact[]>("/api/v1/reports/dashboard-dimensions"),
+  dashboardDimensions: (academicYear?: string) =>
+    getJson<DashboardDimensionFact[]>(`/api/v1/reports/dashboard-dimensions${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
+  eliStatementDashboardDimensions: (academicYear: string) =>
+    getJson<DashboardDimensionFact[]>(`/api/v1/reports/eli-statement-dimensions?academicYear=${encodeURIComponent(academicYear)}`),
   elevateStatusDashboard: (academicYear: string) =>
     getJson<ElevateStatusDashboardSummary[]>(`/api/v1/reports/elevate-status?academicYear=${encodeURIComponent(academicYear)}`),
   staffParticipationDashboard: (academicYear: string) =>
     getJson<StaffParticipationDashboardSummary[]>(`/api/v1/reports/staff-participation?academicYear=${encodeURIComponent(academicYear)}`),
+  cpdAttendanceDashboard: (academicYear: string) =>
+    getJson<CpdAttendanceDashboardSummary[]>(`/api/v1/reports/cpd-attendance?academicYear=${encodeURIComponent(academicYear)}`),
+  livLifecycleDashboard: (academicYear: string) =>
+    getJson<LivLifecycleDashboardSummary[]>(`/api/v1/reports/liv-lifecycle?academicYear=${encodeURIComponent(academicYear)}`),
   saveDashboardConfiguration: (processes: DashboardProcessConfiguration[]) =>
     sendJson("/api/v1/admin/reports/dashboard-configuration", "PUT", { processes }),
   learningWalkRollup: () =>
@@ -381,8 +389,8 @@ export const api = {
     ),
   updateLivStage: (id: string, stageId: string, request: SaveLivStageRequest) =>
     sendJson(`/api/v1/liv-records/${id}/stages/${stageId}`, "PUT", request),
-  completeLivCycle: (id: string) =>
-    sendJson<never, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete`, "POST"),
+  completeLivCycle: (id: string, openFollowUp = true) =>
+    sendJson<{ openFollowUp: boolean }, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete`, "POST", { openFollowUp }),
   changeLivStatus: (id: string, action: "close" | "reopen" | "archive") =>
     sendJson(`/api/v1/liv-records/${id}/status`, "POST", { action }),
   probationCases: () => getJson<ProbationCase[]>("/api/v1/probation-observations"),

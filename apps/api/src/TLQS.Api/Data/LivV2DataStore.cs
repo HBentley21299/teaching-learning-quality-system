@@ -13,7 +13,7 @@ public sealed partial class SqlFoundationDataStore
     {
         var deliveryAreas = await GetLivLookupOptionsAsync("liv_delivery_area", cancellationToken);
         var courseLevels = await GetLivLookupOptionsAsync("liv_course_level", cancellationToken);
-        var focusAreas = await GetLivLookupOptionsAsync("liv_focus_area", cancellationToken);
+        var focusAreas = await GetLivLookupOptionsAsync("liv_visit_focus_area", cancellationToken);
         var opportunities = await GetLivLookupOptionsAsync("liv_development_opportunity", cancellationToken);
         var rubric = await QueryAsync(
             """
@@ -111,6 +111,7 @@ public sealed partial class SqlFoundationDataStore
                 AND (
                     liv.subject_staff_id = @currentStaffId
                     OR liv.reviewer_staff_id = @currentStaffId
+                    OR liv.created_by_user_account_id = @currentUserAccountId
                     OR (
                         @canViewScoped = 1
                         AND (
@@ -128,8 +129,7 @@ public sealed partial class SqlFoundationDataStore
                    area.code, parent.code, liv.pre_conversation, liv.status,
                    liv.current_stage, liv.visibility_status, liv.completion_date,
                    liv.created_at, liv.updated_at,
-                   CASE WHEN liv.status = N'in_progress'
-                          AND (@canManage = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId)
+                   CASE WHEN @canManage = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId
                         THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,
                    CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId
                         THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,
@@ -147,7 +147,8 @@ public sealed partial class SqlFoundationDataStore
                    CONVERT(nvarchar(7), source_information.preferred_visit_month, 126),
                    source_secondary.value_key, source_secondary.display_name,
                     source_information.secondary_focus_other,
-                    probation_case.id, probation_observation.observation_number
+                    probation_case.id, probation_observation.observation_number,
+                    CONVERT(bit, CASE WHEN liv.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END)
             FROM quality.liv_records liv
             JOIN people.staff subject ON subject.id = liv.subject_staff_id
             LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
@@ -190,7 +191,7 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 24), GetStringOrNull(reader, 25), GetStringOrNull(reader, 26), [],
                 GetStringOrNull(reader, 27), GetStringOrNull(reader, 28), GetStringOrNull(reader, 29),
                 GetStringOrNull(reader, 30), GetGuidOrNull(reader, 31),
-                reader.IsDBNull(32) ? null : reader.GetByte(32)),
+                reader.IsDBNull(32) ? null : reader.GetByte(32), reader.GetBoolean(33)),
             cancellationToken);
 
         if (cases.Count == 0)
@@ -589,6 +590,7 @@ public sealed partial class SqlFoundationDataStore
             var subjectCanEdit = metadata.SubjectStaffId == currentUser.StaffId
                 && stageType is "pre_discussion" or "distance_impact";
             if (!subjectCanEdit && !CanEditLivMetadata(metadata, currentUser)) return FormSubmissionUpdateResult.Forbidden;
+            var stageStatus = NormalizeLivStageStatus(request.StageStatus, stageType);
 
             await ValidateLivOpportunityKeysAsync(
                 connection, transaction, request.DevelopmentOpportunityKeys, cancellationToken);
@@ -600,7 +602,7 @@ public sealed partial class SqlFoundationDataStore
                     intended_follow_up_date = @followUpDate,
                     distance_impact_text = @distanceImpact,
                     development_opportunity_keys_json = @opportunities,
-                    stage_status = CASE WHEN @stageStatus = N'completed' THEN N'completed' ELSE N'in_progress' END,
+                    stage_status = @stageStatus,
                     updated_by_user_account_id = @updatedBy, updated_at = sysutcdatetime()
                 WHERE id = @stageId;
                 """, connection, (SqlTransaction)transaction))
@@ -613,7 +615,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@followUpDate", ToDbValue(request.IntendedFollowUpDate));
                 command.Parameters.AddWithValue("@distanceImpact", ToDbValue(request.DistanceImpactText));
                 command.Parameters.AddWithValue("@opportunities", ToDbValue(SerializeLivStringList(request.DevelopmentOpportunityKeys)));
-                command.Parameters.AddWithValue("@stageStatus", request.StageStatus ?? "in_progress");
+                command.Parameters.AddWithValue("@stageStatus", stageStatus);
                 command.Parameters.AddWithValue("@updatedBy", ToDbValue(currentUser.UserAccountId));
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
@@ -688,6 +690,7 @@ public sealed partial class SqlFoundationDataStore
 
     public async Task<LivCycleSummary?> CompleteLivCycleAsync(
         Guid livId,
+        bool openFollowUp,
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
@@ -783,6 +786,44 @@ public sealed partial class SqlFoundationDataStore
                     JsonSerializer.Serialize(new { livId, cycle.CycleNumber }), cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return new LivCycleSummary(cycle.Id, cycle.CycleNumber, "completed", cycle.StartedAt, DateTimeOffset.UtcNow, false, []);
+            }
+
+            if (!openFollowUp)
+            {
+                if (cycle.CycleNumber < 2)
+                    throw new WorkflowValidationException("A LIV can only be closed without a follow-up after cycle 2 has been completed.");
+
+                await using (var command = new SqlCommand(
+                    """
+                    UPDATE quality.liv_cycles
+                    SET cycle_status = N'completed', completed_at = sysutcdatetime(),
+                        updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE id = @cycleId;
+                    UPDATE quality.liv_stages
+                    SET stage_status = CASE WHEN stage_status = N'in_progress' THEN N'completed' ELSE stage_status END,
+                        updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE liv_cycle_id = @cycleId AND archived_at IS NULL;
+                    UPDATE quality.liv_visits
+                    SET visit_status = N'completed', updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE cycle_id = @cycleId AND archived_at IS NULL;
+                    UPDATE quality.liv_records
+                    SET status = N'closed', current_stage = N'completed', completion_date = CONVERT(date, sysutcdatetime()),
+                        updated_by_user_account_id = @user, updated_at = sysutcdatetime()
+                    WHERE id = @livId;
+                    """, connection, (SqlTransaction)transaction))
+                {
+                    command.Parameters.AddWithValue("@cycleId", cycle.Id);
+                    command.Parameters.AddWithValue("@livId", livId);
+                    command.Parameters.AddWithValue("@user", ToDbValue(currentUser.UserAccountId));
+                    await command.ExecuteNonQueryAsync(cancellationToken);
+                }
+                await WriteAuditAsync(
+                    connection, transaction, currentUser.UserAccountId, metadata.RecordId,
+                    "liv_cycle", cycle.Id, "liv.cycle_completed_and_closed",
+                    $"LIV cycle {cycle.CycleNumber} completed and the LIV closed by {currentUser.DisplayName}.",
+                    null, JsonSerializer.Serialize(new { cycle.CycleNumber, OpenFollowUp = false }), cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new LivCycleSummary(cycle.Id, cycle.CycleNumber, "completed", cycle.StartedAt, DateTimeOffset.UtcNow, true, []);
             }
 
             var nextCycleId = Guid.NewGuid();
@@ -976,10 +1017,9 @@ public sealed partial class SqlFoundationDataStore
     }
 
     private static bool CanEditLivMetadata(LivCaseMetadataV2 metadata, CurrentUser currentUser) =>
-        metadata.Status == "in_progress"
-        && (metadata.ReviewerStaffId == currentUser.StaffId
+        metadata.ReviewerStaffId == currentUser.StaffId
             || metadata.CreatedByUserAccountId == currentUser.UserAccountId
-            || currentUser.HasPermission(PermissionKeys.LivManage));
+            || currentUser.HasPermission(PermissionKeys.LivManage);
 
     private static bool CanViewLivSensitiveMetadata(LivCaseMetadataV2 metadata, CurrentUser currentUser) =>
         metadata.ReviewerStaffId == currentUser.StaffId
@@ -1014,6 +1054,16 @@ public sealed partial class SqlFoundationDataStore
         if (cycleNumber == 1 && normalized == "distance_impact") throw new WorkflowValidationException("Distance Travelled and Impact is used in follow-up cycles.");
         if (cycleNumber > 1 && normalized == "pre_discussion") throw new WorkflowValidationException("Follow-up cycles use Distance Travelled and Impact instead of a pre-LIV discussion.");
         return normalized;
+    }
+
+    private static string NormalizeLivStageStatus(string? value, string stageType)
+    {
+        var normalized = value?.Trim().ToLowerInvariant() ?? "in_progress";
+        if (normalized == "not_applicable" && stageType != "follow_up_review")
+            throw new WorkflowValidationException("Not applicable is only available for the follow-up review stage.");
+        return normalized is "in_progress" or "completed" or "not_applicable"
+            ? normalized
+            : throw new WorkflowValidationException("The selected LIV stage status is invalid.");
     }
 
     private static int LivStageOrder(string stageType) => stageType switch
@@ -1164,8 +1214,6 @@ public sealed partial class SqlFoundationDataStore
         }
         foreach (var rating in values)
         {
-            if (rating.IsNotApplicable && rating.FocusKey is not ("positive_start" or "digital"))
-                throw new WorkflowValidationException("Not applicable is only available for Positive Start and Digital.");
             if (!rating.IsNotApplicable && !rating.DescriptorId.HasValue)
                 throw new WorkflowValidationException("Select a rubric outcome for every rated LIV area.");
             await using var command = new SqlCommand(
@@ -1178,7 +1226,7 @@ public sealed partial class SqlFoundationDataStore
                        CASE WHEN @isNa = 1 THEN NULL ELSE descriptor.hidden_numeric_value END,
                        @isNa
                 FROM core.lookup_values focus
-                JOIN core.lookup_types focus_type ON focus_type.id = focus.lookup_type_id AND focus_type.lookup_key = N'liv_focus_area'
+                JOIN core.lookup_types focus_type ON focus_type.id = focus.lookup_type_id AND focus_type.lookup_key = N'liv_visit_focus_area'
                 LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = @descriptorId AND descriptor.archived_at IS NULL
                 WHERE focus.value_key = @focusKey AND focus.value_key <> N'other'
                   AND focus.is_active = 1 AND focus.archived_at IS NULL;
