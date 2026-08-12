@@ -156,7 +156,9 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\052_teaching_and_learning_language.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\053_liv_focus_and_record_editing.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\054_liv_focus_stable_keys.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\055_teaching_and_learning_label_consistency.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\055_teaching_and_learning_label_consistency.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\056_local_test_credentials.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\057_local_credentials_by_email.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

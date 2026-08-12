@@ -2,7 +2,7 @@ import { Building2, CheckCircle2, LogOut, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
-import { isAuthEnabled, signOut } from "../services/auth";
+import { getLocalToken, isAuthEnabled, signOut } from "../services/auth";
 import type { CurrentUser, StaffOnboardingOptions } from "../services/types";
 
 type FirstTimeOnboardingProps = {
@@ -57,7 +57,7 @@ export function FirstTimeOnboarding({ email, onComplete }: FirstTimeOnboardingPr
           <div className="brand-mark">iE</div>
           <div><strong>i-Elevate</strong><span>Teaching &amp; Learning</span></div>
         </div>
-        {isAuthEnabled ? (
+        {isAuthEnabled || getLocalToken() ? (
           <button className="icon-button" onClick={signOut} title="Sign out" type="button">
             <LogOut aria-hidden="true" size={17} />
           </button>

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CalendarDays, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun } from "lucide-react";
+import { AlertTriangle, CalendarDays, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun } from "lucide-react";
 import { canAccessRoute, navigationItems, type AppRoute } from "./navigation";
 import {
   actionPath,
@@ -13,6 +13,7 @@ import {
 } from "./routing";
 import { api } from "../services/api";
 import { isAuthEnabled, signOut } from "../services/auth";
+import { UserMenu } from "../components/UserMenu";
 import { FirstTimeOnboarding } from "../components/FirstTimeOnboarding";
 import type {
   ActionSummary,
@@ -422,14 +423,7 @@ export function App() {
           >
             {theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
           </button>
-          <div className="user-chip">
-            <span>{user.displayName}</span>
-            {isAuthEnabled ? (
-              <button className="icon-button" onClick={signOut} title="Sign out" type="button">
-                <LogOut size={16} aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
+          <UserMenu displayName={user.displayName} />
         </header>
 
         {loadError ? (

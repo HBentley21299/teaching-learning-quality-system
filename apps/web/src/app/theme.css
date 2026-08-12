@@ -1035,3 +1035,190 @@ h1, h2, h3 {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------------------- local test login */
+
+.login-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+  text-align: left;
+  width: 100%;
+}
+
+.login-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.login-form label span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.login-form input {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  min-height: 40px;
+  padding: 0 12px;
+  transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+
+.login-form input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--ring);
+  outline: none;
+}
+
+.login-error {
+  color: var(--danger-text);
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.login-divider {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 0.76rem;
+  gap: 10px;
+  margin: 14px 0 4px;
+  width: 100%;
+}
+
+.login-divider::before,
+.login-divider::after {
+  background: var(--line);
+  content: "";
+  flex: 1;
+  height: 1px;
+}
+
+/* ---------------------------------------------------------------- user menu */
+
+.user-menu {
+  position: relative;
+}
+
+.user-menu-trigger {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 550;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  transition: background-color 160ms var(--ease);
+}
+
+.user-menu-trigger:hover {
+  background: var(--surface-muted);
+}
+
+.user-menu-backdrop {
+  inset: 0;
+  position: fixed;
+  z-index: 19;
+}
+
+.user-menu-list {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lifted);
+  display: grid;
+  min-width: 200px;
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+}
+
+.user-menu-list button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 9px;
+  min-height: 38px;
+  padding: 0 10px;
+  text-align: left;
+  transition: background-color 140ms var(--ease);
+}
+
+.user-menu-list button:hover {
+  background: var(--surface-muted);
+}
+
+.user-menu-note {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin: 0;
+  padding: 9px 10px;
+}
+
+.user-menu-dialog-backdrop {
+  align-items: center;
+  background: rgba(10, 14, 12, 0.45);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 40;
+}
+
+.user-menu-dialog {
+  display: grid;
+  gap: 12px;
+  margin: 16px;
+  max-width: 420px;
+  width: 100%;
+}
+
+.user-menu-dialog h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.user-menu-dialog label {
+  display: grid;
+  gap: 5px;
+}
+
+.user-menu-dialog label span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.user-menu-dialog input {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  min-height: 40px;
+  padding: 0 12px;
+}
+
+.user-menu-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

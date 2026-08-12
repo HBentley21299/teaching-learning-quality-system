@@ -31,6 +31,7 @@ public sealed partial class SqlFoundationDataStore
         string displayName,
         string providerSubjectId,
         Guid tenantId,
+        string provider,
         CancellationToken cancellationToken)
     {
         var normalizedEmail = email.Trim().ToLowerInvariant();
@@ -58,6 +59,12 @@ public sealed partial class SqlFoundationDataStore
             throw new WorkflowValidationException(exception.Message);
         }
         var roleKey = StaffOnboardingRules.InitialRoleKeyFor(category);
+
+        // Identity lookups only resolve Entra identities, so a local test
+        // sign-in is looked up by email and never records an Entra identity.
+        var isEntra = string.Equals(provider, "entra", StringComparison.Ordinal);
+        var entraSubjectId = isEntra ? providerObjectId.ToString() : null;
+        Guid? entraTenantId = isEntra ? tenantId : null;
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -93,16 +100,17 @@ public sealed partial class SqlFoundationDataStore
                 SELECT COUNT_BIG(*)
                 FROM people.staff staff
                 LEFT JOIN auth.user_accounts account ON account.staff_id = staff.id
-                LEFT JOIN auth.auth_identities identity ON identity.user_account_id = account.id
-                    AND identity.provider = N'entra'
-                    AND identity.tenant_id = @tenantId
-                    AND identity.provider_subject_id = @providerSubjectId
-                WHERE staff.email = @email OR identity.id IS NOT NULL;
+                LEFT JOIN auth.auth_identities provider_identity ON provider_identity.user_account_id = account.id
+                    AND provider_identity.provider = @provider
+                    AND provider_identity.tenant_id = @tenantId
+                    AND provider_identity.provider_subject_id = @providerSubjectId
+                WHERE staff.email = @email OR provider_identity.id IS NOT NULL;
                 """,
                 connection,
                 (SqlTransaction)transaction))
             {
                 existingCommand.Parameters.AddWithValue("@tenantId", tenantId);
+                existingCommand.Parameters.AddWithValue("@provider", provider);
                 existingCommand.Parameters.AddWithValue("@providerSubjectId", providerObjectId.ToString());
                 existingCommand.Parameters.AddWithValue("@email", normalizedEmail);
                 if (Convert.ToInt64(await existingCommand.ExecuteScalarAsync(cancellationToken)) > 0)
@@ -144,7 +152,7 @@ public sealed partial class SqlFoundationDataStore
                     user_account_id, provider, tenant_id, provider_subject_id, email_claim
                 )
                 VALUES (
-                    @userAccountId, N'entra', @tenantId, @providerSubjectId, @email
+                    @userAccountId, @provider, @tenantId, @providerSubjectId, @email
                 );
 
                 INSERT INTO auth.user_roles (
@@ -182,6 +190,7 @@ public sealed partial class SqlFoundationDataStore
                 createCommand.Parameters.AddWithValue("@teamId", request.TeamOrgUnitId);
                 createCommand.Parameters.AddWithValue("@staffCategory", category);
                 createCommand.Parameters.AddWithValue("@tenantId", tenantId);
+                createCommand.Parameters.AddWithValue("@provider", provider);
                 createCommand.Parameters.AddWithValue("@providerSubjectId", providerObjectId.ToString());
                 createCommand.Parameters.AddWithValue("@roleId", roleId);
                 await createCommand.ExecuteNonQueryAsync(cancellationToken);
@@ -214,7 +223,8 @@ public sealed partial class SqlFoundationDataStore
         catch (SqlException exception) when (exception.Number is 2601 or 2627)
         {
             await transaction.RollbackAsync(cancellationToken);
-            var existing = await GetCurrentUserAsync(normalizedEmail, providerObjectId.ToString(), tenantId, cancellationToken);
+            var existing = await GetCurrentUserAsync(
+                normalizedEmail, entraSubjectId, entraTenantId, cancellationToken);
             if (existing.UserAccountId.HasValue)
             {
                 return existing;
@@ -229,8 +239,8 @@ public sealed partial class SqlFoundationDataStore
 
         return await GetCurrentUserAsync(
             normalizedEmail,
-            providerObjectId.ToString(),
-            tenantId,
+            entraSubjectId,
+            entraTenantId,
             cancellationToken);
     }
 }

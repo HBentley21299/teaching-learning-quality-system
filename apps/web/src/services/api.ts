@@ -108,7 +108,16 @@ import type {
   UpdateLearningWalkThemeMappingRequest
 } from "./types";
 
-import { getAccessToken } from "./auth";
+import { clearLocalSession, getAccessToken, getLocalToken } from "./auth";
+
+// An expired local test-account token yields 401s; clear it and return to
+// the sign-in screen instead of leaving the app half-broken.
+function handleExpiredLocalSession(status: number) {
+  if (status === 401 && getLocalToken()) {
+    clearLocalSession();
+    window.location.assign("/");
+  }
+}
 
 const configuredApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
 const apiBaseUrl = configuredApiBaseUrl || (import.meta.env.DEV ? "http://127.0.0.1:5001" : "");
@@ -152,6 +161,7 @@ async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await requestApi(url, { headers: await buildHeaders(false) }, signal);
   if (!response.ok) {
+    handleExpiredLocalSession(response.status);
     throw new Error(`${response.status} ${response.statusText} for ${url}`);
   }
 
@@ -174,6 +184,7 @@ async function sendJson<TRequest, TResponse = never>(url: string, method: "POST"
       return { ok: true, data };
     }
 
+    handleExpiredLocalSession(response.status);
     let message = `The request failed (${response.status}).`;
     if (response.status === 403) {
       message = "You do not have permission to do that.";
@@ -248,6 +259,10 @@ async function downloadApiFile(url: string): Promise<ApiResult> {
 }
 
 export const api = {
+  changePassword: (request: { currentPassword: string; newPassword: string }) =>
+    sendJson("/api/v1/auth/change-password", "POST", request),
+  adminSetUserPassword: (userAccountId: string, newPassword: string) =>
+    sendJson(`/api/v1/auth/admin/users/${userAccountId}/password`, "POST", { newPassword }),
   exportExcel: (moduleKey: string, filters: ExportFilters = {}) => {
     const query = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => { if (value) query.set(key, value); });

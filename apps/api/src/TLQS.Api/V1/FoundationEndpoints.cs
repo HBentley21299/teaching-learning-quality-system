@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using TLQS.Api.Data;
+using TLQS.Api.Security;
 using TLQS.Application.Security;
 using TLQS.Application.Workflows;
 
@@ -35,21 +36,46 @@ public static class FoundationEndpoints
             var displayName = principal.FindFirstValue("name")
                 ?? principal.Identity?.Name
                 ?? email?.Split('@')[0];
-            if (string.IsNullOrWhiteSpace(email)
+
+            // Local test sign-ins carry no Entra identity claims, so they get a
+            // deterministic local provider identity instead. Everything else —
+            // staff record, account, role, scope, membership, audit — runs
+            // through the same trusted self-onboarding path as Entra users.
+            var isLocalSignIn = string.Equals(
+                principal.Identity?.AuthenticationType,
+                LocalTokenAuthenticationHandler.SchemeName,
+                StringComparison.Ordinal);
+            var provider = isLocalSignIn ? "local" : "entra";
+            Guid tenantId;
+            if (isLocalSignIn && !string.IsNullOrWhiteSpace(email))
+            {
+                objectId = LocalIdentity.SubjectIdFor(email);
+                tenantId = LocalIdentity.TenantId;
+                displayName = LocalIdentity.DisplayNameFor(email);
+            }
+            else if (string.IsNullOrWhiteSpace(email)
                 || string.IsNullOrWhiteSpace(objectId)
                 || string.IsNullOrWhiteSpace(displayName)
-                || !Guid.TryParse(principal.FindFirstValue("tid"), out var tenantId))
+                || !Guid.TryParse(principal.FindFirstValue("tid"), out tenantId))
             {
                 return Results.BadRequest(new { Message = "Your Microsoft sign-in is missing the Entra identity details required to create an account." });
             }
 
             var onboardedUser = await store.CompleteStaffOnboardingAsync(
                 request,
-                email,
-                displayName,
-                objectId,
+                email!,
+                displayName!,
+                objectId!,
                 tenantId,
+                provider,
                 cancellationToken);
+
+            // Keep the test credential usable after onboarding creates the account.
+            if (isLocalSignIn && onboardedUser.UserAccountId.HasValue)
+            {
+                await store.LinkLocalCredentialAsync(email!, onboardedUser.UserAccountId.Value, cancellationToken);
+            }
+
             return Results.Ok(onboardedUser);
         });
 
