@@ -142,7 +142,23 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\038_domain_event_dispatch.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\039_staff_profile_summary_performance.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\040_learning_walk_practice_observed_rubric.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\041_elevate_learning_environment_audit_rubric.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\041_elevate_learning_environment_audit_rubric.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\042_messaging_transport_configuration.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\043_learning_walk_focus_rubrics.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\044_action_themes_and_standardised_forms.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\045_configurable_action_themes.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\046_register_action_theme_admin_lists.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\047_probation_unobserved_rubric_areas.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\048_eli_streamlined_statements.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\049_eli_unicode_punctuation.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\050_liv_visit_detail_configuration.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\051_leadership_dashboard_configuration.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\052_teaching_and_learning_language.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\053_liv_focus_and_record_editing.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\054_liv_focus_stable_keys.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\055_teaching_and_learning_label_consistency.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\056_local_test_credentials.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\057_local_credentials_by_email.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

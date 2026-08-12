@@ -19,11 +19,13 @@ import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
   MessageDeliverySummary,
+  MessagingConfiguration,
   MessagePreview,
   MessageTemplateSummary,
   MessageTemplateVersionSummary,
   MessagingParameter,
-  SaveMessageTemplateRequest
+  SaveMessageTemplateRequest,
+  SaveMessagingConfigurationRequest
 } from "../services/types";
 
 const eventOptions = [
@@ -95,6 +97,29 @@ const emptyEditor: EditorState = {
   isActive: false
 };
 
+const emptyMessagingConfiguration: SaveMessagingConfigurationRequest = {
+  enabled: false,
+  testMode: true,
+  provider: "MicrosoftGraph",
+  tenantId: "",
+  clientId: "",
+  clientSecret: "",
+  clearClientSecret: false,
+  senderAddress: "",
+  senderDisplayName: "i-Elevate",
+  replyToAddress: "",
+  testRecipient: "",
+  applicationUrl: "",
+  pollSeconds: 10,
+  smtpHost: "smtp.office365.com",
+  smtpPort: 587,
+  smtpSecurity: "StartTls",
+  smtpAuthentication: "OAuth2",
+  smtpUsername: "",
+  smtpPassword: "",
+  clearSmtpPassword: false
+};
+
 export function MessagingAdminPanel() {
   const [templates, setTemplates] = useState<MessageTemplateSummary[]>([]);
   const [parameters, setParameters] = useState<MessagingParameter[]>([]);
@@ -110,6 +135,11 @@ export function MessagingAdminPanel() {
   const [saving, setSaving] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
+  const [configuration, setConfiguration] = useState<MessagingConfiguration | null>(null);
+  const [configurationForm, setConfigurationForm] = useState<SaveMessagingConfigurationRequest>(emptyMessagingConfiguration);
+  const [configurationLoading, setConfigurationLoading] = useState(true);
+  const [configurationSaving, setConfigurationSaving] = useState(false);
+  const [configurationError, setConfigurationError] = useState("");
 
   const groupedParameters = useMemo(() => {
     const groups = new Map<string, MessagingParameter[]>();
@@ -123,7 +153,28 @@ export function MessagingAdminPanel() {
 
   useEffect(() => {
     void api.messagingParameters().then(setParameters).catch(() => setError("Approved message parameters could not be loaded."));
+    void api.messagingConfiguration()
+      .then((value) => {
+        setConfiguration(value);
+        setConfigurationForm(toConfigurationEditor(value));
+      })
+      .catch(() => setConfigurationError("Email delivery settings could not be loaded."))
+      .finally(() => setConfigurationLoading(false));
   }, []);
+
+  async function saveConfiguration() {
+    setConfigurationSaving(true);
+    setConfigurationError("");
+    const result = await api.saveMessagingConfiguration(configurationForm);
+    setConfigurationSaving(false);
+    if (!result.ok || !result.data) {
+      setConfigurationError(result.message ?? "Email delivery settings could not be saved.");
+      return;
+    }
+    setConfiguration(result.data);
+    setConfigurationForm(toConfigurationEditor(result.data));
+    setMessage("Email delivery settings saved. The message worker will use them on its next polling cycle.");
+  }
 
   async function loadTemplates() {
     setLoading(true);
@@ -262,6 +313,69 @@ export function MessagingAdminPanel() {
 
   return (
     <div className="route-stack messaging-admin">
+      <section className="panel messaging-configuration-panel">
+        <div className="panel-heading messaging-heading">
+          <div>
+            <h2>Email delivery</h2>
+            <span>Microsoft 365 / Outlook transport configuration</span>
+          </div>
+          {configuration ? (
+            <span className={`status-badge status-${configuration.enabled ? configuration.testMode ? "draft" : "complete" : "cancelled"}`}>
+              {configuration.enabled ? configuration.testMode ? "Test mode" : "Live" : "Disabled"}
+            </span>
+          ) : null}
+        </div>
+        {configurationError ? <div className="section-state section-state-error" role="alert">{configurationError}</div> : null}
+        {configurationLoading ? <div className="section-state">Loading email delivery settings...</div> : (
+          <>
+            <div className="messaging-delivery-switches">
+              <label className="compact-checkbox"><input checked={configurationForm.enabled} onChange={(event) => setConfigurationForm({ ...configurationForm, enabled: event.target.checked })} type="checkbox" />Enable delivery worker</label>
+              <label className="compact-checkbox"><input checked={configurationForm.testMode} onChange={(event) => setConfigurationForm({ ...configurationForm, testMode: event.target.checked })} type="checkbox" />Test mode: redirect every message to the test recipient</label>
+            </div>
+
+            <div className="entry-field-grid messaging-settings-grid">
+              <label className="entry-field"><span>Email provider</span><select onChange={(event) => setConfigurationForm({ ...configurationForm, provider: event.target.value as "MicrosoftGraph" | "Smtp" })} value={configurationForm.provider}><option value="MicrosoftGraph">Microsoft Graph (recommended)</option><option value="Smtp">SMTP server / relay</option></select></label>
+              <label className="entry-field"><span>Polling interval (seconds)</span><input max={300} min={2} onChange={(event) => setConfigurationForm({ ...configurationForm, pollSeconds: Number(event.target.value) })} type="number" value={configurationForm.pollSeconds} /></label>
+              <label className="entry-field"><span>Sender mailbox</span><input onChange={(event) => setConfigurationForm({ ...configurationForm, senderAddress: event.target.value })} placeholder="i-elevate@oldham.ac.uk" type="email" value={configurationForm.senderAddress} /></label>
+              <label className="entry-field"><span>Sender display name</span><input onChange={(event) => setConfigurationForm({ ...configurationForm, senderDisplayName: event.target.value })} value={configurationForm.senderDisplayName} /></label>
+              <label className="entry-field"><span>Reply-to address <small>Optional</small></span><input onChange={(event) => setConfigurationForm({ ...configurationForm, replyToAddress: event.target.value })} type="email" value={configurationForm.replyToAddress} /></label>
+              <label className="entry-field"><span>Test recipient</span><input onChange={(event) => setConfigurationForm({ ...configurationForm, testRecipient: event.target.value })} placeholder="test@oldham.ac.uk" type="email" value={configurationForm.testRecipient} /></label>
+              <label className="entry-field entry-field-wide"><span>Public application URL</span><input onChange={(event) => setConfigurationForm({ ...configurationForm, applicationUrl: event.target.value })} placeholder="https://i-elevate.oldham.ac.uk" type="url" value={configurationForm.applicationUrl} /></label>
+            </div>
+
+            <fieldset className="message-config-group messaging-provider-settings">
+              <legend>Microsoft Entra / OAuth2</legend>
+              <p className="muted-copy">Required for Microsoft Graph and for Outlook SMTP with OAuth2. Graph needs <strong>Mail.Send</strong> application permission; Outlook SMTP app-only access needs Exchange Online <strong>SMTP.SendAsApp</strong> plus service-principal and mailbox permission setup.</p>
+              <div className="entry-field-grid messaging-settings-grid">
+                <label className="entry-field"><span>Tenant ID</span><input autoComplete="off" onChange={(event) => setConfigurationForm({ ...configurationForm, tenantId: event.target.value })} value={configurationForm.tenantId} /></label>
+                <label className="entry-field"><span>Client / application ID</span><input autoComplete="off" onChange={(event) => setConfigurationForm({ ...configurationForm, clientId: event.target.value })} value={configurationForm.clientId} /></label>
+                <label className="entry-field entry-field-wide"><span>Client secret <small>{configuration?.clientSecretConfigured ? "Configured — leave blank to keep it" : "Not configured"}</small></span><input autoComplete="new-password" onChange={(event) => setConfigurationForm({ ...configurationForm, clientSecret: event.target.value, clearClientSecret: false })} placeholder={configuration?.clientSecretConfigured ? "••••••••••••" : "Enter client secret"} type="password" value={configurationForm.clientSecret ?? ""} /></label>
+                {configuration?.clientSecretConfigured ? <label className="compact-checkbox"><input checked={configurationForm.clearClientSecret} onChange={(event) => setConfigurationForm({ ...configurationForm, clearClientSecret: event.target.checked, clientSecret: "" })} type="checkbox" />Remove stored client secret</label> : null}
+              </div>
+            </fieldset>
+
+            <fieldset className="message-config-group messaging-provider-settings" disabled={configurationForm.provider !== "Smtp"}>
+              <legend>SMTP server / Outlook relay</legend>
+              <p className="muted-copy">Outlook defaults are <strong>smtp.office365.com</strong>, port <strong>587</strong>, STARTTLS and OAuth2. SMTP AUTH must also be enabled for the sender mailbox in Microsoft 365. Username/password is retained only for non-Microsoft or legacy SMTP servers.</p>
+              <div className="entry-field-grid messaging-settings-grid">
+                <label className="entry-field"><span>SMTP server</span><input onChange={(event) => setConfigurationForm({ ...configurationForm, smtpHost: event.target.value })} value={configurationForm.smtpHost} /></label>
+                <label className="entry-field"><span>Port</span><input max={65535} min={1} onChange={(event) => setConfigurationForm({ ...configurationForm, smtpPort: Number(event.target.value) })} type="number" value={configurationForm.smtpPort} /></label>
+                <label className="entry-field"><span>Connection security</span><select onChange={(event) => setConfigurationForm({ ...configurationForm, smtpSecurity: event.target.value as SaveMessagingConfigurationRequest["smtpSecurity"] })} value={configurationForm.smtpSecurity}><option value="StartTls">STARTTLS</option><option value="SslOnConnect">SSL/TLS on connect</option><option value="None">None (private relay only)</option></select></label>
+                <label className="entry-field"><span>Authentication</span><select onChange={(event) => setConfigurationForm({ ...configurationForm, smtpAuthentication: event.target.value as SaveMessagingConfigurationRequest["smtpAuthentication"] })} value={configurationForm.smtpAuthentication}><option value="OAuth2">OAuth2 / Microsoft Entra</option><option value="UsernamePassword">Username and password (non-Outlook)</option><option value="None">None / connector relay</option></select></label>
+                <label className="entry-field"><span>SMTP mailbox / username</span><input autoComplete="username" onChange={(event) => setConfigurationForm({ ...configurationForm, smtpUsername: event.target.value })} type="email" value={configurationForm.smtpUsername} /></label>
+                <label className="entry-field"><span>SMTP password <small>{configuration?.smtpPasswordConfigured ? "Configured — leave blank to keep it" : "Only for username/password authentication"}</small></span><input autoComplete="new-password" disabled={configurationForm.smtpAuthentication !== "UsernamePassword"} onChange={(event) => setConfigurationForm({ ...configurationForm, smtpPassword: event.target.value, clearSmtpPassword: false })} placeholder={configuration?.smtpPasswordConfigured ? "••••••••••••" : "Enter SMTP password"} type="password" value={configurationForm.smtpPassword ?? ""} /></label>
+                {configuration?.smtpPasswordConfigured ? <label className="compact-checkbox"><input checked={configurationForm.clearSmtpPassword} onChange={(event) => setConfigurationForm({ ...configurationForm, clearSmtpPassword: event.target.checked, smtpPassword: "" })} type="checkbox" />Remove stored SMTP password</label> : null}
+              </div>
+            </fieldset>
+
+            <div className="messaging-configuration-footer">
+              <small>{configuration?.updatedAt ? `Last updated ${new Date(configuration.updatedAt).toLocaleString()}${configuration.updatedBy ? ` by ${configuration.updatedBy}` : ""}` : "Using server configuration until these settings are saved."}</small>
+              <Button disabled={configurationSaving} icon={Save} onClick={() => void saveConfiguration()} variant="primary">{configurationSaving ? "Saving..." : "Save email settings"}</Button>
+            </div>
+          </>
+        )}
+      </section>
+
       <section className="panel">
         <div className="panel-heading messaging-heading">
           <div><h2>Messages</h2><span>Versioned templates and delivery rules</span></div>
@@ -395,6 +509,31 @@ export function MessagingAdminPanel() {
       </CollapsibleSection>
     </div>
   );
+}
+
+function toConfigurationEditor(value: MessagingConfiguration): SaveMessagingConfigurationRequest {
+  return {
+    enabled: value.enabled,
+    testMode: value.testMode,
+    provider: value.provider,
+    tenantId: value.tenantId,
+    clientId: value.clientId,
+    clientSecret: "",
+    clearClientSecret: false,
+    senderAddress: value.senderAddress,
+    senderDisplayName: value.senderDisplayName,
+    replyToAddress: value.replyToAddress,
+    testRecipient: value.testRecipient,
+    applicationUrl: value.applicationUrl,
+    pollSeconds: value.pollSeconds,
+    smtpHost: value.smtpHost || "smtp.office365.com",
+    smtpPort: value.smtpPort || 587,
+    smtpSecurity: value.smtpSecurity,
+    smtpAuthentication: value.smtpAuthentication,
+    smtpUsername: value.smtpUsername,
+    smtpPassword: "",
+    clearSmtpPassword: false
+  };
 }
 
 function RecipientChecklist({ label, selected, onChange }: { label: string; selected: string[]; onChange: (values: string[]) => void }) {

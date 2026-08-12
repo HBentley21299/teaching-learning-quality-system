@@ -19,6 +19,7 @@ import {
 import { KpiStrip } from "../components/KpiStrip";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
+import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -48,6 +49,8 @@ type Props = {
   onActionsChanged?: () => Promise<void>;
   onOpenEliReport: (staffId: string, elevateRecordId: string) => void;
   initialSourceRecordId?: string;
+  onRecordOpened?: (recordId: string) => void;
+  onRecordClosed?: () => void;
 };
 
 const stageDefinitions = [
@@ -65,7 +68,9 @@ export function ProbationObservations({
   user,
   onActionsChanged,
   onOpenEliReport,
-  initialSourceRecordId = ""
+  initialSourceRecordId = "",
+  onRecordOpened,
+  onRecordClosed
 }: Props) {
   const [cases, setCases] = useState<ProbationCase[]>([]);
   const [configuration, setConfiguration] = useState<ProbationConfiguration | null>(null);
@@ -83,12 +88,19 @@ export function ProbationObservations({
   const [facultyFilter, setFacultyFilter] = useState("all");
   const [teamFilter, setTeamFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [recordOwnershipView, setRecordOwnershipView] = useState<"mine" | "scope">("mine");
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
   const hasProbationPermission = user.permissions.includes("probation.submit") || user.permissions.includes("probation.manage");
   const canCreate = hasProbationPermission && Boolean(configuration?.canCreateCase);
   const selectedCase = cases.find((item) => item.id === selectedCaseId) ?? null;
+
+  function openCase(item: ProbationCase) {
+    setSelectedCaseId(item.id);
+    setSelectedObservationNumber(item.currentObservationNumber);
+    onRecordOpened?.(item.recordId);
+  }
   const faculties = orgUnits.filter((unit) => unit.orgUnitType === "faculty" && unit.isActive);
   const teams = orgUnits.filter((unit) => unit.orgUnitType === "team" && unit.isActive
     && (facultyFilter === "all" || unit.parentOrgUnitId === facultyFilter));
@@ -116,7 +128,7 @@ export function ProbationObservations({
     const match = cases.find((item) => item.recordId === initialSourceRecordId
       || item.observations.some((observation) => observation.linkedLivSourceRecordId === initialSourceRecordId));
     if (match) {
-      setSelectedCaseId(match.id);
+      openCase(match);
       const linked = match.observations.find((observation) => observation.linkedLivSourceRecordId === initialSourceRecordId);
       setSelectedObservationNumber(linked?.observationNumber ?? match.currentObservationNumber);
     }
@@ -140,9 +152,10 @@ export function ProbationObservations({
       const matchesTeam = teamFilter === "all" || staffMember?.orgUnitIds.includes(teamFilter)
         || item.orgUnitId === teamFilter;
       const matchesStatus = statusFilter === "all" || item.status === statusFilter;
-      return matchesSearch && matchesYear && matchesFaculty && matchesTeam && matchesStatus;
+      const matchesOwnership = recordOwnershipView === "scope" || item.isCreatedByCurrentUser;
+      return matchesSearch && matchesYear && matchesFaculty && matchesTeam && matchesStatus && matchesOwnership;
     });
-  }, [cases, facultyFilter, search, staff, statusFilter, teamFilter, yearFilter]);
+  }, [cases, facultyFilter, recordOwnershipView, search, staff, statusFilter, teamFilter, yearFilter]);
 
   const completionCounts = [1, 2, 3].map((number) => filteredCases.filter((item) => highestCompletedObservation(item) === number).length);
 
@@ -179,7 +192,7 @@ export function ProbationObservations({
         selectedLivCycleId={selectedLivCycleId}
         record={selectedCase}
         staff={staff}
-        onBack={() => { setSelectedCaseId(""); setSelectedLivCycleId(""); }}
+        onBack={() => { setSelectedCaseId(""); setSelectedLivCycleId(""); onRecordClosed?.(); }}
         onChanged={async (nextMessage) => { await onActionsChanged?.(); await refresh(nextMessage); }}
         onObservationChange={(number) => { setSelectedObservationNumber(number); setSelectedLivCycleId(""); }}
         onLivCycleChange={setSelectedLivCycleId}
@@ -191,7 +204,7 @@ export function ProbationObservations({
   return (
     <div className="route-stack probation-route">
       <div className="route-header">
-        <div><p className="eyebrow">Staff probation quality process</p><h1>Probationary Observations</h1></div>
+        <div><p className="eyebrow">Staff probation observation process</p><h1>Probationary Observations</h1></div>
         {canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create probation case</Button> : null}
       </div>
       {message ? <div className="notice-row">{message}</div> : null}
@@ -216,7 +229,8 @@ export function ProbationObservations({
       ]} />
 
       <details className="panel liv-v2-records">
-        <summary><span><strong>Active records</strong><small>{filteredCases.length} records in your scope</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: yearFilter === "all" ? undefined : yearFilter }} moduleKey="probation" orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
+        <summary><span><strong>{recordOwnershipView === "mine" ? "My probationary observation records" : "Probationary observation records in scope"}</strong><small>{filteredCases.length} records in this view</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: yearFilter === "all" ? undefined : yearFilter }} moduleKey="probation" orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
+        <div className="segmented-control record-ownership-switch" aria-label="Probation record ownership view"><button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My probation records</button><button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button></div>
         <div className="filter-toolbar probation-filter-toolbar">
           <label className="search-box"><Search size={16} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff or area" value={search} /></label>
           <label><span>Academic year</span><select onChange={(event) => setYearFilter(event.target.value)} value={yearFilter}><option value="all">All years</option>{years.map((year) => <option key={year}>{year}</option>)}</select></label>
@@ -225,7 +239,7 @@ export function ProbationObservations({
           <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label>
         </div>
         <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty / team</th><th>Academic year</th><th>Progress</th><th>Reviewers</th><th>Open</th></tr></thead><tbody>
-          {filteredCases.length === 0 ? <tr><td colSpan={6}>No probation records match these filters.</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => { setSelectedCaseId(item.id); setSelectedObservationNumber(item.currentObservationNumber); }} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
+          {filteredCases.length === 0 ? <tr><td colSpan={6}>{recordOwnershipView === "mine" ? "You have not created any probation records matching these filters." : "No probation records match these filters."}</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => openCase(item)} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
         </tbody></table></div>
       </details>
     </div>
@@ -399,21 +413,113 @@ function ProbationStageEditor({ record, observation, stage, configuration, actio
 }
 
 function ProbationVisitEditor({ configuration, disabled, value, onChange }: { configuration: ProbationConfiguration; disabled: boolean; value: SaveProbationVisitRequest; onChange: (value: SaveProbationVisitRequest) => void }) {
+  const [retainedRatings, setRetainedRatings] = useState<Record<string, SaveProbationVisitRequest["ratings"][number]>>({});
+
   function selectRating(focusKey: string, descriptorId: string) {
     const existing = value.ratings.find((rating) => rating.focusKey === focusKey);
     onChange({ ...value, ratings: [...value.ratings.filter((rating) => rating.focusKey !== focusKey), { focusKey, descriptorId, evidenceOfPractice: existing?.evidenceOfPractice }] });
   }
+
   function updateEvidence(focusKey: string, evidenceOfPractice: string) {
     onChange({ ...value, ratings: value.ratings.map((rating) => rating.focusKey === focusKey ? { ...rating, evidenceOfPractice } : rating) });
   }
-  return <div className="form-stack probation-visit-editor"><div className="form-grid form-grid-three"><label className="entry-field"><span>Delivery area</span><select disabled={disabled} onChange={(event) => onChange({ ...value, deliveryAreaKey: event.target.value })} value={value.deliveryAreaKey ?? ""}><option value="">Select delivery area</option>{configuration.deliveryAreas.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label><label className="entry-field"><span>Observation date</span><input disabled={disabled} onChange={(event) => onChange({ ...value, observationDate: event.target.value })} type="date" value={value.observationDate ?? ""} /></label><label className="entry-field"><span>Observation time</span><input disabled={disabled} onChange={(event) => onChange({ ...value, observationTime: event.target.value })} type="time" value={value.observationTime ?? ""} /></label><label className="entry-field"><span>Course name</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseName: event.target.value })} value={value.courseName ?? ""} /></label><label className="entry-field"><span>Course group</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseGroup: event.target.value })} value={value.courseGroup ?? ""} /></label><label className="entry-field"><span>Course level</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseLevel: event.target.value })} value={value.courseLevel ?? ""} /></label></div><label className="entry-field"><span>Key points</span><textarea disabled={disabled} onChange={(event) => onChange({ ...value, keyPoints: event.target.value })} rows={5} value={value.keyPoints ?? ""} /></label><section className="probation-rubric"><div className="panel-heading"><div><h3>Practice rubric</h3><span>Select one wording judgement for every area. Numerical values remain hidden.</span></div></div>{configuration.focusAreas.map((focus) => { const selected = value.ratings.find((rating) => rating.focusKey === focus.key); return <fieldset key={focus.key}><legend>{focus.name}</legend><div className="probation-rubric-options">{configuration.rubric.map((descriptor) => <button className={selected?.descriptorId === descriptor.id ? "is-selected" : ""} disabled={disabled} key={descriptor.id} onClick={() => selectRating(focus.key, descriptor.id)} title={descriptor.meaning} type="button"><i style={{ background: descriptor.colorHex }} /><span>{descriptor.descriptor}</span></button>)}</div>{selected ? <details className="probation-evidence-disclosure"><summary>Evidence of practice <small>Optional</small><ChevronDown size={16} /></summary><textarea disabled={disabled} onChange={(event) => updateEvidence(focus.key, event.target.value)} placeholder="Add the evidence observed for this area" rows={3} value={selected.evidenceOfPractice ?? ""} /></details> : null}</fieldset>; })}</section></div>;
+
+  function setObserved(focusKey: string, observed: boolean) {
+    if (!observed) {
+      const existing = value.ratings.find((rating) => rating.focusKey === focusKey);
+      if (existing) setRetainedRatings((current) => ({ ...current, [focusKey]: existing }));
+      onChange({
+        ...value,
+        unobservedFocusKeys: [...value.unobservedFocusKeys.filter((key) => key !== focusKey), focusKey],
+        ratings: value.ratings.filter((rating) => rating.focusKey !== focusKey)
+      });
+      return;
+    }
+
+    const retained = retainedRatings[focusKey];
+    onChange({
+      ...value,
+      unobservedFocusKeys: value.unobservedFocusKeys.filter((key) => key !== focusKey),
+      ratings: retained
+        ? [...value.ratings.filter((rating) => rating.focusKey !== focusKey), retained]
+        : value.ratings
+    });
+    if (retained) {
+      setRetainedRatings((current) => {
+        const next = { ...current };
+        delete next[focusKey];
+        return next;
+      });
+    }
+  }
+
+  return (
+    <div className="form-stack probation-visit-editor">
+      <div className="form-grid form-grid-three">
+        <label className="entry-field"><span>Delivery area</span><select disabled={disabled} onChange={(event) => onChange({ ...value, deliveryAreaKey: event.target.value })} value={value.deliveryAreaKey ?? ""}><option value="">Select delivery area</option>{configuration.deliveryAreas.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
+        <label className="entry-field"><span>Observation date</span><input disabled={disabled} onChange={(event) => onChange({ ...value, observationDate: event.target.value })} type="date" value={value.observationDate ?? ""} /></label>
+        <label className="entry-field"><span>Observation time</span><input disabled={disabled} onChange={(event) => onChange({ ...value, observationTime: event.target.value })} type="time" value={value.observationTime ?? ""} /></label>
+        <label className="entry-field"><span>Course name</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseName: event.target.value })} value={value.courseName ?? ""} /></label>
+        <label className="entry-field"><span>Course group</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseGroup: event.target.value })} value={value.courseGroup ?? ""} /></label>
+        <label className="entry-field"><span>Course level</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseLevel: event.target.value })} value={value.courseLevel ?? ""} /></label>
+      </div>
+      <label className="entry-field"><span>Key points</span><textarea disabled={disabled} onChange={(event) => onChange({ ...value, keyPoints: event.target.value })} rows={5} value={value.keyPoints ?? ""} /></label>
+      <section className="probation-rubric">
+        <div className="panel-heading">
+          <div>
+            <h3>Practice rubric</h3>
+            <span>Turn off areas that were not observed. Select one wording judgement for each observed area.</span>
+          </div>
+        </div>
+        {configuration.focusAreas.map((focus) => {
+          const selected = value.ratings.find((rating) => rating.focusKey === focus.key);
+          const observed = !value.unobservedFocusKeys.includes(focus.key);
+          return (
+            <fieldset className={observed ? "" : "is-not-observed"} key={focus.key}>
+              <legend className="probation-rubric-area-heading">
+                <span>{focus.name}</span>
+                <label className="probation-observed-toggle">
+                  <input
+                    aria-label={`${focus.name} observed`}
+                    checked={observed}
+                    disabled={disabled}
+                    onChange={(event) => setObserved(focus.key, event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>{observed ? "Observed" : "Not observed"}</span>
+                </label>
+              </legend>
+              {observed ? (
+                <>
+                  <div className="probation-rubric-options">
+                    {configuration.rubric.map((descriptor) => (
+                      <button className={selected?.descriptorId === descriptor.id ? "is-selected" : ""} disabled={disabled} key={descriptor.id} onClick={() => selectRating(focus.key, descriptor.id)} title={descriptor.meaning} type="button">
+                        <i style={{ background: descriptor.colorHex }} />
+                        <span>{descriptor.descriptor}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {selected ? (
+                    <details className="probation-evidence-disclosure">
+                      <summary>Evidence of practice <small>Optional</small><ChevronDown size={16} /></summary>
+                      <textarea disabled={disabled} onChange={(event) => updateEvidence(focus.key, event.target.value)} placeholder="Add the evidence observed for this area" rows={3} value={selected.evidenceOfPractice ?? ""} />
+                    </details>
+                  ) : null}
+                </>
+              ) : <p className="probation-not-observed-copy">No practice judgement is required for this area.</p>}
+            </fieldset>
+          );
+        })}
+      </section>
+    </div>
+  );
 }
 
 function ProbationActions({ record, observation, stage, actions, staff, onChanged }: { record: ProbationCase; observation: ProbationObservation; stage: ProbationStage; actions: ActionSummary[]; staff: StaffSummary[]; onChanged: (message: string) => Promise<void> }) {
   const [ownerOptions, setOwnerOptions] = useState<ActionOwnerOption[]>([]);
   const [isAdding, setIsAdding] = useState(false);
+  const [actionTheme, setActionTheme] = useState("");
   const [title, setTitle] = useState("");
-  const [detail, setDetail] = useState("");
   const [ownerId, setOwnerId] = useState(record.subjectStaffId);
   const [dueDate, setDueDate] = useState("");
   const [stageComplete, setStageComplete] = useState(stage.stageStatus === "completed");
@@ -424,12 +530,12 @@ function ProbationActions({ record, observation, stage, actions, staff, onChange
   }, [ownerOptions, staff]);
   useEffect(() => { api.actionOwnerOptions(record.recordId, record.subjectStaffId).then(setOwnerOptions).catch(() => setOwnerOptions([])); }, [record.recordId, record.subjectStaffId]);
   async function addAction() {
-    if (!title.trim() || !ownerId || !dueDate) return;
+    if (!actionTheme.trim() || !title.trim() || !ownerId || !dueDate) return;
     setIsSaving(true);
-    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "probation_observation", sourceSubRecordType: "probation_observation", sourceSubRecordId: observation.id, sourceSubRecordKey: `observation_${observation.observationNumber}`, subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, title: title.trim(), detail: detail.trim() || undefined, dueDate, publishedToStaff: true, visibilitySetting: "staff_and_management" });
+    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "probation_observation", sourceSubRecordType: "probation_observation", sourceSubRecordId: observation.id, sourceSubRecordKey: `observation_${observation.observationNumber}`, subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, actionTheme: actionTheme.trim(), title: title.trim(), dueDate, publishedToStaff: true, visibilitySetting: "staff_and_management" });
     setIsSaving(false);
     if (!result.ok) return;
-    setTitle(""); setDetail(""); setDueDate(""); setOwnerId(record.subjectStaffId); setIsAdding(false);
+    setActionTheme(""); setTitle(""); setDueDate(""); setOwnerId(record.subjectStaffId); setIsAdding(false);
     await onChanged("Probation action added to the central Action Engine.");
   }
   async function saveStage() {
@@ -438,7 +544,7 @@ function ProbationActions({ record, observation, stage, actions, staff, onChange
     setIsSaving(false);
     if (result.ok) await onChanged("Actions stage saved.");
   }
-  return <div className="probation-actions"><div className="liv-actions-heading"><div><h3>Observation actions</h3><span>{actions.length} linked to Observation {observation.observationNumber}</span></div>{stage.canEdit ? <Button icon={Plus} onClick={() => setIsAdding((value) => !value)} variant="primary">Add action</Button> : null}</div>{isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action</span><input onChange={(event) => setTitle(event.target.value)} value={title} /></label><label className="entry-field"><span>Description <small>Optional</small></span><textarea onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} /></label><div className="form-grid form-grid-two"><div className="entry-field"><span>Owner</span><StaffSearchSelect helperText="Type to find an authorised action owner." id={`probation-action-owner-${observation.id}`} onChange={setOwnerId} staff={permittedOwnerStaff} value={ownerId} /></div><label className="entry-field"><span>Date to be implemented by</span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !title.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void addAction()} variant="primary">Create action</Button></div></div> : null}<div className="probation-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added.</p> : actions.map((action) => <div key={action.id}><span className={`status-pill ${action.completedDate ? "status-complete" : "status-draft"}`}>{action.completedDate ? "Completed" : action.isOverdue ? "Overdue" : "Open"}</span><div><strong>{action.title}</strong><span>{action.ownerStaffName ?? "Unassigned"} / {formatDate(action.dueDate)}</span></div></div>)}</div>{stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={stageComplete} onChange={(event) => setStageComplete(event.target.checked)} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void saveStage()} variant="primary">Save stage</Button></div> : null}{ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No action owners are available within your scope.</small> : null}</div>;
+  return <div className="probation-actions"><div className="liv-actions-heading"><div><h3>Observation actions</h3><span>{actions.length} linked to Observation {observation.observationNumber}</span></div>{stage.canEdit ? <Button icon={Plus} onClick={() => setIsAdding((value) => !value)} variant="primary">Add action</Button> : null}</div>{isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`probation-action-theme-${observation.id}`} onChange={setActionTheme} sourceFormType="probation_observation" value={actionTheme} /></label><label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label><div className="form-grid form-grid-two"><div className="entry-field"><span>Owner <strong>Required</strong></span><StaffSearchSelect helperText="Type to find an authorised action owner." id={`probation-action-owner-${observation.id}`} onChange={setOwnerId} staff={permittedOwnerStaff} value={ownerId} /></div><label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !actionTheme.trim() || !title.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void addAction()} variant="primary">Create action</Button></div></div> : null}<div className="probation-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added.</p> : actions.map((action) => <div key={action.id}><span className={`status-pill ${action.completedDate ? "status-complete" : "status-draft"}`}>{action.completedDate ? "Completed" : action.isOverdue ? "Overdue" : "Open"}</span><div><strong>{action.title}</strong><span>{action.actionTheme} / {action.ownerStaffName ?? "Unassigned"} / {formatDate(action.dueDate)}</span></div></div>)}</div>{stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={stageComplete} onChange={(event) => setStageComplete(event.target.checked)} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void saveStage()} variant="primary">Save stage</Button></div> : null}{ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No action owners are available within your scope.</small> : null}</div>;
 }
 
 function ProbationEliContext({ context }: { context: ProbationStaffContext }) {
@@ -449,7 +555,7 @@ function stageToRequest(stage: ProbationStage): SaveProbationStageRequest {
   return { contextText: stage.contextText, aimsText: stage.aimsText, learnerActivityText: stage.learnerActivityText, reflectionText: stage.reflectionText, developmentOpportunityKeys: stage.developmentOpportunityKeys, intendedNextObservationDate: stage.intendedNextObservationDate, stageStatus: stage.stageStatus };
 }
 function visitToRequest(visit: ProbationVisit | undefined, stageStatus: ProbationStage["stageStatus"]): SaveProbationVisitRequest {
-  return { deliveryAreaKey: visit?.deliveryAreaKey, observationDate: visit?.observationDate, observationTime: visit?.observationTime, courseName: visit?.courseName, courseGroup: visit?.courseGroup, courseLevel: visit?.courseLevel, keyPoints: visit?.keyPoints, ratings: visit?.ratings.map((rating) => ({ focusKey: rating.focusKey, descriptorId: rating.descriptorId, evidenceOfPractice: rating.evidenceOfPractice })) ?? [], stageStatus };
+  return { deliveryAreaKey: visit?.deliveryAreaKey, observationDate: visit?.observationDate, observationTime: visit?.observationTime, courseName: visit?.courseName, courseGroup: visit?.courseGroup, courseLevel: visit?.courseLevel, keyPoints: visit?.keyPoints, unobservedFocusKeys: visit?.unobservedFocusKeys ?? [], ratings: visit?.ratings.map((rating) => ({ focusKey: rating.focusKey, descriptorId: rating.descriptorId, evidenceOfPractice: rating.evidenceOfPractice })) ?? [], stageStatus };
 }
 function highestCompletedObservation(record: ProbationCase) { return Math.max(0, ...record.observations.filter((item) => item.status === "completed").map((item) => item.observationNumber)); }
 function toggleValue(values: string[], value: string) { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }

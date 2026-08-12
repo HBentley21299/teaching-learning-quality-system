@@ -87,7 +87,7 @@ export function AdminRecordsPanel({ onOpenRecord }: { onOpenRecord: (record: Adm
   return (
     <section className="panel admin-records-panel">
       <div className="panel-heading">
-        <div><h2>Administrative record search</h2><span>Open, edit, archive, restore and audit quality records</span></div>
+        <div><h2>Administrative record search</h2><span>Open, edit, archive, restore and audit teaching and learning records</span></div>
         <strong>{visibleRecords.length} records</strong>
       </div>
 

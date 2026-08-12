@@ -58,11 +58,22 @@ public sealed class ProbationObservationWorkflowTests
     }
 
     [Fact]
-    public void CompletionRequiresEveryRubricArea()
+    public void CompletionRequiresEveryObservedRubricArea()
     {
         var stages = ProbationObservationWorkflow.RequiredStageTypes(1);
         Assert.Throws<WorkflowValidationException>(() =>
             ProbationObservationWorkflow.ValidateCompletion(1, stages, selectedRubricAreas: 3, requiredRubricAreas: 4));
+    }
+
+    [Fact]
+    public void CompletionAllowsEveryRubricAreaToBeNotObserved()
+    {
+        var stages = ProbationObservationWorkflow.RequiredStageTypes(1);
+        ProbationObservationWorkflow.ValidateCompletion(
+            1,
+            stages,
+            selectedRubricAreas: 0,
+            requiredRubricAreas: 0);
     }
 
     [Fact]

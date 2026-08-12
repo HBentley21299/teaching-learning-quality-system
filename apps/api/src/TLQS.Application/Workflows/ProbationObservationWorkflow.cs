@@ -49,9 +49,9 @@ public static class ProbationObservationWorkflow
             throw new WorkflowValidationException("Complete every required stage before completing this probation observation.");
         }
 
-        if (requiredRubricAreas <= 0 || selectedRubricAreas != requiredRubricAreas)
+        if (requiredRubricAreas < 0 || selectedRubricAreas != requiredRubricAreas)
         {
-            throw new WorkflowValidationException("Select a practice outcome for every probation rubric area.");
+            throw new WorkflowValidationException("Select a practice outcome for every observed probation rubric area.");
         }
     }
 }

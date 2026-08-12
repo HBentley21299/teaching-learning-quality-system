@@ -25,10 +25,10 @@ public static class SubmissionLifecycle
             _ => null
         };
 
-    /// <summary>Editing responses is only allowed while a submission is in draft or reopened,
-    /// unless the caller has forms.manage.</summary>
+    /// <summary>The owner may correct any unarchived submission. Forms managers retain
+    /// oversight access regardless of lifecycle status.</summary>
     public static bool CanEditResponses(string currentStatus, bool isOwner, bool canManageForms) =>
-        canManageForms || (isOwner && currentStatus is Draft or Reopened);
+        canManageForms || isOwner;
 
     public static bool CanEditRecord(string recordType, string currentStatus, bool isOwner, bool canManageForms) =>
         CanEditResponses(currentStatus, isOwner, canManageForms)

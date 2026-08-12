@@ -1,8 +1,19 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CalendarDays, LogOut, PanelLeftClose, Search } from "lucide-react";
-import { navigationItems, type AppRoute } from "./navigation";
+import { AlertTriangle, CalendarDays, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun } from "lucide-react";
+import { canAccessRoute, navigationItems, type AppRoute } from "./navigation";
+import {
+  actionPath,
+  adminPath,
+  parseAppLocation,
+  recordPath,
+  routePath,
+  staffActionsPath,
+  staffPath,
+  type AppLocation
+} from "./routing";
 import { api } from "../services/api";
 import { isAuthEnabled, signOut } from "../services/auth";
+import { UserMenu } from "../components/UserMenu";
 import { FirstTimeOnboarding } from "../components/FirstTimeOnboarding";
 import type {
   ActionSummary,
@@ -16,6 +27,7 @@ import type {
   StaffSummary
 } from "../services/types";
 
+const Home = lazy(() => import("../routes/Home").then((module) => ({ default: module.Home })));
 const Dashboard = lazy(() => import("../routes/Dashboard").then((module) => ({ default: module.Dashboard })));
 const StaffProfiles = lazy(() => import("../routes/StaffProfiles").then((module) => ({ default: module.StaffProfiles })));
 const AdminCentre = lazy(() => import("../routes/AdminCentre").then((module) => ({ default: module.AdminCentre })));
@@ -36,7 +48,8 @@ const emptyUser: CurrentUser = {
 };
 
 export function App() {
-  const [route, setRoute] = useState<AppRoute>("dashboard");
+  const [initialLocation] = useState(() => parseAppLocation());
+  const [route, setRoute] = useState<AppRoute>(initialLocation.route);
   const [user, setUser] = useState<CurrentUser>(emptyUser);
   const [modules, setModules] = useState<ModuleSummary[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
@@ -48,10 +61,46 @@ export function App() {
   const [academicYear, setAcademicYear] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [profileStaffId, setProfileStaffId] = useState("");
-  const [actionStaffId, setActionStaffId] = useState("");
-  const [actionDetailId, setActionDetailId] = useState("");
-  const [sourceRecordId, setSourceRecordId] = useState("");
+  const [profileStaffId, setProfileStaffId] = useState(initialLocation.profileStaffId);
+  const [actionStaffId, setActionStaffId] = useState(initialLocation.actionStaffId);
+  const [actionDetailId, setActionDetailId] = useState(initialLocation.actionDetailId);
+  const [sourceRecordId, setSourceRecordId] = useState(initialLocation.sourceRecordId);
+  const [pendingRecordId, setPendingRecordId] = useState(initialLocation.pendingRecordId);
+  const [adminTab, setAdminTab] = useState(initialLocation.adminTab);
+  const [linkError, setLinkError] = useState("");
+  const [isNavigationCollapsed, setIsNavigationCollapsed] = useState(
+    () => localStorage.getItem("ielevate-navigation-collapsed") === "true"
+  );
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const stored = localStorage.getItem("ielevate-theme");
+    if (stored === "light" || stored === "dark") return stored;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("ielevate-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("ielevate-navigation-collapsed", String(isNavigationCollapsed));
+  }, [isNavigationCollapsed]);
+
+  const applyLocation = useCallback((location: AppLocation) => {
+    setRoute(location.route);
+    setProfileStaffId(location.profileStaffId);
+    setActionStaffId(location.actionStaffId);
+    setActionDetailId(location.actionDetailId);
+    setSourceRecordId(location.sourceRecordId);
+    setPendingRecordId(location.pendingRecordId);
+    setAdminTab(location.adminTab);
+    setLinkError("");
+  }, []);
+
+  const writePath = useCallback((path: string, replace = false) => {
+    if (window.location.pathname === path && !window.location.search && !window.location.hash) return;
+    window.history[replace ? "replaceState" : "pushState"]({}, "", path);
+  }, []);
 
   const loadCoreData = useCallback(async () => {
     setLoadError("");
@@ -91,7 +140,7 @@ export function App() {
         .catch(() => setProcessRecords([]));
     } catch {
       setLoadError(
-        "The Teaching & Learning API could not be reached. Start the API (scripts\\run-api.ps1) and check the database, then refresh."
+        "The Teaching and Learning API could not be reached. Start the API (scripts\\run-api.ps1) and check the database, then refresh."
       );
     } finally {
       setIsLoading(false);
@@ -102,6 +151,37 @@ export function App() {
     void loadCoreData();
   }, [loadCoreData]);
 
+  useEffect(() => {
+    const onPopState = () => applyLocation(parseAppLocation());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [applyLocation]);
+
+  useEffect(() => {
+    if (!pendingRecordId || !user.userAccountId || isLoading) return;
+    let cancelled = false;
+    void api.recordNavigation(pendingRecordId)
+      .then((record) => {
+        if (cancelled) return;
+        const nextRoute = routeForRecordType(record.recordType);
+        setPendingRecordId("");
+        setSourceRecordId(record.id);
+        setProfileStaffId(nextRoute === "profile" ? record.subjectStaffId ?? "" : "");
+        setActionStaffId("");
+        setActionDetailId("");
+        setRoute(nextRoute);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPendingRecordId("");
+        setSourceRecordId("");
+        setRoute("dashboard");
+        setLinkError("That record could not be found, or you do not have permission to view it.");
+        writePath(routePath("dashboard"), true);
+      });
+    return () => { cancelled = true; };
+  }, [isLoading, pendingRecordId, user.userAccountId, writePath]);
+
   const refreshActions = useCallback(async () => {
     try {
       setActions(await api.actions());
@@ -111,24 +191,29 @@ export function App() {
   }, []);
 
   const visibleNavigationItems = useMemo(
-    () => navigationItems.filter((item) => {
-      if (item.key === "team") return user.permissions.includes("my_team.view");
-      if (item.key === "admin") {
-        return ["users.manage", "permissions.manage", "organisation.manage", "lists.manage", "forms.manage", "records.manage", "messaging.manage"]
-          .some((permission) => user.permissions.includes(permission));
-      }
-      return true;
-    }),
+    () => navigationItems.filter((item) => canAccessRoute(item.key, user.permissions)),
     [user.permissions]
   );
   const activeItem = useMemo(() => visibleNavigationItems.find((item) => item.key === route), [route, visibleNavigationItems]);
+
+  useEffect(() => {
+    if (isLoading || !user.userAccountId || pendingRecordId || sourceRecordId || canAccessRoute(route, user.permissions)) return;
+    setRoute("home");
+    setProfileStaffId("");
+    setActionStaffId("");
+    setActionDetailId("");
+    setAdminTab("overview");
+    setLinkError("You do not have permission to open that area.");
+    writePath(routePath("home"), true);
+  }, [isLoading, pendingRecordId, route, sourceRecordId, user.permissions, user.userAccountId, writePath]);
+
   const yearActions = useMemo(
     () => academicYear ? actions.filter((action) => action.academicYear === academicYear) : actions,
     [academicYear, actions]
   );
   const yearProcessRecords = useMemo(
     () => academicYear
-      ? processRecords.filter((record) => academicYearForDate(record.recordDate ?? record.createdAt) === academicYear)
+      ? processRecords.filter((record) => (record.academicYear ?? academicYearForDate(record.recordDate ?? record.createdAt)) === academicYear)
       : processRecords,
     [academicYear, processRecords]
   );
@@ -138,7 +223,11 @@ export function App() {
     setActionStaffId("");
     setActionDetailId("");
     setSourceRecordId("");
+    setPendingRecordId("");
+    setAdminTab("overview");
+    setLinkError("");
     setRoute(nextRoute);
+    writePath(routePath(nextRoute));
   }
 
   function openTeamProfile(staffId: string) {
@@ -147,6 +236,7 @@ export function App() {
     setActionDetailId("");
     setSourceRecordId("");
     setRoute("profile");
+    writePath(staffPath(staffId));
   }
 
   function openTeamActions(staffId: string) {
@@ -155,6 +245,7 @@ export function App() {
     setProfileStaffId("");
     setSourceRecordId("");
     setRoute("actions");
+    writePath(staffActionsPath(staffId));
   }
 
   function openElevateReport(staffId: string, elevateRecordId: string) {
@@ -163,6 +254,7 @@ export function App() {
     setActionDetailId("");
     setSourceRecordId(elevateRecordId);
     setRoute("profile");
+    writePath(recordPath(elevateRecordId));
   }
 
   function openActionSource(action: ActionSummary) {
@@ -173,62 +265,32 @@ export function App() {
     if (action.sourceFormType === "elevate_practice" && action.subjectStaffId) {
       setProfileStaffId(action.subjectStaffId);
       setRoute("profile");
+      writePath(recordPath(action.sourceRecordId));
       return;
     }
     setProfileStaffId("");
-    const sourceRoutes: Partial<Record<string, AppRoute>> = {
-      coaching_mentoring: "coaching",
-      elevate_environment: "elevate",
-      learning_walk: "learning",
-      liv: "liv",
-      probation_observation: "probation",
-      work_scrutiny: "scrutiny"
-    };
-    setRoute(sourceRoutes[action.sourceFormType] ?? "actions");
+    setRoute(routeForRecordType(action.sourceFormType));
+    writePath(recordPath(action.sourceRecordId));
   }
 
   function openAdminRecord(record: AdminRecord) {
     setSourceRecordId(record.recordId);
     setActionStaffId("");
     setActionDetailId("");
-    if (["elevate_practice", "elevate_practice_assessment"].includes(record.recordType) && record.subjectStaffId) {
-      setProfileStaffId(record.subjectStaffId);
-      setRoute("profile");
-      return;
-    }
-    setProfileStaffId("");
-    const recordRoutes: Partial<Record<string, AppRoute>> = {
-      coaching_session: "coaching",
-      cpd_event: "cpd",
-      elevate_environment: "elevate",
-      learning_walk: "learning",
-      liv: "liv",
-      probation_case: "probation",
-      work_scrutiny: "scrutiny"
-    };
-    setRoute(recordRoutes[record.recordType] ?? "dashboard");
+    const nextRoute = routeForRecordType(record.recordType);
+    setProfileStaffId(nextRoute === "profile" ? record.subjectStaffId ?? "" : "");
+    setRoute(nextRoute);
+    writePath(recordPath(record.recordId));
   }
 
   function openStaffRecord(recordType: string, recordId: string, staffId: string) {
     setSourceRecordId(recordId);
     setActionStaffId("");
     setActionDetailId("");
-    if (["elevate_practice", "elevate_practice_assessment"].includes(recordType)) {
-      setProfileStaffId(staffId);
-      setRoute("profile");
-      return;
-    }
-    setProfileStaffId("");
-    const recordRoutes: Partial<Record<string, AppRoute>> = {
-      coaching_session: "coaching",
-      cpd_event: "cpd",
-      elevate_environment: "elevate",
-      learning_walk: "learning",
-      liv: "liv",
-      probation_case: "probation",
-      work_scrutiny: "scrutiny"
-    };
-    setRoute(recordRoutes[recordType] ?? "dashboard");
+    const nextRoute = routeForRecordType(recordType);
+    setProfileStaffId(nextRoute === "profile" ? staffId : "");
+    setRoute(nextRoute);
+    writePath(recordPath(recordId));
   }
 
   function openActionDetails(actionId: string, staffId: string) {
@@ -237,6 +299,39 @@ export function App() {
     setProfileStaffId("");
     setSourceRecordId("");
     setRoute("actions");
+    writePath(actionPath(actionId));
+  }
+
+  function openDashboardRecord(recordId: string) {
+    setPendingRecordId(recordId);
+    setLinkError("");
+    writePath(recordPath(recordId));
+  }
+
+  function handleRecordOpened(recordId: string) {
+    setSourceRecordId(recordId);
+    setLinkError("");
+    writePath(recordPath(recordId));
+  }
+
+  function handleRecordClosed(recordRoute: AppRoute) {
+    setSourceRecordId("");
+    writePath(routePath(recordRoute));
+  }
+
+  function handleAdminTabChanged(tab: string) {
+    setAdminTab(tab);
+    writePath(adminPath(tab));
+  }
+
+  function handleActionOpened(actionId: string) {
+    setActionDetailId(actionId);
+    writePath(actionPath(actionId));
+  }
+
+  function handleActionClosed() {
+    setActionDetailId("");
+    writePath(actionStaffId ? staffActionsPath(actionStaffId) : routePath("actions"));
   }
 
   if (!isLoading && !loadError && !user.userAccountId) {
@@ -253,10 +348,22 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar" aria-label="Main navigation">
+    <div className={isNavigationCollapsed ? "app-shell app-shell-nav-collapsed" : "app-shell"}>
+      <aside className="sidebar" aria-label="Main navigation" id="main-navigation">
         <div className="brand-block">
-          <img className="brand-logo" src="/system-assets/i-elevate-logo.png" alt="i-Elevate" />
+          <img
+            className="brand-logo brand-logo-full"
+            src={theme === "dark"
+              ? "/system-assets/i-elevate-logo-transparent.png"
+              : "/system-assets/i-elevate-logo-ink.png"}
+            alt="i-Elevate"
+          />
+          <img
+            aria-hidden="true"
+            className="brand-logo-mark"
+            src="/system-assets/eli/eli-favicon-64.png"
+            alt=""
+          />
         </div>
         <nav>
           {visibleNavigationItems.map((item) => {
@@ -279,8 +386,17 @@ export function App() {
 
       <main className="main">
         <header className="topbar">
-          <button className="icon-button" title="Collapse navigation" type="button">
-            <PanelLeftClose size={18} aria-hidden="true" />
+          <button
+            aria-controls="main-navigation"
+            aria-expanded={!isNavigationCollapsed}
+            className="icon-button navigation-collapse-button"
+            onClick={() => setIsNavigationCollapsed((current) => !current)}
+            title={isNavigationCollapsed ? "Expand navigation" : "Collapse navigation"}
+            type="button"
+          >
+            {isNavigationCollapsed
+              ? <PanelLeftOpen size={18} aria-hidden="true" />
+              : <PanelLeftClose size={18} aria-hidden="true" />}
           </button>
           <div className="topbar-search">
             <Search size={16} aria-hidden="true" />
@@ -299,14 +415,15 @@ export function App() {
               </select>
             </label>
           ) : null}
-          <div className="user-chip">
-            <span>{user.displayName}</span>
-            {isAuthEnabled ? (
-              <button className="icon-button" onClick={signOut} title="Sign out" type="button">
-                <LogOut size={16} aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
+          <button
+            className="icon-button"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            title={theme === "dark" ? "Switch to light appearance" : "Switch to dark appearance"}
+            type="button"
+          >
+            {theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
+          </button>
+          <UserMenu displayName={user.displayName} />
         </header>
 
         {loadError ? (
@@ -316,6 +433,14 @@ export function App() {
             <button onClick={() => { setIsLoading(true); void loadCoreData(); }} type="button">
               Retry
             </button>
+          </div>
+        ) : null}
+
+        {linkError ? (
+          <div className="api-error-banner" role="alert">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>{linkError}</span>
+            <button onClick={() => setLinkError("")} type="button">Dismiss</button>
           </div>
         ) : null}
 
@@ -340,26 +465,39 @@ export function App() {
             </section>
           ) : (
             <Suspense fallback={<div className="route-stack"><p className="muted-copy">Loading this workspace...</p></div>}>
+              {route === "home" ? (
+                <Home
+                  onNavigate={navigate}
+                  tiles={visibleNavigationItems}
+                  user={user}
+                />
+              ) : null}
               {route === "dashboard" ? (
                 <Dashboard
+                  academicYear={academicYear}
                   actions={yearActions}
                   orgUnits={orgUnits}
                   processRecords={yearProcessRecords}
                   user={user}
                   onRefresh={loadCoreData}
+                  onOpenAction={openActionDetails}
+                  onOpenRecord={openDashboardRecord}
+                  onOpenStaff={openTeamProfile}
                 />
               ) : null}
-              {route === "staff" ? <StaffProfiles academicYear={academicYear} staff={staff} profiles={profiles} user={user} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} /> : null}
+              {route === "staff" ? <StaffProfiles academicYear={academicYear} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffSelected={(staffId) => writePath(staffPath(staffId))} profiles={profiles} staff={staff} user={user} /> : null}
               {route === "team" ? <MyTeam onOpenActions={openTeamActions} onOpenProfile={openTeamProfile} /> : null}
-              {route === "admin" ? <AdminCentre user={user} modules={modules} profiles={profiles} staff={staff} onOpenRecord={openAdminRecord} /> : null}
+              {route === "admin" ? <AdminCentre initialTab={adminTab} modules={modules} onOpenRecord={openAdminRecord} onTabChange={handleAdminTabChanged} profiles={profiles} staff={staff} user={user} /> : null}
               {route === "learning" ? (
-                <ModuleWorkspace academicYear={academicYear} title="Learning Walks" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="learning" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace academicYear={academicYear} eyebrow="Teaching and learning activity" initialRecordId={sourceRecordId} mode="learning" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("learning")} onRecordOpened={handleRecordOpened} staff={staff} title="Learning Walks" user={user} />
               ) : null}
               {route === "liv" ? (
                 <LivVisits
                   initialSourceRecordId={sourceRecordId}
                   onActionsChanged={refreshActions}
                   onOpenStaffProfile={openTeamProfile}
+                  onRecordClosed={() => handleRecordClosed("liv")}
+                  onRecordOpened={handleRecordOpened}
                   orgUnits={orgUnits}
                   staff={staff}
                   user={user}
@@ -371,6 +509,8 @@ export function App() {
                   initialSourceRecordId={sourceRecordId}
                   onActionsChanged={refreshActions}
                   onOpenEliReport={openElevateReport}
+                  onRecordClosed={() => handleRecordClosed("probation")}
+                  onRecordOpened={handleRecordOpened}
                   orgUnits={orgUnits}
                   staff={staff}
                   user={user}
@@ -380,9 +520,11 @@ export function App() {
                 <ModuleWorkspace
                   academicYear={academicYear}
                   title="Elevate Your Learning Environment"
-                  eyebrow="Learning environment quality"
+                  eyebrow="Learning environment review"
                   initialRecordId={sourceRecordId}
                   mode="elevate"
+                  onRecordClosed={() => handleRecordClosed("elevate")}
+                  onRecordOpened={handleRecordOpened}
                   staff={staff}
                   user={user}
                   onActionsChanged={refreshActions}
@@ -390,17 +532,17 @@ export function App() {
               ) : null}
               {route === "practice" ? <ElevatePractice user={user} onActionsChanged={refreshActions} /> : null}
               {route === "coaching" ? (
-                <CoachingMentoring initialRecordId={sourceRecordId} orgUnits={orgUnits} staff={staff} user={user} onActionsChanged={refreshActions} />
+                <CoachingMentoring initialRecordId={sourceRecordId} onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("coaching")} onRecordOpened={handleRecordOpened} orgUnits={orgUnits} staff={staff} user={user} />
               ) : null}
               {route === "scrutiny" ? (
-                <ModuleWorkspace academicYear={academicYear} title="Work Scrutiny" eyebrow="Quality activity" initialRecordId={sourceRecordId} mode="scrutiny" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace academicYear={academicYear} eyebrow="Teaching and learning activity" initialRecordId={sourceRecordId} mode="scrutiny" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("scrutiny")} onRecordOpened={handleRecordOpened} staff={staff} title="Work Scrutiny" user={user} />
               ) : null}
               {route === "cpd" ? (
-                <ModuleWorkspace academicYear={academicYear} title="CPD Management" eyebrow="Professional learning" initialRecordId={sourceRecordId} mode="cpd" staff={staff} user={user} onActionsChanged={refreshActions} />
+                <ModuleWorkspace academicYear={academicYear} eyebrow="Professional learning" initialRecordId={sourceRecordId} mode="cpd" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("cpd")} onRecordOpened={handleRecordOpened} staff={staff} title={user.permissions.includes("cpd.manage") ? "CPD Management" : "CPD"} user={user} />
               ) : null}
-              {route === "profile" ? <StaffProfileWorkspace academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} profiles={profiles} staff={staff} user={user} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} /> : null}
+              {route === "profile" ? <StaffProfileWorkspace academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffChanged={(staffId) => writePath(staffPath(staffId))} profiles={profiles} staff={staff} user={user} /> : null}
               {route === "actions" ? (
-                <ActionsView academicYear={academicYear} actions={yearActions} initialActionId={actionDetailId} initialStaffId={actionStaffId} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} onChanged={refreshActions} />
+                <ActionsView academicYear={academicYear} actions={yearActions} initialActionId={actionDetailId} initialStaffId={actionStaffId} onActionClosed={handleActionClosed} onActionOpened={handleActionOpened} onChanged={refreshActions} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} />
               ) : null}
             </Suspense>
           )}
@@ -415,4 +557,21 @@ function academicYearForDate(value: string) {
   const calendarYear = date.getUTCFullYear();
   const startYear = date.getUTCMonth() >= 7 ? calendarYear : calendarYear - 1;
   return `${startYear}/${String((startYear + 1) % 100).padStart(2, "0")}`;
+}
+
+function routeForRecordType(recordType: string): AppRoute {
+  const routes: Partial<Record<string, AppRoute>> = {
+    coaching_mentoring: "coaching",
+    coaching_session: "coaching",
+    cpd_event: "cpd",
+    elevate_environment: "elevate",
+    elevate_practice: "profile",
+    elevate_practice_assessment: "profile",
+    learning_walk: "learning",
+    liv: "liv",
+    probation_case: "probation",
+    probation_observation: "probation",
+    work_scrutiny: "scrutiny"
+  };
+  return routes[recordType] ?? "dashboard";
 }

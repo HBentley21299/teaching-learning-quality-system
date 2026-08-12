@@ -10,11 +10,11 @@ public sealed partial class SqlFoundationDataStore
 {
     private static readonly ElevateStatusLevelDefinition[] ElevateStatusLevels =
     [
-        new(1, "explorer", "Explorer", 3, "Submit implementation and impact evidence against one internal CPD session."),
-        new(2, "storyteller", "Storyteller", 6, "Has staff member produced a case study for the Elevate newsletter, staff news or blog?"),
-        new(3, "champion", "Champion", 9, "Has delivered CPD to faculty or shared best practice with the team?"),
-        new(4, "trailblazer", "Trailblazer", 12, "Has staff member delivered an Elevate session?"),
-        new(5, "changemaker", "Changemaker", 15, "Staff member has shared practice externally through LinkedIn, sector networks or conferences.")
+        new(1, "explorer", "Elevate Explorer", 3, "Evidence showing how professional development has been implemented in your own practice."),
+        new(2, "storyteller", "Elevate Storyteller", 6, "A case study outlining what you have implemented, why, and the impact, suitable for the T and L newsletter or blog."),
+        new(3, "innovator", "Elevate Innovator", 9, "Delivery of professional development within your faculty or sharing of best practice at a Spotlight and Showcase session."),
+        new(4, "champion", "Elevate Champion", 12, "Delivery of an Elevate session to staff."),
+        new(5, "changemaker", "Elevate Changemaker", 15, "Sharing practice externally (sector networks or conferences) or delivering a session at the Teaching and Learning Conference.")
     ];
 
     public Task<IReadOnlyList<AcademicYearSummary>> GetAcademicYearsAsync(CancellationToken cancellationToken)
@@ -84,15 +84,21 @@ public sealed partial class SqlFoundationDataStore
         foreach (var definition in ElevateStatusLevels)
         {
             awardsByLevel.TryGetValue(definition.LevelNumber, out var award);
+            // Elevate Status restarts each academic year. A stored confirmation is only
+            // an active award when its recorded qualifying attendance meets the threshold
+            // and every preceding level has also been awarded. This prevents incomplete
+            // or legacy rows from carrying badges into a new year.
             var isEligible = eligibleCpd.Count >= definition.RequiredSessions && previousLevelAwarded;
             var isConfirmed = award is not null;
-            var isAwarded = isEligible && isConfirmed;
+            var isAwarded = isConfirmed
+                && award!.QualifyingAttendanceCount >= definition.RequiredSessions
+                && previousLevelAwarded;
             levelSummaries.Add(new ElevateStatusLevelSummary(
                 definition.LevelNumber,
                 definition.LevelKey,
                 definition.Name,
                 definition.RequiredSessions,
-                definition.LevelNumber == 1 || canManage ? definition.RequirementLabel : null,
+                definition.RequirementLabel,
                 isEligible,
                 isConfirmed,
                 isAwarded,
@@ -198,10 +204,16 @@ public sealed partial class SqlFoundationDataStore
                 return await GetElevateStatusAsync(staffId, request.AcademicYear, currentUser, cancellationToken);
             }
 
-            if (levelNumber == 1 && eligibleCpd.Count < definition.RequiredSessions)
+            if (eligibleCpd.Count < definition.RequiredSessions)
             {
                 throw new WorkflowValidationException(
                     $"{definition.Name} requires {definition.RequiredSessions} completed internal CPD sessions in {request.AcademicYear}.");
+            }
+
+            if (levelNumber > 1 && existingAwards.All(award => award.LevelNumber != levelNumber - 1))
+            {
+                throw new WorkflowValidationException(
+                    $"Confirm Level {levelNumber - 1} before awarding {definition.Name}.");
             }
 
             Guid? evidenceCpdEventId = null;

@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
@@ -22,11 +24,13 @@ if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("TlqsDat
 }
 
 builder.Services.AddSingleton<SqlFoundationDataStore>();
+builder.Services.AddSingleton<MessagingConfigurationStore>();
 builder.Services.AddSingleton<ExcelExportService>();
 builder.Services.AddSingleton<WordExportService>();
 builder.Services.Configure<ExportBrandingOptions>(builder.Configuration.GetSection("ExportBranding"));
 builder.Services.Configure<MessagingOptions>(builder.Configuration.GetSection("Messaging"));
-builder.Services.AddHttpClient<IEmailProvider, MicrosoftGraphEmailProvider>(client =>
+builder.Services.AddDataProtection().SetApplicationName("TLQS");
+builder.Services.AddHttpClient<IEmailProvider, ConfiguredEmailProvider>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(30);
 });
@@ -84,10 +88,23 @@ builder.Services.AddCors(options =>
 // opt-in and never active outside the Development environment. Everywhere else the
 // API validates Microsoft Entra ID access tokens.
 var allowDevelopmentUser = builder.Configuration.GetValue<bool>("Authentication:AllowDevelopmentUser");
-if (builder.Environment.IsDevelopment() && allowDevelopmentUser)
+var useLocalLogins = builder.Environment.IsDevelopment() && allowDevelopmentUser;
+if (useLocalLogins)
 {
+    // Requests carrying an "lt_" bearer token authenticate as that local test
+    // account; anything else falls back to the development user.
+    builder.Services.AddSingleton<LocalTokenService>();
     builder.Services
-        .AddAuthentication(DevelopmentAuthenticationHandler.SchemeName)
+        .AddAuthentication("LocalOrDevelopment")
+        .AddPolicyScheme("LocalOrDevelopment", "Local test login or development user", options =>
+        {
+            options.ForwardDefaultSelector = context =>
+                LocalTokenAuthenticationHandler.RequestCarriesLocalToken(context)
+                    ? LocalTokenAuthenticationHandler.SchemeName
+                    : DevelopmentAuthenticationHandler.SchemeName;
+        })
+        .AddScheme<AuthenticationSchemeOptions, LocalTokenAuthenticationHandler>(
+            LocalTokenAuthenticationHandler.SchemeName, _ => { })
         .AddScheme<DevelopmentAuthenticationOptions, DevelopmentAuthenticationHandler>(
             DevelopmentAuthenticationHandler.SchemeName,
             options =>
@@ -231,6 +248,10 @@ app.MapGet("/health", ReadinessAsync);
 
 app.MapFoundationEndpoints();
 app.MapPlatformOperationsEndpoints();
+if (useLocalLogins)
+{
+    app.MapLocalAuthEndpoints();
+}
 
 // Production packages the React application into wwwroot. Client-side routes
 // resolve to index.html while API and health endpoints retain their own 404s.

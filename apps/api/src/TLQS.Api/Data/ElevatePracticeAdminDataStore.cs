@@ -239,7 +239,8 @@ public sealed partial class SqlFoundationDataStore
                         await using var updateActionCommand = new SqlCommand(
                             """
                             UPDATE quality.actions
-                            SET title = @title,
+                            SET action_theme = @actionTheme,
+                                title = @title,
                                 detail = @detail,
                                 due_date = NULL,
                                 source_form_type = 'elevate_practice',
@@ -254,6 +255,7 @@ public sealed partial class SqlFoundationDataStore
                             connection,
                             (SqlTransaction)transaction);
                         updateActionCommand.Parameters.AddWithValue("@actionId", existingActionId.Value);
+                        updateActionCommand.Parameters.AddWithValue("@actionTheme", area.Name);
                         updateActionCommand.Parameters.AddWithValue("@title", $"Elevate Learning and Innovation: {area.Name}");
                         updateActionCommand.Parameters.AddWithValue("@detail", actionDetail);
                         updateActionCommand.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
@@ -519,13 +521,13 @@ public sealed partial class SqlFoundationDataStore
         await using var command = new SqlCommand(
             """
             INSERT INTO quality.actions (
-                source_record_id, source_form_type, subject_staff_id, owner_staff_id, title, detail,
+                source_record_id, source_form_type, subject_staff_id, owner_staff_id, action_theme, title, detail,
                 priority_lookup_value_id, status_lookup_value_id, published_to_staff,
                 visibility_setting, created_by_user_account_id
             )
             OUTPUT inserted.id
             VALUES (
-                @recordId, 'elevate_practice', @staffId, @staffId, @title, @detail,
+                @recordId, 'elevate_practice', @staffId, @staffId, @actionTheme, @title, @detail,
                 (SELECT TOP (1) value.id FROM core.lookup_values value JOIN core.lookup_types type ON type.id = value.lookup_type_id WHERE type.lookup_key = 'priority' AND value.value_key = 'medium'),
                 (SELECT TOP (1) value.id FROM core.lookup_values value JOIN core.lookup_types type ON type.id = value.lookup_type_id WHERE type.lookup_key = 'action_status' AND value.value_key = 'open'),
                 1, 'staff_and_management', @userAccountId
@@ -535,6 +537,7 @@ public sealed partial class SqlFoundationDataStore
             (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@recordId", recordId);
         command.Parameters.AddWithValue("@staffId", staffId);
+        command.Parameters.AddWithValue("@actionTheme", areaName);
         command.Parameters.AddWithValue("@title", $"Elevate Learning and Innovation: {areaName}");
         command.Parameters.AddWithValue("@detail", detail);
         command.Parameters.AddWithValue("@userAccountId", ToDbValue(userAccountId));

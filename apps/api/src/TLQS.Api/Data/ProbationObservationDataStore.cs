@@ -49,6 +49,7 @@ public sealed partial class SqlFoundationDataStore
 
         return new ProbationConfigurationSummary(
             liv.DeliveryAreas,
+            liv.CourseLevels,
             liv.FocusAreas.Where(option => !option.IsOther).ToArray(),
             liv.DevelopmentOpportunities,
             liv.Rubric,
@@ -185,13 +186,13 @@ public sealed partial class SqlFoundationDataStore
                    probation.status, probation.current_observation_number,
                    probation.source_elevate_assessment_id, assessment.record_id,
                    probation.created_at, probation.updated_at,
-                   CASE WHEN probation.status = N'in_progress' AND (
-                       @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
+                   CASE WHEN @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
                        OR EXISTS (
                            SELECT 1 FROM quality.probation_case_reviewers reviewer
                            WHERE reviewer.probation_case_id = probation.id AND reviewer.staff_id = @currentStaffId
                        )
-                   ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+                   THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,
+                   CONVERT(bit, CASE WHEN probation.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END)
             FROM quality.probation_cases probation
             JOIN people.staff subject ON subject.id = probation.subject_staff_id
             LEFT JOIN org.org_units area ON area.id = probation.org_unit_id
@@ -225,7 +226,7 @@ public sealed partial class SqlFoundationDataStore
                 GetGuidOrNull(reader, 4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6),
                 reader.GetString(7), reader.GetString(8), reader.GetByte(9), GetGuidOrNull(reader, 10),
                 GetGuidOrNull(reader, 11), reader.GetFieldValue<DateTimeOffset>(12),
-                GetDateTimeOffsetOrNull(reader, 13), reader.GetBoolean(14)),
+                GetDateTimeOffsetOrNull(reader, 13), reader.GetBoolean(14), reader.GetBoolean(15)),
             cancellationToken);
         if (caseRows.Count == 0) return [];
 
@@ -271,14 +272,16 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT visit.probation_observation_id, delivery.value_key, delivery.display_name,
                    visit.observation_date, CONVERT(nvarchar(5), visit.observation_time, 108),
-                   visit.course_name, visit.course_group, visit.course_level, visit.key_points
+                   visit.course_name, visit.course_group, visit.course_level, visit.key_points,
+                   visit.unobserved_focus_keys_json
             FROM quality.probation_observation_visits visit
             LEFT JOIN core.lookup_values delivery ON delivery.id = visit.delivery_area_lookup_value_id;
             """,
             reader => new ProbationVisitRow(
                 reader.GetGuid(0), GetStringOrNull(reader, 1), GetStringOrNull(reader, 2),
                 GetDateOnlyOrNull(reader, 3), GetStringOrNull(reader, 4), GetStringOrNull(reader, 5),
-                GetStringOrNull(reader, 6), GetStringOrNull(reader, 7), GetStringOrNull(reader, 8)),
+                GetStringOrNull(reader, 6), GetStringOrNull(reader, 7), GetStringOrNull(reader, 8),
+                ParseLivStringList(GetStringOrNull(reader, 9))),
             cancellationToken);
         var ratings = await QueryAsync(
             """
@@ -302,8 +305,7 @@ public sealed partial class SqlFoundationDataStore
                         stage.Id, stage.StageType, stage.StageOrder, stage.StageStatus, stage.ContextText,
                         stage.AimsText, stage.LearnerActivityText, stage.ReflectionText,
                         stage.DevelopmentOpportunityKeys, stage.IntendedNextObservationDate,
-                        caseRows.First(item => item.Id == row.CaseId).CanEdit
-                            && caseRows.First(item => item.Id == row.CaseId).CurrentObservationNumber == row.ObservationNumber))
+                        caseRows.First(item => item.Id == row.CaseId).CanEdit))
                     .ToArray();
                 var visit = visits.FirstOrDefault(item => item.ObservationId == row.Id);
                 return new ProbationObservationSummary(
@@ -312,6 +314,7 @@ public sealed partial class SqlFoundationDataStore
                     visit is null ? null : new ProbationVisitSummary(
                         visit.DeliveryAreaKey, visit.DeliveryAreaName, visit.ObservationDate, visit.ObservationTime,
                         visit.CourseName, visit.CourseGroup, visit.CourseLevel, visit.KeyPoints,
+                        visit.UnobservedFocusKeys,
                         ratings.Where(rating => rating.ObservationId == row.Id).Select(rating => rating.Rating).ToArray()));
             }).OrderBy(item => item.ObservationNumber).ToArray());
 
@@ -319,6 +322,7 @@ public sealed partial class SqlFoundationDataStore
             row.Id, row.RecordId, row.SubjectStaffId, row.SubjectStaffName, row.OrgUnitId, row.OrgUnitCode,
             row.ParentOrgUnitCode, row.AcademicYear, row.Status, row.CurrentObservationNumber,
             row.SourceElevateAssessmentId, row.SourceElevateRecordId, row.CreatedAt, row.UpdatedAt, row.CanEdit,
+            row.IsCreatedByCurrentUser,
             reviewers.Where(reviewer => reviewer.CaseId == row.Id).Select(reviewer => reviewer.Reviewer).ToArray(),
             observationsByCase.GetValueOrDefault(row.Id, []))).ToArray();
     }
@@ -593,6 +597,17 @@ public sealed partial class SqlFoundationDataStore
                 string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase), cancellationToken);
             var ratings = (request.Ratings ?? []).Where(rating => !string.IsNullOrWhiteSpace(rating.FocusKey))
                 .GroupBy(rating => rating.FocusKey, StringComparer.OrdinalIgnoreCase).Select(group => group.Last()).ToArray();
+            var rubricAreaKeys = await GetProbationRubricAreaKeysAsync(connection, transaction, cancellationToken);
+            var unobservedFocusKeys = (request.UnobservedFocusKeys ?? [])
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .Select(key => key.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (unobservedFocusKeys.Any(key => !rubricAreaKeys.Contains(key)))
+                throw new WorkflowValidationException("One or more unobserved probation rubric areas are invalid.");
+            var unobservedSet = unobservedFocusKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (ratings.Any(rating => unobservedSet.Contains(rating.FocusKey)))
+                throw new WorkflowValidationException("An area marked as not observed cannot also have a practice outcome.");
 
             await using (var command = new SqlCommand(
                 """
@@ -600,6 +615,7 @@ public sealed partial class SqlFoundationDataStore
                 SET delivery_area_lookup_value_id = @deliveryAreaId, observation_date = @date,
                     observation_time = TRY_CONVERT(time(0), @time), course_name = @courseName,
                     course_group = @courseGroup, course_level = @courseLevel, key_points = @keyPoints,
+                    unobserved_focus_keys_json = @unobservedFocusKeys,
                     updated_by_user_account_id = @user, updated_at = sysutcdatetime()
                 WHERE probation_observation_id = @observationId;
 
@@ -618,6 +634,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@courseGroup", ToDbValue(request.CourseGroup));
                 command.Parameters.AddWithValue("@courseLevel", ToDbValue(request.CourseLevel));
                 command.Parameters.AddWithValue("@keyPoints", ToDbValue(request.KeyPoints));
+                command.Parameters.AddWithValue("@unobservedFocusKeys", ToDbValue(SerializeLivStringList(unobservedFocusKeys)));
                 command.Parameters.AddWithValue("@status", status);
                 command.Parameters.AddWithValue("@user", ToDbValue(currentUser.UserAccountId));
                 await command.ExecuteNonQueryAsync(cancellationToken);
@@ -635,7 +652,7 @@ public sealed partial class SqlFoundationDataStore
                            descriptor.hidden_numeric_value, @evidence
                     FROM core.lookup_values focus
                     JOIN core.lookup_types focus_type ON focus_type.id = focus.lookup_type_id
-                      AND focus_type.lookup_key = N'liv_focus_area'
+                      AND focus_type.lookup_key = N'liv_visit_focus_area'
                     JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = @descriptorId
                       AND descriptor.is_active = 1 AND descriptor.archived_at IS NULL
                     WHERE focus.value_key = @focusKey AND focus.value_key <> N'other'
@@ -651,9 +668,14 @@ public sealed partial class SqlFoundationDataStore
 
             if (status == "completed")
             {
-                var requiredCount = await GetProbationRubricAreaCountAsync(connection, transaction, cancellationToken);
-                if (ratings.Length != requiredCount)
-                    throw new WorkflowValidationException("Select a practice outcome for every probation rubric area.");
+                var observedAreaKeys = rubricAreaKeys
+                    .Where(key => !unobservedSet.Contains(key))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var ratedAreaKeys = ratings
+                    .Select(rating => rating.FocusKey.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!observedAreaKeys.SetEquals(ratedAreaKeys))
+                    throw new WorkflowValidationException("Select a practice outcome for every observed probation rubric area.");
             }
 
             await WriteAuditAsync(
@@ -696,7 +718,10 @@ public sealed partial class SqlFoundationDataStore
                 while (await reader.ReadAsync(cancellationToken)) completedStages.Add(reader.GetString(0));
             }
             var selectedRatings = await GetProbationRatingCountAsync(connection, transaction, observationId, cancellationToken);
-            var requiredRatings = await GetProbationRubricAreaCountAsync(connection, transaction, cancellationToken);
+            var rubricAreaKeys = await GetProbationRubricAreaKeysAsync(connection, transaction, cancellationToken);
+            var unobservedFocusKeys = await GetProbationUnobservedFocusKeysAsync(
+                connection, transaction, observationId, cancellationToken);
+            var requiredRatings = rubricAreaKeys.Count(key => !unobservedFocusKeys.Contains(key));
             ProbationObservationWorkflow.ValidateCompletion(metadata.ObservationNumber, completedStages, selectedRatings, requiredRatings);
 
             await using (var command = new SqlCommand(
@@ -899,13 +924,12 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT probation.record_id, probation.status, probation.current_observation_number,
                    observation.observation_number, observation.status,
-                   CASE WHEN probation.status = N'in_progress' AND observation.status <> N'completed' AND (
-                       @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
+                   CASE WHEN @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
                        OR EXISTS (
                            SELECT 1 FROM quality.probation_case_reviewers reviewer
                            WHERE reviewer.probation_case_id = probation.id AND reviewer.staff_id = @currentStaffId
                        )
-                   ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+                   THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
             FROM quality.probation_cases probation
             JOIN quality.probation_observations observation ON observation.probation_case_id = probation.id
             WHERE probation.id = @caseId AND observation.id = @observationId AND probation.archived_at IS NULL;
@@ -925,20 +949,41 @@ public sealed partial class SqlFoundationDataStore
     private static string NormalizeProbationStageStatus(string? status) =>
         string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase) ? "completed" : "in_progress";
 
-    private static async Task<int> GetProbationRubricAreaCountAsync(
+    private static async Task<HashSet<string>> GetProbationRubricAreaKeysAsync(
         SqlConnection connection,
         System.Data.Common.DbTransaction transaction,
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
             """
-            SELECT COUNT(*)
+            SELECT value.value_key
             FROM core.lookup_values value
             JOIN core.lookup_types type ON type.id = value.lookup_type_id
-            WHERE type.lookup_key = N'liv_focus_area' AND value.value_key <> N'other'
+            WHERE type.lookup_key = N'liv_visit_focus_area' AND value.value_key <> N'other'
               AND value.is_active = 1 AND value.archived_at IS NULL;
             """, connection, (SqlTransaction)transaction);
-        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) keys.Add(reader.GetString(0));
+        return keys;
+    }
+
+    private static async Task<HashSet<string>> GetProbationUnobservedFocusKeysAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid observationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT unobserved_focus_keys_json
+            FROM quality.probation_observation_visits
+            WHERE probation_observation_id = @id;
+            """, connection, (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@id", observationId);
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return ParseLivStringList(value is null or DBNull ? null : Convert.ToString(value))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static async Task<int> GetProbationRatingCountAsync(
@@ -958,7 +1003,7 @@ public sealed partial class SqlFoundationDataStore
         Guid Id, Guid RecordId, Guid SubjectStaffId, string SubjectStaffName, Guid? OrgUnitId,
         string? OrgUnitCode, string? ParentOrgUnitCode, string AcademicYear, string Status,
         int CurrentObservationNumber, Guid? SourceElevateAssessmentId, Guid? SourceElevateRecordId,
-        DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, bool CanEdit);
+        DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, bool CanEdit, bool IsCreatedByCurrentUser);
     private sealed record ProbationReviewerRow(Guid CaseId, ProbationReviewerSummary Reviewer);
     private sealed record ProbationObservationRow(
         Guid CaseId, Guid Id, int ObservationNumber, string ObservationType, string Status,
@@ -969,7 +1014,8 @@ public sealed partial class SqlFoundationDataStore
         IReadOnlyList<string> DevelopmentOpportunityKeys, DateOnly? IntendedNextObservationDate);
     private sealed record ProbationVisitRow(
         Guid ObservationId, string? DeliveryAreaKey, string? DeliveryAreaName, DateOnly? ObservationDate,
-        string? ObservationTime, string? CourseName, string? CourseGroup, string? CourseLevel, string? KeyPoints);
+        string? ObservationTime, string? CourseName, string? CourseGroup, string? CourseLevel, string? KeyPoints,
+        IReadOnlyList<string> UnobservedFocusKeys);
     private sealed record ProbationRatingRow(Guid ObservationId, ProbationRatingSummary Rating);
     private sealed record ProbationObservationMetadata(
         Guid RecordId, string CaseStatus, int CurrentObservationNumber, int ObservationNumber,

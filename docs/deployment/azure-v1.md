@@ -1,6 +1,6 @@
 # Azure V1 Deployment
 
-This runbook creates the first deployable Teaching & Learning Quality System
+This runbook creates the first deployable i-Elevate Teaching and Learning System
 environment. Use a non-production subscription first, then repeat for production
 after acceptance testing.
 
@@ -79,7 +79,7 @@ is the default and excludes the official curriculum staff seed. It uses the Free
 App Service tier and Azure SQL's free-limit auto-pause policy. Because Free App
 Service does not support VNet integration, dev uses managed identity over Azure
 public service endpoints; production retains private endpoints and VNet routing.
-Never import real staff or quality records into a personally owned subscription.
+Never import real staff or teaching and learning records into a personally owned subscription.
 The current personal free-trial subscription has validated Free App Service
 capacity in `ukwest`. New SQL server creation is restricted in the UK regions
 for this subscription, so use `-Location ukwest -SqlLocation francecentral` for

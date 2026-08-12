@@ -209,14 +209,12 @@ public sealed partial class SqlFoundationDataStore
                 SELECT N'LIV — Preferences and focus', values_row.field_label, values_row.field_value, values_row.display_order
                 FROM quality.liv_records liv
                 LEFT JOIN quality.elevate_practice_liv_information liv_info ON liv_info.assessment_id = liv.source_elevate_assessment_id
-                LEFT JOIN core.lookup_values notice ON notice.id = liv_info.notice_preference_lookup_value_id
                 CROSS APPLY (VALUES
-                    (N'Notice preference', CONVERT(nvarchar(max), notice.display_name), 1),
-                    (N'Preferred month', CONVERT(nvarchar(max), liv_info.preferred_visit_month, 23), 2),
-                    (N'Primary focus', CONVERT(nvarchar(max), liv.eli_primary_focus_snapshot), 3),
-                    (N'Desired outcome', CONVERT(nvarchar(max), liv.eli_desired_outcome), 4),
+                    (N'Preferred month', CONVERT(nvarchar(max), liv_info.preferred_visit_month, 23), 1),
+                    (N'Primary focus', CONVERT(nvarchar(max), liv.eli_primary_focus_snapshot), 2),
+                    (N'Desired outcome', CONVERT(nvarchar(max), liv.eli_desired_outcome), 3),
                     (N'Areas of practice', CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CONVERT(nvarchar(max), liv.area_of_practice_keys_json) END, 5),
-                    (N'Elevate practitioner', CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CASE WHEN liv.is_elevate_practitioner = 1 THEN N'Yes' ELSE N'No' END END, 6),
+                    (N'Elevate practitioner', CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CASE WHEN liv.is_elevate_practitioner = 1 THEN N'Yes' ELSE N'-' END END, 6),
                     (N'Record visibility', CONVERT(nvarchar(max), liv.visibility_status), 7),
                     (N'Status', CONVERT(nvarchar(max), liv.status), 8)
                 ) values_row(field_label, field_value, display_order)
@@ -249,16 +247,17 @@ public sealed partial class SqlFoundationDataStore
                 JOIN quality.liv_cycles cycle ON cycle.liv_record_id = liv.id
                 JOIN quality.liv_visits visit ON visit.cycle_id = cycle.id AND visit.archived_at IS NULL
                 LEFT JOIN core.lookup_values delivery ON delivery.id = visit.delivery_area_lookup_value_id
+                LEFT JOIN core.lookup_types course_level_type ON course_level_type.lookup_key = N'liv_course_level'
+                LEFT JOIN core.lookup_values course_level ON course_level.lookup_type_id = course_level_type.id
+                  AND course_level.value_key = visit.course_level
                 CROSS APPLY (VALUES
                     (N'Delivery area', CONVERT(nvarchar(max), delivery.display_name), 1),
                     (N'Visit date', CONVERT(nvarchar(max), visit.visit_date, 23), 2),
                     (N'Visit time', CONVERT(nvarchar(max), visit.visit_time), 3),
                     (N'Course name', CONVERT(nvarchar(max), visit.course_name), 4),
-                    (N'Course group', CONVERT(nvarchar(max), visit.course_group), 5),
-                    (N'Course level', CONVERT(nvarchar(max), visit.course_level), 6),
-                    (N'Discussion, observations and key points', CONVERT(nvarchar(max), visit.findings), 7),
-                    (N'Restricted practitioner information', CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CONVERT(nvarchar(max), visit.reflection_notes) END, 8),
-                    (N'Visit status', CONVERT(nvarchar(max), visit.visit_status), 9)
+                    (N'Course level', CONVERT(nvarchar(max), COALESCE(course_level.display_name, visit.course_level)), 5),
+                    (N'LIV notes', CASE WHEN @hasSensitivePermission = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CONVERT(nvarchar(max), visit.reflection_notes) END, 6),
+                    (N'Visit status', CONVERT(nvarchar(max), visit.visit_status), 7)
                 ) values_row(field_label, field_value, display_order)
                 WHERE liv.record_id = @recordId
 
@@ -766,7 +765,7 @@ public sealed partial class SqlFoundationDataStore
                    CONVERT(nvarchar(36), liv.id) AS [LIV case ID], staff.display_name AS [Staff member],
                    reviewer.display_name AS [Reviewer], liv.status AS [Status], liv.current_stage AS [Current stage],
                    liv.eli_primary_focus_snapshot AS [Primary focus], liv.eli_desired_outcome AS [Desired outcome],
-                   CASE WHEN @canViewLivSensitive = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN liv.is_elevate_practitioner END AS [Elevate practitioner],
+                   CASE WHEN @canViewLivSensitive = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CASE WHEN liv.is_elevate_practitioner = 1 THEN N'Yes' ELSE N'-' END END AS [Elevate practitioner],
                    CASE WHEN @canViewLivSensitive = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN liv.area_of_practice_keys_json END AS [Areas of practice],
                    faculty.code AS [Faculty code], team.code AS [Sub-team code],
                    record_row.academic_year_key AS [Academic year], liv.created_at AS [Created at],
@@ -789,15 +788,17 @@ public sealed partial class SqlFoundationDataStore
             SELECT TOP (@exportTake)
                    CONVERT(nvarchar(36), liv.id) AS [LIV case ID], CONVERT(nvarchar(36), visit.id) AS [Visit ID],
                    visit.visit_number AS [Visit number], visit.visit_date AS [Visit date], visit.visit_time AS [Visit time],
-                   visit.visit_type AS [Visit type], visit.course_name AS [Course], visit.course_group AS [Group],
-                   visit.course_level AS [Level], delivery.display_name AS [Delivery area],
-                   CASE WHEN @canViewLivSensitive = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN visit.reflection_notes END AS [Restricted practitioner information],
-                   visit.findings AS [Discussion, observations and key points],
+                   visit.visit_type AS [Visit type], visit.course_name AS [Course],
+                   COALESCE(course_level.display_name, visit.course_level) AS [Level], delivery.display_name AS [Delivery area],
+                   CASE WHEN @canViewLivSensitive = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN visit.reflection_notes END AS [LIV notes],
                    visit.visit_status AS [Visit status], visit.created_at AS [Created at]
             FROM quality.liv_records liv
             JOIN scoped_records record_row ON record_row.id = liv.record_id
             JOIN quality.liv_visits visit ON visit.liv_record_id = liv.id AND visit.archived_at IS NULL
             LEFT JOIN core.lookup_values delivery ON delivery.id = visit.delivery_area_lookup_value_id
+            LEFT JOIN core.lookup_types course_level_type ON course_level_type.lookup_key = N'liv_course_level'
+            LEFT JOIN core.lookup_values course_level ON course_level.lookup_type_id = course_level_type.id
+              AND course_level.value_key = visit.course_level
             ORDER BY liv.created_at DESC, visit.visit_number;
             """, command =>
             {

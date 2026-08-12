@@ -46,6 +46,7 @@ public sealed record CoachingCycleSummary(
 
 public sealed record CoachingPreviousActionSummary(
     Guid ActionId,
+    string ActionTheme,
     string Title,
     string OwnerType,
     string OwnerName,
@@ -73,7 +74,8 @@ public sealed record CoachingSessionSummary(
     string? PrimaryFocus,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
-    bool CanEdit);
+    bool CanEdit,
+    bool IsCreatedByCurrentUser);
 
 public sealed record CoachingSessionDetail(
     Guid Id,
@@ -118,6 +120,7 @@ public sealed record CoachingActionReviewSummary(
 public sealed record CoachingSessionActionSummary(
     Guid? Id,
     int ActionOrder,
+    string ActionTheme,
     string ActionText,
     string OwnerType,
     string OwnerName,
@@ -160,6 +163,7 @@ public sealed record CoachingActionReviewRequest(
 
 public sealed record CoachingSessionActionRequest(
     Guid? Id,
+    string ActionTheme,
     string ActionText,
     string OwnerType,
     DateOnly? DueDate,

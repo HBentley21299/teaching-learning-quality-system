@@ -14,6 +14,7 @@ import {
   UsersRound
 } from "lucide-react";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
+import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -42,6 +43,8 @@ type CoachingMentoringProps = {
   user: CurrentUser;
   onActionsChanged: () => void;
   initialRecordId?: string;
+  onRecordOpened?: (recordId: string) => void;
+  onRecordClosed?: () => void;
 };
 
 const sessionTypes = [
@@ -63,7 +66,7 @@ const reviewOutcomes: Array<[CoachingReviewOutcome, string]> = [
   ["closed_without_completion", "Closed without completion"]
 ];
 
-export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, initialRecordId = "" }: CoachingMentoringProps) {
+export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, initialRecordId = "", onRecordOpened, onRecordClosed }: CoachingMentoringProps) {
   const canCreate = user.permissions.includes("coaching.submit") || user.permissions.includes("coaching.manage");
   const [configuration, setConfiguration] = useState<CoachingConfiguration | null>(null);
   const [sessions, setSessions] = useState<CoachingSessionSummary[]>([]);
@@ -80,6 +83,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
   const [typeFilter, setTypeFilter] = useState("all");
   const [sort, setSort] = useState("date_desc");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [recordOwnershipView, setRecordOwnershipView] = useState<"mine" | "scope">("mine");
   const openedInitialRecord = useRef("");
 
   useEffect(() => {
@@ -144,6 +148,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
       setDetail(nextDetail);
       setForm(formFromDetail(nextDetail));
       setView("form");
+      onRecordOpened?.(nextDetail.recordId);
     } catch {
       setMessage("The selected coaching session could not be opened.");
     } finally {
@@ -225,6 +230,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
       const matchesSearch = !query || [session.staffName, session.coachName, session.primaryFocus ?? ""]
         .some((value) => value.toLowerCase().includes(query));
       return matchesSearch
+        && (recordOwnershipView === "scope" || session.isCreatedByCurrentUser)
         && (statusFilter === "all" || session.status === statusFilter)
         && (typeFilter === "all" || session.sessionType === typeFilter);
     });
@@ -235,7 +241,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
         ? left.sessionDate.localeCompare(right.sessionDate)
         : right.sessionDate.localeCompare(left.sessionDate);
     });
-  }, [search, sessions, sort, statusFilter, typeFilter]);
+  }, [recordOwnershipView, search, sessions, sort, statusFilter, typeFilter]);
 
   if (view === "form" && form) {
     return (
@@ -246,7 +252,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
         form={form}
         isSaving={isSaving}
         message={message}
-        onBack={() => { setView("list"); setMessage(""); }}
+        onBack={() => { setView("list"); setMessage(""); onRecordClosed?.(); }}
         onChange={setForm}
         onCycleChange={(value) => void changeCycle(value)}
         onSave={(status) => void save(status)}
@@ -278,13 +284,14 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
       <section className="panel coaching-history-panel">
         <div className="panel-heading">
           <button className="collapsible-heading" onClick={() => setHistoryOpen((current) => !current)} type="button">
-            <span>{historyOpen ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}Active records</span>
-            <strong>{sessions.length}</strong>
+            <span>{historyOpen ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}{recordOwnershipView === "mine" ? "My coaching and mentoring records" : "Records in scope"}</span>
+            <strong>{filteredSessions.length}</strong>
           </button>
           {user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="coaching" orgUnits={orgUnits} /> : null}
         </div>
         {historyOpen ? (
           <>
+            <div className="segmented-control record-ownership-switch" aria-label="Coaching record ownership view"><button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My coaching records</button><button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button></div>
             <div className="coaching-filter-bar">
               <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff, coach or focus" value={search} /></label>
               <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option><option value="draft">Draft</option><option value="completed">Completed</option></select></label>
@@ -296,7 +303,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
                 <thead><tr><th>Staff member</th><th>Cycle / session</th><th>Date</th><th>Type</th><th>Coach or mentor</th><th>Status</th><th><span className="sr-only">Open</span></th></tr></thead>
                 <tbody>
                   {isLoading ? <tr><td colSpan={7}>Loading sessions...</td></tr> : filteredSessions.length === 0 ? (
-                    <tr><td colSpan={7}>No coaching or mentoring sessions match these filters.</td></tr>
+                    <tr><td colSpan={7}>{recordOwnershipView === "mine" ? "You have not created any coaching or mentoring records matching these filters." : "No coaching or mentoring sessions match these filters."}</td></tr>
                   ) : filteredSessions.map((session) => (
                     <tr key={session.id}>
                       <td><strong>{session.staffName}</strong><small className="table-subline">{lookupLabel(configuration?.focusAreas, session.primaryFocus)}</small></td>
@@ -601,13 +608,10 @@ function WordingRubric({ label, options, value, onChange }: { label: string; opt
 function ActionFields({ action, coachName, index, staffName, onChange }: { action: CoachingSessionAction; coachName: string; index: number; staffName: string; onChange: (changes: Partial<CoachingSessionAction>) => void }) {
   return (
     <div className="coaching-action-fields">
-      <label className="entry-field coaching-action-description"><span>Action description</span><textarea onChange={(event) => onChange({ actionText: event.target.value })} rows={2} value={action.actionText} /></label>
-      <label className="entry-field"><span>Action owner</span><select onChange={(event) => onChange({ ownerType: event.target.value as CoachingSessionAction["ownerType"] })} value={action.ownerType}><option value="staff">{staffName}</option><option value="coach">{coachName}</option><option value="joint">Staff member and coach</option></select></label>
-      <label className="entry-field"><span>Due date</span><input onChange={(event) => onChange({ dueDate: event.target.value || undefined })} type="date" value={action.dueDate ?? ""} /></label>
-      <label className="entry-field"><span>Review date</span><input onChange={(event) => onChange({ reviewDate: event.target.value || undefined })} type="date" value={action.reviewDate ?? ""} /></label>
-      <label className="entry-field coaching-action-evidence"><span>Intended evidence of completion or success</span><textarea onChange={(event) => onChange({ intendedEvidence: event.target.value })} rows={2} value={action.intendedEvidence ?? ""} /></label>
-      <label className="entry-field coaching-action-impact"><span>Intended impact</span><textarea onChange={(event) => onChange({ intendedImpact: event.target.value })} rows={2} value={action.intendedImpact ?? ""} /></label>
-      <label className="entry-field"><span>Status</span><select aria-label={`Status for action ${index + 1}`} onChange={(event) => onChange({ status: event.target.value as CoachingActionStatus })} value={action.status}>{actionStatuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label className="entry-field coaching-action-theme"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`coaching-action-theme-${action.id ?? index}`} onChange={(actionTheme) => onChange({ actionTheme })} sourceFormType="coaching_mentoring" value={action.actionTheme} /></label>
+      <label className="entry-field coaching-action-description"><span>Action {index + 1} <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => onChange({ actionText: event.target.value })} rows={3} value={action.actionText} /></label>
+      <label className="entry-field"><span>Owner <strong>Required</strong></span><select onChange={(event) => onChange({ ownerType: event.target.value as CoachingSessionAction["ownerType"] })} value={action.ownerType}><option value="staff">{staffName}</option><option value="coach">{coachName}</option><option value="joint">Staff member and coach</option></select></label>
+      <label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => onChange({ dueDate: event.target.value || undefined })} type="date" value={action.dueDate ?? ""} /></label>
     </div>
   );
 }
@@ -627,12 +631,13 @@ function emptyCoachingForm(staffId: string): SaveCoachingSessionRequest {
 }
 
 function emptyAction(actionOrder: number): CoachingSessionAction {
-  return { actionOrder, actionText: "", ownerType: "staff", status: "not_started" };
+  return { actionOrder, actionTheme: "", actionText: "", ownerType: "staff", status: "not_started" };
 }
 
 function revisedActionFrom(action: CoachingPreviousActionSummary): CoachingSessionAction {
   return {
     actionOrder: 0,
+    actionTheme: action.actionTheme,
     actionText: action.title,
     ownerType: action.ownerType,
     dueDate: action.dueDate,
@@ -686,7 +691,7 @@ function validateCompletion(form: SaveCoachingSessionRequest, previousActions: C
     ...form.actionReviews.filter((review) => review.reviewOutcome === "revised" && review.revisedAction).map((review) => review.revisedAction!)
   ].filter((action) => action.actionText.trim());
   if (!form.closeCycle && actions.length === 0) return "Add at least one action, or formally close the coaching cycle.";
-  if (actions.some((action) => !action.actionText.trim() || !action.dueDate || !action.reviewDate || !action.intendedEvidence?.trim() || !action.intendedImpact?.trim())) return "Complete every field for each agreed action.";
+  if (actions.some((action) => !action.actionTheme.trim() || !action.actionText.trim() || !action.dueDate)) return "Every agreed action needs an action theme, action, owner and implementation date.";
   return "";
 }
 

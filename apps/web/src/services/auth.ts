@@ -45,8 +45,47 @@ export async function initializeAuth(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Local test-account sign-in (username/password). The API issues a sealed
+// bearer token; it coexists with Microsoft sign-in and never replaces it.
+
+const localTokenKey = "ielevate-local-token";
+const localLoginApiBase = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "")
+  || (import.meta.env.DEV ? "http://127.0.0.1:5001" : "");
+
+export function getLocalToken(): string | null {
+  return localStorage.getItem(localTokenKey);
+}
+
+export function clearLocalSession(): void {
+  localStorage.removeItem(localTokenKey);
+}
+
+export async function signInWithPassword(email: string, password: string): Promise<void> {
+  const response = await fetch(`${localLoginApiBase}/api/v1/auth/login`, {
+    body: JSON.stringify({ email, password }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST"
+  });
+  if (!response.ok) {
+    let message = "Sign in failed. Check your email address and password.";
+    try {
+      const payload = (await response.json()) as { message?: string; Message?: string };
+      message = payload.message ?? payload.Message ?? message;
+    } catch {
+      // keep the default message
+    }
+    throw new Error(message);
+  }
+  const payload = (await response.json()) as { token: string };
+  localStorage.setItem(localTokenKey, payload.token);
+}
+
 export function hasSignedInAccount(): boolean {
-  return !isAuthEnabled || Boolean(msalInstance?.getActiveAccount());
+  if (isAuthEnabled) {
+    return Boolean(msalInstance?.getActiveAccount());
+  }
+  return Boolean(getLocalToken());
 }
 
 export function signIn(): void {
@@ -54,6 +93,11 @@ export function signIn(): void {
 }
 
 export async function getAccessToken(): Promise<string | null> {
+  const localToken = getLocalToken();
+  if (localToken) {
+    return localToken;
+  }
+
   if (!msalInstance) {
     return null;
   }
@@ -70,5 +114,10 @@ export async function getAccessToken(): Promise<string | null> {
 }
 
 export function signOut(): void {
+  if (getLocalToken()) {
+    clearLocalSession();
+    window.location.assign("/");
+    return;
+  }
   void msalInstance?.logoutRedirect();
 }

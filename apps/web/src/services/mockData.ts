@@ -93,7 +93,7 @@ export const mockStaff: StaffSummary[] = [
     externalId: "STAFF_0001",
     displayName: "Harry Bentley",
     email: "harryjbentley@outlook.com",
-    jobTitle: "Digital Teaching & Learning Lead",
+    jobTitle: "Digital Teaching and Learning Lead",
     accountStatus: "active",
     orgUnitIds: []
   },
@@ -113,6 +113,7 @@ export const mockActions: ActionSummary[] = [
     id: "ACT-001",
     ownerStaffId: "40000000-0000-0000-0000-000000000002",
     subjectStaffId: "40000000-0000-0000-0000-000000000002",
+    actionTheme: "Impact evidence",
     title: "Upload winter impact evidence",
     detail: "Add implementation notes and at least one supporting file.",
     sourceFormType: "standalone",
@@ -128,6 +129,7 @@ export const mockActions: ActionSummary[] = [
   {
     id: "ACT-002",
     ownerStaffId: "40000000-0000-0000-0000-000000000001",
+    actionTheme: "Work scrutiny",
     title: "Review work scrutiny findings",
     sourceFormType: "work_scrutiny",
     dueDate: "2026-10-04",
@@ -166,7 +168,7 @@ export const mockStaffProfiles: StaffProfileSummary[] = [
     externalId: "STAFF_0001",
     displayName: "Harry Bentley",
     email: "harryjbentley@outlook.com",
-    jobTitle: "Digital Teaching & Learning Lead",
+    jobTitle: "Digital Teaching and Learning Lead",
     primaryOrgCode: "T&L",
     cpdSessionsAttended: 5,
     evidenceRecords: 3,
@@ -392,7 +394,8 @@ export const mockRecords: RecordSummary[] = [
     recordDate: "2026-09-18",
     createdAt: "2026-09-18T10:00:00Z",
     submissionStatus: "submitted",
-    academicYear: "2026/27"
+    academicYear: "2026/27",
+    isCreatedByCurrentUser: true
   }
 ];
 

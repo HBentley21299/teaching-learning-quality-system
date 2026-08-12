@@ -99,17 +99,14 @@ public sealed record AdminSaveElevatePracticeAssessmentRequest(
 public sealed record ElevateLookupOptionSummary(string Key, string Name, int DisplayOrder, bool IsOther = false);
 
 public sealed record ElevateLivInformationSummary(
-    string? NoticePreferenceKey,
     string? PreferredVisitMonth,
     string? PrimaryFocusKey,
     string? SecondaryFocusKey,
     string? SecondaryFocusOther,
     string? DesiredOutcome,
-    IReadOnlyList<ElevateLookupOptionSummary> NoticeOptions,
     IReadOnlyList<ElevateLookupOptionSummary> FocusOptions);
 
 public sealed record SaveElevateLivInformationRequest(
-    string? NoticePreferenceKey,
     string? PreferredVisitMonth,
     string? PrimaryFocusKey,
     string? SecondaryFocusKey,

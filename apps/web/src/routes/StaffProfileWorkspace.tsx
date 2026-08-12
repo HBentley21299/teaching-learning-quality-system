@@ -11,7 +11,8 @@ export function StaffProfileWorkspace({
   initialStaffId = "",
   initialElevateRecordId = "",
   onOpenRecord,
-  onOpenActionDetails
+  onOpenActionDetails,
+  onStaffChanged
 }: {
   academicYear: string;
   profiles: StaffProfileSummary[];
@@ -21,6 +22,7 @@ export function StaffProfileWorkspace({
   initialElevateRecordId?: string;
   onOpenRecord: StaffProfileRecordLinkHandler;
   onOpenActionDetails: (actionId: string, staffId: string) => void;
+  onStaffChanged?: (staffId: string) => void;
 }) {
   const canViewAllProfiles =
     user.permissions.includes("liv.manage") ||
@@ -60,7 +62,10 @@ export function StaffProfileWorkspace({
               <Search size={16} aria-hidden="true" />
               <select
                 aria-label="Select staff profile"
-                onChange={(event) => setSelectedStaffId(event.target.value)}
+                onChange={(event) => {
+                  setSelectedStaffId(event.target.value);
+                  onStaffChanged?.(event.target.value);
+                }}
                 value={selectedStaffId}
               >
                 {accessibleStaff.map((staffMember) => (

@@ -171,7 +171,7 @@ FROM (VALUES
     ('92000000-0000-0000-0000-000000000003',
      '40000000-0000-0000-0000-000000000004', NULL,
      'Run a digital media feedback workshop',
-     'Programme-level action from the faculty quality review.',
+     'Programme-level action from the faculty teaching and learning review.',
      CONVERT(date, DATEADD(day, 21, sysutcdatetime())))
 ) v(id, owner_staff_id, subject_staff_id, title, detail, due_date)
 WHERE EXISTS (SELECT 1 FROM people.staff s WHERE s.id = v.owner_staff_id)

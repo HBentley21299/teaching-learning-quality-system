@@ -2,8 +2,10 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { LoginScreen } from "./components/LoginScreen";
-import { hasSignedInAccount, initializeAuth, isAuthEnabled } from "./services/auth";
+import { hasSignedInAccount, initializeAuth } from "./services/auth";
+import "@fontsource-variable/inter";
 import "./app/styles.css";
+import "./app/theme.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -19,7 +21,7 @@ function render(content: React.ReactNode) {
 // Complete any returning MSAL redirect before deciding whether to show the app
 // or the explicit sign-in screen. This is a no-op in local development.
 void initializeAuth().then(() => {
-  render(isAuthEnabled && !hasSignedInAccount() ? <LoginScreen /> : <App />);
+  render(hasSignedInAccount() ? <App /> : <LoginScreen />);
 }).catch(() => {
   render(
     <main className="startup-error-shell">

@@ -405,18 +405,35 @@ BEGIN TRY
     INSERT INTO cpd.elevate_status_awards (
         id, staff_id, academic_year_key, level_number, qualifying_attendance_count,
         evidence_cpd_event_id, implementation_impact, confirmed_by_user_account_id, confirmed_at
-    ) VALUES
-        ('FC000000-0000-0000-0000-000000000001', @staffId, N'2025/26', 1, 3, 'F2000000-0000-0000-0000-000000000001', N'Applied retrieval checks and collaborative digital tools; learner participation and confidence improved.', @userAccountId, '2026-02-10T12:00:00+00:00'),
-        ('FC000000-0000-0000-0000-000000000002', @staffId, N'2025/26', 2, 6, NULL, NULL, @userAccountId, '2026-03-12T12:00:00+00:00'),
-        ('FC000000-0000-0000-0000-000000000003', @staffId, N'2025/26', 3, 9, NULL, NULL, @userAccountId, '2026-04-11T12:00:00+00:00'),
-        ('FC000000-0000-0000-0000-000000000004', @staffId, N'2025/26', 4, 12, NULL, NULL, @userAccountId, '2026-05-11T12:00:00+00:00'),
-        ('FC000000-0000-0000-0000-000000000005', @staffId, N'2025/26', 5, 15, NULL, NULL, @userAccountId, '2026-06-10T12:00:00+00:00');
+    )
+    SELECT source.id, @staffId, N'2025/26', source.level_number, source.qualifying_attendance_count,
+           source.evidence_cpd_event_id, source.implementation_impact, @userAccountId, source.confirmed_at
+    FROM (VALUES
+        (CONVERT(uniqueidentifier, 'FC000000-0000-0000-0000-000000000001'), 1, 3, CONVERT(uniqueidentifier, 'F2000000-0000-0000-0000-000000000001'), CONVERT(nvarchar(2000), N'Applied retrieval checks and collaborative digital tools; learner participation and confidence improved.'), CONVERT(datetimeoffset, '2026-02-10T12:00:00+00:00')),
+        (CONVERT(uniqueidentifier, 'FC000000-0000-0000-0000-000000000002'), 2, 6, CONVERT(uniqueidentifier, NULL), CONVERT(nvarchar(2000), NULL), CONVERT(datetimeoffset, '2026-03-12T12:00:00+00:00')),
+        (CONVERT(uniqueidentifier, 'FC000000-0000-0000-0000-000000000003'), 3, 9, CONVERT(uniqueidentifier, NULL), CONVERT(nvarchar(2000), NULL), CONVERT(datetimeoffset, '2026-04-11T12:00:00+00:00')),
+        (CONVERT(uniqueidentifier, 'FC000000-0000-0000-0000-000000000004'), 4, 12, CONVERT(uniqueidentifier, NULL), CONVERT(nvarchar(2000), NULL), CONVERT(datetimeoffset, '2026-05-11T12:00:00+00:00')),
+        (CONVERT(uniqueidentifier, 'FC000000-0000-0000-0000-000000000005'), 5, 15, CONVERT(uniqueidentifier, NULL), CONVERT(nvarchar(2000), NULL), CONVERT(datetimeoffset, '2026-06-10T12:00:00+00:00'))
+    ) source(id, level_number, qualifying_attendance_count, evidence_cpd_event_id, implementation_impact, confirmed_at)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM cpd.elevate_status_awards existing
+        WHERE existing.staff_id = @staffId
+          AND existing.academic_year_key = N'2025/26'
+          AND existing.level_number = source.level_number
+          AND existing.archived_at IS NULL
+    );
 
     DECLARE @coachingCycleId uniqueidentifier = 'F6000000-0000-0000-0000-000000000401';
     DECLARE @coachingSessionId uniqueidentifier = 'F6000000-0000-0000-0000-000000000402';
+    DECLARE @coachingCycleNumber int = COALESCE((
+        SELECT MAX(cycle_number)
+        FROM quality.coaching_cycles
+        WHERE staff_id = @staffId
+    ), 0) + 1;
     INSERT INTO quality.coaching_cycles (
         id, staff_id, coach_staff_id, cycle_number, cycle_type, status, started_on, created_by_user_account_id
-    ) VALUES (@coachingCycleId, @staffId, @staffId, 1, N'coaching', N'active', '2026-06-10', @userAccountId);
+    ) VALUES (@coachingCycleId, @staffId, @staffId, @coachingCycleNumber, N'coaching', N'active', '2026-06-10', @userAccountId);
     INSERT INTO quality.coaching_sessions (
         id, record_id, cycle_id, staff_id, coach_staff_id, session_number, session_date,
         session_type, delivery_method, duration_minutes, status, development_stage_lookup_value_id,
@@ -525,19 +542,19 @@ BEGIN TRY
         (@observationOneId, @livDigitalFocusId, @strongDescriptorId, 4, N'Digital tools were embedded and supported active learner participation.');
 
     INSERT INTO quality.actions (
-        id, source_record_id, subject_staff_id, owner_staff_id, title, detail,
+        id, source_record_id, subject_staff_id, owner_staff_id, title, detail, action_theme,
         priority_lookup_value_id, status_lookup_value_id, due_date, completed_date,
         published_to_staff, created_by_user_account_id, completion_note, completed_by_user_account_id,
         source_form_type, source_sub_record_type, source_sub_record_id, source_sub_record_key,
         source_display_order, original_due_date, revised_due_date, visibility_setting,
         liv_visit_id, liv_cycle_id, progress_status, intended_evidence, intended_impact, review_date
     ) VALUES
-        ('FA000000-0000-0000-0000-000000000001', @learningRecordId, @staffId, @staffId, N'[TEST] Trial live checks for understanding', N'Use two live checks in each sampled session and review learner responses.', @priorityMedium, @actionOpen, '2026-07-28', NULL, 1, @userAccountId, NULL, NULL, N'learning_walk', NULL, NULL, NULL, 1, '2026-07-28', NULL, N'staff_and_management', NULL, NULL, N'in_progress', N'Two annotated lesson examples.', N'More responsive sequencing and learner confidence.', '2026-07-28'),
-        ('FA000000-0000-0000-0000-000000000002', @scrutinyRecordId, @staffId, @staffId, N'[TEST] Review learner responses to feedback', N'Sample learner improvements after feedback and agree a consistent team approach.', @priorityHigh, @actionOpen, '2026-06-15', NULL, 1, @userAccountId, NULL, NULL, N'work_scrutiny', NULL, NULL, NULL, 1, '2026-06-15', NULL, N'staff_and_management', NULL, NULL, N'not_started', N'Eight learner work samples.', N'More visible impact from feedback.', '2026-06-15'),
-        ('FA000000-0000-0000-0000-000000000003', @environmentRecordId, @staffId, @staffId, N'[TEST] Expand interactive room resources', N'Add two reusable interactive resources to the room display.', @priorityMedium, @actionOpen, '2026-08-05', NULL, 1, @userAccountId, NULL, NULL, N'elevate_environment', NULL, NULL, NULL, 1, '2026-08-05', NULL, N'staff_and_management', NULL, NULL, N'not_started', N'Photographs and resource links.', N'Greater learner interaction with the environment.', '2026-08-05'),
-        ('FA000000-0000-0000-0000-000000000004', @coachingRecordId, @staffId, @staffId, N'[TEST] Trial the retrieval sequence', N'Use the agreed retrieval sequence with two groups and capture learner response data.', @priorityMedium, @actionComplete, '2026-06-24', '2026-06-23', 1, @userAccountId, N'Completed with both groups; response rates improved.', @userAccountId, N'coaching_mentoring', N'coaching_session', @coachingSessionId, N'session_1', 1, '2026-06-24', NULL, N'staff_and_management', NULL, NULL, N'completed', N'Lesson resources and response data.', N'More accurate checks before independent work.', '2026-06-24'),
-        ('FA000000-0000-0000-0000-000000000005', @livRecordId, @staffId, @staffId, N'[TEST] Embed visible success checks', N'Introduce a consistent success check before independent application.', @priorityHigh, @actionExtended, '2026-08-20', NULL, 1, @userAccountId, NULL, NULL, N'liv', N'liv_visit', @livVisitId, N'visit_1', 1, '2026-07-10', '2026-08-20', N'staff_and_management', @livVisitId, @livCycleId, N'in_progress', N'Learner response sample from three sessions.', N'Learners identify and address misconceptions earlier.', '2026-08-20'),
-        ('FA000000-0000-0000-0000-000000000006', @probationRecordId, @staffId, @staffId, N'[TEST] Prepare evidence for observation 3', N'Collate examples showing the impact of actions from observations 1 and 2.', @priorityMedium, @actionOpen, '2026-08-01', NULL, 1, @userAccountId, NULL, NULL, N'probation_observation', N'probation_observation', @observationTwoId, N'observation_2', 2, '2026-08-01', NULL, N'staff_and_management', NULL, NULL, N'not_started', N'Annotated resources and learner work.', N'Clear evidence of development across the probation cycle.', '2026-08-01');
+        ('FA000000-0000-0000-0000-000000000001', @learningRecordId, @staffId, @staffId, N'[TEST] Trial live checks for understanding', N'Use two live checks in each sampled session and review learner responses.', N'Assessment', @priorityMedium, @actionOpen, '2026-07-28', NULL, 1, @userAccountId, NULL, NULL, N'learning_walk', NULL, NULL, NULL, 1, '2026-07-28', NULL, N'staff_and_management', NULL, NULL, N'in_progress', N'Two annotated lesson examples.', N'More responsive sequencing and learner confidence.', '2026-07-28'),
+        ('FA000000-0000-0000-0000-000000000002', @scrutinyRecordId, @staffId, @staffId, N'[TEST] Review learner responses to feedback', N'Sample learner improvements after feedback and agree a consistent team approach.', N'Feedback', @priorityHigh, @actionOpen, '2026-06-15', NULL, 1, @userAccountId, NULL, NULL, N'work_scrutiny', NULL, NULL, NULL, 1, '2026-06-15', NULL, N'staff_and_management', NULL, NULL, N'not_started', N'Eight learner work samples.', N'More visible impact from feedback.', '2026-06-15'),
+        ('FA000000-0000-0000-0000-000000000003', @environmentRecordId, @staffId, @staffId, N'[TEST] Expand interactive room resources', N'Add two reusable interactive resources to the room display.', N'Innovative', @priorityMedium, @actionOpen, '2026-08-05', NULL, 1, @userAccountId, NULL, NULL, N'elevate_environment', NULL, NULL, NULL, 1, '2026-08-05', NULL, N'staff_and_management', NULL, NULL, N'not_started', N'Photographs and resource links.', N'Greater learner interaction with the environment.', '2026-08-05'),
+        ('FA000000-0000-0000-0000-000000000004', @coachingRecordId, @staffId, @staffId, N'[TEST] Trial the retrieval sequence', N'Use the agreed retrieval sequence with two groups and capture learner response data.', N'Assessment and feedback', @priorityMedium, @actionComplete, '2026-06-24', '2026-06-23', 1, @userAccountId, N'Completed with both groups; response rates improved.', @userAccountId, N'coaching_mentoring', N'coaching_session', @coachingSessionId, N'session_1', 1, '2026-06-24', NULL, N'staff_and_management', NULL, NULL, N'completed', N'Lesson resources and response data.', N'More accurate checks before independent work.', '2026-06-24'),
+        ('FA000000-0000-0000-0000-000000000005', @livRecordId, @staffId, @staffId, N'[TEST] Embed visible success checks', N'Introduce a consistent success check before independent application.', N'Planning and structure', @priorityHigh, @actionExtended, '2026-08-20', NULL, 1, @userAccountId, NULL, NULL, N'liv', N'liv_visit', @livVisitId, N'visit_1', 1, '2026-07-10', '2026-08-20', N'staff_and_management', @livVisitId, @livCycleId, N'in_progress', N'Learner response sample from three sessions.', N'Learners identify and address misconceptions earlier.', '2026-08-20'),
+        ('FA000000-0000-0000-0000-000000000006', @probationRecordId, @staffId, @staffId, N'[TEST] Prepare evidence for observation 3', N'Collate examples showing the impact of actions from observations 1 and 2.', N'Professional standards', @priorityMedium, @actionOpen, '2026-08-01', NULL, 1, @userAccountId, NULL, NULL, N'probation_observation', N'probation_observation', @observationTwoId, N'observation_2', 2, '2026-08-01', NULL, N'staff_and_management', NULL, NULL, N'not_started', N'Annotated resources and learner work.', N'Clear evidence of development across the probation cycle.', '2026-08-01');
 
     INSERT INTO quality.action_extensions (
         id, action_id, previous_due_date, extended_due_date, reason, created_by_user_account_id, created_at

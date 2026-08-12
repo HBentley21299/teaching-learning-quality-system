@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -7,6 +7,7 @@ import type {
   AdminRecord,
   AdminUserSummary,
   CurrentUser,
+  DashboardProcessConfiguration,
   LearningWalkTheme,
   LearningWalkThemeGroup,
   ModuleSummary,
@@ -28,18 +29,23 @@ export function AdminCentre({
   modules,
   profiles,
   staff,
-  onOpenRecord
+  onOpenRecord,
+  initialTab = "overview",
+  onTabChange
 }: {
   user: CurrentUser;
   modules: ModuleSummary[];
   profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   onOpenRecord: (record: AdminRecord) => void;
+  initialTab?: string;
+  onTabChange?: (tab: string) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<AdminTabKey>("overview");
+  const requestedTab = adminTabs.some((tab) => tab.key === initialTab) ? initialTab as AdminTabKey : "overview";
+  const [activeTab, setActiveTab] = useState<AdminTabKey>(requestedTab);
   const permissionRows = [
     ["Admin", "System maintenance, users, records and labels", "Global"],
-    ["Teaching & Learning", "Forms, CPD, LIV, reports and actions", "Global"],
+    ["Teaching and Learning", "Forms, CPD, LIV, reports and actions", "Global"],
     ["Director", "Scoped reports and review activity", "Assigned org units"],
     ["Head of Faculty", "Faculty records, actions and dashboards", "Assigned faculty"],
     ["Programme Leader", "Team records, actions and dashboards", "Assigned team"],
@@ -65,9 +71,18 @@ export function AdminCentre({
   };
   const visibleTabs = adminTabs.filter((tab) => tabAccess[tab.key]);
 
+  function selectTab(tab: AdminTabKey) {
+    setActiveTab(tab);
+    onTabChange?.(tab);
+  }
+
+  useEffect(() => {
+    if (tabAccess[requestedTab]) setActiveTab(requestedTab);
+  }, [requestedTab]);
+
   useEffect(() => {
     if (!tabAccess[activeTab]) {
-      setActiveTab(visibleTabs[0]?.key ?? "overview");
+      selectTab(visibleTabs[0]?.key ?? "overview");
     }
   }, [activeTab, tabAccess, visibleTabs]);
 
@@ -108,7 +123,7 @@ export function AdminCentre({
               aria-selected={activeTab === tab.key}
               className={activeTab === tab.key ? "admin-tab admin-tab-active" : "admin-tab"}
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => selectTab(tab.key)}
               role="tab"
               type="button"
             >
@@ -122,7 +137,7 @@ export function AdminCentre({
       {activeTab === "overview" ? (
         <AdminOverview
           modules={modules}
-          onOpenLookups={() => setActiveTab("lists")}
+          onOpenLookups={() => selectTab("lists")}
           permissionRows={permissionRows}
           user={user}
         />
@@ -207,6 +222,7 @@ function AdminOverview({
             <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching qualification statuses</button>
             <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching focus areas</button>
             <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching support types</button>
+            <button className="lookup-row" onClick={onOpenLookups} type="button">Action themes by process</button>
           </div>
         </section>
       </div>
@@ -1143,11 +1159,14 @@ function formatReflectionSummary(record: StaffProfileRecordSummary) {
 
 function LearningWalkThemeAdminPanel() {
   const [groups, setGroups] = useState<LearningWalkThemeGroup[]>([]);
+  const [newGroupName, setNewGroupName] = useState("");
   const [newThemeName, setNewThemeName] = useState("");
   const [newThemeGroupId, setNewThemeGroupId] = useState("");
+  const [editingAreaId, setEditingAreaId] = useState("");
+  const [editingAreaName, setEditingAreaName] = useState("");
   const [editingId, setEditingId] = useState("");
   const [editingName, setEditingName] = useState("");
-  const [editingGroupId, setEditingGroupId] = useState("");
+  const [editingThemeGroupId, setEditingThemeGroupId] = useState("");
   const [status, setStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -1159,11 +1178,69 @@ function LearningWalkThemeAdminPanel() {
     try {
       const nextGroups = await api.adminLearningWalkThemes();
       setGroups(nextGroups);
-      setNewThemeGroupId((current) => current || nextGroups[0]?.id || "");
+      setNewThemeGroupId((current) => nextGroups.some((group) => group.id === current && group.isActive)
+        ? current
+        : nextGroups.find((group) => group.isActive)?.id ?? "");
       setStatus(nextStatus);
     } catch {
       setStatus("Learning Walk themes could not be loaded from the API.");
     }
+  }
+
+  async function addThemeArea() {
+    if (!newGroupName.trim()) {
+      setStatus("Enter a theme area name.");
+      return;
+    }
+
+    setIsSaving(true);
+    const result = await api.createLearningWalkThemeGroup({ name: newGroupName.trim() });
+    setIsSaving(false);
+    if (!result.ok) {
+      setStatus(result.message ?? "The theme area could not be added.");
+      return;
+    }
+
+    setNewGroupName("");
+    await refreshThemes("Theme area added.");
+  }
+
+  function startAreaEdit(group: LearningWalkThemeGroup) {
+    setEditingAreaId(group.id);
+    setEditingAreaName(group.name);
+    setStatus("");
+  }
+
+  async function saveAreaEdit() {
+    if (!editingAreaId || !editingAreaName.trim()) {
+      setStatus("A theme area name is required.");
+      return;
+    }
+
+    setIsSaving(true);
+    const result = await api.updateLearningWalkThemeGroup(editingAreaId, { name: editingAreaName.trim() });
+    setIsSaving(false);
+    if (!result.ok) {
+      setStatus(result.message ?? "The theme area could not be renamed.");
+      return;
+    }
+
+    setEditingAreaId("");
+    await refreshThemes("Theme area renamed. Historical records retain their saved labels.");
+  }
+
+  async function setAreaStatus(group: LearningWalkThemeGroup, isActive: boolean) {
+    setIsSaving(true);
+    const result = await api.setLearningWalkThemeGroupStatus(group.id, isActive);
+    setIsSaving(false);
+    if (!result.ok) {
+      setStatus(result.message ?? "The theme area status could not be changed.");
+      return;
+    }
+
+    await refreshThemes(isActive
+      ? "Theme area reactivated."
+      : "Theme area deactivated. Its themes and historical reporting data have been preserved.");
   }
 
   async function addTheme() {
@@ -1190,19 +1267,19 @@ function LearningWalkThemeAdminPanel() {
   function startEdit(theme: LearningWalkTheme) {
     setEditingId(theme.id);
     setEditingName(theme.name);
-    setEditingGroupId(theme.themeGroupId);
+    setEditingThemeGroupId(theme.themeGroupId);
     setStatus("");
   }
 
   async function saveEdit() {
-    if (!editingId || !editingName.trim() || !editingGroupId) {
+    if (!editingId || !editingName.trim() || !editingThemeGroupId) {
       setStatus("A theme name and area are required.");
       return;
     }
 
     setIsSaving(true);
     const result = await api.updateLearningWalkTheme(editingId, {
-      themeGroupId: editingGroupId,
+      themeGroupId: editingThemeGroupId,
       name: editingName.trim()
     });
     setIsSaving(false);
@@ -1246,47 +1323,92 @@ function LearningWalkThemeAdminPanel() {
     await refreshThemes("Theme order updated.");
   }
 
+  const activeGroups = groups.filter((group) => group.isActive);
+  const activeThemeCount = activeGroups.reduce(
+    (count, group) => count + group.themes.filter((theme) => theme.isActive).length,
+    0);
+
   return (
     <section className="panel learning-theme-admin">
       <div className="panel-heading">
         <div>
-          <h2>Teaching &amp; Learning themes</h2>
-          <span>Shared by Learning Walks, LIV and quality reporting</span>
+          <h2>Teaching and Learning themes</h2>
+          <span>Shared by Learning Walks, LIV and teaching and learning reporting</span>
         </div>
-        <strong>{groups.reduce((count, group) => count + group.themes.filter((theme) => theme.isActive).length, 0)} active</strong>
+        <strong>{activeGroups.length} active areas · {activeThemeCount} active themes</strong>
+      </div>
+
+      <div className="learning-theme-area-add-row">
+        <label className="entry-field">
+          <span>New theme area <strong>Required</strong></span>
+          <input onChange={(event) => setNewGroupName(event.target.value)} placeholder="Enter area name" type="text" value={newGroupName} />
+        </label>
+        <Button disabled={isSaving || !newGroupName.trim()} icon={Plus} onClick={() => void addThemeArea()} variant="secondary">Add area</Button>
       </div>
 
       <div className="learning-theme-add-row">
         <label className="entry-field">
           <span>Theme area <strong>Required</strong></span>
           <select onChange={(event) => setNewThemeGroupId(event.target.value)} value={newThemeGroupId}>
-            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+            {activeGroups.length === 0 ? <option value="">No active theme areas</option> : null}
+            {activeGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
           </select>
         </label>
         <label className="entry-field">
           <span>New theme <strong>Required</strong></span>
           <input onChange={(event) => setNewThemeName(event.target.value)} placeholder="Enter theme wording" type="text" value={newThemeName} />
         </label>
-        <Button disabled={isSaving || !newThemeName.trim()} icon={Plus} onClick={() => void addTheme()} variant="primary">Add theme</Button>
+        <Button disabled={isSaving || !newThemeName.trim() || !newThemeGroupId} icon={Plus} onClick={() => void addTheme()} variant="primary">Add theme</Button>
       </div>
+
+      <p className="learning-theme-governance-note">
+        Area names can change safely because records use stable IDs and saved reporting labels. Deactivating an area removes it from new selections without deleting its themes or history.
+      </p>
 
       {status ? <div className="notice-row" role="status">{status}</div> : null}
 
       <div className="learning-theme-groups">
         {groups.map((group) => (
-          <div className="learning-theme-group" key={group.id}>
+          <div className={`learning-theme-group${group.isActive ? "" : " is-inactive"}`} key={group.id}>
             <div className="learning-theme-group-heading">
-              <h3>{group.name}</h3>
-              <span>{group.themes.length} theme{group.themes.length === 1 ? "" : "s"}</span>
+              {editingAreaId === group.id ? (
+                <div className="learning-theme-area-edit">
+                  <input aria-label="Theme area name" onChange={(event) => setEditingAreaName(event.target.value)} type="text" value={editingAreaName} />
+                  <button aria-label="Cancel area editing" className="icon-button" onClick={() => setEditingAreaId("")} title="Cancel area editing" type="button"><X size={16} /></button>
+                  <button aria-label="Save theme area" className="icon-button" disabled={isSaving || !editingAreaName.trim()} onClick={() => void saveAreaEdit()} title="Save theme area" type="button"><Save size={16} /></button>
+                </div>
+              ) : (
+                <>
+                  <div className="learning-theme-group-title">
+                    <h3>{group.name}</h3>
+                    <span>{group.isActive ? "Active" : "Inactive"} · {group.themes.length} theme{group.themes.length === 1 ? "" : "s"}</span>
+                  </div>
+                  <div className="learning-theme-row-actions">
+                    <button aria-label={`Rename ${group.name} area`} className="icon-button" disabled={isSaving} onClick={() => startAreaEdit(group)} title="Rename theme area" type="button"><Edit3 size={16} /></button>
+                    <button
+                      aria-label={`${group.isActive ? "Deactivate" : "Reactivate"} ${group.name} area`}
+                      className="icon-button"
+                      disabled={isSaving}
+                      onClick={() => void setAreaStatus(group, !group.isActive)}
+                      title={group.isActive ? "Deactivate theme area" : "Reactivate theme area"}
+                      type="button"
+                    >
+                      {group.isActive ? <Archive size={16} /> : <ArchiveRestore size={16} />}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
             {group.themes.length === 0 ? <div className="empty-row">No themes in this area.</div> : null}
             {group.themes.map((theme, index) => (
-              <div className={`learning-theme-admin-row${theme.isActive ? "" : " is-inactive"}`} key={theme.id}>
+              <div className={`learning-theme-admin-row${theme.isActive && group.isActive ? "" : " is-inactive"}`} key={theme.id}>
                 {editingId === theme.id ? (
                   <>
                     <input aria-label="Theme wording" onChange={(event) => setEditingName(event.target.value)} type="text" value={editingName} />
-                    <select aria-label="Theme area" disabled={theme.isOther} onChange={(event) => setEditingGroupId(event.target.value)} value={editingGroupId}>
-                      {groups.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+                    <select aria-label="Theme area" disabled={theme.isOther} onChange={(event) => setEditingThemeGroupId(event.target.value)} value={editingThemeGroupId}>
+                      {groups.filter((candidate) => candidate.isActive || candidate.id === editingThemeGroupId).map((candidate) => (
+                        <option key={candidate.id} value={candidate.id}>{candidate.name}{candidate.isActive ? "" : " (inactive)"}</option>
+                      ))}
                     </select>
                     <div className="learning-theme-row-actions">
                       <button aria-label="Cancel editing" className="icon-button" onClick={() => setEditingId("")} title="Cancel editing" type="button"><X size={16} /></button>
@@ -1297,18 +1419,18 @@ function LearningWalkThemeAdminPanel() {
                   <>
                     <div className="learning-theme-name">
                       <strong>{theme.name}</strong>
-                      <span>{theme.isActive ? "Active" : "Inactive"}</span>
+                      <span>{!group.isActive ? "Area inactive" : theme.isActive ? "Active" : "Inactive"}</span>
                     </div>
                     <div className="learning-theme-order-actions">
-                      <button aria-label={`Move ${theme.name} up`} className="icon-button" disabled={isSaving || index === 0} onClick={() => void moveTheme(group, index, -1)} title="Move up" type="button"><ArrowUp size={16} /></button>
-                      <button aria-label={`Move ${theme.name} down`} className="icon-button" disabled={isSaving || index === group.themes.length - 1} onClick={() => void moveTheme(group, index, 1)} title="Move down" type="button"><ArrowDown size={16} /></button>
+                      <button aria-label={`Move ${theme.name} up`} className="icon-button" disabled={isSaving || !group.isActive || index === 0} onClick={() => void moveTheme(group, index, -1)} title="Move up" type="button"><ArrowUp size={16} /></button>
+                      <button aria-label={`Move ${theme.name} down`} className="icon-button" disabled={isSaving || !group.isActive || index === group.themes.length - 1} onClick={() => void moveTheme(group, index, 1)} title="Move down" type="button"><ArrowDown size={16} /></button>
                     </div>
                     <div className="learning-theme-row-actions">
-                      <button aria-label={`Edit ${theme.name}`} className="icon-button" disabled={isSaving} onClick={() => startEdit(theme)} title="Edit theme" type="button"><Edit3 size={16} /></button>
+                      <button aria-label={`Edit ${theme.name}`} className="icon-button" disabled={isSaving || !group.isActive} onClick={() => startEdit(theme)} title="Edit theme" type="button"><Edit3 size={16} /></button>
                       <button
                         aria-label={`${theme.isActive ? "Deactivate" : "Reactivate"} ${theme.name}`}
                         className="icon-button"
-                        disabled={isSaving}
+                        disabled={isSaving || !group.isActive}
                         onClick={() => void setThemeStatus(theme, !theme.isActive)}
                         title={theme.isActive ? "Deactivate theme" : "Reactivate theme"}
                         type="button"
@@ -1337,23 +1459,73 @@ function formatOrgUnitOption(orgUnit: OrgUnitSummary) {
 }
 
 function DashboardAdminPanel() {
+  const [processes, setProcesses] = useState<DashboardProcessConfiguration[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    api.dashboardConfiguration()
+      .then((configuration) => setProcesses([...configuration.processes].sort((left, right) => left.displayOrder - right.displayOrder)))
+      .catch(() => setMessage("Dashboard configuration could not be loaded."))
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  function update(processKey: string, changes: Partial<DashboardProcessConfiguration>) {
+    setProcesses((current) => current.map((process) => process.processKey === processKey ? { ...process, ...changes } : process));
+  }
+
+  function move(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= processes.length) return;
+    setProcesses((current) => {
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next.map((process, order) => ({ ...process, displayOrder: (order + 1) * 10 }));
+    });
+  }
+
+  async function save() {
+    setIsSaving(true); setMessage("");
+    try {
+      await api.saveDashboardConfiguration(processes);
+      const saved = await api.dashboardConfiguration();
+      setProcesses([...saved.processes].sort((left, right) => left.displayOrder - right.displayOrder));
+      setMessage("Dashboard configuration saved. Leadership views will use the new layout on refresh.");
+    } catch {
+      setMessage("Dashboard configuration could not be saved.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   return (
-    <section className="panel">
-      <div className="panel-heading">
-        <h2>Dashboard governance</h2>
-        <span>Fixed dashboards first</span>
-      </div>
-      <div className="admin-task-grid">
-        {[
-          "Use fixed dashboards with role-based visibility for the first release",
-          "Apply academic year and custom date range filters to reporting views",
-          "Control dashboard visibility by role, faculty, team, child code and directorate",
-          "Support CSV and Excel exports where permission allows",
-          "Treat custom dashboard building as a future phase"
-        ].map((item) => (
-          <div className="admin-task-row" key={item}>{item}</div>
-        ))}
-      </div>
-    </section>
+    <div className="admin-dashboard-config">
+      <section className="panel admin-dashboard-intro">
+        <div><p className="eyebrow">Reporting governance</p><h2>Leadership dashboard</h2><p>Control the order, naming and analytical emphasis of approved dashboard views. Metrics and permission rules remain protected.</p></div>
+        <Button disabled={isLoading || isSaving || processes.length === 0} icon={Save} onClick={() => void save()} variant="primary">{isSaving ? "Saving" : "Save configuration"}</Button>
+      </section>
+      {message ? <div className="form-message">{message}</div> : null}
+      {isLoading ? <section className="panel"><p className="muted-copy">Loading dashboard configuration...</p></section> : (
+        <section className="panel admin-dashboard-processes">
+          <div className="panel-heading"><h2>Dashboard views</h2><span>{processes.filter((process) => process.isEnabled).length} visible</span></div>
+          <p className="muted-copy">Disabling a view hides it from navigation; it does not delete records or reporting data. Labels may be changed without changing stable process keys. Outcome matrices and frequency profiles are selected automatically from the type of structured data available.</p>
+          <div className="admin-dashboard-process-list">
+            {processes.map((process, index) => <article className={process.isEnabled ? "" : "is-disabled"} key={process.processKey}>
+              <div className="admin-dashboard-order"><Button aria-label="Move up" disabled={index === 0} icon={ArrowUp} onClick={() => move(index, -1)} variant="secondary">Up</Button><Button aria-label="Move down" disabled={index === processes.length - 1} icon={ArrowDown} onClick={() => move(index, 1)} variant="secondary">Down</Button></div>
+              <div className="admin-dashboard-identity"><small>{process.processKey}</small><input aria-label={`${process.label} dashboard label`} maxLength={80} onChange={(event) => update(process.processKey, { label: event.target.value })} value={process.label}/></div>
+              <div className="admin-dashboard-widgets" aria-label={`${process.label} visible analysis`}>
+                <label><input checked={process.showTrend} onChange={(event) => update(process.processKey, { showTrend: event.target.checked })} type="checkbox"/>Trend</label>
+                <label><input checked={process.showAreaComparison} onChange={(event) => update(process.processKey, { showAreaComparison: event.target.checked })} type="checkbox"/>Areas</label>
+                <label><input checked={process.showOutcomes} onChange={(event) => update(process.processKey, { showOutcomes: event.target.checked })} type="checkbox"/>Outcomes</label>
+                <label><input checked={process.showActions} onChange={(event) => update(process.processKey, { showActions: event.target.checked })} type="checkbox"/>Actions</label>
+              </div>
+              <label className="admin-dashboard-enabled"><input checked={process.isEnabled} disabled={process.processKey === "overview"} onChange={(event) => update(process.processKey, { isEnabled: event.target.checked })} type="checkbox"/><span>{process.processKey === "overview" ? "Required" : process.isEnabled ? "Visible" : "Hidden"}</span></label>
+            </article>)}
+          </div>
+        </section>
+      )}
+      <section className="panel admin-dashboard-guardrails"><ShieldCheck size={20}/><div><h3>Protected reporting guardrails</h3><p>Administrators can change presentation, but cannot expose restricted narrative responses, alter scope permissions, introduce arbitrary database queries or delete historical reporting labels.</p></div></section>
+    </div>
   );
 }

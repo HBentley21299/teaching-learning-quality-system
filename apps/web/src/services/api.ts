@@ -12,6 +12,9 @@ import type {
   MessageTemplateSummary,
   MessageTemplateVersionSummary,
   MessagingParameter,
+  MessagingConfiguration,
+  RecordNavigation,
+  SaveMessagingConfigurationRequest,
   OrganisationChangeImpact,
   OrganisationMigrationReview,
   PagedResult,
@@ -27,12 +30,18 @@ import type {
   CoachingSessionSaveSummary,
   CoachingSessionSummary,
   CompleteStaffOnboardingRequest,
+  CpdAttendanceDashboardSummary,
   CourseSummary,
   CreateActionRequest,
   CreateAdminUserRequest,
   CreateFormTemplateRequest,
   CurrentUser,
   DashboardSummary,
+  DashboardConfiguration,
+  DashboardDimensionFact,
+  DashboardProcessConfiguration,
+  ElevateStatusDashboardSummary,
+  LivLifecycleDashboardSummary,
   ElevateEnvironmentPillarSummary,
   ElevatePracticeProgress,
   ElevatePracticeAudit,
@@ -70,11 +79,13 @@ import type {
   SaveLivVisitRequest,
   SaveProbationStageRequest,
   SaveProbationVisitRequest,
+  SaveLearningWalkThemeGroupRequest,
   SaveLearningWalkThemeRequest,
   SaveCoachingSessionRequest,
   SaveElevatePracticeAssessmentRequest,
   SaveElevateStatusLevelRequest,
   SaveStaffReflectionRequest,
+  StaffParticipationDashboardSummary,
   StaffProfileDetail,
   StaffProfileActionSummary,
   StaffProfileCoachingSummary,
@@ -97,7 +108,16 @@ import type {
   UpdateLearningWalkThemeMappingRequest
 } from "./types";
 
-import { getAccessToken } from "./auth";
+import { clearLocalSession, getAccessToken, getLocalToken } from "./auth";
+
+// An expired local test-account token yields 401s; clear it and return to
+// the sign-in screen instead of leaving the app half-broken.
+function handleExpiredLocalSession(status: number) {
+  if (status === 401 && getLocalToken()) {
+    clearLocalSession();
+    window.location.assign("/");
+  }
+}
 
 const configuredApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
 const apiBaseUrl = configuredApiBaseUrl || (import.meta.env.DEV ? "http://127.0.0.1:5001" : "");
@@ -141,6 +161,7 @@ async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await requestApi(url, { headers: await buildHeaders(false) }, signal);
   if (!response.ok) {
+    handleExpiredLocalSession(response.status);
     throw new Error(`${response.status} ${response.statusText} for ${url}`);
   }
 
@@ -163,6 +184,7 @@ async function sendJson<TRequest, TResponse = never>(url: string, method: "POST"
       return { ok: true, data };
     }
 
+    handleExpiredLocalSession(response.status);
     let message = `The request failed (${response.status}).`;
     if (response.status === 403) {
       message = "You do not have permission to do that.";
@@ -237,6 +259,10 @@ async function downloadApiFile(url: string): Promise<ApiResult> {
 }
 
 export const api = {
+  changePassword: (request: { currentPassword: string; newPassword: string }) =>
+    sendJson("/api/v1/auth/change-password", "POST", request),
+  adminSetUserPassword: (userAccountId: string, newPassword: string) =>
+    sendJson(`/api/v1/auth/admin/users/${userAccountId}/password`, "POST", { newPassword }),
   exportExcel: (moduleKey: string, filters: ExportFilters = {}) => {
     const query = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => { if (value) query.set(key, value); });
@@ -251,6 +277,8 @@ export const api = {
     sendJson<CompleteStaffOnboardingRequest, CurrentUser>("/api/v1/onboarding", "POST", request),
   modules: () => getJson<ModuleSummary[]>("/api/v1/modules"),
   lookups: () => getJson<LookupSummary[]>("/api/v1/lookups"),
+  actionThemes: (sourceFormType: string) =>
+    getJson<LookupValueSummary[]>(`/api/v1/action-themes/${encodeURIComponent(sourceFormType)}`),
   sharedThemes: (applicationKey: string) =>
     getJson<SharedThemeGroup[]>(`/api/v1/themes/${encodeURIComponent(applicationKey)}`),
   adminLookupValues: (lookupKey: string) =>
@@ -274,6 +302,7 @@ export const api = {
   records: (academicYear?: string) =>
     getJson<RecordSummary[]>(`/api/v1/records${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
   recordDetail: (id: string) => getJson<RecordDetail>(`/api/v1/records/${id}`),
+  recordNavigation: (id: string) => getJson<RecordNavigation>(`/api/v1/records/${id}/navigation`),
   adminWorkScrutinyRecords: () =>
     getJson<AdminWorkScrutinyRecord[]>("/api/v1/admin/work-scrutiny/records"),
   adminWorkScrutinyRecord: (id: string) =>
@@ -287,10 +316,11 @@ export const api = {
   restoreWorkScrutinyRecord: (id: string) =>
     sendJson(`/api/v1/admin/work-scrutiny/records/${id}/restore`, "POST"),
   actions: (includeDeleted = false) => getJson<ActionSummary[]>(`/api/v1/actions${includeDeleted ? "?includeDeleted=true" : ""}`),
-  actionOwnerOptions: (sourceRecordId?: string, subjectStaffId?: string) => {
+  actionOwnerOptions: (sourceRecordId?: string, subjectStaffId?: string, sourceFormType?: string) => {
     const parameters = new URLSearchParams();
     if (sourceRecordId) parameters.set("sourceRecordId", sourceRecordId);
     if (subjectStaffId) parameters.set("subjectStaffId", subjectStaffId);
+    if (sourceFormType) parameters.set("sourceFormType", sourceFormType);
     const query = parameters.toString();
     return getJson<ActionOwnerOption[]>(`/api/v1/actions/owner-options${query ? `?${query}` : ""}`);
   },
@@ -303,6 +333,22 @@ export const api = {
   dashboards: () => getJson<DashboardSummary[]>("/api/v1/reports/dashboards"),
   processDashboardRecords: () =>
     getJson<ProcessDashboardRecordSummary[]>("/api/v1/reports/process-records"),
+  dashboardConfiguration: () =>
+    getJson<DashboardConfiguration>("/api/v1/reports/dashboard-configuration"),
+  dashboardDimensions: (academicYear?: string) =>
+    getJson<DashboardDimensionFact[]>(`/api/v1/reports/dashboard-dimensions${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
+  eliStatementDashboardDimensions: (academicYear: string) =>
+    getJson<DashboardDimensionFact[]>(`/api/v1/reports/eli-statement-dimensions?academicYear=${encodeURIComponent(academicYear)}`),
+  elevateStatusDashboard: (academicYear: string) =>
+    getJson<ElevateStatusDashboardSummary[]>(`/api/v1/reports/elevate-status?academicYear=${encodeURIComponent(academicYear)}`),
+  staffParticipationDashboard: (academicYear: string) =>
+    getJson<StaffParticipationDashboardSummary[]>(`/api/v1/reports/staff-participation?academicYear=${encodeURIComponent(academicYear)}`),
+  cpdAttendanceDashboard: (academicYear: string) =>
+    getJson<CpdAttendanceDashboardSummary[]>(`/api/v1/reports/cpd-attendance?academicYear=${encodeURIComponent(academicYear)}`),
+  livLifecycleDashboard: (academicYear: string) =>
+    getJson<LivLifecycleDashboardSummary[]>(`/api/v1/reports/liv-lifecycle?academicYear=${encodeURIComponent(academicYear)}`),
+  saveDashboardConfiguration: (processes: DashboardProcessConfiguration[]) =>
+    sendJson("/api/v1/admin/reports/dashboard-configuration", "PUT", { processes }),
   learningWalkRollup: () =>
     getJson<LearningWalkRollupSummary[]>("/api/v1/reports/learning-walk-rollup"),
   formTemplates: () => getJson<FormTemplateSummary[]>("/api/v1/form-templates"),
@@ -318,6 +364,12 @@ export const api = {
     getJson<LearningWalkThemeGroup[]>("/api/v1/learning-walk/themes"),
   adminLearningWalkThemes: () =>
     getJson<LearningWalkThemeGroup[]>("/api/v1/admin/learning-walk/themes"),
+  createLearningWalkThemeGroup: (request: SaveLearningWalkThemeGroupRequest) =>
+    sendJson<SaveLearningWalkThemeGroupRequest, { id: string }>("/api/v1/admin/learning-walk/theme-groups", "POST", request),
+  updateLearningWalkThemeGroup: (id: string, request: SaveLearningWalkThemeGroupRequest) =>
+    sendJson(`/api/v1/admin/learning-walk/theme-groups/${id}`, "PUT", request),
+  setLearningWalkThemeGroupStatus: (id: string, isActive: boolean) =>
+    sendJson(`/api/v1/admin/learning-walk/theme-groups/${id}/status`, "POST", { isActive }),
   createLearningWalkTheme: (request: SaveLearningWalkThemeRequest) =>
     sendJson<SaveLearningWalkThemeRequest, { id: string }>("/api/v1/admin/learning-walk/themes", "POST", request),
   updateLearningWalkTheme: (id: string, request: SaveLearningWalkThemeRequest) =>
@@ -352,8 +404,8 @@ export const api = {
     ),
   updateLivStage: (id: string, stageId: string, request: SaveLivStageRequest) =>
     sendJson(`/api/v1/liv-records/${id}/stages/${stageId}`, "PUT", request),
-  completeLivCycle: (id: string) =>
-    sendJson<never, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete`, "POST"),
+  completeLivCycle: (id: string, openFollowUp = true) =>
+    sendJson<{ openFollowUp: boolean }, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete`, "POST", { openFollowUp }),
   changeLivStatus: (id: string, action: "close" | "reopen" | "archive") =>
     sendJson(`/api/v1/liv-records/${id}/status`, "POST", { action }),
   probationCases: () => getJson<ProbationCase[]>("/api/v1/probation-observations"),
@@ -437,6 +489,12 @@ export const api = {
     getJson<ElevatePracticeAudit[]>(`/api/v1/elevate-practice/admin/records/${assessmentId}/audit`),
   elevatePracticeResult: (staffId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/latest`),
+  saveStaffElevatePracticeRecord: (staffId: string, assessmentId: string, request: AdminSaveElevatePracticeAssessmentRequest) =>
+    sendJson<AdminSaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>(
+      `/api/v1/elevate-practice/staff/${staffId}/records/${assessmentId}`,
+      "PUT",
+      request
+    ),
   elevatePracticeRecord: (recordId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/records/${recordId}`),
   coachingSessions: () => getJson<CoachingSessionSummary[]>("/api/v1/coaching/sessions"),
@@ -530,6 +588,10 @@ export const api = {
   publishFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST"),
   messageTemplates: (includeDeleted = false) =>
     getJson<MessageTemplateSummary[]>(`/api/v1/admin/messaging/templates?includeDeleted=${includeDeleted}`),
+  messagingConfiguration: () =>
+    getJson<MessagingConfiguration>("/api/v1/admin/messaging/settings"),
+  saveMessagingConfiguration: (request: SaveMessagingConfigurationRequest) =>
+    sendJson<SaveMessagingConfigurationRequest, MessagingConfiguration>("/api/v1/admin/messaging/settings", "PUT", request),
   messagingParameters: () => getJson<MessagingParameter[]>("/api/v1/admin/messaging/parameters"),
   messageTemplateVersions: (id: string) =>
     getJson<MessageTemplateVersionSummary[]>(`/api/v1/admin/messaging/templates/${id}/versions`),

@@ -17,7 +17,8 @@ export function StaffProfiles({
   staff,
   user,
   onOpenRecord,
-  onOpenActionDetails
+  onOpenActionDetails,
+  onStaffSelected
 }: {
   academicYear: string;
   profiles: StaffProfileSummary[];
@@ -25,6 +26,7 @@ export function StaffProfiles({
   user: CurrentUser;
   onOpenRecord: StaffProfileRecordLinkHandler;
   onOpenActionDetails: (actionId: string, staffId: string) => void;
+  onStaffSelected?: (staffId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [isResultsOpen, setIsResultsOpen] = useState(false);
@@ -60,6 +62,7 @@ export function StaffProfiles({
     setSelectedStaffId(staffMember.id);
     setQuery(staffMember.displayName);
     setIsResultsOpen(false);
+    onStaffSelected?.(staffMember.id);
   }
 
   function clearSearch() {

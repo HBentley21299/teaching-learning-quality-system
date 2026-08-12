@@ -8,6 +8,7 @@ public sealed record ProbationReviewerOptionSummary(
 
 public sealed record ProbationConfigurationSummary(
     IReadOnlyList<LivLookupOptionSummary> DeliveryAreas,
+    IReadOnlyList<LivLookupOptionSummary> CourseLevels,
     IReadOnlyList<LivLookupOptionSummary> FocusAreas,
     IReadOnlyList<LivLookupOptionSummary> DevelopmentOpportunities,
     IReadOnlyList<ElevatePracticeRatingScaleSummary> Rubric,
@@ -56,6 +57,7 @@ public sealed record SaveProbationVisitRequest(
     string? CourseGroup,
     string? CourseLevel,
     string? KeyPoints,
+    IReadOnlyList<string>? UnobservedFocusKeys,
     IReadOnlyList<ProbationRatingRequest>? Ratings,
     string? StageStatus = null);
 
@@ -68,6 +70,7 @@ public sealed record ProbationVisitSummary(
     string? CourseGroup,
     string? CourseLevel,
     string? KeyPoints,
+    IReadOnlyList<string> UnobservedFocusKeys,
     IReadOnlyList<ProbationRatingSummary> Ratings);
 
 public sealed record SaveProbationStageRequest(
@@ -120,6 +123,7 @@ public sealed record ProbationCaseSummary(
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
     bool CanEdit,
+    bool IsCreatedByCurrentUser,
     IReadOnlyList<ProbationReviewerSummary> Reviewers,
     IReadOnlyList<ProbationObservationSummary> Observations);
 

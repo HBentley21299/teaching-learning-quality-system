@@ -34,11 +34,11 @@ public class SubmissionLifecycleTests
     }
 
     [Fact]
-    public void OwnersCanEditDraftsAndReopenedButNotSubmitted()
+    public void OwnersCanCorrectRecordsAtAnyLifecycleStatus()
     {
         Assert.True(SubmissionLifecycle.CanEditResponses(SubmissionLifecycle.Draft, isOwner: true, canManageForms: false));
         Assert.True(SubmissionLifecycle.CanEditResponses(SubmissionLifecycle.Reopened, isOwner: true, canManageForms: false));
-        Assert.False(SubmissionLifecycle.CanEditResponses(SubmissionLifecycle.Submitted, isOwner: true, canManageForms: false));
+        Assert.True(SubmissionLifecycle.CanEditResponses(SubmissionLifecycle.Submitted, isOwner: true, canManageForms: false));
     }
 
     [Fact]
@@ -70,14 +70,14 @@ public class SubmissionLifecycleTests
     }
 
     [Fact]
-    public void WorkScrutinyCreatorCanCorrectSubmittedRecord()
+    public void RecordCreatorsCanCorrectSubmittedRecords()
     {
         Assert.True(SubmissionLifecycle.CanEditRecord(
             "work_scrutiny",
             SubmissionLifecycle.Submitted,
             isOwner: true,
             canManageForms: false));
-        Assert.False(SubmissionLifecycle.CanEditRecord(
+        Assert.True(SubmissionLifecycle.CanEditRecord(
             "learning_walk",
             SubmissionLifecycle.Submitted,
             isOwner: true,

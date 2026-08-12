@@ -1,6 +1,6 @@
-# Teaching & Learning Quality System
+# i-Elevate Teaching and Learning System
 
-Web application for managing a college's Teaching & Learning workflows: Learning Walks, Work Scrutiny, managed and self-logged CPD, LIV (Learning and Innovation Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
+Web application for managing a college's Teaching and Learning workflows: Learning Walks, Work Scrutiny, managed and self-logged CPD, LIV (Learning and Innovation Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
 
 - React + TypeScript frontend in `apps/web`
 - ASP.NET Core (.NET 10) API in `apps/api` (ADO.NET data access, no EF runtime dependency)
@@ -26,8 +26,7 @@ Use `-SkipDatabase` for a faster start when LocalDB is already prepared. Use
 
 - `ConnectionStrings:TlqsDatabase` - SQL Server connection string.
 - `Authentication:DevelopmentUserEmail` - the user every request runs as during development.
-  Override per shell with `$env:Authentication__DevelopmentUserEmail = "priya.nair@college.example"`
-  to test other roles (see `database/seed/002_seed_demo.sql` for demo accounts).
+  Override per shell with the email address of an active local test account to test another role.
 
 `apps/web`: `VITE_API_BASE_URL` defaults to `http://127.0.0.1:5001` in
 development and the current origin in a production build.
@@ -62,7 +61,7 @@ development and the current origin in a production build.
 | Role | Access |
 | --- | --- |
 | Admin (`super_admin`) | Everything, including users, permissions and template administration |
-| Teaching & Learning (`teaching_learning_team`) | Quality workflows, global reporting, LIV and actions |
+| Teaching and Learning (`teaching_learning_team`) | Teaching and learning workflows, global reporting, LIV and actions |
 | Director (`director`) | Scoped reporting across assigned faculties, LIV submit |
 | Head of Faculty (`head_of_faculty`) | Faculty records, team managers, actions and dashboards |
 | Programme Leader (`programme_leader`) | Team records, actions and dashboards |
@@ -77,6 +76,7 @@ development and the current origin in a production build.
 - `dotnet test apps\api\TLQS.sln`
 - `.\scripts\verify-v1.ps1` (Release build, tests, dependency audits and hashed artifacts)
 - `.\scripts\apply-database.ps1 -Server <server> -Database <database>`
+- `.\scripts\reset-local-submission-data.ps1` (LocalDB only; clears workflow data while preserving accounts and configuration)
 - `.\scripts\run-api.ps1` / `.\scripts\run-web.ps1`
 - `npm run build` in `apps/web`
 

@@ -79,3 +79,47 @@ public sealed record MessagePreview(
 
 public sealed record SetMessageDeliveryStatusRequest(string Reason);
 public sealed record DuplicateMessageTemplateRequest(string MessageKey, string Name);
+
+public sealed record MessagingConfigurationSummary(
+    bool Enabled,
+    bool TestMode,
+    string Provider,
+    string TenantId,
+    string ClientId,
+    bool ClientSecretConfigured,
+    string SenderAddress,
+    string SenderDisplayName,
+    string ReplyToAddress,
+    string TestRecipient,
+    string ApplicationUrl,
+    int PollSeconds,
+    string SmtpHost,
+    int SmtpPort,
+    string SmtpSecurity,
+    string SmtpAuthentication,
+    string SmtpUsername,
+    bool SmtpPasswordConfigured,
+    DateTimeOffset? UpdatedAt,
+    string? UpdatedBy);
+
+public sealed record SaveMessagingConfigurationRequest(
+    bool Enabled,
+    bool TestMode,
+    string Provider,
+    string TenantId,
+    string ClientId,
+    string? ClientSecret,
+    bool ClearClientSecret,
+    string SenderAddress,
+    string SenderDisplayName,
+    string ReplyToAddress,
+    string TestRecipient,
+    string ApplicationUrl,
+    int PollSeconds,
+    string SmtpHost,
+    int SmtpPort,
+    string SmtpSecurity,
+    string SmtpAuthentication,
+    string SmtpUsername,
+    string? SmtpPassword,
+    bool ClearSmtpPassword);

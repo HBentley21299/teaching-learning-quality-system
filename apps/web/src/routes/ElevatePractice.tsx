@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Check,
   Eye,
+  Pencil,
   LockKeyhole,
   Save,
   Search,
@@ -25,7 +26,7 @@ import type {
   SaveElevatePracticeAssessmentRequest
 } from "../services/types";
 
-type LivInformationDraft = Omit<ElevateLivInformation, "noticeOptions" | "focusOptions">;
+type LivInformationDraft = Omit<ElevateLivInformation, "focusOptions">;
 
 type PracticeDraft = {
   ratings: Record<string, string>;
@@ -325,7 +326,7 @@ function AssessmentEditor({
               </div>
             </div>
           ) : (
-            <LivInformationEditor information={draft.livInformation} onChange={updateLiv} workspace={workspace} />
+            <LivInformationEditor information={draft.livInformation} onChange={updateLiv} ratings={draft.ratings} workspace={workspace} />
           )}
           <div className="practice-editor-actions">
             <Button disabled={step === 0} icon={ArrowLeft} onClick={() => onStepChange(Math.max(0, step - 1))}>Previous</Button>
@@ -350,23 +351,44 @@ function AssessmentEditor({
   );
 }
 
-function LivInformationEditor({ information, onChange, workspace }: {
+function LivInformationEditor({ information, onChange, ratings, workspace }: {
   information: LivInformationDraft;
   onChange: (updates: Partial<LivInformationDraft>) => void;
+  ratings: Record<string, string>;
   workspace: ElevatePracticeWorkspace;
 }) {
   const secondaryOther = information.secondaryFocusKey === "other";
+  const recommendedAreas = recommendedLivAreas(workspace, ratings);
+  const preferredMonthOptions = livPreferredMonthOptions(workspace.academicYear);
   return (
     <div className="practice-area-section">
       <div className="panel-heading"><div><p className="eyebrow">Learning, Innovation and Vision visit</p><h2>LIV Information</h2></div><span>Supports your future LIV</span></div>
+      <section className="practice-liv-recommendations" aria-label="Recommended LIV focus areas">
+        <div><strong>Recommended focus areas</strong><span>Based on your answers</span></div>
+        <ol>{recommendedAreas.length ? recommendedAreas.map((area) => <li key={area.areaKey}>{area.name}</li>) : <li>Complete the ELI statements to see recommendations.</li>}</ol>
+      </section>
       <div className="form-grid form-grid-two">
-        <label className="entry-field"><span>Notice preference</span><select onChange={(event) => onChange({ noticePreferenceKey: event.target.value })} value={information.noticePreferenceKey ?? ""}><option value="">Select notice preference</option>{workspace.livInformation.noticeOptions.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
-        <label className="entry-field"><span>Preferred month</span><input onChange={(event) => onChange({ preferredVisitMonth: event.target.value })} type="month" value={information.preferredVisitMonth ?? ""} /></label>
+        <label className="entry-field">
+          <span>Preferred month</span>
+          <select onChange={(event) => onChange({ preferredVisitMonth: event.target.value })} value={information.preferredVisitMonth ?? ""}>
+            <option value="">Select preferred month</option>
+            {preferredMonthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <small>The Teaching and Learning team will attempt to accommodate your preferred month where possible, but this cannot be guaranteed.</small>
+        </label>
         <label className="entry-field"><span>Primary focus</span><select onChange={(event) => onChange({ primaryFocusKey: event.target.value })} value={information.primaryFocusKey ?? ""}><option value="">Select primary focus</option>{workspace.livInformation.focusOptions.filter((option) => option.key !== "other").map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
         <label className="entry-field"><span>Secondary focus <small>Optional</small></span><select onChange={(event) => onChange({ secondaryFocusKey: event.target.value, secondaryFocusOther: event.target.value === "other" ? information.secondaryFocusOther : "" })} value={information.secondaryFocusKey ?? ""}><option value="">No secondary focus</option>{workspace.livInformation.focusOptions.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
       </div>
       {secondaryOther ? <label className="entry-field"><span>Other secondary focus</span><input onChange={(event) => onChange({ secondaryFocusOther: event.target.value })} value={information.secondaryFocusOther ?? ""} /></label> : null}
-      <label className="entry-field"><span>What would you like to achieve through your LIV?</span><textarea onChange={(event) => onChange({ desiredOutcome: event.target.value })} rows={6} value={information.desiredOutcome ?? ""} /></label>
+      <label className="entry-field"><span>What would you like to achieve through your LIV?</span>
+        <div className="practice-liv-guidance">
+          <p>Have you considered a specific area of your practice you would like to develop, test or receive feedback on?</p>
+          <p>Think about:</p>
+          <ul><li>What you want to improve or explore</li><li>Why this matters for your learners</li><li>What you would like the observer to focus on</li><li>What success or improvement might look like</li></ul>
+          <p>Include any particular strategies, approaches or learner groups you would like the LIV to consider.</p>
+        </div>
+        <textarea onChange={(event) => onChange({ desiredOutcome: event.target.value })} rows={8} value={information.desiredOutcome ?? ""} />
+      </label>
     </div>
   );
 }
@@ -417,6 +439,7 @@ function ElevatePracticeProgressView() {
 export function ElevatePracticeResultPage({ staffId, recordId, onBack }: { staffId: string; recordId?: string; onBack: () => void }) {
   const [workspace, setWorkspace] = useState<ElevatePracticeWorkspace | null>(null);
   const [message, setMessage] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
   useEffect(() => {
     let cancelled = false;
     (recordId ? api.elevatePracticeRecord(recordId) : api.elevatePracticeResult(staffId))
@@ -425,14 +448,39 @@ export function ElevatePracticeResultPage({ staffId, recordId, onBack }: { staff
     return () => { cancelled = true; };
   }, [recordId, staffId]);
   if (!workspace) return <section className="panel"><Button icon={ArrowLeft} onClick={onBack}>Back to Staff Profile</Button><p className="muted-copy">{message || "Loading assessment result..."}</p></section>;
-  return <ElevatePracticeResult onBack={onBack} workspace={workspace} />;
+  if (isEditing && workspace.assessmentId) {
+    return <ElevatePracticeProfileEditor onBack={() => setIsEditing(false)} onSaved={(result) => { setWorkspace(result); setIsEditing(false); }} staffId={staffId} workspace={workspace} />;
+  }
+  return <ElevatePracticeResult onBack={onBack} onEdit={workspace.canEdit && !recordId ? () => setIsEditing(true) : undefined} workspace={workspace} />;
 }
 
-function ElevatePracticeResult({ workspace, onBack }: { workspace: ElevatePracticeWorkspace; onBack?: () => void }) {
+function ElevatePracticeProfileEditor({ staffId, workspace, onBack, onSaved }: { staffId: string; workspace: ElevatePracticeWorkspace; onBack: () => void; onSaved: (workspace: ElevatePracticeWorkspace) => void }) {
+  const [draft, setDraft] = useState(() => createDraft(workspace));
+  const [step, setStep] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function save() {
+    if (!workspace.assessmentId) return;
+    setIsSaving(true);
+    setMessage("");
+    const result = await api.saveStaffElevatePracticeRecord(staffId, workspace.assessmentId, toAdminSaveRequest(workspace, draft, "submitted"));
+    setIsSaving(false);
+    if (!result.ok || !result.data) {
+      setMessage(result.message ?? "The submitted assessment could not be updated.");
+      return;
+    }
+    onSaved(result.data);
+  }
+
+  return <div className="route-stack"><div><Button icon={ArrowLeft} onClick={onBack}>Back to report</Button></div>{message ? <div className="notice-row">{message}</div> : null}<AssessmentEditor adminStatus="submitted" draft={draft} isSaving={isSaving} onAdminStatusChange={() => undefined} onChange={setDraft} onSave={() => void save()} onStepChange={setStep} onSubmit={() => void save()} step={step} workspace={workspace} /></div>;
+}
+
+function ElevatePracticeResult({ workspace, onBack, onEdit }: { workspace: ElevatePracticeWorkspace; onBack?: () => void; onEdit?: () => void }) {
   const optionName = (key: string | undefined, options: Array<{ key: string; name: string }>) => options.find((option) => option.key === key)?.name ?? "Not provided";
   return (
     <div className="practice-result">
-      {onBack ? <div><Button icon={ArrowLeft} onClick={onBack}>Back to Staff Profile</Button></div> : null}
+      {onBack || onEdit ? <div className="toolbar">{onBack ? <Button icon={ArrowLeft} onClick={onBack}>Back to Staff Profile</Button> : null}{onEdit ? <Button icon={Pencil} onClick={onEdit} variant="primary">Edit submitted assessment</Button> : null}</div> : null}
       <section className="practice-result-header">
         <div><p className="eyebrow">Submitted self-assessment</p><h2>{workspace.staffName}</h2><p>{workspace.facultyName ?? "No faculty"} · {workspace.teamName ?? "No team"}</p></div>
         <div className="practice-result-score"><span>Overall profile</span><strong>{workspace.overallJudgement ?? "Not yet rated"}</strong><small>Rubric outcome</small></div>
@@ -442,7 +490,6 @@ function ElevatePracticeResult({ workspace, onBack }: { workspace: ElevatePracti
       <section className="panel practice-liv-summary">
         <div className="panel-heading"><div><p className="eyebrow">Learning, Innovation and Vision</p><h2>LIV information</h2></div><span>Ready for case creation</span></div>
         <div className="liv-information-grid">
-          <div><span>Notice preference</span><strong>{optionName(workspace.livInformation.noticePreferenceKey, workspace.livInformation.noticeOptions)}</strong></div>
           <div><span>Preferred month</span><strong>{formatPreferredMonth(workspace.livInformation.preferredVisitMonth)}</strong></div>
           <div><span>Primary focus</span><strong>{optionName(workspace.livInformation.primaryFocusKey, workspace.livInformation.focusOptions)}</strong></div>
           <div><span>Secondary focus</span><strong>{workspace.livInformation.secondaryFocusKey === "other" ? workspace.livInformation.secondaryFocusOther ?? "Other" : optionName(workspace.livInformation.secondaryFocusKey, workspace.livInformation.focusOptions)}</strong></div>
@@ -457,7 +504,6 @@ function createDraft(workspace: ElevatePracticeWorkspace): PracticeDraft {
   return {
     ratings: Object.fromEntries(workspace.areas.flatMap((area) => area.statements.filter((statement) => statement.descriptorId).map((statement) => [statement.id, statement.descriptorId!] as const))),
     livInformation: {
-      noticePreferenceKey: workspace.livInformation.noticePreferenceKey,
       preferredVisitMonth: workspace.livInformation.preferredVisitMonth,
       primaryFocusKey: workspace.livInformation.primaryFocusKey,
       secondaryFocusKey: workspace.livInformation.secondaryFocusKey,
@@ -465,6 +511,18 @@ function createDraft(workspace: ElevatePracticeWorkspace): PracticeDraft {
       desiredOutcome: workspace.livInformation.desiredOutcome
     }
   };
+}
+
+function recommendedLivAreas(workspace: ElevatePracticeWorkspace, ratings: Record<string, string>) {
+  const scaleOrder = new Map(workspace.ratingScale.map((rating) => [rating.id, rating.displayOrder]));
+  return workspace.areas
+    .map((area) => {
+      const scores = area.statements.map((statement) => scaleOrder.get(ratings[statement.id])).filter((score): score is number => score !== undefined);
+      return { ...area, score: scores.length === area.statements.length ? scores.reduce((total, score) => total + score, 0) / scores.length : null };
+    })
+    .filter((area) => area.score !== null)
+    .sort((left, right) => left.score! - right.score! || left.displayOrder - right.displayOrder)
+    .slice(0, 2);
 }
 
 function toSaveRequest(workspace: ElevatePracticeWorkspace, draft: PracticeDraft, submit: boolean): SaveElevatePracticeAssessmentRequest {
@@ -489,3 +547,12 @@ function formatAuditAction(action: string) { return action.split(/[._]/).filter(
 function formatAuditJson(value?: string) { if (!value) return "No record snapshot"; try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; } }
 function formatDate(value: string) { return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
 function formatPreferredMonth(value?: string) { if (!value) return "Not provided"; const [year, month] = value.split("-").map(Number); return new Date(year, month - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" }); }
+function livPreferredMonthOptions(academicYear: string) {
+  const startYear = /^\d{4}/.exec(academicYear)?.[0] ?? String(new Date().getFullYear());
+  return [
+    { value: `${startYear}-09`, label: `September ${startYear}` },
+    { value: `${startYear}-10`, label: `October ${startYear}` },
+    { value: `${startYear}-11`, label: `November ${startYear}` },
+    { value: `${startYear}-12`, label: `December ${startYear}` }
+  ];
+}

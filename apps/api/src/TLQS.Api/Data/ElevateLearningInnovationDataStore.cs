@@ -32,7 +32,7 @@ public sealed partial class SqlFoundationDataStore
             .Select(group => group.Last())
             .ToArray();
         var livInformation = request.LivInformation
-            ?? new SaveElevateLivInformationRequest(null, null, null, null, null, null);
+            ?? new SaveElevateLivInformationRequest(null, null, null, null, null);
 
         var statementAreas = current.Areas
             .SelectMany(area => area.Statements.Select(statement => new { statement.Id, AreaId = area.Id }))
@@ -41,7 +41,6 @@ public sealed partial class SqlFoundationDataStore
             .Where(value => value.IsActive)
             .Select(value => value.Id)
             .ToHashSet();
-        var noticeKeys = current.LivInformation.NoticeOptions.Select(option => option.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var focusKeys = current.LivInformation.FocusOptions.Select(option => option.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         if (ratings.Any(value =>
@@ -50,11 +49,6 @@ public sealed partial class SqlFoundationDataStore
                 || !activeDescriptorIds.Contains(value.DescriptorId)))
         {
             throw new WorkflowValidationException("Every statement response must use an active descriptor from this assessment framework.");
-        }
-        if (!string.IsNullOrWhiteSpace(livInformation.NoticePreferenceKey)
-            && !noticeKeys.Contains(livInformation.NoticePreferenceKey))
-        {
-            throw new WorkflowValidationException("The selected LIV notice preference is no longer available.");
         }
         if ((!string.IsNullOrWhiteSpace(livInformation.PrimaryFocusKey) && !focusKeys.Contains(livInformation.PrimaryFocusKey))
             || (!string.IsNullOrWhiteSpace(livInformation.SecondaryFocusKey) && !focusKeys.Contains(livInformation.SecondaryFocusKey)))
@@ -71,20 +65,7 @@ public sealed partial class SqlFoundationDataStore
             throw new WorkflowValidationException("Describe the secondary LIV focus when Other is selected.");
         }
 
-        DateOnly? preferredVisitMonth = null;
-        if (!string.IsNullOrWhiteSpace(livInformation.PreferredVisitMonth))
-        {
-            if (!DateOnly.TryParseExact(
-                    $"{livInformation.PreferredVisitMonth}-01",
-                    "yyyy-MM-dd",
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.None,
-                    out var parsedMonth))
-            {
-                throw new WorkflowValidationException("The preferred LIV month is invalid.");
-            }
-            preferredVisitMonth = parsedMonth;
-        }
+        var preferredVisitMonth = ParsePreferredLivMonth(livInformation.PreferredVisitMonth, academicYear);
 
         if (request.Submit)
         {
@@ -92,12 +73,11 @@ public sealed partial class SqlFoundationDataStore
             {
                 throw new WorkflowValidationException("Rate every Elevate Learning and Innovation statement before submitting.");
             }
-            if (string.IsNullOrWhiteSpace(livInformation.NoticePreferenceKey)
-                || !preferredVisitMonth.HasValue
+            if (!preferredVisitMonth.HasValue
                 || string.IsNullOrWhiteSpace(livInformation.PrimaryFocusKey)
                 || string.IsNullOrWhiteSpace(livInformation.DesiredOutcome))
             {
-                throw new WorkflowValidationException("Complete the LIV notice, preferred month, primary focus and intended outcome before submitting.");
+                throw new WorkflowValidationException("Complete the preferred LIV month, primary focus and intended outcome before submitting.");
             }
         }
 
@@ -301,15 +281,13 @@ public sealed partial class SqlFoundationDataStore
         await using var command = new SqlCommand(
             """
             INSERT INTO quality.elevate_practice_liv_information (
-                assessment_id, notice_preference_lookup_value_id, preferred_visit_month,
+                assessment_id, preferred_visit_month,
                 primary_focus_lookup_value_id, secondary_focus_lookup_value_id,
                 secondary_focus_other, desired_outcome
             )
-            SELECT @assessmentId, notice.id, @preferredVisitMonth,
+            SELECT @assessmentId, @preferredVisitMonth,
                    primary_focus.id, secondary_focus.id, @secondaryFocusOther, @desiredOutcome
             FROM (SELECT 1 AS anchor) seed
-            LEFT JOIN core.lookup_values notice ON notice.value_key = @noticePreferenceKey
-              AND notice.lookup_type_id = (SELECT id FROM core.lookup_types WHERE lookup_key = N'liv_notice_preference')
             LEFT JOIN core.lookup_values primary_focus ON primary_focus.value_key = @primaryFocusKey
               AND primary_focus.lookup_type_id = (SELECT id FROM core.lookup_types WHERE lookup_key = N'liv_focus_area')
             LEFT JOIN core.lookup_values secondary_focus ON secondary_focus.value_key = @secondaryFocusKey
@@ -318,13 +296,40 @@ public sealed partial class SqlFoundationDataStore
             connection,
             (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@assessmentId", assessmentId);
-        command.Parameters.AddWithValue("@noticePreferenceKey", ToDbValue(request.NoticePreferenceKey));
         command.Parameters.AddWithValue("@preferredVisitMonth", ToDbValue(preferredVisitMonth));
         command.Parameters.AddWithValue("@primaryFocusKey", ToDbValue(request.PrimaryFocusKey));
         command.Parameters.AddWithValue("@secondaryFocusKey", ToDbValue(request.SecondaryFocusKey));
         command.Parameters.AddWithValue("@secondaryFocusOther", ToDbValue(request.SecondaryFocusOther?.Trim()));
         command.Parameters.AddWithValue("@desiredOutcome", ToDbValue(request.DesiredOutcome?.Trim()));
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static DateOnly? ParsePreferredLivMonth(string? value, string academicYear)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (!DateOnly.TryParseExact(
+                $"{value}-01",
+                "yyyy-MM-dd",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var parsedMonth))
+        {
+            throw new WorkflowValidationException("The preferred LIV month is invalid.");
+        }
+
+        if (!AcademicYearPolicy.TryGetBounds(academicYear, out var academicYearStart, out _)
+            || parsedMonth.Year != academicYearStart.Year
+            || parsedMonth.Month is < 9 or > 12)
+        {
+            throw new WorkflowValidationException(
+                "The preferred LIV month must be between September and December of the assessment academic year.");
+        }
+
+        return parsedMonth;
     }
 
     private static async Task InsertElevateStatementRatingAsync(

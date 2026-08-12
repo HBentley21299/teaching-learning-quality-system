@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DataTable } from "../components/DataTable";
+import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { ExportExcelButton } from "../components/ExportButtons";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { Button } from "../design-system/Button";
@@ -36,6 +37,8 @@ type ActionsViewProps = {
   initialStaffId?: string;
   initialActionId?: string;
   onOpenSource?: (action: ActionSummary) => void;
+  onActionOpened?: (actionId: string) => void;
+  onActionClosed?: () => void;
 };
 
 type StatusFilter = "all" | "open" | "extended" | "overdue" | "complete" | "cancelled" | "deleted";
@@ -77,7 +80,7 @@ function formatDateTime(value?: string) {
   return value ? new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "Not recorded";
 }
 
-export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", initialActionId = "", onOpenSource }: ActionsViewProps) {
+export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", initialActionId = "", onOpenSource, onActionOpened, onActionClosed }: ActionsViewProps) {
   const [localActions, setLocalActions] = useState(actions);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -92,6 +95,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [actionTheme, setActionTheme] = useState("");
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
   const [ownerStaffId, setOwnerStaffId] = useState(user.staffId ?? "");
@@ -109,6 +113,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   const [detailId, setDetailId] = useState("");
   const [extensions, setExtensions] = useState<ActionExtensionSummary[]>([]);
   const [editingId, setEditingId] = useState("");
+  const [editActionTheme, setEditActionTheme] = useState("");
   const [editTitle, setEditTitle] = useState("");
   const [editDetail, setEditDetail] = useState("");
   const [editOwnerId, setEditOwnerId] = useState("");
@@ -211,20 +216,20 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   }
 
   async function createAction() {
-    if (!title.trim() || !ownerStaffId) {
-      setStatusMessage("An action needs a title and an assigned owner.");
+    if (!actionTheme.trim() || !title.trim() || !ownerStaffId || !dueDate) {
+      setStatusMessage("An action needs an action theme, action, assigned owner and implementation date.");
       return;
     }
     setIsSaving(true);
     const result = await api.createAction({
-      title: title.trim(), detail: detail.trim() || undefined, ownerStaffId,
+      actionTheme: actionTheme.trim(), title: title.trim(), detail: detail.trim() || undefined, ownerStaffId,
       subjectStaffId: subjectStaffId || undefined, dueDate: dueDate || undefined,
       publishedToStaff: visibilitySetting !== "source_editors", visibilitySetting
     });
     setIsSaving(false);
     if (!result.ok) return setStatusMessage(result.message ?? "The action could not be created.");
     setStatusMessage("Action created and assigned.");
-    setIsCreating(false); setTitle(""); setDetail(""); setDueDate(""); setSubjectStaffId("");
+    setIsCreating(false); setActionTheme(""); setTitle(""); setDetail(""); setDueDate(""); setSubjectStaffId("");
     await refresh();
   }
 
@@ -262,21 +267,22 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
 
   async function showDetail(action: ActionSummary) {
     setDetailId(action.id);
+    onActionOpened?.(action.id);
     setExtensions(action.extensionCount ? await api.actionExtensions(action.id) : []);
   }
 
   async function beginEdit(action: ActionSummary) {
-    setEditingId(action.id); setEditTitle(action.title); setEditDetail(action.detail ?? "");
+    setEditingId(action.id); setEditActionTheme(action.actionTheme); setEditTitle(action.title); setEditDetail(action.detail ?? "");
     setEditOwnerId(action.ownerStaffId); setEditDueDate(action.dueDate ?? ""); setEditVisibility(action.visibilitySetting);
     const options = await api.actionOwnerOptions(action.sourceRecordId, action.subjectStaffId);
     setOwnerOptions(options);
   }
 
   async function saveEdit() {
-    if (!editingId || !editTitle.trim() || !editOwnerId) return;
+    if (!editingId || !editActionTheme.trim() || !editTitle.trim() || !editOwnerId) return;
     setIsSaving(true);
     const result = await api.updateAction(editingId, {
-      title: editTitle.trim(), detail: editDetail.trim() || undefined,
+      actionTheme: editActionTheme.trim(), title: editTitle.trim(), detail: editDetail.trim() || undefined,
       dueDate: editDueDate || undefined, ownerStaffId: editOwnerId, visibilitySetting: editVisibility
     });
     setIsSaving(false);
@@ -308,7 +314,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   return (
     <div className="route-stack">
       <div className="route-header">
-        <div><p className="eyebrow">Organisation-wide follow-up</p><h1>Actions</h1></div>
+        <div><p className="eyebrow">{canViewTeamActions ? "Teaching and learning follow-up" : "Your follow-up"}</p><h1>Actions</h1></div>
         <div className="toolbar">
           {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear }} moduleKey="actions" /> : null}
           {canManageActions ? <Button icon={Plus} onClick={() => setIsCreating((current) => !current)} variant="primary">Create action</Button> : null}
@@ -329,11 +335,12 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
           <div className="panel-heading"><h2>New action</h2><span>Assign a standalone action within your permitted scope</span></div>
           <div className="entry-form">
             <div className="entry-field-grid">
-              <label className="entry-field entry-field-wide"><span>Action <strong>Required</strong></span><input onChange={(event) => setTitle(event.target.value)} value={title} /></label>
+              <label className="entry-field entry-field-wide"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id="standalone-action-theme" onChange={setActionTheme} sourceFormType="standalone" value={actionTheme} /></label>
+              <label className="entry-field entry-field-wide"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label>
               <label className="entry-field entry-field-wide"><span>Description</span><textarea onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} /></label>
               <label className="entry-field"><span>Staff member</span><StaffSearchSelect id="action-subject" onChange={setSubjectStaffId} staff={staff} value={subjectStaffId} /></label>
               <label className="entry-field"><span>Owner <strong>Required</strong></span><StaffSearchSelect id="action-owner" onChange={setOwnerStaffId} staff={availableOwnerStaff} value={ownerStaffId} /></label>
-              <label className="entry-field"><span>Date to be implemented by</span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label>
+              <label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label>
               <label className="entry-field"><span>Visibility</span><select onChange={(event) => setVisibilitySetting(event.target.value as ActionVisibility)} value={visibilitySetting}>{Object.entries(visibilityLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
             </div>
             <div className="toolbar"><Button icon={X} onClick={() => setIsCreating(false)}>Cancel</Button><Button disabled={isSaving} icon={Plus} onClick={() => void createAction()} variant="primary">Create action</Button></div>
@@ -346,10 +353,10 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
         <div className="action-filter-grid">
           {canViewTeamActions ? <label className="mini-filter"><span>View</span><select onChange={(event) => setOwnershipFilter(event.target.value as OwnershipFilter)} value={ownershipFilter}><option value="all">All permitted</option><option value="mine">My actions</option><option value="team">My team</option></select></label> : null}
           <label className="mini-filter"><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} value={statusFilter}><option value="all">All statuses</option><option value="open">Open</option><option value="extended">Extended</option><option value="overdue">Overdue</option><option value="complete">Completed</option><option value="cancelled">Cancelled</option>{includeDeleted ? <option value="deleted">Deleted</option> : null}</select></label>
-          <label className="mini-filter"><span>Owner</span><select onChange={(event) => setOwnerFilter(event.target.value)} value={ownerFilter}><option value="">All owners</option>{staff.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label>
-          <label className="mini-filter"><span>Staff member</span><select onChange={(event) => setStaffFilter(event.target.value)} value={staffFilter}><option value="">All staff</option>{staff.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label>
-          <label className="mini-filter"><span>Faculty</span><select onChange={(event) => { setFacultyFilter(event.target.value); setTeamFilter(""); }} value={facultyFilter}><option value="">All faculties</option>{facultyOptions.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label>
-          <label className="mini-filter"><span>Team</span><select disabled={!facultyFilter} onChange={(event) => setTeamFilter(event.target.value)} value={teamFilter}><option value="">All teams</option>{teamOptions.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label>
+          {canViewTeamActions ? <label className="mini-filter"><span>Owner</span><select onChange={(event) => setOwnerFilter(event.target.value)} value={ownerFilter}><option value="">All owners</option>{staff.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label> : null}
+          {canViewTeamActions ? <label className="mini-filter"><span>Staff member</span><select onChange={(event) => setStaffFilter(event.target.value)} value={staffFilter}><option value="">All staff</option>{staff.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label> : null}
+          {canViewTeamActions ? <label className="mini-filter"><span>Faculty</span><select onChange={(event) => { setFacultyFilter(event.target.value); setTeamFilter(""); }} value={facultyFilter}><option value="">All faculties</option>{facultyOptions.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label> : null}
+          {canViewTeamActions ? <label className="mini-filter"><span>Team</span><select disabled={!facultyFilter} onChange={(event) => setTeamFilter(event.target.value)} value={teamFilter}><option value="">All teams</option>{teamOptions.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label> : null}
           <label className="mini-filter"><span>Source form</span><select onChange={(event) => setSourceFilter(event.target.value)} value={sourceFilter}><option value="">All sources</option>{sourceOptions.map((source) => <option key={source} value={source}>{sourceLabel(source)}</option>)}</select></label>
           <label className="mini-filter"><span>Due date</span><select onChange={(event) => setDueFilter(event.target.value as DueFilter)} value={dueFilter}><option value="all">Any date</option><option value="overdue">Overdue</option><option value="next_7">Next 7 days</option><option value="next_30">Next 30 days</option><option value="no_date">No date</option></select></label>
           <label className="mini-filter"><span>Sort by</span><select onChange={(event) => setSortMode(event.target.value as SortMode)} value={sortMode}><option value="due">Date due</option><option value="newest">Newest created</option><option value="owner">Owner</option><option value="source">Source</option><option value="title">Action</option></select></label>
@@ -358,7 +365,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
 
         {visibleActions.length === 0 ? <div className="empty-row">No actions match the current filters.</div> : (
           <DataTable rows={visibleActions} rowKey={(row) => row.id} columns={[
-            { key: "title", header: "Action", render: (row) => <span><strong>{row.title}</strong><small className="table-subline">{row.subjectStaffName ?? "Organisation action"}</small></span> },
+            { key: "title", header: "Action", render: (row) => <span><strong>{row.title}</strong><small className="table-subline">{row.actionTheme} · {row.subjectStaffName ?? "Organisation action"}</small></span> },
             { key: "owner", header: "Owner", render: (row) => row.ownerStaffName ?? "Unassigned" },
             { key: "source", header: "Source", render: (row) => <span>{sourceLabel(row.sourceFormType)}<small className="table-subline">{row.sourceRecordTitle ?? "Standalone"}</small></span> },
             { key: "area", header: "Faculty / team", render: (row) => <span>{row.facultyCode ?? "Organisation"}<small className="table-subline">{row.teamCode ?? ""}</small></span> },
@@ -379,9 +386,10 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
 
       {selectedAction ? (
         <section className="panel action-detail-panel">
-          <div className="panel-heading"><div><h2>{selectedAction.title}</h2><span>{sourceLabel(selectedAction.sourceFormType)} · {actionStatus(selectedAction)}</span></div><Button icon={X} onClick={() => setDetailId("")} variant="quiet">Close</Button></div>
+          <div className="panel-heading"><div><h2>{selectedAction.title}</h2><span>{sourceLabel(selectedAction.sourceFormType)} · {actionStatus(selectedAction)}</span></div><Button icon={X} onClick={() => { setDetailId(""); onActionClosed?.(); }} variant="quiet">Close</Button></div>
           {selectedAction.detail ? <p className="action-detail-copy">{selectedAction.detail}</p> : null}
           <dl className="action-detail-grid">
+            <div><dt>Action theme</dt><dd>{selectedAction.actionTheme}</dd></div>
             <div><dt>Owner</dt><dd>{selectedAction.ownerStaffName}</dd></div><div><dt>Staff member</dt><dd>{selectedAction.subjectStaffName ?? "Not staff-specific"}</dd></div>
             <div><dt>Original date</dt><dd>{selectedAction.originalDueDate ?? "No date"}</dd></div><div><dt>Current date</dt><dd>{selectedAction.dueDate ?? "No date"}</dd></div>
             {selectedAction.reviewDate ? <div><dt>Review date</dt><dd>{selectedAction.reviewDate}</dd></div> : null}
@@ -401,7 +409,8 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
       ) : null}
 
       {editingId ? <section className="panel"><div className="panel-heading"><h2>Edit action</h2><span>Changes are audit logged</span></div><div className="entry-form"><div className="entry-field-grid">
-        <label className="entry-field entry-field-wide"><span>Action</span><input onChange={(event) => setEditTitle(event.target.value)} value={editTitle} /></label>
+        <label className="entry-field entry-field-wide"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id="edit-action-theme" onChange={setEditActionTheme} sourceFormType={localActions.find((action) => action.id === editingId)?.sourceFormType ?? "standalone"} value={editActionTheme} /></label>
+        <label className="entry-field entry-field-wide"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setEditTitle(event.target.value)} rows={3} value={editTitle} /></label>
         <label className="entry-field entry-field-wide"><span>Description</span><textarea onChange={(event) => setEditDetail(event.target.value)} rows={3} value={editDetail} /></label>
         <label className="entry-field"><span>Owner</span><StaffSearchSelect id="edit-action-owner" onChange={setEditOwnerId} staff={availableOwnerStaff} value={editOwnerId} /></label>
         <label className="entry-field"><span>Date to be implemented by</span><input onChange={(event) => setEditDueDate(event.target.value)} type="date" value={editDueDate} /></label>
