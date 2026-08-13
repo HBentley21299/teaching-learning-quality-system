@@ -10,6 +10,10 @@ const apiScope = import.meta.env.VITE_ENTRA_API_SCOPE ?? "";
 // When the Entra settings are absent the app runs without sign-in and sends no
 // Authorization header, matching the API's development authentication handler.
 export const isAuthEnabled = Boolean(clientId && tenantId && apiScope);
+const localLoginSetting = (import.meta.env.VITE_ENABLE_LOCAL_LOGIN ?? "").trim().toLowerCase();
+export const isLocalLoginEnabled = localLoginSetting
+  ? localLoginSetting === "true"
+  : import.meta.env.DEV;
 export const passwordResetUrl = "https://passwordreset.microsoftonline.com/";
 
 const msalInstance = isAuthEnabled
@@ -54,7 +58,7 @@ const localLoginApiBase = (import.meta.env.VITE_API_BASE_URL ?? "").trim().repla
   || (import.meta.env.DEV ? "http://127.0.0.1:5001" : "");
 
 export function getLocalToken(): string | null {
-  return localStorage.getItem(localTokenKey);
+  return isLocalLoginEnabled ? localStorage.getItem(localTokenKey) : null;
 }
 
 export function clearLocalSession(): void {
@@ -62,6 +66,9 @@ export function clearLocalSession(): void {
 }
 
 export async function signInWithPassword(email: string, password: string): Promise<void> {
+  if (!isLocalLoginEnabled) {
+    throw new Error("Test-account sign in is not enabled in this environment.");
+  }
   const response = await fetch(`${localLoginApiBase}/api/v1/auth/login`, {
     body: JSON.stringify({ email, password }),
     headers: { "Content-Type": "application/json" },
@@ -82,10 +89,7 @@ export async function signInWithPassword(email: string, password: string): Promi
 }
 
 export function hasSignedInAccount(): boolean {
-  if (isAuthEnabled) {
-    return Boolean(msalInstance?.getActiveAccount());
-  }
-  return Boolean(getLocalToken());
+  return Boolean(getLocalToken() || msalInstance?.getActiveAccount());
 }
 
 export function signIn(): void {

@@ -41,6 +41,7 @@ import type {
 } from "../services/types";
 
 type LivVisitsProps = {
+  academicYear: string;
   staff: StaffSummary[];
   orgUnits: OrgUnitSummary[];
   user: CurrentUser;
@@ -62,6 +63,7 @@ const stageDefinitions = [
 ] as const;
 
 export function LivVisits({
+  academicYear,
   staff,
   orgUnits,
   user,
@@ -101,7 +103,7 @@ export function LivVisits({
   async function refreshData(nextMessage = "") {
     const [recordsResult, actionsResult, configurationResult, practitionerThemesResult] = await Promise.allSettled([
       api.livRecords(),
-      api.actions(),
+      api.actions(false, academicYear),
       api.livConfiguration(),
       api.sharedThemes("liv")
     ]);
@@ -121,7 +123,7 @@ export function LivVisits({
     else setStatusMessage("");
   }
 
-  useEffect(() => { void refreshData(); }, []);
+  useEffect(() => { void refreshData(); }, [academicYear]);
 
   useEffect(() => {
     if (!initialSourceRecordId || !records.length || openedInitialRecord.current === initialSourceRecordId) return;

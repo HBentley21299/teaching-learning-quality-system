@@ -34,6 +34,24 @@ public sealed record DashboardDimensionFactSummary(
     string ValueLabel,
     decimal? NumericValue);
 
+public sealed record DashboardActionSummary(
+    Guid Id,
+    Guid? SourceRecordId,
+    string SourceFormType,
+    string? SubjectStaffName,
+    Guid OwnerStaffId,
+    string? OwnerStaffName,
+    string ActionTheme,
+    string Title,
+    string? StatusKey,
+    DateOnly? DueDate,
+    DateOnly? CompletedDate,
+    bool IsOverdue,
+    DateTimeOffset CreatedAt,
+    string? FacultyCode,
+    string? TeamCode,
+    bool IsDeleted);
+
 public sealed record ElevateStatusDashboardSummary(
     Guid? OrgUnitId,
     string? AreaCode,

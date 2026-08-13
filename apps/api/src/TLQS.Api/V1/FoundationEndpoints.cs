@@ -573,10 +573,10 @@ public static class FoundationEndpoints
             };
         });
 
-        api.MapGet("/actions", async (bool? includeDeleted, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/actions", async (bool? includeDeleted, string? academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return Results.Ok(await store.GetActionsAsync(currentUser, includeDeleted == true, cancellationToken));
+            return Results.Ok(await store.GetActionsAsync(currentUser, includeDeleted == true, cancellationToken, academicYear));
         });
 
         api.MapGet("/actions/owner-options", async (Guid? sourceRecordId, Guid? subjectStaffId, string? sourceFormType, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -886,7 +886,7 @@ public static class FoundationEndpoints
             return Results.Ok(await store.GetActivityOverviewAsync(currentUser, cancellationToken));
         });
 
-        api.MapGet("/reports/process-records", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/reports/process-records", async (string? academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
@@ -895,7 +895,19 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            return Results.Ok(await store.GetProcessDashboardRecordsAsync(currentUser, cancellationToken));
+            return Results.Ok(await store.GetProcessDashboardRecordsAsync(currentUser, cancellationToken, academicYear));
+        });
+
+        api.MapGet("/reports/actions", async (string academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                && !currentUser.HasPermission(PermissionKeys.ReportsViewScoped))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.GetDashboardActionsAsync(academicYear, currentUser, cancellationToken));
         });
 
         api.MapGet("/reports/dashboard-configuration", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -1014,6 +1026,81 @@ public static class FoundationEndpoints
 
         api.MapGet("/academic-years", async (SqlFoundationDataStore store, CancellationToken cancellationToken) =>
             Results.Ok(await store.GetAcademicYearsAsync(cancellationToken)));
+
+        api.MapGet("/elevate-status/badge-assets", async (string academicYear, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+            Results.Ok(await store.GetElevateStatusBadgeAssetsAsync(academicYear, cancellationToken)));
+
+        api.MapGet("/elevate-status/badge-assets/{levelNumber:int}/content", async (
+            int levelNumber,
+            string academicYear,
+            SqlFoundationDataStore store,
+            CancellationToken cancellationToken) =>
+        {
+            var asset = await store.GetElevateStatusBadgeAssetContentAsync(academicYear, levelNumber, cancellationToken);
+            return asset is null
+                ? Results.NotFound()
+                : Results.File(asset.Content, asset.ContentType, asset.FileName, enableRangeProcessing: true);
+        });
+
+        api.MapPost("/admin/elevate-status/badge-assets/{levelNumber:int}", async (
+            int levelNumber,
+            string academicYear,
+            HttpRequest request,
+            ClaimsPrincipal principal,
+            SqlFoundationDataStore store,
+            CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ElevateStatusManage))
+            {
+                return Results.Forbid();
+            }
+            if (!request.HasFormContentType)
+            {
+                return Results.BadRequest(new { Message = "Choose a PNG, JPEG or WebP image to upload." });
+            }
+
+            var form = await request.ReadFormAsync(cancellationToken);
+            var file = form.Files.GetFile("file");
+            if (file is null)
+            {
+                return Results.BadRequest(new { Message = "Choose a PNG, JPEG or WebP image to upload." });
+            }
+            if (file.Length <= 0 || file.Length > 5 * 1024 * 1024)
+            {
+                return Results.BadRequest(new { Message = "Badge images must be no larger than 5 MB." });
+            }
+
+            await using var stream = new MemoryStream((int)file.Length);
+            await file.CopyToAsync(stream, cancellationToken);
+            return Results.Ok(await store.SaveElevateStatusBadgeAssetAsync(
+                academicYear,
+                levelNumber,
+                file.FileName,
+                stream.ToArray(),
+                currentUser,
+                cancellationToken));
+        }).DisableAntiforgery();
+
+        api.MapDelete("/admin/elevate-status/badge-assets/{levelNumber:int}", async (
+            int levelNumber,
+            string academicYear,
+            ClaimsPrincipal principal,
+            SqlFoundationDataStore store,
+            CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            if (!currentUser.HasPermission(PermissionKeys.ElevateStatusManage))
+            {
+                return Results.Forbid();
+            }
+
+            return Results.Ok(await store.ResetElevateStatusBadgeAssetAsync(
+                academicYear,
+                levelNumber,
+                currentUser,
+                cancellationToken));
+        });
 
         api.MapGet("/staff-profiles/{staffId:guid}", async (Guid staffId, string? academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {

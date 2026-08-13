@@ -24,17 +24,19 @@ import type { LucideProps } from "lucide-react";
 import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { CollapsibleSection, Pagination } from "../components/CollapsibleSection";
 import { DataTable } from "../components/DataTable";
+import { ElevateStatusBadgeImage } from "../components/ElevateStatusBadgeImage";
 import { Button } from "../design-system/Button";
 import { actionPath, recordPath, staffPath } from "../app/routing";
 import { api } from "../services/api";
 import type {
-  ActionSummary,
+  DashboardActionSummary as ActionSummary,
   CurrentUser,
   CpdAttendanceDashboardSummary,
   DashboardConfiguration,
   DashboardDimensionFact,
   DashboardProcessConfiguration,
   ElevateStatusDashboardSummary,
+  ElevateStatusBadgeAssetSummary,
   LearningWalkThemeGroup,
   LivLifecycleDashboardSummary,
   OrgUnitSummary,
@@ -48,11 +50,8 @@ type SortKey = "date_desc" | "date_asc" | "title" | "area" | "status";
 
 type DashboardProps = {
   academicYear: string;
-  actions: ActionSummary[];
   orgUnits: OrgUnitSummary[];
-  processRecords: ProcessDashboardRecordSummary[];
   user: CurrentUser;
-  onRefresh: () => Promise<void>;
   onOpenAction: (actionId: string, staffId: string) => void;
   onOpenRecord: (recordId: string) => void;
   onOpenStaff: (staffId: string) => void;
@@ -155,10 +154,13 @@ const fallbackConfiguration: DashboardConfiguration = {
   }))
 };
 
-export function Dashboard({ academicYear, actions, orgUnits, processRecords, user, onRefresh, onOpenAction, onOpenRecord, onOpenStaff }: DashboardProps) {
+export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRecord, onOpenStaff }: DashboardProps) {
+  const [actions, setActions] = useState<ActionSummary[]>([]);
+  const [processRecords, setProcessRecords] = useState<ProcessDashboardRecordSummary[]>([]);
   const [configuration, setConfiguration] = useState<DashboardConfiguration>(fallbackConfiguration);
   const [facts, setFacts] = useState<DashboardDimensionFact[]>([]);
   const [elevateStatus, setElevateStatus] = useState<ElevateStatusDashboardSummary[]>([]);
+  const [elevateStatusAssets, setElevateStatusAssets] = useState<ElevateStatusBadgeAssetSummary[]>([]);
   const [staffParticipation, setStaffParticipation] = useState<StaffParticipationDashboardSummary[]>([]);
   const [cpdAttendance, setCpdAttendance] = useState<CpdAttendanceDashboardSummary[]>([]);
   const [livLifecycle, setLivLifecycle] = useState<LivLifecycleDashboardSummary[]>([]);
@@ -191,31 +193,60 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
       .then((value) => ({ value, failed: false }))
       .catch(() => ({ value: fallback, failed: true }));
     void (async () => {
-      // Reporting queries are deliberately sequenced. Large academic-year datasets can
-      // otherwise make several individually fast SQL queries contend and time out together.
       const configurationResult = await safe(api.dashboardConfiguration(), fallbackConfiguration);
       const factsResult = await safe(api.dashboardDimensions(academicYear), [] as DashboardDimensionFact[]);
-      const eliFactsResult = await safe(api.eliStatementDashboardDimensions(academicYear), [] as DashboardDimensionFact[]);
-      const elevateStatusResult = await safe(api.elevateStatusDashboard(academicYear), [] as ElevateStatusDashboardSummary[]);
-      const participationResult = await safe(api.staffParticipationDashboard(academicYear), [] as StaffParticipationDashboardSummary[]);
-      const attendanceResult = await safe(api.cpdAttendanceDashboard(academicYear), [] as CpdAttendanceDashboardSummary[]);
-      const livResult = await safe(api.livLifecycleDashboard(academicYear), [] as LivLifecycleDashboardSummary[]);
-      const themeResult = await safe(api.learningWalkThemes(), [] as LearningWalkThemeGroup[]);
+      const actionsResult = await safe(api.dashboardActions(academicYear), [] as ActionSummary[]);
+      const recordsResult = await safe(api.processDashboardRecords(academicYear), [] as ProcessDashboardRecordSummary[]);
 
         if (cancelled) return;
         setConfiguration(configurationResult.value);
-        setFacts([...factsResult.value, ...eliFactsResult.value].filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
-        setElevateStatus(elevateStatusResult.value);
-        setStaffParticipation(participationResult.value);
-        setCpdAttendance(attendanceResult.value);
-        setLivLifecycle(livResult.value);
-        setLearningWalkThemeGroups(themeResult.value);
-        setIntelligenceError([configurationResult, factsResult, eliFactsResult, elevateStatusResult, participationResult, attendanceResult, livResult, themeResult].some((result) => result.failed)
+        setFacts(factsResult.value.filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
+        setActions(actionsResult.value);
+        setProcessRecords(recordsResult.value);
+        setElevateStatus([]);
+        setElevateStatusAssets([]);
+        setStaffParticipation([]);
+        setCpdAttendance([]);
+        setLivLifecycle([]);
+        setLearningWalkThemeGroups([]);
+        setIntelligenceError([configurationResult, factsResult, actionsResult, recordsResult].some((result) => result.failed)
           ? "Some detailed analysis is temporarily unavailable. Available reporting remains visible."
           : "");
     })();
     return () => { cancelled = true; };
   }, [academicYear, canViewReports]);
+
+  useEffect(() => {
+    if (!canViewReports || !academicYear) return;
+    let cancelled = false;
+    const load = async <T,>(request: Promise<T>, apply: (value: T) => void) => {
+      try {
+        const value = await request;
+        if (!cancelled) apply(value);
+      } catch {
+        if (!cancelled) setIntelligenceError("Some detailed analysis is temporarily unavailable. Available reporting remains visible.");
+      }
+    };
+
+    if (selectedProcess === "elevate_status") {
+      void load(Promise.all([
+        api.elevateStatusDashboard(academicYear),
+        api.elevateStatusBadgeAssets(academicYear)
+      ]), ([rows, assets]) => { setElevateStatus(rows); setElevateStatusAssets(assets); });
+    } else if (!["overview", "actions"].includes(selectedProcess)) {
+      void load(api.staffParticipationDashboard(academicYear), setStaffParticipation);
+      if (selectedProcess === "cpd_event") {
+        void load(api.cpdAttendanceDashboard(academicYear), setCpdAttendance);
+      }
+      if (selectedProcess === "liv") {
+        void load(api.livLifecycleDashboard(academicYear), setLivLifecycle);
+      }
+      if (selectedProcess === "learning_walk") {
+        void load(api.learningWalkThemes(), setLearningWalkThemeGroups);
+      }
+    }
+    return () => { cancelled = true; };
+  }, [academicYear, canViewReports, selectedProcess]);
 
   const configuredProcesses = useMemo(() => configuration.processes
     .filter((item) => item.isEnabled)
@@ -365,29 +396,42 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
 
   async function refresh() {
     setIsRefreshing(true);
-    await onRefresh();
     const safe = <T,>(request: Promise<T>, fallback: T) => request
       .then((value) => ({ value, failed: false }))
       .catch(() => ({ value: fallback, failed: true }));
     const configurationResult = await safe(api.dashboardConfiguration(), configuration);
     const factsResult = await safe(api.dashboardDimensions(academicYear), [] as DashboardDimensionFact[]);
-    const eliFactsResult = await safe(api.eliStatementDashboardDimensions(academicYear), [] as DashboardDimensionFact[]);
-    const elevateStatusResult = await safe(api.elevateStatusDashboard(academicYear), elevateStatus);
-    const participationResult = await safe(api.staffParticipationDashboard(academicYear), staffParticipation);
-    const attendanceResult = await safe(api.cpdAttendanceDashboard(academicYear), cpdAttendance);
-    const livResult = await safe(api.livLifecycleDashboard(academicYear), livLifecycle);
-    const themeResult = await safe(api.learningWalkThemes(), learningWalkThemeGroups);
+    const actionsResult = await safe(api.dashboardActions(academicYear), actions);
+    const recordsResult = await safe(api.processDashboardRecords(academicYear), processRecords);
 
     setConfiguration(configurationResult.value);
-    if (!factsResult.failed && !eliFactsResult.failed) {
-      setFacts([...factsResult.value, ...eliFactsResult.value].filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
+    if (!factsResult.failed) setFacts(factsResult.value.filter((fact) => academicYearForDate(fact.occurredOn) === academicYear));
+    setActions(actionsResult.value);
+    setProcessRecords(recordsResult.value);
+
+    const supplementalFailures: boolean[] = [];
+    if (selectedProcess === "elevate_status") {
+      const statusResult = await safe(api.elevateStatusDashboard(academicYear), elevateStatus);
+      const assetsResult = await safe(api.elevateStatusBadgeAssets(academicYear), elevateStatusAssets);
+      setElevateStatus(statusResult.value); setElevateStatusAssets(assetsResult.value);
+      supplementalFailures.push(statusResult.failed, assetsResult.failed);
+    } else if (!["overview", "actions"].includes(selectedProcess)) {
+      const participationResult = await safe(api.staffParticipationDashboard(academicYear), staffParticipation);
+      setStaffParticipation(participationResult.value); supplementalFailures.push(participationResult.failed);
+      if (selectedProcess === "cpd_event") {
+        const attendanceResult = await safe(api.cpdAttendanceDashboard(academicYear), cpdAttendance);
+        setCpdAttendance(attendanceResult.value); supplementalFailures.push(attendanceResult.failed);
+      }
+      if (selectedProcess === "liv") {
+        const livResult = await safe(api.livLifecycleDashboard(academicYear), livLifecycle);
+        setLivLifecycle(livResult.value); supplementalFailures.push(livResult.failed);
+      }
+      if (selectedProcess === "learning_walk") {
+        const themeResult = await safe(api.learningWalkThemes(), learningWalkThemeGroups);
+        setLearningWalkThemeGroups(themeResult.value); supplementalFailures.push(themeResult.failed);
+      }
     }
-    setElevateStatus(elevateStatusResult.value);
-    setStaffParticipation(participationResult.value);
-    setCpdAttendance(attendanceResult.value);
-    setLivLifecycle(livResult.value);
-    setLearningWalkThemeGroups(themeResult.value);
-    setIntelligenceError([configurationResult, factsResult, eliFactsResult, elevateStatusResult, participationResult, attendanceResult, livResult, themeResult].some((result) => result.failed)
+    setIntelligenceError([configurationResult.failed, factsResult.failed, actionsResult.failed, recordsResult.failed, ...supplementalFailures].some(Boolean)
       ? "Some detailed analysis is temporarily unavailable. Available reporting remains visible."
       : "");
     setIsRefreshing(false);
@@ -520,7 +564,7 @@ export function Dashboard({ academicYear, actions, orgUnits, processRecords, use
           trendGranularity={trendGranularity}
         />
       ) : selectedProcess === "elevate_status" ? (
-        <ElevateStatusOverview academicYear={academicYear} configuration={selectedConfiguration} facultyNames={new Map(organisationOptions.faculties.map((faculty) => [faculty.code, faculty.name]))} rows={elevateStatusInScope} totals={elevateStatusTotals} />
+        <ElevateStatusOverview academicYear={academicYear} assets={elevateStatusAssets} configuration={selectedConfiguration} facultyNames={new Map(organisationOptions.faculties.map((faculty) => [faculty.code, faculty.name]))} rows={elevateStatusInScope} totals={elevateStatusTotals} />
       ) : (
         <ProcessOverview
           actions={analysisActions}
@@ -610,8 +654,9 @@ function ExecutiveOverview({ records, facts, actions, trendData, trendGranularit
   </>;
 }
 
-function ElevateStatusOverview({ academicYear, configuration, rows, totals, facultyNames }: {
+function ElevateStatusOverview({ academicYear, assets, configuration, rows, totals, facultyNames }: {
   academicYear: string;
+  assets: ElevateStatusBadgeAssetSummary[];
   configuration: DashboardProcessConfiguration;
   rows: ElevateStatusDashboardSummary[];
   totals: ElevateStatusTotals;
@@ -641,7 +686,14 @@ function ElevateStatusOverview({ academicYear, configuration, rows, totals, facu
           const count = totals.levelCounts[level.level - 1] ?? 0;
           const value = percentage(count, totals.staffCount);
           return <article key={level.level}>
-            <img alt="" aria-hidden="true" src={`/system-assets/elevate-status/${level.key}.png`} />
+            <ElevateStatusBadgeImage
+              academicYear={academicYear}
+              alt={level.name}
+              ariaHidden
+              customAssetId={assets.find((asset) => asset.levelNumber === level.level)?.customAssetId}
+              levelKey={level.key}
+              levelNumber={level.level}
+            />
             <div className="elevate-attainment-heading"><span>Level {level.level}</span><strong>{level.name}</strong><small>{level.sessions} sessions required</small></div>
             <div className="elevate-attainment-value"><strong>{value}%</strong><span>{count} of {totals.staffCount} staff in year</span></div>
             <div className="elevate-attainment-track" aria-label={`${level.name}: ${value}%, ${count} of ${totals.staffCount} staff`} role="img"><i style={{ width: `${value}%` }} /></div>

@@ -37,10 +37,12 @@ import type {
   CreateFormTemplateRequest,
   CurrentUser,
   DashboardSummary,
+  DashboardActionSummary,
   DashboardConfiguration,
   DashboardDimensionFact,
   DashboardProcessConfiguration,
   ElevateStatusDashboardSummary,
+  ElevateStatusBadgeAssetSummary,
   LivLifecycleDashboardSummary,
   ElevateEnvironmentPillarSummary,
   ElevatePracticeProgress,
@@ -206,6 +208,47 @@ async function sendJson<TRequest, TResponse = never>(url: string, method: "POST"
   }
 }
 
+async function sendForm<TResponse>(url: string, body: FormData): Promise<ApiResult<TResponse>> {
+  try {
+    const response = await requestApi(url, {
+      body,
+      headers: await buildHeaders(false),
+      method: "POST"
+    });
+    if (response.ok) {
+      return { ok: true, data: (await response.json()) as TResponse };
+    }
+    handleExpiredLocalSession(response.status);
+    let message = response.status === 403
+      ? "You do not have permission to do that."
+      : `The upload failed (${response.status}).`;
+    try {
+      const payload = (await response.json()) as { message?: string; Message?: string };
+      message = payload.message ?? payload.Message ?? message;
+    } catch {
+      // keep the status-based message
+    }
+    return { ok: false, message };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error && error.name === "AbortError"
+        ? "The upload took too long. Please try again."
+        : "The API could not be reached. Check it is running."
+    };
+  }
+}
+
+async function getApiBlob(url: string): Promise<Blob | null> {
+  const response = await requestApi(url, { headers: await buildHeaders(false) });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    handleExpiredLocalSession(response.status);
+    throw new Error(`The image could not be loaded (${response.status}).`);
+  }
+  return response.blob();
+}
+
 async function requestApi(url: string, init: RequestInit, externalSignal?: AbortSignal, timeoutMs = apiRequestTimeoutMs): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -315,7 +358,13 @@ export const api = {
     sendJson(`/api/v1/admin/work-scrutiny/records/${id}`, "DELETE"),
   restoreWorkScrutinyRecord: (id: string) =>
     sendJson(`/api/v1/admin/work-scrutiny/records/${id}/restore`, "POST"),
-  actions: (includeDeleted = false) => getJson<ActionSummary[]>(`/api/v1/actions${includeDeleted ? "?includeDeleted=true" : ""}`),
+  actions: (includeDeleted = false, academicYear?: string) => {
+    const parameters = new URLSearchParams();
+    if (includeDeleted) parameters.set("includeDeleted", "true");
+    if (academicYear) parameters.set("academicYear", academicYear);
+    const query = parameters.toString();
+    return getJson<ActionSummary[]>(`/api/v1/actions${query ? `?${query}` : ""}`);
+  },
   actionOwnerOptions: (sourceRecordId?: string, subjectStaffId?: string, sourceFormType?: string) => {
     const parameters = new URLSearchParams();
     if (sourceRecordId) parameters.set("sourceRecordId", sourceRecordId);
@@ -331,8 +380,10 @@ export const api = {
   deleteAction: (id: string, reason: string) => sendJson(`/api/v1/actions/${id}`, "DELETE", { reason }),
   restoreAction: (id: string) => sendJson(`/api/v1/actions/${id}/restore`, "POST"),
   dashboards: () => getJson<DashboardSummary[]>("/api/v1/reports/dashboards"),
-  processDashboardRecords: () =>
-    getJson<ProcessDashboardRecordSummary[]>("/api/v1/reports/process-records"),
+  processDashboardRecords: (academicYear?: string) =>
+    getJson<ProcessDashboardRecordSummary[]>(`/api/v1/reports/process-records${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
+  dashboardActions: (academicYear: string) =>
+    getJson<DashboardActionSummary[]>(`/api/v1/reports/actions?academicYear=${encodeURIComponent(academicYear)}`),
   dashboardConfiguration: () =>
     getJson<DashboardConfiguration>("/api/v1/reports/dashboard-configuration"),
   dashboardDimensions: (academicYear?: string) =>
@@ -426,6 +477,23 @@ export const api = {
     getJson<StaffProfileSummary[]>("/api/v1/reports/staff-profile-summaries"),
   staffProfileRecords: () => getJson<StaffProfileRecordSummary[]>("/api/v1/staff-profiles"),
   academicYears: () => getJson<AcademicYearSummary[]>("/api/v1/academic-years"),
+  elevateStatusBadgeAssets: (academicYear: string) =>
+    getJson<ElevateStatusBadgeAssetSummary[]>(`/api/v1/elevate-status/badge-assets?academicYear=${encodeURIComponent(academicYear)}`),
+  elevateStatusBadgeContent: (academicYear: string, levelNumber: number) =>
+    getApiBlob(`/api/v1/elevate-status/badge-assets/${levelNumber}/content?academicYear=${encodeURIComponent(academicYear)}`),
+  uploadElevateStatusBadge: (academicYear: string, levelNumber: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return sendForm<ElevateStatusBadgeAssetSummary[]>(
+      `/api/v1/admin/elevate-status/badge-assets/${levelNumber}?academicYear=${encodeURIComponent(academicYear)}`,
+      form
+    );
+  },
+  resetElevateStatusBadge: (academicYear: string, levelNumber: number) =>
+    sendJson<never, ElevateStatusBadgeAssetSummary[]>(
+      `/api/v1/admin/elevate-status/badge-assets/${levelNumber}?academicYear=${encodeURIComponent(academicYear)}`,
+      "DELETE"
+    ),
   staffProfile: (staffId: string, academicYear?: string) =>
     getJson<StaffProfileDetail>(
       `/api/v1/staff-profiles/${staffId}${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`

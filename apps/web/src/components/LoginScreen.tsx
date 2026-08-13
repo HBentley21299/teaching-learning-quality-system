@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { KeyRound, LogIn, ShieldCheck, UserRound } from "lucide-react";
-import { isAuthEnabled, passwordResetUrl, signIn, signInWithPassword } from "../services/auth";
+import { isAuthEnabled, isLocalLoginEnabled, passwordResetUrl, signIn, signInWithPassword } from "../services/auth";
 
 export function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -49,11 +49,12 @@ export function LoginScreen() {
           <KeyRound size={17} aria-hidden="true" />
           Reset Microsoft password
         </a>
-        <div className="login-divider" role="presentation">
-          <span>or use a test account</span>
-        </div>
+        {isLocalLoginEnabled ? <>
+          <div className="login-divider" role="presentation">
+            <span>or use a test account</span>
+          </div>
 
-        <form className="login-form" onSubmit={submitPasswordLogin}>
+          <form className="login-form" onSubmit={submitPasswordLogin}>
           <label>
             <span>Email address</span>
             <input
@@ -80,11 +81,12 @@ export function LoginScreen() {
             <UserRound size={18} aria-hidden="true" />
             {isSubmitting ? "Signing in..." : "Sign in"}
           </button>
-        </form>
+          </form>
+        </> : null}
 
         <div className="login-security">
           <ShieldCheck size={17} aria-hidden="true" />
-          <span>{isAuthEnabled ? "Protected by Microsoft Entra ID" : "Local test environment"}</span>
+          <span>{isAuthEnabled ? "Protected by Microsoft Entra ID" : isLocalLoginEnabled ? "Local test environment" : "Microsoft sign-in required"}</span>
         </div>
       </section>
     </main>

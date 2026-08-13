@@ -158,7 +158,9 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\054_liv_focus_stable_keys.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\055_teaching_and_learning_label_consistency.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\056_local_test_credentials.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\057_local_credentials_by_email.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\057_local_credentials_by_email.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\058_elevate_status_badge_assets.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\059_reporting_performance_indexes.sql")
 )
 
 if ($ExcludeOfficialStaffData) {
@@ -186,6 +188,24 @@ END;
 "@
 Invoke-DatabaseQuery -Query $ledgerSql | Out-Null
 
+function Get-NormalizedMigrationChecksum {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+
+    # Git may materialise SQL files with CRLF on Windows and LF in deployment.
+    # Hash a canonical UTF-8/LF representation so line endings alone never make
+    # an already-applied migration appear to have changed.
+    $content = [System.IO.File]::ReadAllText($LiteralPath)
+    $content = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($content)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
 if ($BaselineExistingDatabase) {
     $ledgerCount = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT COUNT_BIG(*) FROM dbo.schema_migrations;")
     $hasFinalSchema = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT CASE WHEN OBJECT_ID(N'org.org_unit_leaderships', N'U') IS NULL THEN 0 ELSE 1 END;")
@@ -210,7 +230,7 @@ if ($BaselineExistingDatabase) {
 
     foreach ($script in $baselineScripts) {
         $migrationKey = $script.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
-        $checksum = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
+        $checksum = Get-NormalizedMigrationChecksum -LiteralPath $script
         $escapedKey = $migrationKey.Replace("'", "''")
         Invoke-DatabaseQuery -Query "INSERT dbo.schema_migrations (migration_key, checksum_sha256) VALUES (N'$escapedKey', '$checksum');" | Out-Null
     }
@@ -219,11 +239,12 @@ if ($BaselineExistingDatabase) {
 
 foreach ($script in $scripts) {
     $migrationKey = $script.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
-    $checksum = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
+    $checksum = Get-NormalizedMigrationChecksum -LiteralPath $script
+    $rawChecksum = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
     $escapedKey = $migrationKey.Replace("'", "''")
     $appliedChecksum = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT checksum_sha256 FROM dbo.schema_migrations WHERE migration_key = N'$escapedKey';")
     if (![string]::IsNullOrWhiteSpace($appliedChecksum)) {
-        if ($appliedChecksum -ne $checksum) {
+        if ($appliedChecksum -ne $checksum -and $appliedChecksum -ne $rawChecksum) {
             throw "Applied migration '$migrationKey' has changed. Add a new forward-only migration instead of editing migration history."
         }
         Write-Host "Skipping already applied $migrationKey"

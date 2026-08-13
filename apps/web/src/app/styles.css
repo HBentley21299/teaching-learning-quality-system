@@ -3664,8 +3664,9 @@ td {
 
 .elevate-attainment-grid article > img {
   aspect-ratio: 1.45 / 1;
+  background: #061735;
   border-radius: 5px;
-  object-fit: cover;
+  object-fit: contain;
   width: 100%;
 }
 
@@ -4318,9 +4319,181 @@ td {
 }
 
 .elevate-status-badges img {
+  background: #061735;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 4px;
-  object-fit: cover;
+  object-fit: contain;
+}
+
+.elevate-status-assets-admin {
+  display: grid;
+  gap: 20px;
+}
+
+.elevate-status-assets-heading {
+  align-items: end;
+  gap: 24px;
+}
+
+.elevate-status-assets-heading > div:first-child {
+  max-width: 760px;
+}
+
+.elevate-status-assets-heading .eyebrow {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.elevate-status-year-select {
+  flex: 0 0 210px;
+  margin: 0;
+}
+
+.elevate-status-asset-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.elevate-status-asset-card {
+  align-items: center;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 108px minmax(170px, .7fr) minmax(220px, 1fr) minmax(140px, auto);
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.elevate-status-asset-preview {
+  align-items: center;
+  aspect-ratio: 1.45 / 1;
+  background: #061735;
+  border: 1px solid #17376b;
+  border-radius: 6px;
+  display: flex;
+  justify-content: center;
+  max-height: 74px;
+  overflow: hidden;
+  width: 108px;
+}
+
+.elevate-status-asset-preview img {
+  height: 100%;
+  object-fit: contain;
+  width: 100%;
+}
+
+.elevate-status-asset-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.elevate-status-asset-copy > span {
+  color: var(--accent-strong);
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.elevate-status-asset-copy h3,
+.elevate-status-asset-copy p {
+  margin: 0;
+}
+
+.elevate-status-asset-copy h3 {
+  font-size: .9rem;
+}
+
+.elevate-status-asset-copy p,
+.elevate-status-asset-copy small,
+.elevate-status-file-input small {
+  color: var(--text-muted);
+  font-size: .7rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.elevate-status-file-input {
+  display: grid;
+  gap: 6px;
+}
+
+.elevate-status-file-input > span {
+  font-size: .74rem;
+  font-weight: 750;
+}
+
+.elevate-status-file-input input {
+  color: var(--text-muted);
+  font-size: .7rem;
+  max-width: 100%;
+}
+
+.elevate-status-asset-card .button-row {
+  align-items: stretch;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  min-width: 140px;
+}
+
+.elevate-status-asset-card .button {
+  justify-content: center;
+  width: 100%;
+}
+
+@media (max-width: 1040px) {
+  .elevate-status-asset-card {
+    grid-template-columns: 96px minmax(150px, .8fr) minmax(190px, 1fr);
+  }
+
+  .elevate-status-asset-preview {
+    max-height: 66px;
+    width: 96px;
+  }
+
+  .elevate-status-asset-card .button-row {
+    grid-column: 2 / -1;
+    grid-template-columns: repeat(2, minmax(0, max-content));
+  }
+}
+
+@media (max-width: 820px) {
+  .elevate-status-assets-heading {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .elevate-status-year-select {
+    width: 100%;
+  }
+
+  .elevate-status-asset-card {
+    align-items: start;
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .elevate-status-asset-preview {
+    max-height: 61px;
+    width: 88px;
+  }
+
+  .elevate-status-file-input,
+  .elevate-status-asset-card .button-row {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 520px) {
+  .elevate-status-asset-card .button-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .elevate-status-badge-placeholder {

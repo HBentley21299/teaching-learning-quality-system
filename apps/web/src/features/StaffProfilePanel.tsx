@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Award, ChevronDown, ExternalLink, Eye, Plus, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { ElevateStatusBadgeImage } from "../components/ElevateStatusBadgeImage";
 import { CollapsibleSection, Pagination } from "../components/CollapsibleSection";
 import { api } from "../services/api";
 import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
@@ -348,7 +349,14 @@ export function StaffProfilePanel({
           <div className="elevate-status-badges">
             {detail.elevateStatus.levels.map((level) => (
               level.isAwarded ? (
-                <img alt={level.name} key={level.levelNumber} src={elevateStatusAsset(level.levelKey)} />
+                <ElevateStatusBadgeImage
+                  academicYear={detail.academicYear}
+                  alt={level.name}
+                  customAssetId={level.customBadgeAssetId}
+                  key={level.levelNumber}
+                  levelKey={level.levelKey}
+                  levelNumber={level.levelNumber}
+                />
               ) : (
                 <span aria-hidden="true" className="elevate-status-badge-placeholder" key={level.levelNumber} />
               )
@@ -1141,10 +1149,6 @@ function formatActionSource(moduleName?: string, recordType?: string) {
 
 function formatCoachingType(value: "coaching" | "mentoring") {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function elevateStatusAsset(levelKey: ElevateStatusLevelSummary["levelKey"]) {
-  return `/system-assets/elevate-status/${levelKey}.png`;
 }
 
 function currentAcademicYear() {

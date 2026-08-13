@@ -22,7 +22,6 @@ import type {
   CurrentUser,
   ModuleSummary,
   OrgUnitSummary,
-  ProcessDashboardRecordSummary,
   StaffProfileSummary,
   StaffSummary
 } from "../services/types";
@@ -55,10 +54,12 @@ export function App() {
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [staff, setStaff] = useState<StaffSummary[]>([]);
   const [actions, setActions] = useState<ActionSummary[]>([]);
-  const [processRecords, setProcessRecords] = useState<ProcessDashboardRecordSummary[]>([]);
   const [profiles, setProfiles] = useState<StaffProfileSummary[]>([]);
   const [academicYears, setAcademicYears] = useState<AcademicYearSummary[]>([]);
   const [academicYear, setAcademicYear] = useState("");
+  const [modulesLoaded, setModulesLoaded] = useState(false);
+  const [staffLoaded, setStaffLoaded] = useState(false);
+  const [profilesLoaded, setProfilesLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [profileStaffId, setProfileStaffId] = useState(initialLocation.profileStaffId);
@@ -112,32 +113,20 @@ export function App() {
         setOrgUnits([]);
         setStaff([]);
         setActions([]);
-        setProcessRecords([]);
         setProfiles([]);
+        setAcademicYears([]);
         return;
       }
 
-      const [nextModules, nextOrgUnits, nextStaff, nextActions, nextProfiles, nextAcademicYears] = await Promise.all([
-        api.modules(),
+      const [nextOrgUnits, nextAcademicYears] = await Promise.all([
         api.orgUnits(),
-        api.staff().catch(() => [] as StaffSummary[]),
-        api.actions(),
-        api.staffProfiles(),
         api.academicYears()
       ]);
-      setModules(nextModules);
       setOrgUnits(nextOrgUnits);
-      setStaff(nextStaff);
-      setActions(nextActions);
-      setProfiles(nextProfiles);
       setAcademicYears(nextAcademicYears);
       setAcademicYear((current) => current && nextAcademicYears.some((year) => year.academicYear === current)
         ? current
         : nextAcademicYears.find((year) => year.isCurrent)?.academicYear ?? nextAcademicYears[0]?.academicYear ?? "");
-      void api
-        .processDashboardRecords()
-        .then(setProcessRecords)
-        .catch(() => setProcessRecords([]));
     } catch {
       setLoadError(
         "The Teaching and Learning API could not be reached. Start the API (scripts\\run-api.ps1) and check the database, then refresh."
@@ -150,6 +139,45 @@ export function App() {
   useEffect(() => {
     void loadCoreData();
   }, [loadCoreData]);
+
+  useEffect(() => {
+    if (!user.userAccountId || modulesLoaded || route !== "admin") return;
+    let cancelled = false;
+    void api.modules()
+      .then((rows) => { if (!cancelled) { setModules(rows); setModulesLoaded(true); } })
+      .catch(() => { if (!cancelled) setModulesLoaded(true); });
+    return () => { cancelled = true; };
+  }, [modulesLoaded, route, user.userAccountId]);
+
+  useEffect(() => {
+    const staffRoutes: AppRoute[] = ["staff", "admin", "learning", "liv", "probation", "elevate", "coaching", "scrutiny", "cpd", "profile", "actions"];
+    if (!user.userAccountId || staffLoaded || !staffRoutes.includes(route)) return;
+    let cancelled = false;
+    void api.staff()
+      .then((rows) => { if (!cancelled) { setStaff(rows); setStaffLoaded(true); } })
+      .catch(() => { if (!cancelled) setStaffLoaded(true); });
+    return () => { cancelled = true; };
+  }, [route, staffLoaded, user.userAccountId]);
+
+  useEffect(() => {
+    const profileRoutes: AppRoute[] = ["staff", "admin", "profile"];
+    if (!user.userAccountId || profilesLoaded || !profileRoutes.includes(route)) return;
+    let cancelled = false;
+    void api.staffProfiles()
+      .then((rows) => { if (!cancelled) { setProfiles(rows); setProfilesLoaded(true); } })
+      .catch(() => { if (!cancelled) setProfilesLoaded(true); });
+    return () => { cancelled = true; };
+  }, [profilesLoaded, route, user.userAccountId]);
+
+  useEffect(() => {
+    if (!user.userAccountId || !academicYear || !["actions", "probation"].includes(route)) return;
+    let cancelled = false;
+    setActions([]);
+    void api.actions(false, academicYear)
+      .then((rows) => { if (!cancelled) setActions(rows); })
+      .catch(() => { if (!cancelled) setActions([]); });
+    return () => { cancelled = true; };
+  }, [academicYear, route, user.userAccountId]);
 
   useEffect(() => {
     const onPopState = () => applyLocation(parseAppLocation());
@@ -183,12 +211,13 @@ export function App() {
   }, [isLoading, pendingRecordId, user.userAccountId, writePath]);
 
   const refreshActions = useCallback(async () => {
+    if (!academicYear || !["actions", "probation"].includes(route)) return;
     try {
-      setActions(await api.actions());
+      setActions(await api.actions(false, academicYear));
     } catch {
       // keep the previous list when a refresh fails
     }
-  }, []);
+  }, [academicYear, route]);
 
   const visibleNavigationItems = useMemo(
     () => navigationItems.filter((item) => canAccessRoute(item.key, user.permissions)),
@@ -211,13 +240,6 @@ export function App() {
     () => academicYear ? actions.filter((action) => action.academicYear === academicYear) : actions,
     [academicYear, actions]
   );
-  const yearProcessRecords = useMemo(
-    () => academicYear
-      ? processRecords.filter((record) => (record.academicYear ?? academicYearForDate(record.recordDate ?? record.createdAt)) === academicYear)
-      : processRecords,
-    [academicYear, processRecords]
-  );
-
   function navigate(nextRoute: AppRoute) {
     setProfileStaffId("");
     setActionStaffId("");
@@ -475,11 +497,8 @@ export function App() {
               {route === "dashboard" ? (
                 <Dashboard
                   academicYear={academicYear}
-                  actions={yearActions}
                   orgUnits={orgUnits}
-                  processRecords={yearProcessRecords}
                   user={user}
-                  onRefresh={loadCoreData}
                   onOpenAction={openActionDetails}
                   onOpenRecord={openDashboardRecord}
                   onOpenStaff={openTeamProfile}
@@ -493,6 +512,7 @@ export function App() {
               ) : null}
               {route === "liv" ? (
                 <LivVisits
+                  academicYear={academicYear}
                   initialSourceRecordId={sourceRecordId}
                   onActionsChanged={refreshActions}
                   onOpenStaffProfile={openTeamProfile}

@@ -133,8 +133,8 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
       return;
     }
 
-    void api.actions(true)
-      .then((nextActions) => setLocalActions(nextActions.filter((action) => action.academicYear === academicYear)))
+    void api.actions(true, academicYear)
+      .then(setLocalActions)
       .catch(() => setLocalActions(actions));
   }, [academicYear, actions, includeDeleted]);
 
@@ -211,8 +211,8 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
 
   async function refresh() {
     await onChanged();
-    const nextActions = await api.actions(includeDeleted);
-    setLocalActions(nextActions.filter((action) => action.academicYear === academicYear));
+    const nextActions = await api.actions(includeDeleted, academicYear);
+    setLocalActions(nextActions);
   }
 
   async function createAction() {

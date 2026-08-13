@@ -1859,7 +1859,8 @@ public sealed partial class SqlFoundationDataStore(
     public async Task<IReadOnlyList<ActionSummary>> GetActionsAsync(
         CurrentUser currentUser,
         bool includeDeleted,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? academicYear = null)
     {
         var canViewAll = CanViewAllRecords(currentUser);
         var canIncludeDeleted = includeDeleted && currentUser.HasPermission(PermissionKeys.ActionsManage);
@@ -1961,6 +1962,11 @@ public sealed partial class SqlFoundationDataStore(
             ) latest_extension
             WHERE (@includeDeleted = 1 OR a.archived_at IS NULL)
               AND (
+                    @academicYear IS NULL
+                    OR r.academic_year_key = @academicYear
+                    OR (r.id IS NULL AND a.created_at >= @academicYearStart AND a.created_at < @academicYearEnd)
+              )
+              AND (
                     @canViewAll = 1
                     OR a.owner_staff_id = @currentStaffId
                     OR a.subject_staff_id = @currentStaffId
@@ -1993,6 +1999,17 @@ public sealed partial class SqlFoundationDataStore(
             {
                 AddScopeParameters(command, currentUser);
                 command.Parameters.AddWithValue("@includeDeleted", canIncludeDeleted);
+                command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
+                if (AcademicYearPolicy.TryGetBounds(academicYear, out var academicYearStart, out var academicYearEnd))
+                {
+                    command.Parameters.AddWithValue("@academicYearStart", academicYearStart);
+                    command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.AddDays(1));
+                }
+                else
+                {
+                    command.Parameters.AddWithValue("@academicYearStart", DBNull.Value);
+                    command.Parameters.AddWithValue("@academicYearEnd", DBNull.Value);
+                }
             },
             reader =>
             {
@@ -2133,7 +2150,8 @@ public sealed partial class SqlFoundationDataStore(
 
     public Task<IReadOnlyList<ProcessDashboardRecordSummary>> GetProcessDashboardRecordsAsync(
         CurrentUser currentUser,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        string? academicYear = null) =>
         QueryAsync(
             """
             WITH visible_staff AS (
@@ -2400,6 +2418,7 @@ public sealed partial class SqlFoundationDataStore(
                 ) area_metrics
             ) cpd_metrics
             WHERE r.archived_at IS NULL
+              AND (@academicYear IS NULL OR r.academic_year_key = @academicYear)
               AND r.record_type IN ('learning_walk', 'work_scrutiny', 'cpd_event', 'elevate_environment', 'coaching_session', 'probation_case', 'liv', 'elevate_practice_assessment')
               AND (
                     COALESCE(coaching_session.status, probation_case.status, dashboard_liv_record.status, eli_assessment.status, latest_submission.status, 'submitted') <> 'draft'
@@ -2495,7 +2514,11 @@ public sealed partial class SqlFoundationDataStore(
             ORDER BY COALESCE(r.record_date, CONVERT(date, r.created_at)) DESC, r.created_at DESC
             OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE, MAX_GRANT_PERCENT = 1);
             """,
-            command => AddScopeParameters(command, currentUser),
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
+            },
             reader => new ProcessDashboardRecordSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -5625,7 +5648,8 @@ public sealed partial class SqlFoundationDataStore(
                 AND sc.archived_at IS NULL
             LEFT JOIN org.org_units scope_org ON scope_org.id = sc.org_unit_id
             WHERE ua.archived_at IS NULL
-            ORDER BY s.display_name;
+            ORDER BY s.display_name
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
             """,
             reader => new AdminUserRow(
                 reader.GetGuid(0),

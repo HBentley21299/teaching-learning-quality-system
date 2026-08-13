@@ -206,6 +206,30 @@ public sealed partial class SqlFoundationDataStore
 
             INSERT #facts
 
+                SELECT record.id, N'eli', record.occurred_on, record.org_unit_id,
+                       record.area_code, record.area_name, record.parent_area_code,
+                       N'practice_statement_outcome', CONCAT(area.area_key, N'::', statement.statement_key),
+                       CONCAT(area.name, N'|||', statement.statement_text),
+                       COALESCE(descriptor.descriptor_key, CONVERT(nvarchar(20), COALESCE(statement_rating.score, area_rating.hidden_numeric_value))),
+                       COALESCE(descriptor.visible_wording, CONVERT(nvarchar(20), COALESCE(statement_rating.score, area_rating.hidden_numeric_value))),
+                       CONVERT(decimal(10,2), COALESCE(statement_rating.score, area_rating.hidden_numeric_value))
+                FROM #visible_records record
+                JOIN quality.elevate_practice_assessments assessment
+                  ON assessment.record_id = record.id
+                 AND assessment.archived_at IS NULL
+                 AND assessment.status = N'submitted'
+                JOIN quality.elevate_practice_area_ratings area_rating ON area_rating.assessment_id = assessment.id
+                JOIN quality.elevate_practice_areas area ON area.id = area_rating.area_id
+                JOIN quality.elevate_practice_statements statement ON statement.area_id = area.id
+                LEFT JOIN quality.elevate_practice_ratings statement_rating
+                  ON statement_rating.assessment_id = assessment.id
+                 AND statement_rating.statement_id = statement.id
+                LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor
+                  ON descriptor.id = COALESCE(statement_rating.descriptor_id, area_rating.descriptor_id)
+                WHERE record.record_type = N'elevate_practice_assessment';
+
+            INSERT #facts
+
                 SELECT record.id, N'elevate_environment', record.occurred_on, record.org_unit_id,
                        record.area_code, record.area_name, record.parent_area_code,
                        N'pillar_outcome', rating.pillar_key, pillar.name, rating.judgement_key,
@@ -326,6 +350,107 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(11),
                 reader.IsDBNull(12) ? null : reader.GetDecimal(12)),
             cancellationToken);
+
+    public async Task<IReadOnlyList<DashboardActionSummary>> GetDashboardActionsAsync(
+        string academicYear,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
+        return await QueryAsync(
+            """
+            WITH visible_staff AS (
+                SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
+            ),
+            visible_org_units AS (
+                SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
+            )
+            SELECT action.id,
+                   action.source_record_id,
+                   COALESCE(action.source_form_type, record.record_type, N'standalone') source_form_type,
+                   subject_staff.display_name subject_staff_name,
+                   action.owner_staff_id,
+                   owner_staff.display_name owner_staff_name,
+                   action.action_theme,
+                   action.title,
+                   status_value.value_key status_key,
+                   action.due_date,
+                   action.completed_date,
+                   action.created_at,
+                   faculty.code faculty_code,
+                   team.code team_code
+            FROM quality.actions action
+            LEFT JOIN core.records record ON record.id = action.source_record_id
+            LEFT JOIN people.staff subject_staff ON subject_staff.id = action.subject_staff_id
+            LEFT JOIN people.staff owner_staff ON owner_staff.id = action.owner_staff_id
+            LEFT JOIN core.lookup_values status_value ON status_value.id = action.status_lookup_value_id
+            LEFT JOIN org.org_units area
+              ON area.id = COALESCE(record.org_unit_id, subject_staff.primary_org_unit_id, owner_staff.primary_org_unit_id)
+            LEFT JOIN org.org_units faculty
+              ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
+            LEFT JOIN org.org_units team
+              ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id END
+            WHERE action.archived_at IS NULL
+              AND (
+                    record.academic_year_key = @academicYear
+                    OR (record.id IS NULL AND action.created_at >= @startDate AND action.created_at < @endDateExclusive)
+              )
+              AND (
+                    @canViewAll = 1
+                    OR action.owner_staff_id = @currentStaffId
+                    OR action.subject_staff_id = @currentStaffId
+                    OR record.owner_staff_id = @currentStaffId
+                    OR (@canViewScopedActivities = 1 AND (
+                        EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = record.org_unit_id)
+                        OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = action.subject_staff_id)
+                        OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = action.owner_staff_id)
+                    ))
+              )
+              AND (
+                    @canViewAll = 1
+                    OR action.visibility_setting = N'staff_and_management'
+                    OR (action.visibility_setting = N'owner_only' AND action.owner_staff_id = @currentStaffId)
+                    OR (action.visibility_setting = N'source_editors' AND (
+                        action.created_by_user_account_id = @currentUserAccountId
+                        OR record.owner_staff_id = @currentStaffId
+                    ))
+                    OR (action.visibility_setting = N'management_only' AND @canViewScopedActivities = 1)
+              )
+            ORDER BY CASE WHEN action.completed_date IS NULL THEN 0 ELSE 1 END,
+                     action.due_date, action.created_at DESC
+            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE, MAX_GRANT_PERCENT = 1);
+            """,
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@academicYear", academicYear);
+                command.Parameters.AddWithValue("@startDate", startDate);
+                command.Parameters.AddWithValue("@endDateExclusive", endDate.AddDays(1));
+            },
+            reader =>
+            {
+                var dueDate = GetDateOnlyOrNull(reader, 9);
+                var completedDate = GetDateOnlyOrNull(reader, 10);
+                return new DashboardActionSummary(
+                    reader.GetGuid(0),
+                    GetGuidOrNull(reader, 1),
+                    reader.GetString(2),
+                    GetStringOrNull(reader, 3),
+                    reader.GetGuid(4),
+                    GetStringOrNull(reader, 5),
+                    reader.GetString(6),
+                    reader.GetString(7),
+                    GetStringOrNull(reader, 8),
+                    dueDate,
+                    completedDate,
+                    dueDate.HasValue && completedDate is null && dueDate.Value < DateOnly.FromDateTime(DateTime.UtcNow),
+                    reader.GetFieldValue<DateTimeOffset>(11),
+                    GetStringOrNull(reader, 12),
+                    GetStringOrNull(reader, 13),
+                    false);
+            },
+            cancellationToken);
+    }
 
     public Task<IReadOnlyList<DashboardDimensionFactSummary>> GetEliStatementDashboardFactsAsync(
         string academicYear,

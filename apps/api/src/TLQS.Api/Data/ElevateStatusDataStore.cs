@@ -8,6 +8,8 @@ namespace TLQS.Api.Data;
 
 public sealed partial class SqlFoundationDataStore
 {
+    private const int MaximumElevateStatusBadgeBytes = 5 * 1024 * 1024;
+
     private static readonly ElevateStatusLevelDefinition[] ElevateStatusLevels =
     [
         new(1, "explorer", "Elevate Explorer", 3, "Evidence showing how professional development has been implemented in your own practice."),
@@ -39,6 +41,241 @@ public sealed partial class SqlFoundationDataStore
                     startDate > DateOnly.FromDateTime(DateTime.UtcNow));
             },
             cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ElevateStatusBadgeAssetSummary>> GetElevateStatusBadgeAssetsAsync(
+        string academicYear,
+        CancellationToken cancellationToken)
+    {
+        _ = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
+        var assets = await QueryAsync(
+            """
+            SELECT asset.id, asset.level_number, asset.file_name, asset.content_type,
+                   asset.content_length, asset.created_at, uploader.display_name
+            FROM cpd.elevate_status_badge_assets asset
+            JOIN auth.user_accounts uploader_account ON uploader_account.id = asset.uploaded_by_user_account_id
+            JOIN people.staff uploader ON uploader.id = uploader_account.staff_id
+            WHERE asset.academic_year_key = @academicYear
+              AND asset.archived_at IS NULL;
+            """,
+            command => command.Parameters.AddWithValue("@academicYear", academicYear),
+            reader => new ElevateStatusBadgeAssetRow(
+                reader.GetGuid(0),
+                reader.GetByte(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt32(4),
+                reader.GetFieldValue<DateTimeOffset>(5),
+                reader.GetString(6)),
+            cancellationToken);
+        var assetsByLevel = assets.ToDictionary(asset => asset.LevelNumber);
+
+        return ElevateStatusLevels.Select(level =>
+        {
+            assetsByLevel.TryGetValue(level.LevelNumber, out var asset);
+            return new ElevateStatusBadgeAssetSummary(
+                academicYear,
+                level.LevelNumber,
+                level.LevelKey,
+                level.Name,
+                $"/system-assets/elevate-status/{level.LevelKey}.png",
+                asset?.Id,
+                asset?.FileName,
+                asset?.ContentType,
+                asset?.ContentLength,
+                asset?.CreatedAt,
+                asset?.UploadedByName);
+        }).ToArray();
+    }
+
+    public async Task<ElevateStatusBadgeAssetContent?> GetElevateStatusBadgeAssetContentAsync(
+        string academicYear,
+        int levelNumber,
+        CancellationToken cancellationToken)
+    {
+        if (ElevateStatusLevels.All(level => level.LevelNumber != levelNumber))
+        {
+            return null;
+        }
+
+        var rows = await QueryAsync(
+            """
+            SELECT file_content, content_type, file_name
+            FROM cpd.elevate_status_badge_assets
+            WHERE academic_year_key = @academicYear
+              AND level_number = @levelNumber
+              AND archived_at IS NULL;
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("@academicYear", academicYear);
+                command.Parameters.AddWithValue("@levelNumber", levelNumber);
+            },
+            reader => new ElevateStatusBadgeAssetContent(
+                (byte[])reader.GetValue(0),
+                reader.GetString(1),
+                reader.GetString(2)),
+            cancellationToken);
+        return rows.SingleOrDefault();
+    }
+
+    public async Task<IReadOnlyList<ElevateStatusBadgeAssetSummary>> SaveElevateStatusBadgeAssetAsync(
+        string academicYear,
+        int levelNumber,
+        string fileName,
+        byte[] content,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        if (!currentUser.UserAccountId.HasValue || !currentUser.HasPermission(PermissionKeys.ElevateStatusManage))
+        {
+            throw new WorkflowValidationException("You are not authorised to manage Elevate Status artwork.");
+        }
+        _ = ElevateStatusLevels.SingleOrDefault(level => level.LevelNumber == levelNumber)
+            ?? throw new WorkflowValidationException("Select a valid Elevate Status level.");
+        _ = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
+        if (content.Length == 0 || content.Length > MaximumElevateStatusBadgeBytes)
+        {
+            throw new WorkflowValidationException("Badge images must be between 1 byte and 5 MB.");
+        }
+
+        var contentType = DetectElevateStatusImageContentType(content)
+            ?? throw new WorkflowValidationException("Upload a valid PNG, JPEG or WebP image.");
+        var safeFileName = Path.GetFileName(fileName.Trim());
+        if (string.IsNullOrWhiteSpace(safeFileName))
+        {
+            safeFileName = $"elevate-status-level-{levelNumber}{ExtensionForImageContentType(contentType)}";
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await using (var archive = new SqlCommand(
+                """
+                UPDATE cpd.elevate_status_badge_assets
+                SET archived_at = sysutcdatetime(), archived_by_user_account_id = @userAccountId
+                WHERE academic_year_key = @academicYear
+                  AND level_number = @levelNumber
+                  AND archived_at IS NULL;
+                """, connection, transaction))
+            {
+                archive.Parameters.AddWithValue("@userAccountId", currentUser.UserAccountId.Value);
+                archive.Parameters.AddWithValue("@academicYear", academicYear);
+                archive.Parameters.AddWithValue("@levelNumber", levelNumber);
+                await archive.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            var assetId = Guid.NewGuid();
+            await using (var insert = new SqlCommand(
+                """
+                INSERT INTO cpd.elevate_status_badge_assets (
+                    id, academic_year_key, level_number, file_name, content_type,
+                    content_length, file_content, uploaded_by_user_account_id
+                ) VALUES (
+                    @id, @academicYear, @levelNumber, @fileName, @contentType,
+                    @contentLength, @fileContent, @userAccountId
+                );
+                """, connection, transaction))
+            {
+                insert.Parameters.AddWithValue("@id", assetId);
+                insert.Parameters.AddWithValue("@academicYear", academicYear);
+                insert.Parameters.AddWithValue("@levelNumber", levelNumber);
+                insert.Parameters.AddWithValue("@fileName", safeFileName);
+                insert.Parameters.AddWithValue("@contentType", contentType);
+                insert.Parameters.AddWithValue("@contentLength", content.Length);
+                insert.Parameters.Add("@fileContent", System.Data.SqlDbType.VarBinary, -1).Value = content;
+                insert.Parameters.AddWithValue("@userAccountId", currentUser.UserAccountId.Value);
+                await insert.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await WriteAuditAsync(
+                connection,
+                transaction,
+                currentUser.UserAccountId.Value,
+                null,
+                "elevate_status_badge_asset",
+                assetId,
+                "elevate_status.badge_uploaded",
+                $"Uploaded Elevate Status level {levelNumber} artwork for {academicYear}.",
+                null,
+                JsonSerializer.Serialize(new { academicYear, levelNumber, FileName = safeFileName, ContentType = contentType, ContentLength = content.Length }),
+                cancellationToken: cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+
+        return await GetElevateStatusBadgeAssetsAsync(academicYear, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ElevateStatusBadgeAssetSummary>> ResetElevateStatusBadgeAssetAsync(
+        string academicYear,
+        int levelNumber,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        if (!currentUser.UserAccountId.HasValue || !currentUser.HasPermission(PermissionKeys.ElevateStatusManage))
+        {
+            throw new WorkflowValidationException("You are not authorised to manage Elevate Status artwork.");
+        }
+        _ = ElevateStatusLevels.SingleOrDefault(level => level.LevelNumber == levelNumber)
+            ?? throw new WorkflowValidationException("Select a valid Elevate Status level.");
+        _ = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            Guid? assetId = null;
+            await using (var read = new SqlCommand(
+                """
+                SELECT id FROM cpd.elevate_status_badge_assets
+                WHERE academic_year_key = @academicYear AND level_number = @levelNumber AND archived_at IS NULL;
+                """, connection, transaction))
+            {
+                read.Parameters.AddWithValue("@academicYear", academicYear);
+                read.Parameters.AddWithValue("@levelNumber", levelNumber);
+                var result = await read.ExecuteScalarAsync(cancellationToken);
+                assetId = result is Guid id ? id : null;
+            }
+
+            if (assetId.HasValue)
+            {
+                await using var archive = new SqlCommand(
+                    """
+                    UPDATE cpd.elevate_status_badge_assets
+                    SET archived_at = sysutcdatetime(), archived_by_user_account_id = @userAccountId
+                    WHERE id = @id AND archived_at IS NULL;
+                    """, connection, transaction);
+                archive.Parameters.AddWithValue("@userAccountId", currentUser.UserAccountId.Value);
+                archive.Parameters.AddWithValue("@id", assetId.Value);
+                await archive.ExecuteNonQueryAsync(cancellationToken);
+                await WriteAuditAsync(
+                    connection,
+                    transaction,
+                    currentUser.UserAccountId.Value,
+                    null,
+                    "elevate_status_badge_asset",
+                    assetId.Value,
+                    "elevate_status.badge_reset",
+                    $"Reset Elevate Status level {levelNumber} artwork to the built-in image for {academicYear}.",
+                    null,
+                    JsonSerializer.Serialize(new { academicYear, levelNumber }),
+                    cancellationToken: cancellationToken);
+            }
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+
+        return await GetElevateStatusBadgeAssetsAsync(academicYear, cancellationToken);
     }
 
     public async Task<ElevateStatusSummary> GetElevateStatusAsync(
@@ -78,6 +315,8 @@ public sealed partial class SqlFoundationDataStore
         var canManage = ElevateStatusAccessPolicy.CanManageControlledLevels(currentUser);
         var canSubmitExplorer = ElevateStatusAccessPolicy.CanUpdateLevel(currentUser, staffId, 1);
         var awardsByLevel = awards.ToDictionary(award => award.LevelNumber);
+        var badgeAssetsByLevel = (await GetElevateStatusBadgeAssetsAsync(academicYear, cancellationToken))
+            .ToDictionary(asset => asset.LevelNumber);
         var previousLevelAwarded = true;
         var levelSummaries = new List<ElevateStatusLevelSummary>(ElevateStatusLevels.Length);
 
@@ -106,7 +345,8 @@ public sealed partial class SqlFoundationDataStore
                 definition.LevelNumber == 1 ? award?.ImplementationImpact : null,
                 canManage || definition.LevelNumber == 1 ? award?.QualifyingAttendanceCount : null,
                 canManage || definition.LevelNumber == 1 ? award?.ConfirmedAt : null,
-                canManage || definition.LevelNumber == 1 ? award?.ConfirmedByName : null));
+                canManage || definition.LevelNumber == 1 ? award?.ConfirmedByName : null,
+                badgeAssetsByLevel[definition.LevelNumber].CustomAssetId));
             previousLevelAwarded = isAwarded;
         }
 
@@ -481,4 +721,41 @@ public sealed partial class SqlFoundationDataStore
         string? ImplementationImpact,
         int QualifyingAttendanceCount,
         DateTimeOffset ConfirmedAt);
+
+    private sealed record ElevateStatusBadgeAssetRow(
+        Guid Id,
+        int LevelNumber,
+        string FileName,
+        string ContentType,
+        int ContentLength,
+        DateTimeOffset CreatedAt,
+        string UploadedByName);
+
+    private static string? DetectElevateStatusImageContentType(byte[] content)
+    {
+        if (content.Length >= 8
+            && content[0] == 0x89 && content[1] == 0x50 && content[2] == 0x4E && content[3] == 0x47
+            && content[4] == 0x0D && content[5] == 0x0A && content[6] == 0x1A && content[7] == 0x0A)
+        {
+            return "image/png";
+        }
+        if (content.Length >= 3 && content[0] == 0xFF && content[1] == 0xD8 && content[2] == 0xFF)
+        {
+            return "image/jpeg";
+        }
+        if (content.Length >= 12
+            && content[0] == 0x52 && content[1] == 0x49 && content[2] == 0x46 && content[3] == 0x46
+            && content[8] == 0x57 && content[9] == 0x45 && content[10] == 0x42 && content[11] == 0x50)
+        {
+            return "image/webp";
+        }
+        return null;
+    }
+
+    private static string ExtensionForImageContentType(string contentType) => contentType switch
+    {
+        "image/jpeg" => ".jpg",
+        "image/webp" => ".webp",
+        _ => ".png"
+    };
 }

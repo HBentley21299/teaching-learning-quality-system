@@ -116,6 +116,25 @@ export type ActionSummary = {
   isDeleted: boolean;
 };
 
+export type DashboardActionSummary = Pick<ActionSummary,
+  | "id"
+  | "sourceRecordId"
+  | "sourceFormType"
+  | "subjectStaffName"
+  | "ownerStaffId"
+  | "ownerStaffName"
+  | "actionTheme"
+  | "title"
+  | "statusKey"
+  | "dueDate"
+  | "completedDate"
+  | "isOverdue"
+  | "createdAt"
+  | "facultyCode"
+  | "teamCode"
+  | "isDeleted"
+>;
+
 export type ActionVisibility = "owner_only" | "staff_and_management" | "management_only" | "source_editors";
 
 export type CreateActionRequest = {
@@ -767,6 +786,21 @@ export type ElevateStatusLevelSummary = {
   attendanceCountAtAward?: number;
   awardedAt?: string;
   awardedByName?: string;
+  customBadgeAssetId?: string;
+};
+
+export type ElevateStatusBadgeAssetSummary = {
+  academicYear: string;
+  levelNumber: number;
+  levelKey: ElevateStatusLevelSummary["levelKey"];
+  levelName: string;
+  defaultAssetPath: string;
+  customAssetId?: string;
+  fileName?: string;
+  contentType?: string;
+  contentLength?: number;
+  uploadedAt?: string;
+  uploadedByName?: string;
 };
 
 export type ElevateStatusSummary = {

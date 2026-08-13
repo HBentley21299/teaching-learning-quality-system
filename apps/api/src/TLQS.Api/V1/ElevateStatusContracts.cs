@@ -25,7 +25,26 @@ public sealed record ElevateStatusLevelSummary(
     string? ImplementationImpact,
     int? AttendanceCountAtAward,
     DateTimeOffset? AwardedAt,
-    string? AwardedByName);
+    string? AwardedByName,
+    Guid? CustomBadgeAssetId);
+
+public sealed record ElevateStatusBadgeAssetSummary(
+    string AcademicYear,
+    int LevelNumber,
+    string LevelKey,
+    string LevelName,
+    string DefaultAssetPath,
+    Guid? CustomAssetId,
+    string? FileName,
+    string? ContentType,
+    int? ContentLength,
+    DateTimeOffset? UploadedAt,
+    string? UploadedByName);
+
+public sealed record ElevateStatusBadgeAssetContent(
+    byte[] Content,
+    string ContentType,
+    string FileName);
 
 public sealed record ElevateStatusSummary(
     Guid StaffId,

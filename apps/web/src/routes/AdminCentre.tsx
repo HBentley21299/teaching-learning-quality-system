@@ -18,6 +18,7 @@ import type {
 } from "../services/types";
 import { FormBuilder } from "./FormBuilder";
 import { AdminElevatePractice } from "./AdminElevatePractice";
+import { ElevateStatusAssetsAdmin } from "./ElevateStatusAssetsAdmin";
 import { AdminWorkScrutiny } from "./AdminWorkScrutiny";
 import { AdminManagedLists } from "./AdminManagedLists";
 import { AdminRecordsPanel } from "./AdminRecordsPanel";
@@ -146,7 +147,10 @@ export function AdminCentre({
       {activeTab === "organisation" ? <OrganisationStructureAdmin /> : null}
       {activeTab === "lists" ? <div className="route-stack"><CoachingConfigurationAdmin /><AdminManagedLists /><LearningWalkThemeAdminPanel /></div> : null}
       {activeTab === "forms" ? <FormBuilder embedded user={user} /> : null}
-      {activeTab === "elevate" ? <AdminElevatePractice /> : null}
+      {activeTab === "elevate" ? <div className="route-stack">
+        {user.permissions.includes("elevate_status.manage") ? <ElevateStatusAssetsAdmin /> : null}
+        <AdminElevatePractice />
+      </div> : null}
       {activeTab === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
       {activeTab === "messaging" ? <MessagingAdminPanel /> : null}
       {activeTab === "dashboards" ? <DashboardAdminPanel /> : null}
