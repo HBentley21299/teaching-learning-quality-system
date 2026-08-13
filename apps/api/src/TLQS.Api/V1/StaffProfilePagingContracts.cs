@@ -32,7 +32,8 @@ public sealed record StaffProfileLivSummary(
     string CurrentStage,
     string Status,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? UpdatedAt);
+    DateTimeOffset? UpdatedAt,
+    string ProcessKey);
 
 public sealed record StaffProfileProbationSummary(
     Guid Id,

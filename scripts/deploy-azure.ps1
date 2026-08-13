@@ -28,6 +28,7 @@ param(
     [string] $MessagingSenderAddress,
     [string] $MessagingReplyToAddress,
     [string] $MessagingTestRecipient,
+    [string] $OperationsAlertEmail,
     [string] $BootstrapAdminObjectId,
     [string] $BootstrapAdminEmail,
     [ValidateSet("Group", "User")]
@@ -115,6 +116,58 @@ function Get-AzureSqlAccessToken {
         throw "Azure CLI could not acquire an Azure SQL access token. Run 'az login' and try again."
     }
     return $token
+}
+
+function Grant-AppDatabaseAccess {
+    param(
+        [Parameter(Mandatory = $true)][string] $IdentityName,
+        [Parameter(Mandatory = $true)][string] $IdentityClientId,
+        [Parameter(Mandatory = $true)][string] $Server,
+        [Parameter(Mandatory = $true)][string] $Database,
+        [Parameter(Mandatory = $true)][string] $AccessToken
+    )
+
+    $safeIdentityName = $IdentityName.Replace("]", "]]" )
+    $identitySid = Convert-GuidToSidHex $IdentityClientId
+    $grantSql = @"
+IF EXISTS (
+    SELECT 1 FROM sys.database_principals
+    WHERE sid = $identitySid AND name <> N'$safeIdentityName'
+)
+    THROW 50001, 'The managed identity client ID is already mapped to another database principal.', 1;
+IF EXISTS (
+    SELECT 1 FROM sys.database_principals
+    WHERE name = N'$safeIdentityName' AND sid <> $identitySid
+)
+    DROP USER [$safeIdentityName];
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE sid = $identitySid)
+    CREATE USER [$safeIdentityName] WITH SID = $identitySid, TYPE = E;
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.database_role_members membership
+    JOIN sys.database_principals role ON role.principal_id = membership.role_principal_id
+    JOIN sys.database_principals member ON member.principal_id = membership.member_principal_id
+    WHERE role.name = N'db_datareader' AND member.sid = $identitySid
+)
+    ALTER ROLE db_datareader ADD MEMBER [$safeIdentityName];
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.database_role_members membership
+    JOIN sys.database_principals role ON role.principal_id = membership.role_principal_id
+    JOIN sys.database_principals member ON member.principal_id = membership.member_principal_id
+    WHERE role.name = N'db_datawriter' AND member.sid = $identitySid
+)
+    ALTER ROLE db_datawriter ADD MEMBER [$safeIdentityName];
+GRANT EXECUTE TO [$safeIdentityName];
+"@
+
+    Invoke-Sqlcmd `
+        -ServerInstance $Server `
+        -Database $Database `
+        -AccessToken $AccessToken `
+        -Query $grantSql `
+        -AbortOnError `
+        -ErrorAction Stop | Out-Null
 }
 
 function New-PortableZip {
@@ -295,6 +348,7 @@ try {
             messagingSenderAddress=$MessagingSenderAddress `
             messagingReplyToAddress=$MessagingReplyToAddress `
             messagingTestRecipient=$MessagingTestRecipient `
+            operationsAlertEmail=$OperationsAlertEmail `
             enableSqlMigrationAccess=true `
             migrationClientIp=$migrationClientIp `
         --output json
@@ -308,6 +362,9 @@ try {
     $appUrl = $outputs.appUrl.value.TrimEnd("/")
     $appIdentityObjectId = $outputs.appManagedIdentityObjectId.value
     $appIdentityClientId = Get-ServicePrincipalClientId -ObjectId $appIdentityObjectId
+    $stagingSlotName = $outputs.stagingSlotName.value
+    $stagingSlotUrl = $outputs.stagingSlotUrl.value.TrimEnd("/")
+    $stagingIdentityObjectId = $outputs.stagingManagedIdentityObjectId.value
     $sqlServerName = $outputs.sqlServerName.value
     $sqlServerFqdn = $outputs.sqlServerFqdn.value
     $sqlDatabaseName = $outputs.sqlDatabaseName.value
@@ -417,65 +474,62 @@ END;
             -ErrorAction Stop | Out-Null
     }
 
-    $escapedIdentityName = $appServiceName.Replace("]", "]]" )
-    # Azure SQL matches a service principal token to its application/client ID,
-    # not the service principal object ID returned by the App Service resource.
-    $identitySid = Convert-GuidToSidHex $appIdentityClientId
-    $grantSql = @"
-IF EXISTS (
-    SELECT 1
-    FROM sys.database_principals
-    WHERE sid = $identitySid AND name <> N'$escapedIdentityName'
-)
-    THROW 50001, 'The managed identity client ID is already mapped to another database principal.', 1;
-IF EXISTS (
-    SELECT 1
-    FROM sys.database_principals
-    WHERE name = N'$escapedIdentityName' AND sid <> $identitySid
-)
-    DROP USER [$escapedIdentityName];
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE sid = $identitySid)
-    CREATE USER [$escapedIdentityName] WITH SID = $identitySid, TYPE = E;
-IF NOT EXISTS (
-    SELECT 1
-    FROM sys.database_role_members membership
-    JOIN sys.database_principals role ON role.principal_id = membership.role_principal_id
-    JOIN sys.database_principals member ON member.principal_id = membership.member_principal_id
-    WHERE role.name = N'db_datareader' AND member.sid = $identitySid
-)
-    ALTER ROLE db_datareader ADD MEMBER [$escapedIdentityName];
-IF NOT EXISTS (
-    SELECT 1
-    FROM sys.database_role_members membership
-    JOIN sys.database_principals role ON role.principal_id = membership.role_principal_id
-    JOIN sys.database_principals member ON member.principal_id = membership.member_principal_id
-    WHERE role.name = N'db_datawriter' AND member.sid = $identitySid
-)
-    ALTER ROLE db_datawriter ADD MEMBER [$escapedIdentityName];
-GRANT EXECUTE TO [$escapedIdentityName];
-"@
-
     Write-Host ""
     Write-Host "==> Grant the App Service managed identity least-privilege database access" -ForegroundColor Cyan
-    Invoke-Sqlcmd `
-        -ServerInstance $sqlServerFqdn `
+    Grant-AppDatabaseAccess `
+        -IdentityName $appServiceName `
+        -IdentityClientId $appIdentityClientId `
+        -Server $sqlServerFqdn `
         -Database $sqlDatabaseName `
-        -AccessToken $databaseAccessToken `
-        -Query $grantSql `
-        -AbortOnError `
-        -ErrorAction Stop | Out-Null
+        -AccessToken $databaseAccessToken
+
+    if ($EnvironmentName -eq "prod") {
+        $stagingIdentityClientId = Get-ServicePrincipalClientId -ObjectId $stagingIdentityObjectId
+        Write-Host ""
+        Write-Host "==> Grant the staging slot managed identity least-privilege database access" -ForegroundColor Cyan
+        Grant-AppDatabaseAccess `
+            -IdentityName "$appServiceName/slots/$stagingSlotName" `
+            -IdentityClientId $stagingIdentityClientId `
+            -Server $sqlServerFqdn `
+            -Database $sqlDatabaseName `
+            -AccessToken $databaseAccessToken
+    }
 
     New-PortableZip -SourceDirectory $apiArtifact -DestinationPath $zipArtifact
 
-    Invoke-Native "Deploy the verified application package" {
-        az webapp deploy `
-            --resource-group $ResourceGroup `
-            --name $appServiceName `
-            --src-path $zipArtifact `
-            --type zip `
-            --clean true `
-            --restart true `
-            --output none
+    if ($EnvironmentName -eq "prod") {
+        Invoke-Native "Deploy the verified package to the staging slot" {
+            az webapp deploy `
+                --resource-group $ResourceGroup `
+                --name $appServiceName `
+                --slot $stagingSlotName `
+                --src-path $zipArtifact `
+                --type zip `
+                --clean true `
+                --restart true `
+                --output none
+        }
+        Wait-ForHealthyApp -Url $stagingSlotUrl
+        Invoke-Native "Swap the healthy staging release into production" {
+            az webapp deployment slot swap `
+                --resource-group $ResourceGroup `
+                --name $appServiceName `
+                --slot $stagingSlotName `
+                --target-slot production `
+                --output none
+        }
+    }
+    else {
+        Invoke-Native "Deploy the verified application package" {
+            az webapp deploy `
+                --resource-group $ResourceGroup `
+                --name $appServiceName `
+                --src-path $zipArtifact `
+                --type zip `
+                --clean true `
+                --restart true `
+                --output none
+        }
     }
 }
 finally {

@@ -12,8 +12,8 @@ function cacheKey(academicYear: string, levelNumber: number, customAssetId: stri
   return `${academicYear}:${levelNumber}:${customAssetId}`;
 }
 
-async function loadCustomAsset(academicYear: string, levelNumber: number) {
-  const blob = await api.elevateStatusBadgeContent(academicYear, levelNumber);
+async function loadCustomAsset(academicYear: string, levelNumber: number, customAssetId: string) {
+  const blob = await api.elevateStatusBadgeContent(academicYear, levelNumber, customAssetId);
   return blob ? URL.createObjectURL(blob) : null;
 }
 
@@ -56,7 +56,7 @@ export function ElevateStatusBadgeImage({
     const key = cacheKey(academicYear, levelNumber, customAssetId);
     let pending = objectUrlCache.get(key);
     if (!pending) {
-      pending = loadCustomAsset(academicYear, levelNumber).catch(() => null);
+      pending = loadCustomAsset(academicYear, levelNumber, customAssetId).catch(() => null);
       objectUrlCache.set(key, pending);
     }
     void pending.then((url) => {
@@ -70,6 +70,8 @@ export function ElevateStatusBadgeImage({
       alt={ariaHidden ? "" : alt}
       aria-hidden={ariaHidden ? "true" : undefined}
       className={className}
+      decoding="async"
+      loading="lazy"
       onError={() => setSource(fallback)}
       src={source}
     />

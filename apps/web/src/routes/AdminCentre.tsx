@@ -145,7 +145,7 @@ export function AdminCentre({
       ) : null}
       {activeTab === "staff-access" ? <div className="route-stack"><StaffAdminPanel user={user} /><PermissionAdminPanel user={user} /></div> : null}
       {activeTab === "organisation" ? <OrganisationStructureAdmin /> : null}
-      {activeTab === "lists" ? <div className="route-stack"><CoachingConfigurationAdmin /><AdminManagedLists /><LearningWalkThemeAdminPanel /></div> : null}
+      {activeTab === "lists" ? <div className="route-stack"><CoachingConfigurationAdmin /><AdminManagedLists /><LearningWalkThemeAdminPanel /><LearningWalkThemeAdminPanel processKey="als_learning_walk" title="ALS Learning Walk themes and focus areas" subtitle="Used by ALS Learning Walks and ALS reporting" /><LearningWalkThemeAdminPanel processKey="als_liv_practitioner" title="ALS LIV Elevate practitioner areas" subtitle="Standalone configurable areas used only by ALS LIV" /></div> : null}
       {activeTab === "forms" ? <FormBuilder embedded user={user} /> : null}
       {activeTab === "elevate" ? <div className="route-stack">
         {user.permissions.includes("elevate_status.manage") ? <ElevateStatusAssetsAdmin /> : null}
@@ -1161,7 +1161,7 @@ function formatReflectionSummary(record: StaffProfileRecordSummary) {
   return `${record.submittedReflections} submitted, ${record.draftReflections} draft`;
 }
 
-function LearningWalkThemeAdminPanel() {
+function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Teaching and Learning themes", subtitle = "Shared by Learning Walks, LIV and teaching and learning reporting" }: { processKey?: "learning_walk" | "als_learning_walk" | "als_liv_practitioner"; title?: string; subtitle?: string }) {
   const [groups, setGroups] = useState<LearningWalkThemeGroup[]>([]);
   const [newGroupName, setNewGroupName] = useState("");
   const [newThemeName, setNewThemeName] = useState("");
@@ -1176,18 +1176,18 @@ function LearningWalkThemeAdminPanel() {
 
   useEffect(() => {
     void refreshThemes();
-  }, []);
+  }, [processKey]);
 
   async function refreshThemes(nextStatus = "") {
     try {
-      const nextGroups = await api.adminLearningWalkThemes();
+      const nextGroups = await api.adminLearningWalkThemes(processKey);
       setGroups(nextGroups);
       setNewThemeGroupId((current) => nextGroups.some((group) => group.id === current && group.isActive)
         ? current
         : nextGroups.find((group) => group.isActive)?.id ?? "");
       setStatus(nextStatus);
     } catch {
-      setStatus("Learning Walk themes could not be loaded from the API.");
+      setStatus("Themes could not be loaded from the API.");
     }
   }
 
@@ -1198,7 +1198,7 @@ function LearningWalkThemeAdminPanel() {
     }
 
     setIsSaving(true);
-    const result = await api.createLearningWalkThemeGroup({ name: newGroupName.trim() });
+    const result = await api.createLearningWalkThemeGroup({ name: newGroupName.trim() }, processKey);
     setIsSaving(false);
     if (!result.ok) {
       setStatus(result.message ?? "The theme area could not be added.");
@@ -1257,15 +1257,15 @@ function LearningWalkThemeAdminPanel() {
     const result = await api.createLearningWalkTheme({
       themeGroupId: newThemeGroupId,
       name: newThemeName.trim()
-    });
+    }, processKey);
     setIsSaving(false);
     if (!result.ok) {
-      setStatus(result.message ?? "The Learning Walk theme could not be added.");
+      setStatus(result.message ?? "The theme could not be added.");
       return;
     }
 
     setNewThemeName("");
-    await refreshThemes("Learning Walk theme added.");
+    await refreshThemes("Theme added.");
   }
 
   function startEdit(theme: LearningWalkTheme) {
@@ -1288,12 +1288,12 @@ function LearningWalkThemeAdminPanel() {
     });
     setIsSaving(false);
     if (!result.ok) {
-      setStatus(result.message ?? "The Learning Walk theme could not be updated.");
+      setStatus(result.message ?? "The theme could not be updated.");
       return;
     }
 
     setEditingId("");
-    await refreshThemes("Learning Walk theme updated.");
+    await refreshThemes("Theme updated.");
   }
 
   async function setThemeStatus(theme: LearningWalkTheme, isActive: boolean) {
@@ -1301,11 +1301,11 @@ function LearningWalkThemeAdminPanel() {
     const result = await api.setLearningWalkThemeStatus(theme.id, isActive);
     setIsSaving(false);
     if (!result.ok) {
-      setStatus(result.message ?? "The Learning Walk theme status could not be changed.");
+      setStatus(result.message ?? "The theme status could not be changed.");
       return;
     }
 
-    await refreshThemes(isActive ? "Learning Walk theme reactivated." : "Learning Walk theme deactivated.");
+    await refreshThemes(isActive ? "Theme reactivated." : "Theme deactivated.");
   }
 
   async function moveTheme(group: LearningWalkThemeGroup, themeIndex: number, direction: -1 | 1) {
@@ -1320,7 +1320,7 @@ function LearningWalkThemeAdminPanel() {
     const result = await api.reorderLearningWalkThemes(group.id, nextIds);
     setIsSaving(false);
     if (!result.ok) {
-      setStatus(result.message ?? "The Learning Walk themes could not be reordered.");
+      setStatus(result.message ?? "The themes could not be reordered.");
       return;
     }
 
@@ -1336,8 +1336,8 @@ function LearningWalkThemeAdminPanel() {
     <section className="panel learning-theme-admin">
       <div className="panel-heading">
         <div>
-          <h2>Teaching and Learning themes</h2>
-          <span>Shared by Learning Walks, LIV and teaching and learning reporting</span>
+          <h2>{title}</h2>
+          <span>{subtitle}</span>
         </div>
         <strong>{activeGroups.length} active areas · {activeThemeCount} active themes</strong>
       </div>

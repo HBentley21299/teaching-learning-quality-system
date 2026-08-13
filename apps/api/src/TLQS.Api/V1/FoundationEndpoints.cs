@@ -246,18 +246,19 @@ public static class FoundationEndpoints
             return definition is null ? Results.NotFound() : Results.Ok(definition);
         });
 
-        api.MapGet("/learning-walk/theme-mappings", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/learning-walk/theme-mappings", async (string? process, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanUseForms(currentUser))
+            var processKey = NormalizeLearningWalkProcess(process);
+            if (!CanUseLearningWalkProcess(currentUser, processKey))
             {
                 return Results.Forbid();
             }
 
-            return Results.Ok(await store.GetLearningWalkThemeMappingsAsync(cancellationToken));
+            return Results.Ok(await store.GetLearningWalkThemeMappingsAsync(cancellationToken, processKey));
         });
 
-        api.MapPut("/learning-walk/theme-mappings", async (UpdateLearningWalkThemeMappingRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPut("/learning-walk/theme-mappings", async (string? process, UpdateLearningWalkThemeMappingRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!currentUser.HasPermission(PermissionKeys.FormsManage))
@@ -270,24 +271,25 @@ public static class FoundationEndpoints
                 return Results.BadRequest(new { Message = "Agreed theme is required." });
             }
 
-            var id = await store.UpsertLearningWalkThemeMappingAsync(request, cancellationToken);
+            var id = await store.UpsertLearningWalkThemeMappingAsync(request, cancellationToken, NormalizeLearningWalkProcess(process));
             return Results.Ok(new { Id = id });
         });
 
-        api.MapGet("/learning-walk/themes", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/learning-walk/themes", async (string? process, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanUseForms(currentUser))
+            var processKey = NormalizeLearningWalkProcess(process);
+            if (!CanUseLearningWalkProcess(currentUser, processKey))
             {
                 return Results.Forbid();
             }
 
             // Inactive themes are returned so historical drafts can still render their selections.
             // The form UI only offers active themes for new choices.
-            return Results.Ok(await store.GetLearningWalkThemeGroupsAsync(includeInactive: true, cancellationToken));
+            return Results.Ok(await store.GetLearningWalkThemeGroupsAsync(includeInactive: true, cancellationToken, processKey));
         });
 
-        api.MapGet("/admin/learning-walk/themes", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/admin/learning-walk/themes", async (string? process, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!currentUser.HasPermission(PermissionKeys.FormsManage)
@@ -296,10 +298,10 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            return Results.Ok(await store.GetLearningWalkThemeGroupsAsync(includeInactive: true, cancellationToken));
+            return Results.Ok(await store.GetLearningWalkThemeGroupsAsync(includeInactive: true, cancellationToken, NormalizeLearningWalkProcess(process)));
         });
 
-        api.MapPost("/admin/learning-walk/theme-groups", async (SaveLearningWalkThemeGroupRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/admin/learning-walk/theme-groups", async (string? process, SaveLearningWalkThemeGroupRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!currentUser.HasPermission(PermissionKeys.FormsManage)
@@ -313,7 +315,7 @@ public static class FoundationEndpoints
                 return Results.BadRequest(new { Message = "A theme area name is required." });
             }
 
-            var id = await store.CreateLearningWalkThemeGroupAsync(request, currentUser, cancellationToken);
+            var id = await store.CreateLearningWalkThemeGroupAsync(request, currentUser, cancellationToken, NormalizeLearningWalkProcess(process));
             return Results.Created($"/api/v1/admin/learning-walk/theme-groups/{id}", new { Id = id });
         });
 
@@ -350,7 +352,7 @@ public static class FoundationEndpoints
                 : Results.NotFound();
         });
 
-        api.MapPost("/admin/learning-walk/themes", async (SaveLearningWalkThemeRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/admin/learning-walk/themes", async (string? process, SaveLearningWalkThemeRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!currentUser.HasPermission(PermissionKeys.FormsManage)
@@ -364,7 +366,7 @@ public static class FoundationEndpoints
                 return Results.BadRequest(new { Message = "A theme name is required." });
             }
 
-            var id = await store.CreateLearningWalkThemeAsync(request, currentUser, cancellationToken);
+            var id = await store.CreateLearningWalkThemeAsync(request, currentUser, cancellationToken, NormalizeLearningWalkProcess(process));
             return Results.Created($"/api/v1/admin/learning-walk/themes/{id}", new { Id = id });
         });
 
@@ -422,7 +424,8 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            if (string.Equals(request.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase)
+            if ((string.Equals(request.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(request.RecordType, "als_learning_walk", StringComparison.OrdinalIgnoreCase))
                 && (!request.OrgUnitId.HasValue || !request.RecordDate.HasValue))
             {
                 return Results.BadRequest(new { Message = "Learning Walk submissions require a team and visit date." });
@@ -619,32 +622,38 @@ public static class FoundationEndpoints
             };
         });
 
-        api.MapGet("/liv-records", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/liv-records", async (string? process, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return Results.Ok(await store.GetLivCasesV2Async(currentUser, cancellationToken));
-        });
-
-        api.MapGet("/liv-records/configuration", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
-        {
-            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return CanSubmitLiv(currentUser)
-                ? Results.Ok(await store.GetLivConfigurationAsync(cancellationToken))
+            var processKey = NormalizeLivProcess(process);
+            return CanSubmitLivProcess(currentUser, processKey) || currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+                ? Results.Ok(await store.GetLivCasesV2Async(currentUser, cancellationToken, processKey))
                 : Results.Forbid();
         });
 
-        api.MapGet("/liv-records/staff/{staffId:guid}/context", async (Guid staffId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/liv-records/configuration", async (string? process, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanSubmitLiv(currentUser)) return Results.Forbid();
-            var context = await store.GetLivStaffContextAsync(staffId, currentUser, cancellationToken);
+            var processKey = NormalizeLivProcess(process);
+            return CanSubmitLivProcess(currentUser, processKey)
+                ? Results.Ok(await store.GetLivConfigurationAsync(cancellationToken, processKey))
+                : Results.Forbid();
+        });
+
+        api.MapGet("/liv-records/staff/{staffId:guid}/context", async (Guid staffId, string? process, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey)) return Results.Forbid();
+            var context = await store.GetLivStaffContextAsync(staffId, currentUser, cancellationToken, processKey);
             return context is null ? Results.NotFound() : Results.Ok(context);
         });
 
-        api.MapPost("/liv-records", async (SaveLivCaseRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/liv-records", async (string? process, SaveLivCaseRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanSubmitLiv(currentUser))
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey))
             {
                 return Results.Forbid();
             }
@@ -654,19 +663,20 @@ public static class FoundationEndpoints
                 return Results.BadRequest(new { Message = "A staff member is required for a LIV record." });
             }
 
-            var id = await store.CreateLivCaseV2Async(request, currentUser, cancellationToken);
+            var id = await store.CreateLivCaseV2Async(request, currentUser, cancellationToken, processKey);
             return Results.Created($"/api/v1/liv-records/{id}", new { Id = id });
         });
 
-        api.MapPut("/liv-records/{id:guid}", async (Guid id, SaveLivCaseRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPut("/liv-records/{id:guid}", async (Guid id, string? process, SaveLivCaseRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanSubmitLiv(currentUser))
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey))
             {
                 return Results.Forbid();
             }
 
-            var result = await store.UpdateLivCaseV2Async(id, request, currentUser, cancellationToken);
+            var result = await store.UpdateLivCaseV2Async(id, request, currentUser, cancellationToken, processKey);
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -675,29 +685,31 @@ public static class FoundationEndpoints
             };
         });
 
-        api.MapPost("/liv-records/{id:guid}/visits", async (Guid id, SaveLivVisitRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/liv-records/{id:guid}/visits", async (Guid id, string? process, SaveLivVisitRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanSubmitLiv(currentUser))
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey))
             {
                 return Results.Forbid();
             }
 
-            var visit = await store.AddLivVisitAsync(id, request, currentUser, cancellationToken);
+            var visit = await store.AddLivVisitAsync(id, request, currentUser, cancellationToken, processKey);
             return visit is null
                 ? Results.NotFound()
                 : Results.Created($"/api/v1/liv-records/{id}/visits/{visit.Id}", visit);
         });
 
-        api.MapPut("/liv-records/{id:guid}/visits/{visitId:guid}", async (Guid id, Guid visitId, SaveLivVisitRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPut("/liv-records/{id:guid}/visits/{visitId:guid}", async (Guid id, Guid visitId, string? process, SaveLivVisitRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanSubmitLiv(currentUser))
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey))
             {
                 return Results.Forbid();
             }
 
-            var result = await store.UpdateLivVisitV2Async(id, visitId, request, currentUser, cancellationToken);
+            var result = await store.UpdateLivVisitV2Async(id, visitId, request, currentUser, cancellationToken, processKey);
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -706,20 +718,23 @@ public static class FoundationEndpoints
             };
         });
 
-        api.MapPost("/liv-records/{id:guid}/stages", async (Guid id, SaveLivStageRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/liv-records/{id:guid}/stages", async (Guid id, string? process, SaveLivStageRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanSubmitLiv(currentUser)) return Results.Forbid();
-            var stage = await store.AddLivStageAsync(id, request, currentUser, cancellationToken);
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey)) return Results.Forbid();
+            var stage = await store.AddLivStageAsync(id, request, currentUser, cancellationToken, processKey);
             return stage is null
                 ? Results.NotFound()
                 : Results.Created($"/api/v1/liv-records/{id}/stages/{stage.Id}", stage);
         });
 
-        api.MapPut("/liv-records/{id:guid}/stages/{stageId:guid}", async (Guid id, Guid stageId, SaveLivStageRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPut("/liv-records/{id:guid}/stages/{stageId:guid}", async (Guid id, Guid stageId, string? process, SaveLivStageRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            var result = await store.UpdateLivStageAsync(id, stageId, request, currentUser, cancellationToken);
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey)) return Results.Forbid();
+            var result = await store.UpdateLivStageAsync(id, stageId, request, currentUser, cancellationToken, processKey);
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -728,11 +743,12 @@ public static class FoundationEndpoints
             };
         });
 
-        api.MapPost("/liv-records/{id:guid}/cycles/current/complete", async (Guid id, CompleteLivCycleRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/liv-records/{id:guid}/cycles/current/complete", async (Guid id, string? process, CompleteLivCycleRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            if (!CanSubmitLiv(currentUser)) return Results.Forbid();
-            var cycle = await store.CompleteLivCycleAsync(id, request.OpenFollowUp, currentUser, cancellationToken);
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey)) return Results.Forbid();
+            var cycle = await store.CompleteLivCycleAsync(id, request.OpenFollowUp, currentUser, cancellationToken, processKey);
             return cycle is null ? Results.NotFound() : Results.Ok(cycle);
         });
 
@@ -862,10 +878,12 @@ public static class FoundationEndpoints
             };
         });
 
-        api.MapPost("/liv-records/{id:guid}/status", async (Guid id, ChangeSubmissionStatusRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/liv-records/{id:guid}/status", async (Guid id, string? process, ChangeSubmissionStatusRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            var result = await store.ChangeLivCaseStatusAsync(id, request.Action, currentUser, cancellationToken);
+            var processKey = NormalizeLivProcess(process);
+            if (!CanSubmitLivProcess(currentUser, processKey)) return Results.Forbid();
+            var result = await store.ChangeLivCaseStatusAsync(id, request.Action, currentUser, cancellationToken, processKey);
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -982,7 +1000,7 @@ public static class FoundationEndpoints
             return Results.Ok(await store.GetCpdAttendanceDashboardAsync(academicYear, currentUser, cancellationToken));
         });
 
-        api.MapGet("/reports/liv-lifecycle", async (string academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/reports/liv-lifecycle", async (string academicYear, string? process, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll)
@@ -991,7 +1009,9 @@ public static class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            return Results.Ok(await store.GetLivLifecycleDashboardAsync(academicYear, currentUser, cancellationToken));
+            var processKey = NormalizeLivProcess(process);
+            if (!currentUser.HasPermission(PermissionKeys.ReportsViewAll) && !CanSubmitLivProcess(currentUser, processKey)) return Results.Forbid();
+            return Results.Ok(await store.GetLivLifecycleDashboardAsync(academicYear, currentUser, cancellationToken, processKey));
         });
 
         api.MapPut("/admin/reports/dashboard-configuration", async (SaveDashboardConfigurationRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -1033,10 +1053,18 @@ public static class FoundationEndpoints
         api.MapGet("/elevate-status/badge-assets/{levelNumber:int}/content", async (
             int levelNumber,
             string academicYear,
+            string? version,
+            HttpResponse response,
             SqlFoundationDataStore store,
             CancellationToken cancellationToken) =>
         {
             var asset = await store.GetElevateStatusBadgeAssetContentAsync(academicYear, levelNumber, cancellationToken);
+            if (asset is not null && !string.IsNullOrWhiteSpace(version))
+            {
+                // The asset id is included in the URL by the web client. A replacement
+                // therefore has a new URL and the previous image can be cached safely.
+                response.Headers.CacheControl = "private,max-age=31536000,immutable";
+            }
             return asset is null
                 ? Results.NotFound()
                 : Results.File(asset.Content, asset.ContentType, asset.FileName, enableRangeProcessing: true);
@@ -1715,6 +1743,7 @@ public static class FoundationEndpoints
         return recordType switch
         {
             "learning_walk" => currentUser.HasPermission(PermissionKeys.LearningWalkSubmit),
+            "als_learning_walk" => currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit),
             "work_scrutiny" => currentUser.HasPermission(PermissionKeys.WorkScrutinySubmit),
             "cpd_event" => currentUser.HasPermission(PermissionKeys.CpdManage),
             "elevate_environment" => currentUser.HasPermission(PermissionKeys.ElevateSubmit)
@@ -1759,6 +1788,7 @@ public static class FoundationEndpoints
     private static bool CanUseForms(CurrentUser currentUser) =>
         currentUser.HasPermission(PermissionKeys.FormsManage)
         || currentUser.HasPermission(PermissionKeys.LearningWalkSubmit)
+        || currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit)
         || currentUser.HasPermission(PermissionKeys.WorkScrutinySubmit)
         || currentUser.HasPermission(PermissionKeys.CpdManage)
         || CanUseElevate(currentUser);
@@ -1773,6 +1803,32 @@ public static class FoundationEndpoints
     private static bool CanSubmitLiv(CurrentUser currentUser) =>
         currentUser.HasPermission(PermissionKeys.LivSubmit)
         || currentUser.HasPermission(PermissionKeys.LivManage);
+
+    private static bool CanSubmitAlsLiv(CurrentUser currentUser) =>
+        currentUser.HasPermission(PermissionKeys.AlsLivSubmit)
+        || currentUser.HasPermission(PermissionKeys.AlsLivManage);
+
+    private static string NormalizeLivProcess(string? process) =>
+        string.Equals(process, "als_liv", StringComparison.OrdinalIgnoreCase) ? "als_liv" : "liv";
+
+    private static bool CanSubmitLivProcess(CurrentUser currentUser, string processKey) =>
+        processKey == "als_liv" ? CanSubmitAlsLiv(currentUser) : CanSubmitLiv(currentUser);
+
+    private static string NormalizeLearningWalkProcess(string? process) =>
+        string.Equals(process, "als_liv_practitioner", StringComparison.OrdinalIgnoreCase)
+            ? "als_liv_practitioner"
+            : string.Equals(process, "als_learning_walk", StringComparison.OrdinalIgnoreCase)
+                ? "als_learning_walk"
+                : "learning_walk";
+
+    private static bool CanUseLearningWalkProcess(CurrentUser currentUser, string processKey) =>
+        currentUser.HasPermission(PermissionKeys.FormsManage)
+        || (processKey switch
+        {
+            "als_learning_walk" => currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit),
+            "als_liv_practitioner" => CanSubmitAlsLiv(currentUser),
+            _ => currentUser.HasPermission(PermissionKeys.LearningWalkSubmit)
+        });
 
     private static bool CanSubmitProbation(CurrentUser currentUser) =>
         currentUser.HasPermission(PermissionKeys.ProbationSubmit)

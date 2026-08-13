@@ -536,7 +536,7 @@ public sealed partial class SqlFoundationDataStore
             if (metadata.ObservationNumber is not (1 or 3) || metadata.CurrentObservationNumber != metadata.ObservationNumber)
                 throw new WorkflowValidationException("This probation observation is not the active observation.");
             var status = NormalizeProbationStageStatus(request.StageStatus);
-            await ValidateLivOpportunityKeysAsync(connection, transaction, request.DevelopmentOpportunityKeys, cancellationToken);
+            await ValidateLivOpportunityKeysAsync(connection, transaction, request.DevelopmentOpportunityKeys, "liv", cancellationToken);
 
             await using var command = new SqlCommand(
                 """

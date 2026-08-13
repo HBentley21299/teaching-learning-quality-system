@@ -24,6 +24,8 @@ public sealed class AccessBoundaryPolicyTests
 
     [Theory]
     [InlineData("learning_walk", "learning_walks", true)]
+    [InlineData("als_learning_walk", "learning_walks", true)]
+    [InlineData("als_learning_walk", "als_learning_walks", false)]
     [InlineData("learning_walk", "work_scrutiny", false)]
     [InlineData("work_scrutiny", "work_scrutiny", true)]
     [InlineData("cpd_event", "cpd", true)]

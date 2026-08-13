@@ -335,7 +335,8 @@ public sealed partial class SqlFoundationDataStore
         Guid livId,
         SaveLivVisitRequest request,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
@@ -343,9 +344,9 @@ public sealed partial class SqlFoundationDataStore
         try
         {
             _ = await ReadActiveLookupValueIdAsync(
-                connection, transaction, "liv_course_level", request.CourseLevel, false, cancellationToken);
+                connection, transaction, LivLookupKey(processKey, "course_level"), request.CourseLevel, false, cancellationToken);
             var metadata = await GetLivCaseMetadataAsync(connection, transaction, livId, cancellationToken);
-            if (metadata is null || !CanEditLivCase(metadata, currentUser))
+            if (metadata is null || metadata.ProcessKey != processKey || !CanEditLivCase(metadata, currentUser))
             {
                 return null;
             }
@@ -489,7 +490,8 @@ public sealed partial class SqlFoundationDataStore
         Guid livId,
         string action,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -501,8 +503,9 @@ public sealed partial class SqlFoundationDataStore
             {
                 return FormSubmissionUpdateResult.NotFound;
             }
+            if (metadata.ProcessKey != processKey) return FormSubmissionUpdateResult.Forbidden;
 
-            var canManage = currentUser.HasPermission(PermissionKeys.LivManage);
+            var canManage = currentUser.HasPermission(processKey == "als_liv" ? PermissionKeys.AlsLivManage : PermissionKeys.LivManage);
             var isCreator = metadata.ReviewerStaffId == currentUser.StaffId
                 || metadata.CreatedByUserAccountId == currentUser.UserAccountId;
             var allowed = action switch
@@ -569,7 +572,7 @@ public sealed partial class SqlFoundationDataStore
             metadata.Status,
             metadata.ReviewerStaffId == currentUser.StaffId
                 || metadata.CreatedByUserAccountId == currentUser.UserAccountId,
-            currentUser.HasPermission(PermissionKeys.LivManage));
+            currentUser.HasPermission(metadata.ProcessKey == "als_liv" ? PermissionKeys.AlsLivManage : PermissionKeys.LivManage));
 
     private static bool CanViewLivSensitive(LivCaseMetadata metadata, CurrentUser currentUser) =>
         LivAccessPolicy.CanViewSensitive(
@@ -585,13 +588,13 @@ public sealed partial class SqlFoundationDataStore
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
-            "SELECT record_id, reviewer_staff_id, created_by_user_account_id, status FROM quality.liv_records WHERE id = @id AND archived_at IS NULL;",
+            "SELECT record_id, reviewer_staff_id, created_by_user_account_id, status, process_key FROM quality.liv_records WHERE id = @id AND archived_at IS NULL;",
             connection,
             (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@id", livId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new LivCaseMetadata(reader.GetGuid(0), GetGuidOrNull(reader, 1), GetGuidOrNull(reader, 2), reader.GetString(3))
+            ? new LivCaseMetadata(reader.GetGuid(0), GetGuidOrNull(reader, 1), GetGuidOrNull(reader, 2), reader.GetString(3), reader.GetString(4))
             : null;
     }
 
@@ -633,7 +636,8 @@ public sealed partial class SqlFoundationDataStore
         System.Data.Common.DbTransaction transaction,
         Guid livId,
         SaveLivCaseRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string applicationKey = "liv")
     {
         var requestedIds = (request.AreaOfPracticeThemeIds ?? [])
             .Where(id => id != Guid.Empty)
@@ -656,7 +660,7 @@ public sealed partial class SqlFoundationDataStore
                 FROM core.themes theme
                 JOIN core.theme_groups theme_group ON theme_group.id = theme.theme_group_id
                 JOIN core.theme_applications application ON application.theme_id = theme.id
-                    AND application.application_key = N'liv'
+                    AND application.application_key = @applicationKey
                     AND application.is_active = 1
                 WHERE theme.archived_at IS NULL
                   AND theme_group.archived_at IS NULL
@@ -683,6 +687,7 @@ public sealed partial class SqlFoundationDataStore
                 (SqlTransaction)transaction);
             select.Parameters.AddWithValue("@useIds", useIds);
             select.Parameters.AddWithValue("@livId", livId);
+            select.Parameters.AddWithValue("@applicationKey", applicationKey);
             select.Parameters.AddWithValue("@idsJson", JsonSerializer.Serialize(requestedIds));
             select.Parameters.AddWithValue("@keysJson", JsonSerializer.Serialize(requestedKeys));
             await using var reader = await select.ExecuteReaderAsync(cancellationToken);
@@ -716,7 +721,7 @@ public sealed partial class SqlFoundationDataStore
             FROM core.themes theme
             JOIN core.theme_groups theme_group ON theme_group.id = theme.theme_group_id
             JOIN core.theme_applications application ON application.theme_id = theme.id
-                AND application.application_key = N'liv'
+                AND application.application_key = @applicationKey
             WHERE theme.id IN (
                 SELECT id FROM OPENJSON(@selectedIdsJson) WITH (id uniqueidentifier '$')
             );
@@ -728,6 +733,7 @@ public sealed partial class SqlFoundationDataStore
             connection,
             (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@livId", livId);
+        command.Parameters.AddWithValue("@applicationKey", applicationKey);
         command.Parameters.AddWithValue("@selectedIdsJson", JsonSerializer.Serialize(selected.Select(theme => theme.Id)));
         command.Parameters.AddWithValue("@keysJson", ToDbValue(SerializeLivStringList(selected.Select(theme => theme.ThemeKey).ToArray())));
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -796,7 +802,8 @@ public sealed partial class SqlFoundationDataStore
         Guid RecordId,
         Guid? ReviewerStaffId,
         Guid? CreatedByUserAccountId,
-        string Status);
+        string Status,
+        string ProcessKey);
 
     private sealed record LivVisitRow(Guid LivRecordId, LivVisitSummary Visit);
     private sealed record LivThemeSelectionRow(Guid LivRecordId, Guid ThemeId);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Award, ChevronDown, ExternalLink, Eye, Plus, Save } from "lucide-react";
+import { Award, ChevronDown, ExternalLink, Eye, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { ElevateStatusBadgeImage } from "../components/ElevateStatusBadgeImage";
 import { CollapsibleSection, Pagination } from "../components/CollapsibleSection";
@@ -9,23 +9,18 @@ import type {
   CurrentUser,
   StaffProfileDetail,
   StaffProfileSummary,
-  StaffReflectionSummary,
-  SaveStaffReflectionRequest,
   ElevateStatusLevelSummary,
   StaffProfileLivSummary,
   StaffProfileProbationSummary,
   StaffProfileSectionSummary
 } from "../services/types";
 
-type StaffReflectionDraft = SaveStaffReflectionRequest;
 export type StaffProfileRecordLinkHandler = (recordType: string, recordId: string, staffId: string) => void;
 
 /**
- * Full staff profile view assembled from its source records (Elevate Your
- * Practice, staff reflections, CPD, actions and coaching) and backed by
- * GET /staff-profiles/{staffId}. Reflections are editable when the viewer is
- * the staff member themselves or holds staff.manage - the API enforces the
- * same rule on save.
+ * Full staff profile view assembled from its source records (Elevate Learning
+ * and Innovation, LIV, CPD, actions and coaching) and backed by
+ * GET /staff-profiles/{staffId}.
  */
 export function StaffProfilePanel({
   academicYear,
@@ -47,10 +42,7 @@ export function StaffProfilePanel({
   onOpenActionDetails?: (actionId: string, staffId: string) => void;
 }) {
   const [detail, setDetail] = useState<StaffProfileDetail | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, StaffReflectionDraft>>({});
   const [isLoading, setIsLoading] = useState(true);
-  const [savingReflectionId, setSavingReflectionId] = useState<string | null>(null);
-  const [isCreatingReflection, setIsCreatingReflection] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [showElevateResult, setShowElevateResult] = useState(openElevateResult);
   const [activeElevateRecordId, setActiveElevateRecordId] = useState(elevateRecordId);
@@ -96,7 +88,6 @@ export function StaffProfilePanel({
 
         setDetail(nextDetail);
         setSectionSummary(nextSummary);
-        setDrafts(buildReflectionDrafts(nextDetail.reflections));
         syncElevateStatusDrafts(nextDetail);
       })
       .catch(() => {
@@ -118,10 +109,6 @@ export function StaffProfilePanel({
     };
   }, [academicYear, openElevateResult, staffId]);
 
-  const canEditReflections =
-    Boolean(detail) && (detail?.staffId === user.staffId || user.permissions.includes("staff.manage"));
-
-  const submittedReflectionCount = sectionSummary?.submittedReflectionCount ?? 0;
   const openActionCount = sectionSummary?.openActionCount ?? 0;
   const completedActionCount = sectionSummary?.completedActionCount ?? 0;
   const totalCpdMinutes = sectionSummary?.totalCpdMinutes ?? 0;
@@ -137,7 +124,6 @@ export function StaffProfilePanel({
       setDetail(nextDetail);
       setSectionSummary(nextSummary);
       syncElevateStatusDrafts(nextDetail);
-      if (loadedSections.reflections) await loadProfileSection("reflections", sectionPages.reflections?.page ?? 1, nextDetail);
       if (loadedSections.cpd) await loadProfileSection("cpd", sectionPages.cpd?.page ?? 1, nextDetail);
       if (loadedSections.coaching) await loadProfileSection("coaching", sectionPages.coaching?.page ?? 1, nextDetail);
       if (loadedSections.liv) await loadProfileSection("liv", sectionPages.liv?.page ?? 1, nextDetail);
@@ -149,7 +135,7 @@ export function StaffProfilePanel({
   }
 
   async function loadProfileSection(
-    section: "reflections" | "cpd" | "coaching" | "liv" | "probation" | "actions",
+    section: "cpd" | "coaching" | "liv" | "probation" | "actions",
     page = 1,
     shell = detail
   ) {
@@ -160,12 +146,7 @@ export function StaffProfilePanel({
     setLoadingSection(section);
     setSectionErrors((current) => ({ ...current, [section]: "" }));
     try {
-      if (section === "reflections") {
-        const result = await api.staffProfileReflections(staffId, academicYear, page, 20, controller.signal);
-        setDetail((current) => current ? { ...current, reflections: result.items } : current);
-        setDrafts(buildReflectionDrafts(result.items));
-        setSectionPages((current) => ({ ...current, reflections: { page: result.page, totalPages: result.totalPages } }));
-      } else if (section === "cpd") {
+      if (section === "cpd") {
         const result = await api.staffProfileCpd(staffId, academicYear, page, 20, controller.signal);
         setDetail((current) => current ? { ...current, cpdRecords: result.items } : current);
         setSectionPages((current) => ({ ...current, cpd: { page: result.page, totalPages: result.totalPages } }));
@@ -198,7 +179,7 @@ export function StaffProfilePanel({
     }
   }
 
-  function handleSectionExpansion(section: "reflections" | "coaching" | "liv" | "probation" | "actions", expanded: boolean) {
+  function handleSectionExpansion(section: "coaching" | "liv" | "probation" | "actions", expanded: boolean) {
     if (expanded && !loadedSections[section]) void loadProfileSection(section);
     if (!expanded) sectionRequests.current[section]?.abort();
   }
@@ -233,60 +214,6 @@ export function StaffProfilePanel({
 
     setStatusMessage(`${level.name} ${level.levelNumber === 1 || controlledLevelDrafts[level.levelNumber] ? "saved" : "revoked"}.`);
     await reloadDetail();
-  }
-
-  async function createReflection() {
-    if (!detail) {
-      return;
-    }
-
-    setIsCreatingReflection(true);
-    setStatusMessage("");
-    const result = await api.createStaffReflection(detail.staffId);
-    setIsCreatingReflection(false);
-    if (!result.ok) {
-      setStatusMessage(result.message ?? "The reflection could not be created.");
-      return;
-    }
-
-    setStatusMessage("Reflection draft created from the current Elevate Learning and Innovation assessment.");
-    await reloadDetail();
-  }
-
-  async function saveReflection(reflection: StaffReflectionSummary) {
-    if (!detail) {
-      return;
-    }
-
-    const draft = drafts[reflection.id];
-    if (!draft) {
-      return;
-    }
-
-    setSavingReflectionId(reflection.id);
-    setStatusMessage("");
-    const result = await api.updateStaffReflection(detail.staffId, reflection.id, draft);
-    setSavingReflectionId(null);
-    if (!result.ok) {
-      setStatusMessage(result.message ?? "The reflection could not be saved.");
-      return;
-    }
-
-    setStatusMessage(draft.status === "submitted" ? "Reflection submitted." : "Reflection draft saved.");
-    await reloadDetail();
-  }
-
-  function updateReflectionDraft<Key extends keyof StaffReflectionDraft>(
-    reflectionId: string,
-    key: Key,
-    value: StaffReflectionDraft[Key]
-  ) {
-    setDrafts((current) => {
-      const draft = current[reflectionId];
-      return draft
-        ? { ...current, [reflectionId]: { ...draft, [key]: value } }
-        : current;
-    });
   }
 
   if (isLoading && !detail) {
@@ -486,10 +413,6 @@ export function StaffProfilePanel({
           <span>Evidence submitted</span>
           <strong>{detail.evidenceSubmitted}</strong>
         </div>
-        <div className="kpi kpi-amber">
-          <span>Reflections completed</span>
-          <strong>{submittedReflectionCount}</strong>
-        </div>
         <div className="kpi kpi-red">
           <span>Open actions</span>
           <strong>{openActionCount}</strong>
@@ -671,8 +594,8 @@ export function StaffProfilePanel({
                       {onOpenRecord ? (
                         <button
                           className="icon-button"
-                          onClick={() => onOpenRecord("liv", record.recordId, detail.staffId)}
-                          title={`Open full LIV record for ${detail.displayName}`}
+                          onClick={() => onOpenRecord(record.processKey, record.recordId, detail.staffId)}
+                          title={`Open full ${record.processKey === "als_liv" ? "ALS LIV" : "LIV"} record for ${detail.displayName}`}
                           type="button"
                         >
                           <ExternalLink aria-hidden="true" size={16} />
@@ -821,159 +744,6 @@ export function StaffProfilePanel({
 
       <div hidden={activeProfileTab !== "overview"}>
       <CollapsibleSection
-        actions={canEditReflections ? (
-            <Button
-              disabled={isCreatingReflection || detail.elevatePractice?.status !== "submitted" || detail.academicYear !== currentAcademicYear()}
-              icon={Plus}
-              onClick={() => void createReflection()}
-              variant="primary"
-            >
-              {isCreatingReflection ? "Creating..." : "Add reflection"}
-            </Button>
-          ) : undefined}
-        count={sectionSummary?.reflectionCount ?? 0}
-        emptyMessage="No staff reflections have been recorded."
-        error={sectionErrors.reflections}
-        isEmpty={(sectionSummary?.reflectionCount ?? 0) === 0}
-        isLoading={loadingSection === "reflections"}
-        onExpandedChange={(expanded) => handleSectionExpansion("reflections", expanded)}
-        statusSummary={`${submittedReflectionCount} submitted`}
-        storageKey={`staff-profile:${staffId}:${academicYear}:reflections`}
-        title="Staff reflections"
-      >
-        <div className="staff-reflection-list">
-          {detail.reflections.length === 0 ? (
-            <p className="muted-copy">No staff reflections have been recorded.</p>
-          ) : detail.reflections.map((reflection) => {
-            const draft = drafts[reflection.id] ?? reflectionToDraft(reflection);
-            const isSaving = savingReflectionId === reflection.id;
-            const hasChanges = reflectionHasChanges(reflection, draft);
-            return (
-              <details className="staff-reflection-entry" key={reflection.id}>
-                <summary className="staff-reflection-heading">
-                  <div>
-                    <h3>Reflection from {formatDate(reflection.reflectionDate)}</h3>
-                    <span>Elevate Learning and Innovation {reflection.elevatePracticeAcademicYear}</span>
-                  </div>
-                  <span className={`status-pill ${reflection.status === "submitted" ? "status-complete" : "status-draft"}`}>
-                    {reflection.status === "submitted" ? "Submitted" : "Draft"}
-                  </span>
-                  <ChevronDown aria-hidden="true" size={18} />
-                </summary>
-
-                <div className="staff-reflection-body">
-                  <div className="staff-reflection-meta-grid">
-                    <label className="entry-field">
-                      <span>Reflection date</span>
-                      <input
-                        disabled={!canEditReflections}
-                        onChange={(event) => updateReflectionDraft(reflection.id, "reflectionDate", event.target.value)}
-                        type="date"
-                        value={draft.reflectionDate}
-                      />
-                    </label>
-                    <label className="entry-field">
-                      <span>Record status</span>
-                      <select
-                        disabled={!canEditReflections}
-                        onChange={(event) => updateReflectionDraft(
-                          reflection.id,
-                          "status",
-                          event.target.value as StaffReflectionDraft["status"]
-                        )}
-                        value={draft.status}
-                      >
-                        <option value="draft">Draft</option>
-                        <option value="submitted">Submitted</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="staff-reflection-areas">
-                    <strong>Linked LIV focus areas</strong>
-                    {reflection.focusAreas.length === 0 ? (
-                      <span>No primary or secondary focus was recorded in the linked assessment</span>
-                    ) : (
-                      <ul>
-                        {reflection.focusAreas.map((focus) => (
-                          <li key={`${focus.focusType}-${focus.displayOrder}`}>
-                            <strong>{focus.focusType === "primary" ? "Primary" : "Secondary"}:</strong> {focus.textSnapshot}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-
-                  <div className="staff-reflection-fields">
-                    <label className="entry-field">
-                      <span>Progress</span>
-                      <textarea
-                        disabled={!canEditReflections}
-                        onChange={(event) => updateReflectionDraft(reflection.id, "progress", event.target.value)}
-                        rows={4}
-                        value={draft.progress ?? ""}
-                      />
-                    </label>
-                    <label className="entry-field">
-                      <span>Impact</span>
-                      <textarea
-                        disabled={!canEditReflections}
-                        onChange={(event) => updateReflectionDraft(reflection.id, "impact", event.target.value)}
-                        rows={4}
-                        value={draft.impact ?? ""}
-                      />
-                    </label>
-                    <label className="entry-field">
-                      <span>Examples</span>
-                      <textarea
-                        disabled={!canEditReflections}
-                        onChange={(event) => updateReflectionDraft(reflection.id, "examples", event.target.value)}
-                        rows={4}
-                        value={draft.examples ?? ""}
-                      />
-                    </label>
-                  </div>
-
-                  <div className="staff-reflection-footer">
-                    <small className="muted-copy">
-                      {reflection.updatedAt
-                        ? `Updated ${formatDateTime(reflection.updatedAt)}${reflection.updatedByName ? ` by ${reflection.updatedByName}` : ""}`
-                        : `Created ${formatDateTime(reflection.createdAt)}${reflection.createdByName ? ` by ${reflection.createdByName}` : ""}`}
-                    </small>
-                    <div className="profile-record-actions">
-                      <Button
-                        icon={ExternalLink}
-                        onClick={() => {
-                          setActiveElevateRecordId(reflection.elevatePracticeRecordId);
-                          setShowElevateResult(true);
-                        }}
-                        variant="secondary"
-                      >
-                        Open linked report
-                      </Button>
-                      {canEditReflections ? (
-                        <Button
-                          disabled={isSaving || !hasChanges}
-                          icon={Save}
-                          onClick={() => void saveReflection(reflection)}
-                          variant="primary"
-                        >
-                          {isSaving ? "Saving..." : "Save reflection"}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </details>
-            );
-          })}
-        </div>
-        <Pagination page={sectionPages.reflections?.page ?? 1} totalPages={sectionPages.reflections?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("reflections", page)} />
-      </CollapsibleSection>
-      </div>
-
-      <div hidden={activeProfileTab !== "overview"}>
-      <CollapsibleSection
         count={openActionCount + completedActionCount}
         emptyMessage="No actions are connected to this staff member."
         error={sectionErrors.actions}
@@ -1070,35 +840,6 @@ function formatDuration(totalMinutes: number) {
   return `${hours}h ${minutes}m`;
 }
 
-function buildReflectionDrafts(reflections: StaffReflectionSummary[]) {
-  return Object.fromEntries(
-    reflections.map((reflection) => [reflection.id, reflectionToDraft(reflection)])
-  ) as Record<string, StaffReflectionDraft>;
-}
-
-function reflectionToDraft(reflection: StaffReflectionSummary): StaffReflectionDraft {
-  return {
-    reflectionDate: reflection.reflectionDate,
-    progress: reflection.progress ?? "",
-    impact: reflection.impact ?? "",
-    examples: reflection.examples ?? "",
-    status: reflection.status
-  };
-}
-
-function reflectionHasChanges(reflection: StaffReflectionSummary, draft: StaffReflectionDraft) {
-  const original = reflectionToDraft(reflection);
-  return original.reflectionDate !== draft.reflectionDate
-    || original.status !== draft.status
-    || normalizeDraftText(original.progress) !== normalizeDraftText(draft.progress)
-    || normalizeDraftText(original.impact) !== normalizeDraftText(draft.impact)
-    || normalizeDraftText(original.examples) !== normalizeDraftText(draft.examples);
-}
-
-function normalizeDraftText(value?: string) {
-  return value?.trim() ?? "";
-}
-
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString("en-GB", {
     dateStyle: "short",
@@ -1129,6 +870,9 @@ function formatProbationStatus(value: StaffProfileProbationSummary["status"]) {
 }
 
 function formatActionSource(moduleName?: string, recordType?: string) {
+  if (recordType === "als_liv") {
+    return "ALS Learning and Innovation Visits";
+  }
   if (recordType === "liv") {
     return "Learning and Innovation Visits";
   }
@@ -1149,11 +893,4 @@ function formatActionSource(moduleName?: string, recordType?: string) {
 
 function formatCoachingType(value: "coaching" | "mentoring") {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function currentAcademicYear() {
-  const now = new Date();
-  const calendarYear = now.getUTCFullYear();
-  const startYear = now.getUTCMonth() >= 7 ? calendarYear : calendarYear - 1;
-  return `${startYear}/${String((startYear + 1) % 100).padStart(2, "0")}`;
 }

@@ -26,7 +26,7 @@ import type {
   StaffSummary
 } from "../services/types";
 
-type WorkspaceMode = "learning" | "scrutiny" | "cpd" | "elevate";
+type WorkspaceMode = "learning" | "als_learning" | "scrutiny" | "cpd" | "elevate";
 
 type DraftLinkedAction = {
   id: string;
@@ -60,6 +60,13 @@ const workspaceConfig: Record<WorkspaceMode, {
     templateKey: "learning_walk_core",
     recordType: "learning_walk",
     recordLabel: "Learning Walk",
+    createLabel: "Create record",
+    submitLabel: "Submit form"
+  },
+  als_learning: {
+    templateKey: "learning_walk_core",
+    recordType: "als_learning_walk",
+    recordLabel: "ALS Learning Walk",
     createLabel: "Create record",
     submitLabel: "Submit form"
   },
@@ -106,7 +113,9 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const [cpdWorkspaceView, setCpdWorkspaceView] = useState<CpdWorkspaceView>(canManageCpd ? "managed" : "external");
   const isExternalCpd = mode === "cpd" && (!canManageCpd || cpdWorkspaceView === "external");
   const config = isExternalCpd ? externalCpdConfig : workspaceConfig[mode];
-  const requiresLeaderActionOwner = mode === "learning" || mode === "elevate";
+  const isLearningWalkMode = mode === "learning" || mode === "als_learning";
+  const learningWalkProcess = mode === "als_learning" ? "als_learning_walk" : "learning_walk";
+  const requiresLeaderActionOwner = isLearningWalkMode || mode === "elevate";
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -143,8 +152,8 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const canManageForms = user.permissions.includes("forms.manage");
   const canManageActions = user.permissions.includes("actions.manage");
   const canExport = user.permissions.includes("exports.create");
-  const exportModuleKey = mode === "learning"
-    ? "learning-walks"
+  const exportModuleKey = isLearningWalkMode
+    ? mode === "als_learning" ? "als-learning-walks" : "learning-walks"
     : mode === "scrutiny"
       ? "work-scrutiny"
       : mode === "elevate" ? "elevate-environments" : "cpd";
@@ -217,7 +226,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     const ownershipRecords = recordOwnershipView === "mine"
       ? records.filter((record) => record.isCreatedByCurrentUser)
       : records;
-    if (mode !== "learning") {
+    if (!isLearningWalkMode) {
       return ownershipRecords;
     }
 
@@ -340,10 +349,10 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       setEnvironmentPillars(nextEnvironmentPillars);
       setLeaderActionOwners(nextLeaderActionOwners);
 
-      if (mode === "learning") {
+      if (isLearningWalkMode) {
         const [nextMappings, nextThemeGroups, coachingConfiguration] = await Promise.all([
-          api.learningWalkThemeMappings(),
-          api.learningWalkThemes(),
+          api.learningWalkThemeMappings(learningWalkProcess),
+          api.learningWalkThemes(learningWalkProcess),
           api.coachingConfiguration()
         ]);
         setThemeMappings(nextMappings);
@@ -384,12 +393,12 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       recordTitle = `Elevate check - ${getResponseValue(sections, values, "room_code") || "Room"}`;
     } else {
       const areaCode = team?.code ?? faculty?.code ?? "Team";
-      recordTitle = `${mode === "learning" ? "Learning Walk" : "Work Scrutiny"} - ${areaCode}`;
+      recordTitle = `${isLearningWalkMode ? config.recordLabel : "Work Scrutiny"} - ${areaCode}`;
     }
 
     const summary = mode === "elevate"
       ? getResponseValue(sections, values, "building_name")
-      : (mode === "learning" ? theme : undefined) ??
+      : (isLearningWalkMode ? theme : undefined) ??
       getResponseValue(sections, values, "development_areas") ??
       getResponseValue(sections, values, "cpd_themes");
 
@@ -410,7 +419,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     theme?: string,
     externalCpdRecord = isExternalCpd
   ) {
-    if (mode === "learning" && facultyId && teamId && !theme) {
+    if (isLearningWalkMode && facultyId && teamId && !theme) {
       return "No agreed Learning Walk theme is configured for that faculty and team.";
     }
 
@@ -451,7 +460,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       return;
     }
 
-    if ((mode === "learning" || mode === "elevate") && asDraft && draftActions.length > 0) {
+    if ((isLearningWalkMode || mode === "elevate") && asDraft && draftActions.length > 0) {
       setStatusMessage(`Submit the ${config.recordLabel} to assign its actions, or remove the actions before saving a draft.`);
       return;
     }
@@ -463,7 +472,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         return;
       }
 
-      if (mode === "learning") {
+      if (isLearningWalkMode) {
         const otherValidation = validateLearningWalkOtherContext(
           createSections,
           responses,
@@ -481,7 +490,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         }
       }
 
-      if ((mode === "learning" || mode === "elevate")
+      if ((isLearningWalkMode || mode === "elevate")
           && draftActions.some((action) => !action.actionTheme.trim() || !action.title.trim() || !action.ownerStaffId || !action.dueDate)) {
         setStatusMessage(
           mode === "elevate"
@@ -504,7 +513,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       recordDate: context.dateValue,
       responses: flattenResponses(createEntrySections, responses, false),
       saveAsDraft: asDraft,
-      actions: (mode === "learning" || mode === "elevate") && !asDraft
+      actions: (isLearningWalkMode || mode === "elevate") && !asDraft
         ? draftActions.map((action) => ({
             actionTheme: action.actionTheme.trim(),
             title: action.title.trim(),
@@ -578,7 +587,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         return;
       }
 
-      if (mode === "learning") {
+      if (isLearningWalkMode) {
         const otherValidation = validateLearningWalkOtherContext(
           editSections,
           editResponses,
@@ -666,11 +675,11 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   }
 
   async function createLinkedAction() {
-    const requiresDueDate = mode === "learning" || mode === "elevate";
+    const requiresDueDate = isLearningWalkMode || mode === "elevate";
     if (!selectedDetail || !actionTheme.trim() || !actionTitle.trim() || !actionOwnerId || (requiresDueDate && !actionDueDate)) {
       setStatusMessage(
-        mode === "learning"
-          ? "A Learning Walk action needs an action theme, action, owner and implementation date."
+        isLearningWalkMode
+          ? `An ${config.recordLabel} action needs an action theme, action, owner and implementation date.`
           : mode === "elevate"
             ? "A Learning Environment action needs an action theme, action, owner and date for review."
             : "A linked action needs an action theme, action and owner."
@@ -719,7 +728,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         const dateField = findField(createSections, "assessment_date");
         setResponses(dateField ? { [dateField.id]: getTodayDate() } : {});
       }
-      if (!current && (mode === "learning" || mode === "elevate")) {
+      if (!current && (isLearningWalkMode || mode === "elevate")) {
         setDraftActions([]);
       }
       return !current;
@@ -771,8 +780,8 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   // Learning Walks are for programme leaders and above; tutors have no
   // learning_walk.submit permission and the API returns them no records.
   const canUseLearningWalks =
-    mode !== "learning" ||
-    user.permissions.includes("learning_walk.submit") ||
+    !isLearningWalkMode ||
+    user.permissions.includes(mode === "als_learning" ? "als_learning_walk.submit" : "learning_walk.submit") ||
     user.permissions.includes("forms.manage") ||
     user.permissions.includes("reports.view_all");
 
@@ -814,7 +823,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
           <p className="eyebrow">{eyebrow}</p>
           <h1>{title}</h1>
         </div>
-        {mode !== "learning" ? (
+        {!isLearningWalkMode ? (
           <div className="toolbar">
             {mode !== "cpd" ? (
               <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
@@ -840,7 +849,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         </div>
       ) : null}
 
-      {mode === "learning" ? (
+      {isLearningWalkMode ? (
         <div className="learning-create-action">
           <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
             {config.createLabel}
@@ -870,7 +879,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       {isCreating && mode !== "scrutiny" ? (
         <section className="panel">
           <div className="panel-heading">
-            <h2>{definition?.name ?? "Loading template"}</h2>
+            <h2>{mode === "als_learning" ? "ALS Learning Walk form" : definition?.name ?? "Loading template"}</h2>
             <span>{definition?.version ? `Version ${definition.version}` : "Template backed"}</span>
           </div>
           {definition ? (
@@ -929,7 +938,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                   </div>
                 </div>
               ))}
-              {mode === "learning" || mode === "elevate" ? (
+              {isLearningWalkMode || mode === "elevate" ? (
                 <div className="entry-section">
                   <div className="section-heading-row">
                     <div>
@@ -974,7 +983,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                               staff={actionOwnerStaff}
                               value={action.ownerStaffId}
                             />
-                            {requiresLeaderActionOwner ? <small>Programme Leaders and above only.</small> : null}
+                            {requiresLeaderActionOwner ? <small>{mode === "als_learning" ? "ALS Team Leaders and above only." : "Programme Leaders and above only."}</small> : null}
                           </label>
                           <label className="entry-field">
                             <span>{mode === "elevate" ? "Date for review" : "Date to be implemented by"} <strong>Required</strong></span>
@@ -1044,7 +1053,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
               <button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My {config.recordLabel}s</button>
               <button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button>
             </div>
-            {mode === "learning" ? (
+            {isLearningWalkMode ? (
               <div className="record-filter-bar">
                 <label className="record-filter-field record-filter-search">
                   <span>Search records</span>
@@ -1253,12 +1262,12 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                     staff={actionOwnerStaff}
                     value={actionOwnerId}
                   />
-                  {requiresLeaderActionOwner ? <small>Programme Leaders and above only.</small> : null}
+                  {requiresLeaderActionOwner ? <small>{mode === "als_learning" ? "ALS Team Leaders and above only." : "Programme Leaders and above only."}</small> : null}
                 </label>
                 <label className="entry-field">
                   <span>
                     {mode === "elevate" ? "Date for review" : "Date to be implemented by"}
-                    {mode === "learning" || mode === "elevate" ? <strong>Required</strong> : null}
+                    {isLearningWalkMode || mode === "elevate" ? <strong>Required</strong> : null}
                   </span>
                   <input onChange={(event) => setActionDueDate(event.target.value)} type="date" value={actionDueDate} />
                 </label>
@@ -1943,7 +1952,7 @@ function shouldShowLearningWalkField(
   responses: Record<string, string>,
   groups: LearningWalkThemeGroup[]
 ) {
-  if (mode !== "learning" || field.fieldKey !== "additional_focus_other") {
+  if ((mode !== "learning" && mode !== "als_learning") || field.fieldKey !== "additional_focus_other") {
     return true;
   }
 

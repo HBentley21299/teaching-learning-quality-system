@@ -50,6 +50,7 @@ type LivVisitsProps = {
   initialSourceRecordId?: string;
   onRecordOpened?: (recordId: string) => void;
   onRecordClosed?: () => void;
+  processKey?: "liv" | "als_liv";
 };
 
 type CoverageStatus = "not_started" | "in_progress" | "completed";
@@ -71,7 +72,8 @@ export function LivVisits({
   onOpenStaffProfile,
   initialSourceRecordId = "",
   onRecordOpened,
-  onRecordClosed
+  onRecordClosed,
+  processKey = "liv"
 }: LivVisitsProps) {
   const [records, setRecords] = useState<LivRecordSummary[]>([]);
   const [configuration, setConfiguration] = useState<LivConfiguration | null>(null);
@@ -92,7 +94,11 @@ export function LivVisits({
   const [coverageStatus, setCoverageStatus] = useState<"all" | CoverageStatus>("all");
   const openedInitialRecord = useRef("");
 
-  const canCreate = user.permissions.includes("liv.submit") || user.permissions.includes("liv.manage");
+  const isAlsLiv = processKey === "als_liv";
+  const processLabel = isAlsLiv ? "ALS LIV" : "LIV";
+  const canCreate = isAlsLiv
+    ? user.permissions.includes("als_liv.submit") || user.permissions.includes("als_liv.manage")
+    : user.permissions.includes("liv.submit") || user.permissions.includes("liv.manage");
   const selectedRecord = records.find((record) => record.id === selectedRecordId) ?? null;
 
   function openRecord(record: LivRecordSummary) {
@@ -102,10 +108,10 @@ export function LivVisits({
 
   async function refreshData(nextMessage = "") {
     const [recordsResult, actionsResult, configurationResult, practitionerThemesResult] = await Promise.allSettled([
-      api.livRecords(),
+      api.livRecords(processKey),
       api.actions(false, academicYear),
-      api.livConfiguration(),
-      api.sharedThemes("liv")
+      api.livConfiguration(processKey),
+      api.sharedThemes(isAlsLiv ? "als_liv_practitioner" : processKey)
     ]);
 
     if (recordsResult.status === "rejected") {
@@ -123,7 +129,7 @@ export function LivVisits({
     else setStatusMessage("");
   }
 
-  useEffect(() => { void refreshData(); }, [academicYear]);
+  useEffect(() => { void refreshData(); }, [academicYear, processKey]);
 
   useEffect(() => {
     if (!initialSourceRecordId || !records.length || openedInitialRecord.current === initialSourceRecordId) return;
@@ -134,14 +140,14 @@ export function LivVisits({
   }, [initialSourceRecordId, records]);
 
   useEffect(() => {
-    if (!selectedStaffId) {
+    if (!selectedStaffId || isAlsLiv) {
       setStaffContext(null);
       return;
     }
-    api.livStaffContext(selectedStaffId)
+    api.livStaffContext(selectedStaffId, processKey)
       .then(setStaffContext)
       .catch(() => setStatusMessage("Elevate Learning and Innovation information could not be loaded for this staff member."));
-  }, [selectedStaffId]);
+  }, [isAlsLiv, processKey, selectedStaffId]);
 
   useEffect(() => {
     if (!selectedRecord) return;
@@ -192,7 +198,7 @@ export function LivVisits({
       areaOfPracticeKeys: [],
       areaOfPracticeThemeIds: []
     };
-    const result = await api.createLivRecord(request);
+    const result = await api.createLivRecord(request, processKey);
     setIsSaving(false);
     if (!result.ok) {
       setStatusMessage(result.message ?? "The LIV case could not be created.");
@@ -215,6 +221,7 @@ export function LivVisits({
         onOpenStaffProfile={onOpenStaffProfile}
         record={selectedRecord}
         practitionerThemeGroups={practitionerThemeGroups}
+        processKey={processKey}
         staff={staff}
       />
     );
@@ -222,54 +229,54 @@ export function LivVisits({
 
   return (
     <div className="route-stack">
-      <div className="route-header"><div><p className="eyebrow">Learning, Innovation and Vision</p><h1>LIV</h1></div><div className="toolbar">{canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create LIV case</Button> : null}</div></div>
+      <div className="route-header"><div><p className="eyebrow">{isAlsLiv ? "Additional Learning Support" : "Learning, Innovation and Vision"}</p><h1>{processLabel}</h1></div><div className="toolbar">{canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">{`Create ${processLabel} case`}</Button> : null}</div></div>
       {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
       {isCreating ? (
         <section className="panel liv-v2-create">
-          <div className="panel-heading"><div><h2>New LIV case</h2><span>The submitted ELI information is linked automatically.</span></div><button className="icon-button" onClick={() => setIsCreating(false)} title="Close" type="button"><X size={16} /></button></div>
+          <div className="panel-heading"><div><h2>New {processLabel} case</h2><span>{isAlsLiv ? "Create a distinct ALS observation cycle." : "The submitted ELI information is linked automatically."}</span></div><button className="icon-button" onClick={() => setIsCreating(false)} title="Close" type="button"><X size={16} /></button></div>
           <div className="form-stack">
             <label className="entry-field"><span>Staff member</span><StaffSearchSelect id="liv-staff" onChange={setSelectedStaffId} staff={staff} value={selectedStaffId} /></label>
           </div>
-          {staffContext ? <EliContext context={staffContext} /> : null}
+          {!isAlsLiv && staffContext ? <EliContext context={staffContext} /> : null}
           <div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsCreating(false)}>Cancel</Button><Button disabled={isSaving || !selectedStaffId} icon={Plus} onClick={() => void createCase()} variant="primary">{isSaving ? "Creating..." : "Create case"}</Button></div>
         </section>
       ) : null}
 
       <KpiStrip items={[
         { label: "Staff in scope", value: coverageRows.length, tone: "blue" },
-        { label: "LIV completed", value: coverageRows.filter((row) => row.status === "completed").length, tone: "green" },
+        { label: `${processLabel} completed`, value: coverageRows.filter((row) => row.status === "completed").length, tone: "green" },
         { label: "In progress", value: coverageRows.filter((row) => row.status === "in_progress").length, tone: "amber" },
         { label: "Not started", value: coverageRows.filter((row) => row.status === "not_started").length, tone: "red" }
       ]} />
 
       <details className="panel liv-v2-records">
-        <summary><span><strong>LIV coverage</strong><small>Completed, in-progress and not-started staff</small></span><span className="toolbar"><span>{filteredCoverage.length} staff</span><ChevronDown size={18} /></span></summary>
+        <summary><span><strong>{processLabel} coverage</strong><small>Completed, in-progress and not-started staff</small></span><span className="toolbar"><span>{filteredCoverage.length} staff</span><ChevronDown size={18} /></span></summary>
         <div className="filter-toolbar">
           <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setCoverageSearch(event.target.value)} placeholder="Search staff or team" value={coverageSearch} /></label>
           <label><span>Faculty</span><select onChange={(event) => setCoverageFaculty(event.target.value)} value={coverageFaculty}><option value="all">All faculties</option>{faculties.map((faculty) => <option key={faculty.id} value={faculty.id}>{faculty.code} - {faculty.name}</option>)}</select></label>
-          <label><span>LIV status</span><select onChange={(event) => setCoverageStatus(event.target.value as typeof coverageStatus)} value={coverageStatus}><option value="all">All statuses</option><option value="completed">Completed</option><option value="in_progress">In progress</option><option value="not_started">Not started</option></select></label>
+          <label><span>{processLabel} status</span><select onChange={(event) => setCoverageStatus(event.target.value as typeof coverageStatus)} value={coverageStatus}><option value="all">All statuses</option><option value="completed">Completed</option><option value="in_progress">In progress</option><option value="not_started">Not started</option></select></label>
         </div>
-        <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty</th><th>Team</th><th>LIV status</th><th>Record</th></tr></thead><tbody>
-          {filteredCoverage.length === 0 ? <tr><td colSpan={5}>No staff match these filters.</td></tr> : filteredCoverage.map((row) => <tr key={row.staff.id}><td><strong>{row.staff.displayName}</strong><small className="table-subline">{row.staff.externalId}</small></td><td>{row.faculties.map((unit) => unit.code).join(", ") || "Unassigned"}</td><td>{row.teams.map((unit) => unit.code).join(", ") || "Unassigned"}</td><td><span className={`status-pill ${coverageStatusClass(row.status)}`}>{coverageStatusLabel(row.status)}</span></td><td>{row.record ? <button className="icon-button" onClick={() => openRecord(row.record!)} title="Open LIV record" type="button"><Eye size={16} /></button> : "-"}</td></tr>)}
+        <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty</th><th>Team</th><th>{processLabel} status</th><th>Record</th></tr></thead><tbody>
+          {filteredCoverage.length === 0 ? <tr><td colSpan={5}>No staff match these filters.</td></tr> : filteredCoverage.map((row) => <tr key={row.staff.id}><td><strong>{row.staff.displayName}</strong><small className="table-subline">{row.staff.externalId}</small></td><td>{row.faculties.map((unit) => unit.code).join(", ") || "Unassigned"}</td><td>{row.teams.map((unit) => unit.code).join(", ") || "Unassigned"}</td><td><span className={`status-pill ${coverageStatusClass(row.status)}`}>{coverageStatusLabel(row.status)}</span></td><td>{row.record ? <button className="icon-button" onClick={() => openRecord(row.record!)} title={`Open ${processLabel} record`} type="button"><Eye size={16} /></button> : "-"}</td></tr>)}
         </tbody></table></div>
       </details>
 
       <details className="panel liv-v2-records">
-        <summary><span><strong>{recordOwnershipView === "mine" ? "My LIV records" : "LIV records in scope"}</strong><small>{displayedRecords.length} records in this view</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey="liv" orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
-        <div className="segmented-control record-ownership-switch" aria-label="LIV record ownership view"><button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My LIV records</button><button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button></div>
+        <summary><span><strong>{recordOwnershipView === "mine" ? `My ${processLabel} records` : `${processLabel} records in scope`}</strong><small>{displayedRecords.length} records in this view</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton moduleKey={isAlsLiv ? "als-liv" : "liv"} orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
+        <div className="segmented-control record-ownership-switch" aria-label={`${processLabel} record ownership view`}><button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My {processLabel} records</button><button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button></div>
         <div className="filter-toolbar">
           <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setRecordSearch(event.target.value)} placeholder="Search records" value={recordSearch} /></label>
           <label><span>Status</span><select onChange={(event) => setRecordStatus(event.target.value)} value={recordStatus}><option value="all">All statuses</option><option value="in_progress">In progress</option><option value="closed">Closed</option></select></label>
         </div>
         <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty / team</th><th>Latest delivery area</th><th>Current cycle</th><th>Status</th><th>Open</th></tr></thead><tbody>
-          {displayedRecords.length === 0 ? <tr><td colSpan={6}>{recordOwnershipView === "mine" ? "You have not created any LIV records matching these filters." : "No LIV records match these filters."}</td></tr> : displayedRecords.map((record) => <tr key={record.id}><td><strong>{record.subjectStaffName}</strong><small className="table-subline">{record.reviewerStaffName ? `Created by ${record.reviewerStaffName}` : ""}</small></td><td>{[record.parentOrgUnitCode, record.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{latestVisit(record)?.deliveryAreaName ?? "Not set"}</td><td>{record.cycles.find((cycle) => cycle.status === "in_progress")?.cycleNumber ?? record.cycles.at(-1)?.cycleNumber ?? 1}</td><td><span className={`status-pill ${record.status === "closed" ? "status-complete" : "status-draft"}`}>{record.status === "closed" ? "Closed" : "In progress"}</span></td><td><button className="icon-button" onClick={() => openRecord(record)} title="Open LIV record" type="button"><Eye size={16} /></button></td></tr>)}
+          {displayedRecords.length === 0 ? <tr><td colSpan={6}>{recordOwnershipView === "mine" ? `You have not created any ${processLabel} records matching these filters.` : `No ${processLabel} records match these filters.`}</td></tr> : displayedRecords.map((record) => <tr key={record.id}><td><strong>{record.subjectStaffName}</strong><small className="table-subline">{record.reviewerStaffName ? `Created by ${record.reviewerStaffName}` : ""}</small></td><td>{[record.parentOrgUnitCode, record.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{latestVisit(record)?.deliveryAreaName ?? "Not set"}</td><td>{record.cycles.find((cycle) => cycle.status === "in_progress")?.cycleNumber ?? record.cycles.at(-1)?.cycleNumber ?? 1}</td><td><span className={`status-pill ${record.status === "closed" ? "status-complete" : "status-draft"}`}>{record.status === "closed" ? "Closed" : "In progress"}</span></td><td><button className="icon-button" onClick={() => openRecord(record)} title={`Open ${processLabel} record`} type="button"><Eye size={16} /></button></td></tr>)}
         </tbody></table></div>
       </details>
     </div>
   );
 }
 
-export function LivCaseWorkspace({ record, configuration, practitionerThemeGroups = [], actions, cycleId, staff, onBack, onChanged, onCycleChange, onOpenStaffProfile, embedded = false }: {
+export function LivCaseWorkspace({ record, configuration, practitionerThemeGroups = [], actions, cycleId, staff, onBack, onChanged, onCycleChange, onOpenStaffProfile, embedded = false, processKey = "liv" }: {
   record: LivRecordSummary;
   configuration: LivConfiguration;
   practitionerThemeGroups?: SharedThemeGroup[];
@@ -281,7 +288,9 @@ export function LivCaseWorkspace({ record, configuration, practitionerThemeGroup
   onCycleChange: (id: string) => void;
   onOpenStaffProfile?: (staffId: string) => void;
   embedded?: boolean;
+  processKey?: "liv" | "als_liv";
 }) {
+  const processLabel = processKey === "als_liv" ? "ALS LIV" : "LIV";
   const cycle = record.cycles.find((value) => value.id === cycleId) ?? record.cycles.find((value) => value.status === "in_progress") ?? record.cycles.at(-1);
   const [ownerOptions, setOwnerOptions] = useState<ActionOwnerOption[]>([]);
   const [message, setMessage] = useState("");
@@ -291,7 +300,7 @@ export function LivCaseWorkspace({ record, configuration, practitionerThemeGroup
 
   async function addStage(stageType: LivStage["stageType"]) {
     setIsSaving(true);
-    const result = await api.addLivStage(record.id, emptyStageRequest(stageType));
+    const result = await api.addLivStage(record.id, emptyStageRequest(stageType), processKey);
     setIsSaving(false);
     if (!result.ok) {
       setMessage(result.message ?? "The LIV stage could not be added.");
@@ -306,10 +315,10 @@ export function LivCaseWorkspace({ record, configuration, practitionerThemeGroup
       ? "Complete Probation Observation 2?"
       : openFollowUp
         ? "Complete this cycle and open the next follow-up cycle?"
-        : "Complete this cycle and close the LIV without opening another cycle?";
+        : `Complete this cycle and close the ${processLabel} without opening another cycle?`;
     if (!window.confirm(confirmation)) return;
     setIsSaving(true);
-    const result = await api.completeLivCycle(record.id, openFollowUp);
+    const result = await api.completeLivCycle(record.id, openFollowUp, processKey);
     setIsSaving(false);
     if (!result.ok) {
       setMessage(result.message ?? "The cycle could not be completed.");
@@ -317,10 +326,10 @@ export function LivCaseWorkspace({ record, configuration, practitionerThemeGroup
     }
     await onChanged(isProbationLiv
       ? "Probation Observation 2 completed. Observation 3 is ready."
-      : openFollowUp ? "Cycle completed. A new follow-up cycle is ready." : "Cycle completed and the LIV is now closed.");
+      : openFollowUp ? "Cycle completed. A new follow-up cycle is ready." : `Cycle completed and the ${processLabel} is now closed.`);
   }
 
-  if (!cycle) return <section className="panel"><Button icon={ArrowLeft} onClick={onBack}>Back to LIV</Button><p>No LIV cycle is available.</p></section>;
+  if (!cycle) return <section className="panel"><Button icon={ArrowLeft} onClick={onBack}>{`Back to ${processLabel}`}</Button><p>No {processLabel} cycle is available.</p></section>;
 
   const currentCycleActions = actions.filter((action) => action.livCycleId === cycle.id);
   const previousActions = actions.filter((action) => action.livCycleId && action.livCycleId !== cycle.id);
@@ -328,11 +337,11 @@ export function LivCaseWorkspace({ record, configuration, practitionerThemeGroup
 
   return (
     <div className="route-stack">
-      {!embedded ? <div className="route-header"><div><Button icon={ArrowLeft} onClick={onBack}>Back to LIV</Button><p className="eyebrow">In-progress staff-visible record</p><h1>{record.subjectStaffName}</h1></div><div className="toolbar"><ExportWordButton recordId={record.recordId} />{onOpenStaffProfile ? <Button icon={Eye} onClick={() => onOpenStaffProfile(record.subjectStaffId)}>Staff profile</Button> : null}</div></div> : null}
+      {!embedded ? <div className="route-header"><div><Button icon={ArrowLeft} onClick={onBack}>{`Back to ${processLabel}`}</Button><p className="eyebrow">In-progress staff-visible record</p><h1>{record.subjectStaffName}</h1></div><div className="toolbar"><ExportWordButton recordId={record.recordId} />{onOpenStaffProfile ? <Button icon={Eye} onClick={() => onOpenStaffProfile(record.subjectStaffId)}>Staff profile</Button> : null}</div></div> : null}
       {message ? <div className="notice-row">{message}</div> : null}
-      <section className="panel liv-v2-header">
+      {processKey !== "als_liv" ? <section className="panel liv-v2-header">
         <div className="panel-heading">
-          <div><p className="eyebrow">Elevate Learning and Innovation</p><h2>LIV preferences and focus</h2></div>
+          <div><p className="eyebrow">Elevate Learning and Innovation</p><h2>{processLabel} preferences and focus</h2></div>
           <span>{record.sourceElevateAssessmentId ? "Linked assessment" : "No linked assessment"}</span>
         </div>
         <div className="liv-information-grid">
@@ -344,8 +353,8 @@ export function LivCaseWorkspace({ record, configuration, practitionerThemeGroup
         </div>
         <details><summary>Desired outcome from Elevate Learning and Innovation</summary><p>{record.eliDesiredOutcome || "No desired outcome was provided."}</p></details>
         {record.sourceElevateAssessmentId ? <small>Linked to the staff member's submitted Elevate Learning and Innovation record.</small> : <small>No submitted ELI record was available when this case was created.</small>}
-      </section>
-      {!embedded && record.canViewSensitive ? <ElevatePractitionerEditor onChanged={onChanged} record={record} themeGroups={practitionerThemeGroups} /> : null}
+      </section> : null}
+      {!embedded && record.canViewSensitive ? <ElevatePractitionerEditor onChanged={onChanged} processKey={processKey} record={record} themeGroups={practitionerThemeGroups} /> : null}
       <div className="segmented-control liv-v2-cycles" aria-label="LIV cycles">
         {record.cycles.map((value) => <button className={cycle.id === value.id ? "is-active" : ""} key={value.id} onClick={() => onCycleChange(value.id)} type="button">Cycle {value.cycleNumber}{value.status === "completed" ? " · Complete" : " · Current"}</button>)}
       </div>
@@ -383,6 +392,7 @@ export function LivCaseWorkspace({ record, configuration, practitionerThemeGroup
                     stage={stage}
                     staff={staff}
                     onChanged={onChanged}
+                    processKey={processKey}
                   />
                 ) : record.canEdit && cycle.status === "in_progress" ? <Button disabled={isSaving} icon={Plus} onClick={() => void addStage(type)}>Add stage</Button> : <p className="muted-copy">This stage has not been added.</p>}
               </div>
@@ -395,7 +405,7 @@ export function LivCaseWorkspace({ record, configuration, practitionerThemeGroup
   );
 }
 
-function LivStageEditor({ stage, record, cycle, configuration, actions, previousActions, ownerOptions, staff, onChanged }: {
+function LivStageEditor({ stage, record, cycle, configuration, actions, previousActions, ownerOptions, staff, onChanged, processKey }: {
   stage: LivStage;
   record: LivRecordSummary;
   cycle: LivCycle;
@@ -405,6 +415,7 @@ function LivStageEditor({ stage, record, cycle, configuration, actions, previous
   ownerOptions: ActionOwnerOption[];
   staff: StaffSummary[];
   onChanged: (message: string) => Promise<void>;
+  processKey: "liv" | "als_liv";
 }) {
   const [form, setForm] = useState<SaveLivStageRequest>(() => stageToRequest(stage));
   const [visit, setVisit] = useState<SaveLivVisitRequest>(() => visitToRequest(record.visits.find((value) => value.id === stage.visitId)));
@@ -416,7 +427,7 @@ function LivStageEditor({ stage, record, cycle, configuration, actions, previous
 
   async function saveStage() {
     setIsSaving(true);
-    const result = await api.updateLivStage(record.id, stage.id, form);
+    const result = await api.updateLivStage(record.id, stage.id, form, processKey);
     setIsSaving(false);
     if (!result.ok) {
       setMessage(result.message ?? "The stage could not be saved.");
@@ -444,9 +455,9 @@ function LivStageEditor({ stage, record, cycle, configuration, actions, previous
       return;
     }
     setIsSaving(true);
-    const result = await api.updateLivVisit(record.id, stage.visitId, visit);
+    const result = await api.updateLivVisit(record.id, stage.visitId, visit, processKey);
     const stageResult = result.ok
-      ? await api.updateLivStage(record.id, stage.id, form)
+      ? await api.updateLivStage(record.id, stage.id, form, processKey)
       : null;
     setIsSaving(false);
     if (!result.ok || !stageResult?.ok) {
@@ -456,7 +467,7 @@ function LivStageEditor({ stage, record, cycle, configuration, actions, previous
     await onChanged("LIV visit detail saved.");
   }
 
-  if (stage.stageType === "actions") return <LivActions actions={actions} cycle={cycle} ownerOptions={ownerOptions} record={record} staff={staff} onChanged={onChanged} />;
+  if (stage.stageType === "actions") return <LivActions actions={actions} cycle={cycle} ownerOptions={ownerOptions} processKey={processKey} record={record} staff={staff} onChanged={onChanged} />;
   if (stage.stageType === "visit" && !record.canViewSensitive) return null;
 
   return (
@@ -546,7 +557,7 @@ function VisitEditor({ completed, configuration, disabled, record, value, onChan
   );
 }
 
-function ElevatePractitionerEditor({ record, themeGroups, onChanged }: { record: LivRecordSummary; themeGroups: SharedThemeGroup[]; onChanged: (message: string) => Promise<void> }) {
+function ElevatePractitionerEditor({ record, themeGroups, onChanged, processKey }: { record: LivRecordSummary; themeGroups: SharedThemeGroup[]; onChanged: (message: string) => Promise<void>; processKey: "liv" | "als_liv" }) {
   const themes = themeGroups.flatMap((group) => group.themes).filter((theme) => theme.isActive || record.areaOfPracticeThemeIds.includes(theme.id));
   const [isPractitioner, setIsPractitioner] = useState(record.isElevatePractitioner ? "yes" : "");
   const [themeIds, setThemeIds] = useState(record.areaOfPracticeThemeIds);
@@ -574,7 +585,7 @@ function ElevatePractitionerEditor({ record, themeGroups, onChanged }: { record:
       areaOfPracticeKeys: [],
       areaOfPracticeThemeIds: themeIds,
       areaOfPracticeOther: otherSelected ? other.trim() : undefined
-    });
+    }, processKey);
     setIsSaving(false);
     if (!result.ok) {
       setMessage(result.message ?? "Elevate practitioner information could not be saved.");
@@ -587,13 +598,14 @@ function ElevatePractitionerEditor({ record, themeGroups, onChanged }: { record:
   return <details className="panel liv-v2-records"><summary><span><strong>Elevate practitioner</strong><small>Practitioner status and areas of practice</small></span><ChevronDown size={18} /></summary><div className="form-stack liv-practitioner-editor">{message ? <div className="notice-row">{message}</div> : null}<label className="entry-field"><span>Elevate practitioner</span><select disabled={!record.canEdit} onChange={(event) => setIsPractitioner(event.target.value)} value={isPractitioner}><option value="">-</option><option value="yes">Yes</option></select></label><fieldset className="support-options"><legend>Areas of practice</legend>{themes.map((theme) => <label key={theme.id}><input checked={themeIds.includes(theme.id)} disabled={!record.canEdit} onChange={() => setThemeIds((current) => current.includes(theme.id) ? current.filter((id) => id !== theme.id) : [...current, theme.id])} type="checkbox" /><span>{theme.name}</span></label>)}</fieldset>{otherSelected ? <label className="entry-field"><span>Other area of practice</span><input disabled={!record.canEdit} onChange={(event) => setOther(event.target.value)} value={other} /></label> : null}{record.canEdit ? <div className="toolbar toolbar-end"><Button disabled={isSaving} icon={Save} onClick={() => void save()} variant="primary">{isSaving ? "Saving..." : "Save practitioner information"}</Button></div> : <p className="muted-copy">This information is read-only for your current access.</p>}</div></details>;
 }
 
-function LivActions({ actions, record, cycle, ownerOptions, staff, onChanged }: {
+function LivActions({ actions, record, cycle, ownerOptions, staff, onChanged, processKey }: {
   actions: ActionSummary[];
   record: LivRecordSummary;
   cycle: LivCycle;
   ownerOptions: ActionOwnerOption[];
   staff: StaffSummary[];
   onChanged: (message: string) => Promise<void>;
+  processKey: "liv" | "als_liv";
 }) {
   const [isAdding, setIsAdding] = useState(false);
   const [actionTheme, setActionTheme] = useState("");
@@ -605,7 +617,7 @@ function LivActions({ actions, record, cycle, ownerOptions, staff, onChanged }: 
   async function createAction() {
     if (!actionTheme.trim() || !text.trim() || !ownerId || !dueDate) return;
     setIsSaving(true);
-    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "liv", subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, actionTheme: actionTheme.trim(), title: text.trim(), dueDate, publishedToStaff: true, livCycleId: cycle.id, visibilitySetting: "staff_and_management" });
+    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: processKey, subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, actionTheme: actionTheme.trim(), title: text.trim(), dueDate, publishedToStaff: true, livCycleId: cycle.id, visibilitySetting: "staff_and_management" });
     setIsSaving(false);
     if (!result.ok) return;
     setActionTheme(""); setText(""); setOwnerId(""); setDueDate(""); setIsAdding(false);
@@ -615,7 +627,7 @@ function LivActions({ actions, record, cycle, ownerOptions, staff, onChanged }: 
   return (
     <div className="liv-v2-actions">
       <div className="liv-actions-heading"><div><h3>Cycle actions</h3><span>{actions.length} linked to this cycle</span></div>{record.canEdit && cycle.status === "in_progress" ? <Button icon={Plus} onClick={() => setIsAdding((value) => !value)} variant="primary">Add action</Button> : null}</div>
-      {isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`liv-action-theme-${cycle.id}`} onChange={setActionTheme} sourceFormType="liv" value={actionTheme} /></label><label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setText(event.target.value)} rows={3} value={text} /></label><div className="form-grid form-grid-two"><label className="entry-field"><span>Owner <strong>Required</strong></span><select onChange={(event) => setOwnerId(event.target.value)} value={ownerId}><option value="">Select owner</option>{ownerOptions.map((option) => <option key={option.staffId} value={option.staffId}>{option.displayName} - {option.relationship}</option>)}</select></label><label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !actionTheme.trim() || !text.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void createAction()} variant="primary">Create action</Button></div></div> : null}
+      {isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`liv-action-theme-${cycle.id}`} onChange={setActionTheme} sourceFormType={processKey} value={actionTheme} /></label><label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setText(event.target.value)} rows={3} value={text} /></label><div className="form-grid form-grid-two"><label className="entry-field"><span>Owner <strong>Required</strong></span><select onChange={(event) => setOwnerId(event.target.value)} value={ownerId}><option value="">Select owner</option>{ownerOptions.map((option) => <option key={option.staffId} value={option.staffId}>{option.displayName} - {option.relationship}</option>)}</select></label><label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !actionTheme.trim() || !text.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void createAction()} variant="primary">Create action</Button></div></div> : null}
       <div className="liv-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added to this cycle.</p> : actions.map((action) => <LivActionCard action={action} key={action.id} onChanged={onChanged} />)}</div>
       {ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No valid owners are available for this record and your current permissions.</small> : null}
     </div>

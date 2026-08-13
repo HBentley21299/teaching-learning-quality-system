@@ -17,6 +17,7 @@ node_modules/
 dist/
 coverage/
 .env
+deployment.settings.psd1
 .env.*
 !.env.example
 !**/.env.example

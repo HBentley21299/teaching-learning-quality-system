@@ -27,9 +27,11 @@ public sealed partial class SqlFoundationDataStore
             "cpd" => await BuildCpdExportAsync(connection, filter, currentUser, cancellationToken),
             "coaching" => await BuildCoachingExportAsync(connection, filter, currentUser, cancellationToken),
             "reflections" => await BuildReflectionExportAsync(connection, filter, currentUser, cancellationToken),
-            "liv" => await BuildLivExportAsync(connection, filter, currentUser, cancellationToken),
+            "liv" => await BuildLivExportAsync(connection, filter, currentUser, cancellationToken, "liv"),
+            "als-liv" => await BuildLivExportAsync(connection, filter, currentUser, cancellationToken, "als_liv"),
             "elevate-practice" => await BuildElevatePracticeExportAsync(connection, filter, currentUser, cancellationToken),
             "learning-walks" => await BuildGenericRecordExportAsync(connection, "learning_walk", "Learning Walks", filter, currentUser, cancellationToken),
+            "als-learning-walks" => await BuildGenericRecordExportAsync(connection, "als_learning_walk", "ALS Learning Walks", filter, currentUser, cancellationToken),
             "work-scrutiny" => await BuildGenericRecordExportAsync(connection, "work_scrutiny", "Work Scrutiny", filter, currentUser, cancellationToken),
             "elevate-environments" => await BuildElevateEnvironmentExportAsync(connection, filter, currentUser, cancellationToken),
             "probation" => await BuildProbationExportAsync(connection, filter, currentUser, cancellationToken),
@@ -106,7 +108,7 @@ public sealed partial class SqlFoundationDataStore
             command => command.Parameters.AddWithValue("@recordId", recordId),
             reader => new RecordReportResponse(reader.GetString(0), reader.GetString(1), GetStringOrNull(reader, 2)),
             cancellationToken)).ToList();
-        fields.AddRange(await GetSpecialistRecordResponsesAsync(connection, recordId, currentUser, cancellationToken));
+        fields.AddRange(await GetSpecialistRecordResponsesAsync(connection, recordId, header.RecordType, currentUser, cancellationToken));
         var actions = await QueryOnConnectionAsync(
             connection,
             """
@@ -140,6 +142,7 @@ public sealed partial class SqlFoundationDataStore
     private async Task<IReadOnlyList<RecordReportResponse>> GetSpecialistRecordResponsesAsync(
         SqlConnection connection,
         Guid recordId,
+        string recordType,
         CurrentUser currentUser,
         CancellationToken cancellationToken) =>
         await QueryOnConnectionAsync(
@@ -247,7 +250,7 @@ public sealed partial class SqlFoundationDataStore
                 JOIN quality.liv_cycles cycle ON cycle.liv_record_id = liv.id
                 JOIN quality.liv_visits visit ON visit.cycle_id = cycle.id AND visit.archived_at IS NULL
                 LEFT JOIN core.lookup_values delivery ON delivery.id = visit.delivery_area_lookup_value_id
-                LEFT JOIN core.lookup_types course_level_type ON course_level_type.lookup_key = N'liv_course_level'
+                LEFT JOIN core.lookup_types course_level_type ON course_level_type.lookup_key = @courseLevelLookupKey
                 LEFT JOIN core.lookup_values course_level ON course_level.lookup_type_id = course_level_type.id
                   AND course_level.value_key = visit.course_level
                 CROSS APPLY (VALUES
@@ -355,6 +358,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
                 command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
                 command.Parameters.AddWithValue("@hasSensitivePermission", currentUser.HasPermission(PermissionKeys.LivSensitiveRead));
+                command.Parameters.AddWithValue("@courseLevelLookupKey", recordType.Equals("als_liv", StringComparison.OrdinalIgnoreCase) ? "als_liv_course_level" : "liv_course_level");
             },
             reader => new RecordReportResponse(reader.GetString(0), reader.GetString(1), GetStringOrNull(reader, 2)),
             cancellationToken);
@@ -757,7 +761,7 @@ public sealed partial class SqlFoundationDataStore
     }
 
     private async Task<IReadOnlyList<ExportSheet>> BuildLivExportAsync(
-        SqlConnection connection, ExportFilter filter, CurrentUser user, CancellationToken cancellationToken)
+        SqlConnection connection, ExportFilter filter, CurrentUser user, CancellationToken cancellationToken, string recordType)
     {
         var cases = await ReadExportSheetAsync(connection, "LIV Cases", $"""
             {ScopedRecordsCte}
@@ -780,7 +784,7 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY liv.created_at DESC;
             """, command =>
             {
-                AddExportParameters(command, user, filter, "liv");
+                AddExportParameters(command, user, filter, recordType);
                 command.Parameters.AddWithValue("@canViewLivSensitive", user.HasPermission(PermissionKeys.LivSensitiveRead));
             }, cancellationToken);
         var visits = await ReadExportSheetAsync(connection, "Visits", $"""
@@ -796,13 +800,14 @@ public sealed partial class SqlFoundationDataStore
             JOIN scoped_records record_row ON record_row.id = liv.record_id
             JOIN quality.liv_visits visit ON visit.liv_record_id = liv.id AND visit.archived_at IS NULL
             LEFT JOIN core.lookup_values delivery ON delivery.id = visit.delivery_area_lookup_value_id
-            LEFT JOIN core.lookup_types course_level_type ON course_level_type.lookup_key = N'liv_course_level'
+            LEFT JOIN core.lookup_types course_level_type ON course_level_type.lookup_key = @courseLevelLookupKey
             LEFT JOIN core.lookup_values course_level ON course_level.lookup_type_id = course_level_type.id
               AND course_level.value_key = visit.course_level
             ORDER BY liv.created_at DESC, visit.visit_number;
             """, command =>
             {
-                AddExportParameters(command, user, filter, "liv");
+                AddExportParameters(command, user, filter, recordType);
+                command.Parameters.AddWithValue("@courseLevelLookupKey", recordType == "als_liv" ? "als_liv_course_level" : "liv_course_level");
                 command.Parameters.AddWithValue("@canViewLivSensitive", user.HasPermission(PermissionKeys.LivSensitiveRead));
             }, cancellationToken);
         var stages = await ReadExportSheetAsync(connection, "Stages", $"""
@@ -819,7 +824,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN quality.liv_cycles cycle ON cycle.liv_record_id = liv.id
             JOIN quality.liv_stages stage ON stage.liv_cycle_id = cycle.id AND stage.archived_at IS NULL
             ORDER BY liv.created_at DESC, cycle.cycle_number, stage.stage_order;
-            """, command => AddExportParameters(command, user, filter, "liv"), cancellationToken);
+            """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
         var ratings = await ReadExportSheetAsync(connection, "Practice Rubric", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
@@ -835,7 +840,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN core.lookup_values focus ON focus.id = rating.focus_lookup_value_id
             LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id
             ORDER BY liv.created_at DESC, cycle.cycle_number, focus.display_order;
-            """, command => AddExportParameters(command, user, filter, "liv"), cancellationToken);
+            """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
         var actions = await ReadExportSheetAsync(connection, "Actions", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
@@ -849,7 +854,7 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN people.staff owner ON owner.id = action_row.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = action_row.status_lookup_value_id
             ORDER BY liv.created_at DESC, action_row.due_date;
-            """, command => AddExportParameters(command, user, filter, "liv"), cancellationToken);
+            """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
         return [FlattenByKey("Full Records", cases, "LIV case ID", visits, stages, ratings, actions), cases, visits, stages, ratings, actions];
     }
 
@@ -1136,6 +1141,8 @@ public sealed partial class SqlFoundationDataStore
     private static string NormalizeExportModuleKey(string value) => value.Trim().ToLowerInvariant() switch
     {
         "learning_walk" => "learning-walks",
+        "als_learning_walk" => "als-learning-walks",
+        "als_liv" => "als-liv",
         "work_scrutiny" => "work-scrutiny",
         "elevate_environment" => "elevate-environments",
         "elevate_practice" => "elevate-practice",
@@ -1147,6 +1154,8 @@ public sealed partial class SqlFoundationDataStore
     private static string ExportDisplayName(string key) => key switch
     {
         "learning-walks" => "Learning Walks",
+        "als-learning-walks" => "ALS Learning Walks",
+        "als-liv" => "ALS Learning and Innovation Visits",
         "work-scrutiny" => "Work Scrutiny",
         "elevate-environments" => "Learning Environments",
         "elevate-practice" => "Elevate Learning and Innovation",

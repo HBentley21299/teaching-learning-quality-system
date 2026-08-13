@@ -9,12 +9,13 @@ namespace TLQS.Api.Data;
 
 public sealed partial class SqlFoundationDataStore
 {
-    public async Task<LivConfigurationSummary> GetLivConfigurationAsync(CancellationToken cancellationToken)
+    public async Task<LivConfigurationSummary> GetLivConfigurationAsync(CancellationToken cancellationToken, string processKey = "liv")
     {
-        var deliveryAreas = await GetLivLookupOptionsAsync("liv_delivery_area", cancellationToken);
-        var courseLevels = await GetLivLookupOptionsAsync("liv_course_level", cancellationToken);
-        var focusAreas = await GetLivLookupOptionsAsync("liv_visit_focus_area", cancellationToken);
-        var opportunities = await GetLivLookupOptionsAsync("liv_development_opportunity", cancellationToken);
+        var lookupPrefix = processKey == "als_liv" ? "als_liv" : "liv";
+        var deliveryAreas = await GetLivLookupOptionsAsync($"{lookupPrefix}_delivery_area", cancellationToken);
+        var courseLevels = await GetLivLookupOptionsAsync($"{lookupPrefix}_course_level", cancellationToken);
+        var focusAreas = await GetLivLookupOptionsAsync($"{lookupPrefix}_visit_focus_area", cancellationToken);
+        var opportunities = await GetLivLookupOptionsAsync($"{lookupPrefix}_development_opportunity", cancellationToken);
         var rubric = await QueryAsync(
             """
             SELECT TOP (5) descriptor.id, descriptor.descriptor_key, descriptor.visible_wording,
@@ -36,9 +37,10 @@ public sealed partial class SqlFoundationDataStore
     public async Task<LivStaffContextSummary?> GetLivStaffContextAsync(
         Guid staffId,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
-        var canViewAll = currentUser.HasPermission(PermissionKeys.LivManage)
+        var canViewAll = currentUser.HasPermission(processKey == "als_liv" ? PermissionKeys.AlsLivManage : PermissionKeys.LivManage)
             || currentUser.HasPermission(PermissionKeys.ReportsViewAll);
         var rows = await QueryAsync(
             """
@@ -64,6 +66,7 @@ public sealed partial class SqlFoundationDataStore
                 SELECT TOP (1) record.id, record.record_id
                 FROM quality.liv_records record
                 WHERE record.source_elevate_assessment_id = assessment.id
+                  AND record.process_key = @processKey
                   AND record.archived_at IS NULL
                 ORDER BY record.created_at DESC
             ) liv
@@ -84,6 +87,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@canViewAll", canViewAll);
                 command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
                 command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@processKey", processKey);
             },
             reader => new LivStaffContextSummary(
                 reader.GetGuid(0), reader.GetString(1), GetGuidOrNull(reader, 2),
@@ -97,12 +101,15 @@ public sealed partial class SqlFoundationDataStore
 
     public async Task<IReadOnlyList<LivCaseSummary>> GetLivCasesV2Async(
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
-        var canViewAll = currentUser.HasPermission(PermissionKeys.LivManage)
+        var managePermission = processKey == "als_liv" ? PermissionKeys.AlsLivManage : PermissionKeys.LivManage;
+        var submitPermission = processKey == "als_liv" ? PermissionKeys.AlsLivSubmit : PermissionKeys.LivSubmit;
+        var canViewAll = currentUser.HasPermission(managePermission)
             || currentUser.HasPermission(PermissionKeys.ReportsViewAll);
-        var canViewScoped = currentUser.HasPermission(PermissionKeys.LivSubmit);
-        var canManage = currentUser.HasPermission(PermissionKeys.LivManage);
+        var canViewScoped = currentUser.HasPermission(submitPermission);
+        var canManage = currentUser.HasPermission(managePermission);
         var hasSensitivePermission = currentUser.HasPermission(PermissionKeys.LivSensitiveRead)
             || currentUser.HasPermission(PermissionKeys.UsersManage);
         var visibilityFilter = canViewAll
@@ -165,7 +172,7 @@ public sealed partial class SqlFoundationDataStore
               ON source_primary.id = source_information.primary_focus_lookup_value_id
             LEFT JOIN core.lookup_values source_secondary
               ON source_secondary.id = source_information.secondary_focus_lookup_value_id
-            WHERE liv.archived_at IS NULL
+            WHERE liv.archived_at IS NULL AND liv.process_key = @processKey
             {visibilityFilter}
             OPTION (LOOP JOIN);
             """,
@@ -176,6 +183,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@canViewScoped", canViewScoped);
                 command.Parameters.AddWithValue("@canManage", canManage);
                 command.Parameters.AddWithValue("@hasSensitivePermission", hasSensitivePermission);
+                command.Parameters.AddWithValue("@processKey", processKey);
             },
             reader => new LivCaseSummary(
                 reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetString(3),
@@ -337,7 +345,8 @@ public sealed partial class SqlFoundationDataStore
     public async Task<Guid> CreateLivCaseV2Async(
         SaveLivCaseRequest request,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
@@ -351,12 +360,14 @@ public sealed partial class SqlFoundationDataStore
                 currentUser,
                 cancellationToken);
 
-            var moduleId = await GetModuleIdAsync(connection, transaction, "liv", cancellationToken);
+            var moduleId = await GetModuleIdAsync(connection, transaction, processKey, cancellationToken);
             var recordId = Guid.NewGuid();
             var livId = Guid.NewGuid();
             var cycleId = Guid.NewGuid();
 
-            var source = await ReadLatestElevateLivSourceAsync(connection, transaction, request.SubjectStaffId, cancellationToken);
+            var source = processKey == "als_liv"
+                ? null
+                : await ReadLatestElevateLivSourceAsync(connection, transaction, request.SubjectStaffId, processKey, cancellationToken);
             if (source?.ExistingLivId is not null)
             {
                 throw new WorkflowValidationException("This Elevate Learning and Innovation assessment already has a LIV case.");
@@ -367,7 +378,7 @@ public sealed partial class SqlFoundationDataStore
                     id, module_id, record_type, title, subject_staff_id, owner_staff_id,
                     org_unit_id, record_date, created_by_user_account_id
                 )
-                SELECT @recordId, @moduleId, N'liv', N'LIV - ' + staff.display_name,
+                SELECT @recordId, @moduleId, @processKey, @recordLabel + N' - ' + staff.display_name,
                        @subjectStaffId, @ownerStaffId, COALESCE(@orgUnitId, staff.primary_org_unit_id),
                        CONVERT(date, sysutcdatetime()), @createdBy
                 FROM people.staff staff
@@ -379,13 +390,13 @@ public sealed partial class SqlFoundationDataStore
                     is_elevate_practitioner, area_of_practice_keys_json, area_of_practice_other,
                     delivery_area_lookup_value_id, source_elevate_assessment_id,
                     eli_primary_focus_key, eli_primary_focus_snapshot, eli_desired_outcome,
-                    created_by_user_account_id
+                    created_by_user_account_id, process_key
                 )
                 SELECT @id, @recordId, @subjectStaffId, @reviewerStaffId,
                        COALESCE(@orgUnitId, staff.primary_org_unit_id), @preConversation,
                        N'in_progress', N'case_created', N'staff_visible', @isElevatePractitioner,
                        @areaKeysJson, @areaOther, @deliveryAreaId, @sourceAssessmentId,
-                       @primaryFocusKey, @primaryFocusName, @desiredOutcome, @createdBy
+                       @primaryFocusKey, @primaryFocusName, @desiredOutcome, @createdBy, @processKey
                 FROM people.staff staff WHERE staff.id = @subjectStaffId;
 
                 INSERT INTO quality.liv_cycles (
@@ -413,13 +424,17 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@primaryFocusName", ToDbValue(source?.PrimaryFocusName));
                 command.Parameters.AddWithValue("@desiredOutcome", ToDbValue(source?.DesiredOutcome));
                 command.Parameters.AddWithValue("@createdBy", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@processKey", processKey);
+                command.Parameters.AddWithValue("@recordLabel", processKey == "als_liv" ? "ALS LIV" : "LIV");
                 if (await command.ExecuteNonQueryAsync(cancellationToken) < 3)
                 {
                     throw new WorkflowValidationException("The selected staff member was not found.");
                 }
             }
 
-            await SaveLivThemeSelectionsAsync(connection, transaction, livId, request, cancellationToken);
+            await SaveLivThemeSelectionsAsync(
+                connection, transaction, livId, request, cancellationToken,
+                processKey == "als_liv" ? "als_liv_practitioner" : "liv");
             if (!string.IsNullOrWhiteSpace(request.PreConversation))
             {
                 await InsertLivStageAsync(
@@ -446,7 +461,8 @@ public sealed partial class SqlFoundationDataStore
         Guid livId,
         SaveLivCaseRequest request,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -454,6 +470,7 @@ public sealed partial class SqlFoundationDataStore
         {
             var metadata = await GetLivCaseMetadataV2Async(connection, transaction, livId, cancellationToken);
             if (metadata is null) return FormSubmissionUpdateResult.NotFound;
+            if (metadata.ProcessKey != processKey) return FormSubmissionUpdateResult.Forbidden;
             if (!CanEditLivMetadata(metadata, currentUser)) return FormSubmissionUpdateResult.Forbidden;
 
             if (request.OrgUnitId.HasValue)
@@ -490,7 +507,9 @@ public sealed partial class SqlFoundationDataStore
             }
             if (canWriteSensitive)
             {
-                await SaveLivThemeSelectionsAsync(connection, transaction, livId, request, cancellationToken);
+                await SaveLivThemeSelectionsAsync(
+                    connection, transaction, livId, request, cancellationToken,
+                    processKey == "als_liv" ? "als_liv_practitioner" : "liv");
             }
             await WriteAuditAsync(
                 connection, transaction, currentUser.UserAccountId, metadata.RecordId,
@@ -510,14 +529,15 @@ public sealed partial class SqlFoundationDataStore
         Guid livId,
         SaveLivStageRequest request,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         try
         {
             var metadata = await GetLivCaseMetadataV2Async(connection, transaction, livId, cancellationToken);
-            if (metadata is null || !CanEditLivMetadata(metadata, currentUser)) return null;
+            if (metadata is null || metadata.ProcessKey != processKey || !CanEditLivMetadata(metadata, currentUser)) return null;
             var cycle = await GetActiveLivCycleAsync(connection, transaction, livId, cancellationToken)
                 ?? throw new WorkflowValidationException("The LIV case has no active cycle.");
             var stageType = NormalizeLivStageType(request.StageType, cycle.CycleNumber);
@@ -528,7 +548,7 @@ public sealed partial class SqlFoundationDataStore
                 await InsertLivCycleVisitAsync(
                     connection, transaction, visitId.Value, livId, cycle.Id, cycle.CycleNumber,
                     new SaveLivVisitRequest(null, null, null, null, null, null, null),
-                    currentUser.UserAccountId, cancellationToken);
+                    currentUser.UserAccountId, processKey, cancellationToken);
             }
             var stageId = await InsertLivStageAsync(
                 connection, transaction, cycle.Id, stageType,
@@ -565,7 +585,8 @@ public sealed partial class SqlFoundationDataStore
         Guid stageId,
         SaveLivStageRequest request,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -573,6 +594,7 @@ public sealed partial class SqlFoundationDataStore
         {
             var metadata = await GetLivCaseMetadataV2Async(connection, transaction, livId, cancellationToken);
             if (metadata is null) return FormSubmissionUpdateResult.NotFound;
+            if (metadata.ProcessKey != processKey) return FormSubmissionUpdateResult.Forbidden;
             string? stageType;
             await using (var read = new SqlCommand(
                 """
@@ -593,7 +615,7 @@ public sealed partial class SqlFoundationDataStore
             var stageStatus = NormalizeLivStageStatus(request.StageStatus, stageType);
 
             await ValidateLivOpportunityKeysAsync(
-                connection, transaction, request.DevelopmentOpportunityKeys, cancellationToken);
+                connection, transaction, request.DevelopmentOpportunityKeys, processKey, cancellationToken);
             await using (var command = new SqlCommand(
                 """
                 UPDATE quality.liv_stages
@@ -639,7 +661,8 @@ public sealed partial class SqlFoundationDataStore
         Guid visitId,
         SaveLivVisitRequest request,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -647,11 +670,12 @@ public sealed partial class SqlFoundationDataStore
         {
             var metadata = await GetLivCaseMetadataV2Async(connection, transaction, livId, cancellationToken);
             if (metadata is null) return FormSubmissionUpdateResult.NotFound;
+            if (metadata.ProcessKey != processKey) return FormSubmissionUpdateResult.Forbidden;
             if (!CanEditLivMetadata(metadata, currentUser)) return FormSubmissionUpdateResult.Forbidden;
             var deliveryAreaId = await ReadActiveLookupValueIdAsync(
-                connection, transaction, "liv_delivery_area", request.DeliveryAreaKey, true, cancellationToken);
+                connection, transaction, LivLookupKey(processKey, "delivery_area"), request.DeliveryAreaKey, true, cancellationToken);
             _ = await ReadActiveLookupValueIdAsync(
-                connection, transaction, "liv_course_level", request.CourseLevel, false, cancellationToken);
+                connection, transaction, LivLookupKey(processKey, "course_level"), request.CourseLevel, false, cancellationToken);
 
             await using (var command = new SqlCommand(
                 """
@@ -672,7 +696,7 @@ public sealed partial class SqlFoundationDataStore
                 AddLivVisitParameters(command, request);
                 if (await command.ExecuteNonQueryAsync(cancellationToken) == 0) return FormSubmissionUpdateResult.NotFound;
             }
-            await SaveLivVisitRatingsAsync(connection, transaction, visitId, request.Ratings, cancellationToken);
+            await SaveLivVisitRatingsAsync(connection, transaction, visitId, request.Ratings, processKey, cancellationToken);
             await WriteAuditAsync(
                 connection, transaction, currentUser.UserAccountId, metadata.RecordId,
                 "liv_visit", visitId, "liv.visit_updated",
@@ -692,14 +716,15 @@ public sealed partial class SqlFoundationDataStore
         Guid livId,
         bool openFollowUp,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "liv")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         try
         {
             var metadata = await GetLivCaseMetadataV2Async(connection, transaction, livId, cancellationToken);
-            if (metadata is null || !CanEditLivMetadata(metadata, currentUser)) return null;
+            if (metadata is null || metadata.ProcessKey != processKey || !CanEditLivMetadata(metadata, currentUser)) return null;
             var cycle = await GetActiveLivCycleAsync(connection, transaction, livId, cancellationToken)
                 ?? throw new WorkflowValidationException("The LIV case has no active cycle.");
             var stageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -918,6 +943,7 @@ public sealed partial class SqlFoundationDataStore
         SqlConnection connection,
         System.Data.Common.DbTransaction transaction,
         Guid staffId,
+        string processKey,
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
@@ -928,12 +954,13 @@ public sealed partial class SqlFoundationDataStore
             JOIN quality.elevate_practice_liv_information information ON information.assessment_id = assessment.id
             LEFT JOIN core.lookup_values focus ON focus.id = information.primary_focus_lookup_value_id
             LEFT JOIN quality.liv_records existing
-              ON existing.source_elevate_assessment_id = assessment.id AND existing.archived_at IS NULL
+              ON existing.source_elevate_assessment_id = assessment.id AND existing.process_key = @processKey AND existing.archived_at IS NULL
             WHERE assessment.staff_id = @staffId AND assessment.status = N'submitted'
               AND assessment.archived_at IS NULL
             ORDER BY assessment.academic_year DESC, assessment.submitted_at DESC;
             """, connection, (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@staffId", staffId);
+        command.Parameters.AddWithValue("@processKey", processKey);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
             ? new ElevateLivSourceV2Row(
@@ -949,12 +976,12 @@ public sealed partial class SqlFoundationDataStore
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
-            "SELECT record_id, subject_staff_id, reviewer_staff_id, created_by_user_account_id, status FROM quality.liv_records WHERE id = @id AND archived_at IS NULL;",
+            "SELECT record_id, subject_staff_id, reviewer_staff_id, created_by_user_account_id, status, process_key FROM quality.liv_records WHERE id = @id AND archived_at IS NULL;",
             connection, (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@id", livId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new LivCaseMetadataV2(reader.GetGuid(0), reader.GetGuid(1), GetGuidOrNull(reader, 2), GetGuidOrNull(reader, 3), reader.GetString(4))
+            ? new LivCaseMetadataV2(reader.GetGuid(0), reader.GetGuid(1), GetGuidOrNull(reader, 2), GetGuidOrNull(reader, 3), reader.GetString(4), reader.GetString(5))
             : null;
     }
 
@@ -1019,13 +1046,16 @@ public sealed partial class SqlFoundationDataStore
     private static bool CanEditLivMetadata(LivCaseMetadataV2 metadata, CurrentUser currentUser) =>
         metadata.ReviewerStaffId == currentUser.StaffId
             || metadata.CreatedByUserAccountId == currentUser.UserAccountId
-            || currentUser.HasPermission(PermissionKeys.LivManage);
+            || currentUser.HasPermission(metadata.ProcessKey == "als_liv" ? PermissionKeys.AlsLivManage : PermissionKeys.LivManage);
 
     private static bool CanViewLivSensitiveMetadata(LivCaseMetadataV2 metadata, CurrentUser currentUser) =>
         metadata.ReviewerStaffId == currentUser.StaffId
         || metadata.CreatedByUserAccountId == currentUser.UserAccountId
         || currentUser.HasPermission(PermissionKeys.UsersManage)
         || currentUser.HasPermission(PermissionKeys.LivSensitiveRead);
+
+    private static string LivLookupKey(string processKey, string suffix) =>
+        $"{(processKey == "als_liv" ? "als_liv" : "liv")}_{suffix}";
 
     private static async Task<LivCycleV2Row?> GetActiveLivCycleAsync(
         SqlConnection connection,
@@ -1143,16 +1173,17 @@ public sealed partial class SqlFoundationDataStore
         int visitNumber,
         SaveLivVisitRequest request,
         Guid? userAccountId,
+        string processKey,
         CancellationToken cancellationToken)
     {
         Guid? deliveryAreaId = null;
         if (!string.IsNullOrWhiteSpace(request.DeliveryAreaKey))
         {
             deliveryAreaId = await ReadActiveLookupValueIdAsync(
-                connection, transaction, "liv_delivery_area", request.DeliveryAreaKey, true, cancellationToken);
+                connection, transaction, LivLookupKey(processKey, "delivery_area"), request.DeliveryAreaKey, true, cancellationToken);
         }
         _ = await ReadActiveLookupValueIdAsync(
-            connection, transaction, "liv_course_level", request.CourseLevel, false, cancellationToken);
+            connection, transaction, LivLookupKey(processKey, "course_level"), request.CourseLevel, false, cancellationToken);
         await using var command = new SqlCommand(
             """
             INSERT INTO quality.liv_visits (
@@ -1180,6 +1211,7 @@ public sealed partial class SqlFoundationDataStore
         SqlConnection connection,
         System.Data.Common.DbTransaction transaction,
         IReadOnlyList<string>? keys,
+        string processKey,
         CancellationToken cancellationToken)
     {
         var values = (keys ?? []).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -1189,11 +1221,12 @@ public sealed partial class SqlFoundationDataStore
             SELECT COUNT(*)
             FROM core.lookup_values value
             JOIN core.lookup_types type ON type.id = value.lookup_type_id
-            WHERE type.lookup_key = N'liv_development_opportunity'
+            WHERE type.lookup_key = @lookupKey
               AND value.value_key IN (SELECT [value] FROM OPENJSON(@keys))
               AND value.is_active = 1 AND value.archived_at IS NULL;
             """, connection, (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@keys", JsonSerializer.Serialize(values));
+        command.Parameters.AddWithValue("@lookupKey", LivLookupKey(processKey, "development_opportunity"));
         if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != values.Length)
             throw new WorkflowValidationException("One or more development opportunities are no longer available.");
     }
@@ -1203,6 +1236,7 @@ public sealed partial class SqlFoundationDataStore
         System.Data.Common.DbTransaction transaction,
         Guid visitId,
         IReadOnlyList<LivVisitRatingRequest>? ratings,
+        string processKey,
         CancellationToken cancellationToken)
     {
         var values = (ratings ?? []).Where(value => !string.IsNullOrWhiteSpace(value.FocusKey))
@@ -1226,7 +1260,7 @@ public sealed partial class SqlFoundationDataStore
                        CASE WHEN @isNa = 1 THEN NULL ELSE descriptor.hidden_numeric_value END,
                        @isNa
                 FROM core.lookup_values focus
-                JOIN core.lookup_types focus_type ON focus_type.id = focus.lookup_type_id AND focus_type.lookup_key = N'liv_visit_focus_area'
+                JOIN core.lookup_types focus_type ON focus_type.id = focus.lookup_type_id AND focus_type.lookup_key = @lookupKey
                 LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = @descriptorId AND descriptor.archived_at IS NULL
                 WHERE focus.value_key = @focusKey AND focus.value_key <> N'other'
                   AND focus.is_active = 1 AND focus.archived_at IS NULL;
@@ -1235,6 +1269,7 @@ public sealed partial class SqlFoundationDataStore
             command.Parameters.AddWithValue("@focusKey", rating.FocusKey);
             command.Parameters.AddWithValue("@descriptorId", ToDbValue(rating.DescriptorId));
             command.Parameters.AddWithValue("@isNa", rating.IsNotApplicable);
+            command.Parameters.AddWithValue("@lookupKey", LivLookupKey(processKey, "visit_focus_area"));
             if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
                 throw new WorkflowValidationException("One or more LIV rubric responses are invalid.");
         }
@@ -1250,6 +1285,6 @@ public sealed partial class SqlFoundationDataStore
     private sealed record LivVisitV2Row(Guid LivRecordId, LivVisitSummary Visit);
     private sealed record LivVisitRatingV2Row(Guid VisitId, LivVisitRatingSummary Rating);
     private sealed record ElevateLivSourceV2Row(Guid AssessmentId, string? PrimaryFocusKey, string? PrimaryFocusName, string? DesiredOutcome, Guid? ExistingLivId);
-    private sealed record LivCaseMetadataV2(Guid RecordId, Guid SubjectStaffId, Guid? ReviewerStaffId, Guid? CreatedByUserAccountId, string Status);
+    private sealed record LivCaseMetadataV2(Guid RecordId, Guid SubjectStaffId, Guid? ReviewerStaffId, Guid? CreatedByUserAccountId, string Status, string ProcessKey);
     private sealed record ProbationLivCompletionLink(Guid ObservationId, Guid CaseId, Guid CaseRecordId);
 }

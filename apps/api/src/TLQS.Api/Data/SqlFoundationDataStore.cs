@@ -918,7 +918,8 @@ public sealed partial class SqlFoundationDataStore(
     }
 
     public Task<IReadOnlyList<LearningWalkThemeMappingSummary>> GetLearningWalkThemeMappingsAsync(
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        string processKey = "learning_walk") =>
         QueryAsync(
             """
             SELECT
@@ -929,8 +930,10 @@ public sealed partial class SqlFoundationDataStore(
             FROM quality.learning_walk_theme_mappings
             WHERE archived_at IS NULL
               AND is_active = 1
+              AND process_key = @processKey
             ORDER BY faculty_org_unit_id, child_org_unit_id;
             """,
+            command => command.Parameters.AddWithValue("@processKey", processKey),
             reader => new LearningWalkThemeMappingSummary(
                 reader.GetGuid(0),
                 reader.GetGuid(1),
@@ -940,7 +943,8 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<Guid> UpsertLearningWalkThemeMappingAsync(
         UpdateLearningWalkThemeMappingRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string processKey = "learning_walk")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = new SqlCommand(
@@ -965,6 +969,7 @@ public sealed partial class SqlFoundationDataStore(
                 FROM quality.learning_walk_theme_mappings
                 WHERE faculty_org_unit_id = @facultyOrgUnitId
                   AND child_org_unit_id = @childOrgUnitId
+                  AND process_key = @processKey
                   AND archived_at IS NULL
             );
 
@@ -977,12 +982,14 @@ public sealed partial class SqlFoundationDataStore(
                     faculty_org_unit_id,
                     child_org_unit_id,
                     agreed_theme
+                    , process_key
                 )
                 VALUES (
                     @mappingId,
                     @facultyOrgUnitId,
                     @childOrgUnitId,
                     @agreedTheme
+                    , @processKey
                 );
             END
             ELSE
@@ -1001,6 +1008,7 @@ public sealed partial class SqlFoundationDataStore(
         command.Parameters.AddWithValue("@facultyOrgUnitId", request.FacultyOrgUnitId);
         command.Parameters.AddWithValue("@childOrgUnitId", request.ChildOrgUnitId);
         command.Parameters.AddWithValue("@agreedTheme", request.AgreedTheme.Trim());
+        command.Parameters.AddWithValue("@processKey", processKey);
 
         return (Guid)(await command.ExecuteScalarAsync(cancellationToken)
             ?? throw new InvalidOperationException("Learning Walk theme mapping was not saved."));
@@ -1008,7 +1016,8 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<IReadOnlyList<LearningWalkThemeGroupSummary>> GetLearningWalkThemeGroupsAsync(
         bool includeInactive,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string applicationKey = "learning_walk")
     {
         var rows = await QueryAsync(
             """
@@ -1024,19 +1033,26 @@ public sealed partial class SqlFoundationDataStore(
                 theme.is_other,
                 theme.is_active
             FROM core.theme_groups theme_group
+            JOIN core.theme_group_applications group_application
+              ON group_application.theme_group_id = theme_group.id
+             AND group_application.application_key = @applicationKey
             LEFT JOIN core.themes theme
                 ON theme.theme_group_id = theme_group.id
                AND theme.archived_at IS NULL
                AND (@includeInactive = 1 OR theme.is_active = 1)
             LEFT JOIN core.theme_applications application
                 ON application.theme_id = theme.id
-               AND application.application_key = 'learning_walk'
+               AND application.application_key = @applicationKey
             WHERE theme_group.archived_at IS NULL
               AND (@includeInactive = 1 OR theme_group.is_active = 1)
               AND (theme.id IS NULL OR application.theme_id IS NOT NULL)
             ORDER BY theme_group.display_order, theme.display_order, theme.name;
             """,
-            command => command.Parameters.AddWithValue("@includeInactive", includeInactive),
+            command =>
+            {
+                command.Parameters.AddWithValue("@includeInactive", includeInactive);
+                command.Parameters.AddWithValue("@applicationKey", applicationKey);
+            },
             reader => new LearningWalkThemeRow(
                 reader.GetGuid(0),
                 reader.GetString(1),
@@ -1074,7 +1090,8 @@ public sealed partial class SqlFoundationDataStore(
     public async Task<Guid> CreateLearningWalkThemeGroupAsync(
         SaveLearningWalkThemeGroupRequest request,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string applicationKey = "learning_walk")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -1087,8 +1104,13 @@ public sealed partial class SqlFoundationDataStore(
             await using (var command = new SqlCommand(
                 """
                 IF EXISTS (
-                    SELECT 1 FROM core.theme_groups
-                    WHERE name = @name AND archived_at IS NULL
+                    SELECT 1
+                    FROM core.theme_groups existing_group
+                    JOIN core.theme_group_applications existing_application
+                      ON existing_application.theme_group_id = existing_group.id
+                     AND existing_application.application_key = @applicationKey
+                     AND existing_application.is_active = 1
+                    WHERE existing_group.name = @name AND existing_group.archived_at IS NULL
                 )
                     THROW 51000, 'That theme area already exists.', 1;
 
@@ -1103,6 +1125,9 @@ public sealed partial class SqlFoundationDataStore(
                     @userAccountId
                 FROM core.theme_groups
                 WHERE archived_at IS NULL;
+
+                INSERT INTO core.theme_group_applications(theme_group_id, application_key, display_order)
+                SELECT @id, @applicationKey, display_order FROM core.theme_groups WHERE id = @id;
                 """,
                 connection,
                 (SqlTransaction)transaction))
@@ -1111,6 +1136,7 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@groupKey", groupKey);
                 command.Parameters.AddWithValue("@name", request.Name.Trim());
                 command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@applicationKey", applicationKey);
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -1260,7 +1286,8 @@ public sealed partial class SqlFoundationDataStore(
     public async Task<Guid> CreateLearningWalkThemeAsync(
         SaveLearningWalkThemeRequest request,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string applicationKey = "learning_walk")
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -1303,7 +1330,7 @@ public sealed partial class SqlFoundationDataStore(
                 INSERT INTO core.theme_applications (theme_id, application_key, display_order)
                 SELECT @id, application_key,
                        (SELECT display_order FROM core.themes WHERE id = @id)
-                FROM (VALUES ('learning_walk'), ('liv'), ('reporting')) application(application_key);
+                FROM (VALUES (@applicationKey), (@relatedApplicationKey), ('reporting')) application(application_key);
                 """,
                 connection,
                 (SqlTransaction)transaction))
@@ -1313,6 +1340,8 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@themeKey", themeKey);
                 command.Parameters.AddWithValue("@name", request.Name.Trim());
                 command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
+                command.Parameters.AddWithValue("@applicationKey", applicationKey);
+                command.Parameters.AddWithValue("@relatedApplicationKey", applicationKey == "als_learning_walk" ? "als_liv" : "liv");
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -1583,17 +1612,31 @@ public sealed partial class SqlFoundationDataStore(
               AND (@academicYear IS NULL OR r.academic_year_key = @academicYear)
               AND (
                     COALESCE(latest_submission.status, 'submitted') <> 'draft'
-                    OR r.owner_staff_id = @currentStaffId
-                    OR r.created_by_user_account_id = @currentUserAccountId
+                    OR ((r.owner_staff_id = @currentStaffId OR r.created_by_user_account_id = @currentUserAccountId) AND (
+                        r.record_type NOT IN ('learning_walk', 'als_learning_walk')
+                        OR (r.record_type = 'learning_walk' AND @canViewStandardLearningWalk = 1)
+                        OR (r.record_type = 'als_learning_walk' AND @canViewAlsLearningWalk = 1)
+                    ))
                     OR @canViewAll = 1
               )
               AND (
                     @canViewAll = 1
-                    OR r.owner_staff_id = @currentStaffId
-                    OR r.created_by_user_account_id = @currentUserAccountId
+                    OR ((r.owner_staff_id = @currentStaffId OR r.created_by_user_account_id = @currentUserAccountId) AND (
+                        r.record_type NOT IN ('learning_walk', 'als_learning_walk')
+                        OR (r.record_type = 'learning_walk' AND @canViewStandardLearningWalk = 1)
+                        OR (r.record_type = 'als_learning_walk' AND @canViewAlsLearningWalk = 1)
+                    ))
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
+                        AND @canViewStandardLearningWalk = 1
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                    )
+                    OR (
+                        @canViewScopedActivities = 1
+                        AND r.record_type = 'als_learning_walk'
+                        AND @canViewAlsLearningWalk = 1
                         AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
@@ -1619,6 +1662,8 @@ public sealed partial class SqlFoundationDataStore(
             command =>
             {
                 AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
                 command.Parameters.AddWithValue("@academicYear", ToDbValue(academicYear));
             },
             reader => new RecordSummary(
@@ -1707,15 +1752,31 @@ public sealed partial class SqlFoundationDataStore(
               AND (@includeArchived = 1 OR r.archived_at IS NULL)
               AND (
                     fsub.status <> 'draft'
-                    OR r.owner_staff_id = @currentStaffId
+                    OR (r.owner_staff_id = @currentStaffId AND (
+                        r.record_type NOT IN ('learning_walk', 'als_learning_walk')
+                        OR (r.record_type = 'learning_walk' AND @canViewStandardLearningWalk = 1)
+                        OR (r.record_type = 'als_learning_walk' AND @canViewAlsLearningWalk = 1)
+                    ))
                     OR @canViewAll = 1
               )
               AND (
                     @canViewAll = 1
-                    OR r.owner_staff_id = @currentStaffId
+                    OR (r.owner_staff_id = @currentStaffId AND (
+                        r.record_type NOT IN ('learning_walk', 'als_learning_walk')
+                        OR (r.record_type = 'learning_walk' AND @canViewStandardLearningWalk = 1)
+                        OR (r.record_type = 'als_learning_walk' AND @canViewAlsLearningWalk = 1)
+                    ))
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
+                        AND @canViewStandardLearningWalk = 1
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                    )
+                    OR (
+                        @canViewScopedActivities = 1
+                        AND r.record_type = 'als_learning_walk'
+                        AND @canViewAlsLearningWalk = 1
                         AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
@@ -1741,6 +1802,8 @@ public sealed partial class SqlFoundationDataStore(
             command =>
             {
                 AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
                 command.Parameters.AddWithValue("@id", id);
                 command.Parameters.AddWithValue("@includeArchived", includeArchived);
             },
@@ -2113,10 +2176,24 @@ public sealed partial class SqlFoundationDataStore(
             WHERE r.archived_at IS NULL
               AND (
                     @canViewAll = 1
-                    OR r.owner_staff_id = @currentStaffId
+                    OR (r.owner_staff_id = @currentStaffId AND (
+                        r.record_type NOT IN ('learning_walk', 'als_learning_walk', 'liv', 'als_liv')
+                        OR (r.record_type = 'learning_walk' AND @canViewStandardLearningWalk = 1)
+                        OR (r.record_type = 'als_learning_walk' AND @canViewAlsLearningWalk = 1)
+                        OR (r.record_type = 'liv' AND @canViewStandardLiv = 1)
+                        OR (r.record_type = 'als_liv' AND @canViewAlsLiv = 1)
+                    ))
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
+                        AND @canViewStandardLearningWalk = 1
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                    )
+                    OR (
+                        @canViewScopedActivities = 1
+                        AND r.record_type = 'als_learning_walk'
+                        AND @canViewAlsLearningWalk = 1
                         AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
@@ -2140,7 +2217,14 @@ public sealed partial class SqlFoundationDataStore(
             GROUP BY m.module_key, m.name, r.record_type
             ORDER BY m.name, r.record_type;
             """,
-            command => AddScopeParameters(command, currentUser),
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
+                command.Parameters.AddWithValue("@canViewAlsLiv", currentUser.HasPermission(PermissionKeys.AlsLivSubmit) || currentUser.HasPermission(PermissionKeys.AlsLivManage));
+            },
             reader => new ActivityOverviewSummary(
                 reader.GetString(0),
                 reader.GetString(1),
@@ -2167,13 +2251,13 @@ public sealed partial class SqlFoundationDataStore(
                 r.summary,
                 CASE WHEN r.record_type = 'coaching_session' THEN COALESCE(coaching_session.session_date, r.record_date)
                      WHEN r.record_type = 'probation_case' THEN COALESCE(probation_metrics.latest_observation_date, r.record_date)
-                     WHEN r.record_type = 'liv' THEN COALESCE(liv_metrics.latest_visit_date, r.record_date)
+                     WHEN r.record_type IN ('liv', 'als_liv') THEN COALESCE(liv_metrics.latest_visit_date, r.record_date)
                      WHEN r.record_type = 'elevate_practice_assessment' THEN CONVERT(date, eli_assessment.submitted_at)
                      ELSE r.record_date END,
                 r.created_at,
                 CASE WHEN r.record_type = 'coaching_session' THEN coaching_session.status
                      WHEN r.record_type = 'probation_case' THEN probation_case.status
-                     WHEN r.record_type = 'liv' THEN dashboard_liv_record.status
+                     WHEN r.record_type IN ('liv', 'als_liv') THEN dashboard_liv_record.status
                      WHEN r.record_type = 'elevate_practice_assessment' THEN eli_assessment.status
                      ELSE COALESCE(latest_submission.status, 'submitted')
                 END AS submission_status,
@@ -2221,7 +2305,7 @@ public sealed partial class SqlFoundationDataStore(
                     WHEN r.record_type = 'elevate_environment' THEN 'Emerging'
                     WHEN r.record_type = 'coaching_session' THEN coaching_focus.display_name
                     WHEN r.record_type = 'probation_case' THEN CONCAT('Observation ', probation_case.current_observation_number)
-                    WHEN r.record_type = 'liv' THEN liv_metrics.focus_labels
+                    WHEN r.record_type IN ('liv', 'als_liv') THEN liv_metrics.focus_labels
                     WHEN r.record_type = 'elevate_practice_assessment' AND eli_metrics.rating_count > 0 THEN
                         CASE WHEN eli_metrics.average_score >= 4.5 THEN 'Exceptional practice'
                              WHEN eli_metrics.average_score >= 3.5 THEN 'Strong practice'
@@ -2240,7 +2324,7 @@ public sealed partial class SqlFoundationDataStore(
                     WHEN r.record_type = 'probation_case' THEN CONCAT(
                         'Highest completed: ', COALESCE(probation_metrics.highest_completed_observation, 0), ' of 3'
                     )
-                    WHEN r.record_type = 'liv' THEN CONCAT(
+                    WHEN r.record_type IN ('liv', 'als_liv') THEN CONCAT(
                         COALESCE(liv_metrics.visit_count, 0), ' visit', CASE WHEN COALESCE(liv_metrics.visit_count, 0) = 1 THEN '' ELSE 's' END,
                         ', ', COALESCE(liv_metrics.completed_cycle_count, 0), ' completed cycle', CASE WHEN COALESCE(liv_metrics.completed_cycle_count, 0) = 1 THEN '' ELSE 's' END
                     )
@@ -2253,18 +2337,18 @@ public sealed partial class SqlFoundationDataStore(
                 COALESCE(cpd_metrics.learning_minutes, 0) AS learning_minutes,
                 CASE WHEN r.record_type = 'probation_case'
                      THEN COALESCE(probation_metrics.highest_completed_observation, 0)
-                     WHEN r.record_type = 'liv' THEN COALESCE(liv_metrics.visit_count, 0)
+                     WHEN r.record_type IN ('liv', 'als_liv') THEN COALESCE(liv_metrics.visit_count, 0)
                      ELSE COALESCE(scrutiny_detail.sample_size, 0) END AS sample_size,
-                CASE WHEN r.record_type = 'liv' THEN COALESCE(liv_metrics.rating_total, 0)
+                CASE WHEN r.record_type IN ('liv', 'als_liv') THEN COALESCE(liv_metrics.rating_total, 0)
                      WHEN r.record_type = 'elevate_practice_assessment' THEN COALESCE(eli_metrics.rating_total, 0)
                      WHEN r.record_type = 'probation_case' THEN COALESCE(probation_rating_metrics.rating_total, 0)
                      ELSE COALESCE(elevate_assessment.total_score, 0) END AS score_total,
-                CASE WHEN r.record_type = 'liv' THEN COALESCE(liv_metrics.rating_count, 0)
+                CASE WHEN r.record_type IN ('liv', 'als_liv') THEN COALESCE(liv_metrics.rating_count, 0)
                      WHEN r.record_type = 'elevate_practice_assessment' THEN COALESCE(eli_metrics.rating_count, 0)
                      WHEN r.record_type = 'probation_case' THEN COALESCE(probation_rating_metrics.rating_count, 0)
                      ELSE COALESCE(elevate_assessment.scored_value_count, 0) END AS score_count,
                 COALESCE(elevate_assessment.barrier_count, 0) AS barrier_count,
-                CASE WHEN r.record_type IN ('liv', 'elevate_practice_assessment', 'probation_case') THEN 5
+                CASE WHEN r.record_type IN ('liv', 'als_liv', 'elevate_practice_assessment', 'probation_case') THEN 5
                      WHEN environment_rating_metrics.rating_count > 0 THEN 5 ELSE 3 END AS score_maximum,
                 probation_metrics.linked_liv_source_record_id,
                 r.subject_staff_id,
@@ -2354,6 +2438,7 @@ public sealed partial class SqlFoundationDataStore(
                   AND response.archived_at IS NULL
                   AND field.field_key = CASE r.record_type
                       WHEN 'learning_walk' THEN 'learning_walk_theme'
+                      WHEN 'als_learning_walk' THEN 'learning_walk_theme'
                       WHEN 'work_scrutiny' THEN 'finding_tag'
                       WHEN 'cpd_event' THEN 'cpd_themes'
                   END
@@ -2419,7 +2504,7 @@ public sealed partial class SqlFoundationDataStore(
             ) cpd_metrics
             WHERE r.archived_at IS NULL
               AND (@academicYear IS NULL OR r.academic_year_key = @academicYear)
-              AND r.record_type IN ('learning_walk', 'work_scrutiny', 'cpd_event', 'elevate_environment', 'coaching_session', 'probation_case', 'liv', 'elevate_practice_assessment')
+              AND r.record_type IN ('learning_walk', 'als_learning_walk', 'work_scrutiny', 'cpd_event', 'elevate_environment', 'coaching_session', 'probation_case', 'liv', 'als_liv', 'elevate_practice_assessment')
               AND (
                     COALESCE(coaching_session.status, probation_case.status, dashboard_liv_record.status, eli_assessment.status, latest_submission.status, 'submitted') <> 'draft'
                     OR r.owner_staff_id = @currentStaffId
@@ -2427,10 +2512,24 @@ public sealed partial class SqlFoundationDataStore(
               )
               AND (
                     @canViewAll = 1
-                    OR r.owner_staff_id = @currentStaffId
+                    OR (r.owner_staff_id = @currentStaffId AND (
+                        r.record_type NOT IN ('learning_walk', 'als_learning_walk', 'liv', 'als_liv')
+                        OR (r.record_type = 'learning_walk' AND @canViewStandardLearningWalk = 1)
+                        OR (r.record_type = 'als_learning_walk' AND @canViewAlsLearningWalk = 1)
+                        OR (r.record_type = 'liv' AND @canViewStandardLiv = 1)
+                        OR (r.record_type = 'als_liv' AND @canViewAlsLiv = 1)
+                    ))
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'learning_walk'
+                        AND @canViewStandardLearningWalk = 1
+                        AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
+                        AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
+                    )
+                    OR (
+                        @canViewScopedActivities = 1
+                        AND r.record_type = 'als_learning_walk'
+                        AND @canViewAlsLearningWalk = 1
                         AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
@@ -2495,6 +2594,17 @@ public sealed partial class SqlFoundationDataStore(
                     OR (
                         @canViewScopedActivities = 1
                         AND r.record_type = 'liv'
+                        AND @canViewStandardLiv = 1
+                        AND (
+                            dashboard_liv_record.reviewer_staff_id = @currentStaffId
+                            OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = dashboard_liv_record.subject_staff_id)
+                            OR EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = COALESCE(dashboard_liv_record.org_unit_id, r.org_unit_id))
+                        )
+                    )
+                    OR (
+                        @canViewScopedActivities = 1
+                        AND r.record_type = 'als_liv'
+                        AND @canViewAlsLiv = 1
                         AND (
                             dashboard_liv_record.reviewer_staff_id = @currentStaffId
                             OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = dashboard_liv_record.subject_staff_id)
@@ -2517,6 +2627,10 @@ public sealed partial class SqlFoundationDataStore(
             command =>
             {
                 AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
+                command.Parameters.AddWithValue("@canViewAlsLiv", currentUser.HasPermission(PermissionKeys.AlsLivSubmit) || currentUser.HasPermission(PermissionKeys.AlsLivManage));
                 command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
             },
             reader => new ProcessDashboardRecordSummary(
@@ -2591,7 +2705,10 @@ public sealed partial class SqlFoundationDataStore(
                 CASE WHEN parent_org.id IS NULL THEN NULL ELSE org_unit.name END
             ORDER BY faculty_code, child_code;
             """,
-            command => AddScopeParameters(command, currentUser),
+            command =>
+            {
+                AddScopeParameters(command, currentUser);
+            },
             reader => new LearningWalkRollupSummary(
                 GetGuidOrNull(reader, 0),
                 GetStringOrNull(reader, 1),
@@ -3698,8 +3815,9 @@ public sealed partial class SqlFoundationDataStore(
         var context = contextRows.FirstOrDefault() ?? new ActionOwnerContext(subjectStaffId, null, null, null, null);
         var effectiveSourceFormType = context.SourceFormType ?? sourceFormType;
         HashSet<Guid>? leaderOwnerIds = null;
-        if (RequiresProgrammeLeaderActionOwner(effectiveSourceFormType))
+        if (RequiresLeaderActionOwner(effectiveSourceFormType))
         {
+            var isAlsLearningWalk = string.Equals(effectiveSourceFormType, "als_learning_walk", StringComparison.OrdinalIgnoreCase);
             var ids = await QueryAsync(
                 """
                 SELECT DISTINCT account.staff_id
@@ -3714,11 +3832,20 @@ public sealed partial class SqlFoundationDataStore(
                   AND (user_role.active_to IS NULL OR user_role.active_to > sysutcdatetime())
                   AND role.archived_at IS NULL
                   AND role.is_active = 1
-                  AND role.precedence >= COALESCE(
-                      (SELECT precedence FROM auth.roles WHERE role_key = N'programme_leader' AND archived_at IS NULL),
-                      200
+                  AND (
+                      (@isAlsLearningWalk = 0 AND role.precedence >= COALESCE(
+                          (SELECT precedence FROM auth.roles WHERE role_key = N'programme_leader' AND archived_at IS NULL), 200
+                      ))
+                      OR (@isAlsLearningWalk = 1 AND EXISTS (
+                          SELECT 1
+                          FROM auth.role_permissions role_permission
+                          JOIN auth.permissions permission ON permission.id = role_permission.permission_id
+                          WHERE role_permission.role_id = role.id
+                            AND permission.permission_key IN (N'als_learning_walk.submit', N'als_liv.manage')
+                      ))
                   );
                 """,
+                command => command.Parameters.AddWithValue("@isAlsLearningWalk", isAlsLearningWalk),
                 reader => reader.GetGuid(0),
                 cancellationToken);
             leaderOwnerIds = ids.ToHashSet();
@@ -4488,7 +4615,7 @@ public sealed partial class SqlFoundationDataStore(
                 subjectStaffId,
                 currentUser,
                 cancellationToken);
-            if (string.Equals(request.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase))
+            if (IsLearningWalkRecordType(request.RecordType))
             {
                 await ValidateVisibleOrgUnitAsync(
                     connection,
@@ -4530,6 +4657,9 @@ public sealed partial class SqlFoundationDataStore(
             var status = request.SaveAsDraft ? SubmissionLifecycle.Draft : SubmissionLifecycle.Submitted;
             var recordId = Guid.NewGuid();
             var submissionId = Guid.NewGuid();
+            var recordModuleId = string.Equals(request.RecordType, "als_learning_walk", StringComparison.OrdinalIgnoreCase)
+                ? await GetModuleIdAsync(connection, transaction, "als_learning_walks", cancellationToken)
+                : template.ModuleId;
 
             await using (var command = new SqlCommand(
                 """
@@ -4566,7 +4696,7 @@ public sealed partial class SqlFoundationDataStore(
                 (SqlTransaction)transaction))
             {
                 command.Parameters.AddWithValue("@id", recordId);
-                command.Parameters.AddWithValue("@moduleId", template.ModuleId);
+                command.Parameters.AddWithValue("@moduleId", recordModuleId);
                 command.Parameters.AddWithValue("@recordType", request.RecordType);
                 command.Parameters.AddWithValue("@title", request.Title);
                 command.Parameters.AddWithValue("@summary", ToDbValue(request.Summary));
@@ -4620,7 +4750,7 @@ public sealed partial class SqlFoundationDataStore(
             }
 
             var valuesByFieldKey = MapResponsesByFieldKey(fields, request.Responses);
-            if (string.Equals(request.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase))
+            if (IsLearningWalkRecordType(request.RecordType))
             {
                 await SyncLearningWalkThemesAsync(
                     connection,
@@ -4629,7 +4759,8 @@ public sealed partial class SqlFoundationDataStore(
                     valuesByFieldKey,
                     requireActiveThemes: true,
                     requireOtherContext: !request.SaveAsDraft,
-                    cancellationToken);
+                    applicationKey: LearningWalkApplicationKey(request.RecordType),
+                    cancellationToken: cancellationToken);
             }
 
             if (!request.SaveAsDraft)
@@ -4725,6 +4856,10 @@ public sealed partial class SqlFoundationDataStore(
             {
                 return FormSubmissionUpdateResult.NotFound;
             }
+            if (!CanUseLearningWalkRecord(currentUser, submission.RecordType))
+            {
+                return FormSubmissionUpdateResult.Forbidden;
+            }
 
             var isOwner = submission.OwnerStaffId.HasValue && currentUser.StaffId == submission.OwnerStaffId.Value;
             var canManageForms = currentUser.HasPermission(PermissionKeys.FormsManage);
@@ -4743,7 +4878,7 @@ public sealed partial class SqlFoundationDataStore(
                 subjectStaffId,
                 currentUser,
                 cancellationToken);
-            if (string.Equals(submission.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase))
+            if (IsLearningWalkRecordType(submission.RecordType))
             {
                 await ValidateVisibleOrgUnitAsync(
                     connection,
@@ -4836,7 +4971,7 @@ public sealed partial class SqlFoundationDataStore(
             }
 
             var valuesByFieldKey = MapResponsesByFieldKey(fields, request.Responses);
-            if (string.Equals(submission.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase))
+            if (IsLearningWalkRecordType(submission.RecordType))
             {
                 await SyncLearningWalkThemesAsync(
                     connection,
@@ -4845,7 +4980,8 @@ public sealed partial class SqlFoundationDataStore(
                     valuesByFieldKey,
                     requireActiveThemes: false,
                     requireOtherContext: submission.Status == SubmissionLifecycle.Submitted,
-                    cancellationToken);
+                    applicationKey: LearningWalkApplicationKey(submission.RecordType),
+                    cancellationToken: cancellationToken);
             }
             else if (string.Equals(submission.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase)
                      && request.CourseIds is not null)
@@ -4914,6 +5050,10 @@ public sealed partial class SqlFoundationDataStore(
             {
                 return FormSubmissionUpdateResult.NotFound;
             }
+            if (!CanUseLearningWalkRecord(currentUser, submission.RecordType))
+            {
+                return FormSubmissionUpdateResult.Forbidden;
+            }
 
             var isOwner = submission.OwnerStaffId.HasValue && currentUser.StaffId == submission.OwnerStaffId.Value;
             var canManageForms = currentUser.HasPermission(PermissionKeys.FormsManage);
@@ -4954,7 +5094,7 @@ public sealed partial class SqlFoundationDataStore(
                         $"Complete the required fields before submitting: {string.Join(", ", missing)}.");
                 }
 
-                if (string.Equals(submission.RecordType, "learning_walk", StringComparison.OrdinalIgnoreCase))
+                if (IsLearningWalkRecordType(submission.RecordType))
                 {
                     await SyncLearningWalkThemesAsync(
                         connection,
@@ -4963,7 +5103,8 @@ public sealed partial class SqlFoundationDataStore(
                         stored,
                         requireActiveThemes: false,
                         requireOtherContext: true,
-                        cancellationToken);
+                        applicationKey: LearningWalkApplicationKey(submission.RecordType),
+                        cancellationToken: cancellationToken);
                 }
 
                 await ApplyModuleSideEffectsAsync(
@@ -7407,7 +7548,7 @@ public sealed partial class SqlFoundationDataStore(
                   AND staff.archived_at IS NULL
                   AND staff.account_status = 'active'
                   AND (
-                      @recordType NOT IN (N'learning_walk', N'elevate_environment')
+                      @recordType NOT IN (N'learning_walk', N'als_learning_walk', N'elevate_environment')
                       OR EXISTS (
                           SELECT 1
                           FROM auth.user_accounts owner_account
@@ -7421,9 +7562,17 @@ public sealed partial class SqlFoundationDataStore(
                             AND (owner_user_role.active_to IS NULL OR owner_user_role.active_to > sysutcdatetime())
                             AND owner_role.archived_at IS NULL
                             AND owner_role.is_active = 1
-                            AND owner_role.precedence >= COALESCE(
-                                (SELECT precedence FROM auth.roles WHERE role_key = N'programme_leader' AND archived_at IS NULL),
-                                200
+                            AND (
+                                (@recordType <> N'als_learning_walk' AND owner_role.precedence >= COALESCE(
+                                    (SELECT precedence FROM auth.roles WHERE role_key = N'programme_leader' AND archived_at IS NULL), 200
+                                ))
+                                OR (@recordType = N'als_learning_walk' AND EXISTS (
+                                    SELECT 1
+                                    FROM auth.role_permissions owner_role_permission
+                                    JOIN auth.permissions owner_permission ON owner_permission.id = owner_role_permission.permission_id
+                                    WHERE owner_role_permission.role_id = owner_role.id
+                                      AND owner_permission.permission_key IN (N'als_learning_walk.submit', N'als_liv.manage')
+                                ))
                             )
                       )
                   )
@@ -7465,6 +7614,7 @@ public sealed partial class SqlFoundationDataStore(
                     throw new WorkflowValidationException(recordType switch
                     {
                         "learning_walk" => "Learning Walk actions can only be assigned to Programme Leaders or above.",
+                        "als_learning_walk" => "ALS Learning Walk actions can only be assigned to ALS Team Leaders or above.",
                         "elevate_environment" => "Elevate Learning Environment actions can only be assigned to Programme Leaders or above.",
                         _ => "One of the selected action owners is not an active staff member."
                     });
@@ -7510,6 +7660,7 @@ public sealed partial class SqlFoundationDataStore(
         IReadOnlyDictionary<string, string> valuesByFieldKey,
         bool requireActiveThemes,
         bool requireOtherContext,
+        string applicationKey,
         CancellationToken cancellationToken)
     {
         var themeIds = ParseLearningWalkThemeIds(
@@ -7545,7 +7696,7 @@ public sealed partial class SqlFoundationDataStore(
                 FROM core.themes theme
                 JOIN core.theme_groups theme_group ON theme_group.id = theme.theme_group_id
                 JOIN core.theme_applications application ON application.theme_id = theme.id
-                    AND application.application_key = 'learning_walk'
+                    AND application.application_key = @applicationKey
                 WHERE theme.id = @themeId
                   AND theme.archived_at IS NULL
                   AND theme_group.archived_at IS NULL
@@ -7555,7 +7706,7 @@ public sealed partial class SqlFoundationDataStore(
                 FROM core.themes theme
                 JOIN core.theme_groups theme_group ON theme_group.id = theme.theme_group_id
                 JOIN core.theme_applications application ON application.theme_id = theme.id
-                    AND application.application_key = 'learning_walk'
+                    AND application.application_key = @applicationKey
                 WHERE theme.id = @themeId
                   AND theme.archived_at IS NULL
                   AND theme_group.archived_at IS NULL
@@ -7566,6 +7717,7 @@ public sealed partial class SqlFoundationDataStore(
             command.Parameters.AddWithValue("@recordId", recordId);
             command.Parameters.AddWithValue("@themeId", themeId);
             command.Parameters.AddWithValue("@requireActiveThemes", requireActiveThemes);
+            command.Parameters.AddWithValue("@applicationKey", applicationKey);
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
@@ -7806,7 +7958,7 @@ public sealed partial class SqlFoundationDataStore(
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
-        var isLearningWalk = string.Equals(recordType, "learning_walk", StringComparison.OrdinalIgnoreCase);
+        var isLearningWalk = IsLearningWalkRecordType(recordType);
         var isWorkScrutiny = string.Equals(recordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase);
         var isCpdEvent = string.Equals(recordType, "cpd_event", StringComparison.OrdinalIgnoreCase);
         var isExternalCpdSelfLog = isCpdEvent
@@ -8434,6 +8586,7 @@ public sealed partial class SqlFoundationDataStore(
     private static bool CanViewScopedActivities(CurrentUser currentUser) =>
         currentUser.HasPermission(PermissionKeys.ReportsViewScoped)
         || currentUser.HasPermission(PermissionKeys.LearningWalkSubmit)
+        || currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit)
         || currentUser.HasPermission(PermissionKeys.WorkScrutinySubmit)
         || currentUser.HasPermission(PermissionKeys.ElevateSubmit)
         || currentUser.HasPermission(PermissionKeys.ElevateManage)
@@ -8455,15 +8608,33 @@ public sealed partial class SqlFoundationDataStore(
         sourceFormType?.Trim().ToLowerInvariant() switch
         {
             "learning_walk" => "action_theme_learning_walk",
+            "als_learning_walk" => "action_theme_als_learning_walk",
             "elevate_environment" => "action_theme_elevate_environment",
             "work_scrutiny" => "action_theme_work_scrutiny",
             "coaching_mentoring" => "action_theme_coaching_mentoring",
             "liv" => "action_theme_liv",
+            "als_liv" => "action_theme_als_liv",
             "probation_observation" => "action_theme_probation_observation",
             "cpd" or "cpd_event" => "action_theme_cpd",
             "standalone" => "action_theme_standalone",
             _ => null
         };
+
+    private static bool IsLearningWalkRecordType(string? recordType) =>
+        string.Equals(recordType, "learning_walk", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(recordType, "als_learning_walk", StringComparison.OrdinalIgnoreCase);
+
+    private static string LearningWalkApplicationKey(string recordType) =>
+        string.Equals(recordType, "als_learning_walk", StringComparison.OrdinalIgnoreCase)
+            ? "als_learning_walk"
+            : "learning_walk";
+
+    private static bool CanUseLearningWalkRecord(CurrentUser currentUser, string recordType) =>
+        !IsLearningWalkRecordType(recordType)
+        || currentUser.HasPermission(PermissionKeys.FormsManage)
+        || (string.Equals(recordType, "als_learning_walk", StringComparison.OrdinalIgnoreCase)
+            ? currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit)
+            : currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
 
     private static async Task ValidateActionThemeAsync(
         SqlConnection connection,
@@ -8734,8 +8905,9 @@ public sealed partial class SqlFoundationDataStore(
         string Title,
         string? StatusKey);
 
-    private static bool RequiresProgrammeLeaderActionOwner(string? sourceFormType)
+    private static bool RequiresLeaderActionOwner(string? sourceFormType)
         => string.Equals(sourceFormType, "learning_walk", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(sourceFormType, "als_learning_walk", StringComparison.OrdinalIgnoreCase)
             || string.Equals(sourceFormType, "elevate_environment", StringComparison.OrdinalIgnoreCase);
 
     private sealed record ActionOwnerContext(

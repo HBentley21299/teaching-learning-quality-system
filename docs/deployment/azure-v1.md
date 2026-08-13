@@ -95,8 +95,9 @@ The script performs these operations in order:
    ID to an existing active staff account and grants Super Admin with global scope.
 6. Resolves the App Service managed identity client ID and grants its Azure SQL
    contained user `db_datareader`, `db_datawriter` and `EXECUTE`.
-7. Deploys the hashed same-origin UI/API release package using portable ZIP paths.
-8. Removes the temporary client firewall rule and verifies `/health/ready`.
+7. In production, deploys the hashed same-origin UI/API package to the staging
+   slot, verifies `/health/ready`, then swaps it live. Non-production deploys directly.
+8. Removes the temporary client firewall rule and verifies production `/health/ready`.
    Production disables SQL public access; development retains the Azure-service
    endpoint required by the Free App Service tier.
 
@@ -181,7 +182,9 @@ Before importing live activity data:
 - Record the deployed Git commit and `.artifacts/v1/manifest.json` with release approval.
 
 Custom DNS can be added after the default App Service URL is accepted. Register
-the final DNS URL in Entra before switching users to it.
+the final DNS URL in Entra before switching users to it. The previous production
+build remains in the staging slot after each swap and can be restored with
+`scripts/rollback-azure-slot.ps1`.
 
 ## Optional Graph Messaging
 

@@ -192,8 +192,10 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
             {
                 case "coaching_session": FillCoachingTemplate(data, tables); break;
                 case "elevate_environment": FillEnvironmentTemplate(data, tables); break;
-                case "learning_walk": FillLearningWalkTemplate(data, tables); break;
-                case "liv": FillLivTemplate(data, tables); break;
+                case "learning_walk":
+                case "als_learning_walk": FillLearningWalkTemplate(data, tables); break;
+                case "liv":
+                case "als_liv": FillLivTemplate(data, tables); break;
                 case "probation_case": FillProbationTemplate(data, tables); break;
             }
             AppendCompleteDetail(main.Document.Body!, data);
@@ -275,8 +277,8 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
     {
         "coaching_session" => "01_Coaching_and_Mentoring_Template.docx",
         "elevate_environment" => "02_Elevate_Learning_Environment_Audit_Template.docx",
-        "learning_walk" => "03_Learning_Walk_Template.docx",
-        "liv" => "04_LIV_Cycle_1_and_2_Combined_Template.docx",
+        "learning_walk" or "als_learning_walk" => "03_Learning_Walk_Template.docx",
+        "liv" or "als_liv" => "04_LIV_Cycle_1_and_2_Combined_Template.docx",
         "probation_case" => "05_Probationary_Observation_Template.docx",
         _ => null
     };

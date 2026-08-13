@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarDays, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun } from "lucide-react";
 import { canAccessRoute, navigationItems, type AppRoute } from "./navigation";
 import {
@@ -150,7 +150,7 @@ export function App() {
   }, [modulesLoaded, route, user.userAccountId]);
 
   useEffect(() => {
-    const staffRoutes: AppRoute[] = ["staff", "admin", "learning", "liv", "probation", "elevate", "coaching", "scrutiny", "cpd", "profile", "actions"];
+    const staffRoutes: AppRoute[] = ["staff", "admin", "learning", "liv", "als_learning", "als_liv", "probation", "elevate", "coaching", "scrutiny", "cpd", "profile", "actions"];
     if (!user.userAccountId || staffLoaded || !staffRoutes.includes(route)) return;
     let cancelled = false;
     void api.staff()
@@ -224,6 +224,7 @@ export function App() {
     [user.permissions]
   );
   const activeItem = useMemo(() => visibleNavigationItems.find((item) => item.key === route), [route, visibleNavigationItems]);
+  const firstVisibleAlsRoute = visibleNavigationItems.find((item) => item.key === "als_learning" || item.key === "als_liv")?.key;
 
   useEffect(() => {
     if (isLoading || !user.userAccountId || pendingRecordId || sourceRecordId || canAccessRoute(route, user.permissions)) return;
@@ -390,17 +391,20 @@ export function App() {
         <nav>
           {visibleNavigationItems.map((item) => {
             const Icon = item.icon;
+            const startsAlsSection = item.key === firstVisibleAlsRoute;
             return (
-              <button
-                className={item.key === route ? "nav-item nav-item-active" : "nav-item"}
-                key={item.key}
-                onClick={() => navigate(item.key)}
-                title={item.label}
-                type="button"
-              >
-                <Icon size={18} aria-hidden="true" />
-                <span>{item.label}</span>
-              </button>
+              <Fragment key={item.key}>
+                {startsAlsSection ? <div className="nav-section-divider" role="separator"><span>Additional Learning Support</span></div> : null}
+                <button
+                  className={item.key === route ? "nav-item nav-item-active" : "nav-item"}
+                  onClick={() => navigate(item.key)}
+                  title={item.label}
+                  type="button"
+                >
+                  <Icon size={18} aria-hidden="true" />
+                  <span>{item.label}</span>
+                </button>
+              </Fragment>
             );
           })}
         </nav>
@@ -523,6 +527,23 @@ export function App() {
                   user={user}
                 />
               ) : null}
+              {route === "als_learning" ? (
+                <ModuleWorkspace academicYear={academicYear} eyebrow="Additional Learning Support" initialRecordId={sourceRecordId} mode="als_learning" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("als_learning")} onRecordOpened={handleRecordOpened} staff={staff} title="ALS Learning Walks" user={user} />
+              ) : null}
+              {route === "als_liv" ? (
+                <LivVisits
+                  academicYear={academicYear}
+                  initialSourceRecordId={sourceRecordId}
+                  onActionsChanged={refreshActions}
+                  onOpenStaffProfile={openTeamProfile}
+                  onRecordClosed={() => handleRecordClosed("als_liv")}
+                  onRecordOpened={handleRecordOpened}
+                  orgUnits={orgUnits}
+                  processKey="als_liv"
+                  staff={staff}
+                  user={user}
+                />
+              ) : null}
               {route === "probation" ? (
                 <ProbationObservations
                   actions={yearActions}
@@ -588,7 +609,9 @@ function routeForRecordType(recordType: string): AppRoute {
     elevate_practice: "profile",
     elevate_practice_assessment: "profile",
     learning_walk: "learning",
+    als_learning_walk: "als_learning",
     liv: "liv",
+    als_liv: "als_liv",
     probation_case: "probation",
     probation_observation: "probation",
     work_scrutiny: "scrutiny"

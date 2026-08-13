@@ -160,7 +160,10 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\056_local_test_credentials.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\057_local_credentials_by_email.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\058_elevate_status_badge_assets.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\059_reporting_performance_indexes.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\059_reporting_performance_indexes.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\060_als_liv_and_learning_walks.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\061_als_liv_source_uniqueness.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\062_als_liv_practitioner_catalogue.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

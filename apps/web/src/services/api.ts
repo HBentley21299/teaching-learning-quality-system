@@ -396,8 +396,8 @@ export const api = {
     getJson<StaffParticipationDashboardSummary[]>(`/api/v1/reports/staff-participation?academicYear=${encodeURIComponent(academicYear)}`),
   cpdAttendanceDashboard: (academicYear: string) =>
     getJson<CpdAttendanceDashboardSummary[]>(`/api/v1/reports/cpd-attendance?academicYear=${encodeURIComponent(academicYear)}`),
-  livLifecycleDashboard: (academicYear: string) =>
-    getJson<LivLifecycleDashboardSummary[]>(`/api/v1/reports/liv-lifecycle?academicYear=${encodeURIComponent(academicYear)}`),
+  livLifecycleDashboard: (academicYear: string, process = "liv") =>
+    getJson<LivLifecycleDashboardSummary[]>(`/api/v1/reports/liv-lifecycle?academicYear=${encodeURIComponent(academicYear)}&process=${encodeURIComponent(process)}`),
   saveDashboardConfiguration: (processes: DashboardProcessConfiguration[]) =>
     sendJson("/api/v1/admin/reports/dashboard-configuration", "PUT", { processes }),
   learningWalkRollup: () =>
@@ -407,22 +407,22 @@ export const api = {
     getJson<FormDefinition>(`/api/v1/form-templates/${templateKey}/definition`),
   workScrutinyTemplate: (orgUnitId: string) =>
     getJson<FormDefinition>(`/api/v1/work-scrutiny/template/${encodeURIComponent(orgUnitId)}`),
-  learningWalkThemeMappings: () =>
-    getJson<LearningWalkThemeMappingSummary[]>("/api/v1/learning-walk/theme-mappings"),
-  updateLearningWalkThemeMapping: (request: UpdateLearningWalkThemeMappingRequest) =>
-    sendJson("/api/v1/learning-walk/theme-mappings", "PUT", request),
-  learningWalkThemes: () =>
-    getJson<LearningWalkThemeGroup[]>("/api/v1/learning-walk/themes"),
-  adminLearningWalkThemes: () =>
-    getJson<LearningWalkThemeGroup[]>("/api/v1/admin/learning-walk/themes"),
-  createLearningWalkThemeGroup: (request: SaveLearningWalkThemeGroupRequest) =>
-    sendJson<SaveLearningWalkThemeGroupRequest, { id: string }>("/api/v1/admin/learning-walk/theme-groups", "POST", request),
+  learningWalkThemeMappings: (process = "learning_walk") =>
+    getJson<LearningWalkThemeMappingSummary[]>(`/api/v1/learning-walk/theme-mappings?process=${encodeURIComponent(process)}`),
+  updateLearningWalkThemeMapping: (request: UpdateLearningWalkThemeMappingRequest, process = "learning_walk") =>
+    sendJson(`/api/v1/learning-walk/theme-mappings?process=${encodeURIComponent(process)}`, "PUT", request),
+  learningWalkThemes: (process = "learning_walk") =>
+    getJson<LearningWalkThemeGroup[]>(`/api/v1/learning-walk/themes?process=${encodeURIComponent(process)}`),
+  adminLearningWalkThemes: (process = "learning_walk") =>
+    getJson<LearningWalkThemeGroup[]>(`/api/v1/admin/learning-walk/themes?process=${encodeURIComponent(process)}`),
+  createLearningWalkThemeGroup: (request: SaveLearningWalkThemeGroupRequest, process = "learning_walk") =>
+    sendJson<SaveLearningWalkThemeGroupRequest, { id: string }>(`/api/v1/admin/learning-walk/theme-groups?process=${encodeURIComponent(process)}`, "POST", request),
   updateLearningWalkThemeGroup: (id: string, request: SaveLearningWalkThemeGroupRequest) =>
     sendJson(`/api/v1/admin/learning-walk/theme-groups/${id}`, "PUT", request),
   setLearningWalkThemeGroupStatus: (id: string, isActive: boolean) =>
     sendJson(`/api/v1/admin/learning-walk/theme-groups/${id}/status`, "POST", { isActive }),
-  createLearningWalkTheme: (request: SaveLearningWalkThemeRequest) =>
-    sendJson<SaveLearningWalkThemeRequest, { id: string }>("/api/v1/admin/learning-walk/themes", "POST", request),
+  createLearningWalkTheme: (request: SaveLearningWalkThemeRequest, process = "learning_walk") =>
+    sendJson<SaveLearningWalkThemeRequest, { id: string }>(`/api/v1/admin/learning-walk/themes?process=${encodeURIComponent(process)}`, "POST", request),
   updateLearningWalkTheme: (id: string, request: SaveLearningWalkThemeRequest) =>
     sendJson(`/api/v1/admin/learning-walk/themes/${id}`, "PUT", request),
   setLearningWalkThemeStatus: (id: string, isActive: boolean) =>
@@ -438,27 +438,27 @@ export const api = {
     sendJson(`/api/v1/form-submissions/${id}`, "PUT", request),
   changeSubmissionStatus: (id: string, action: "submit" | "reopen" | "archive") =>
     sendJson(`/api/v1/form-submissions/${id}/status`, "POST", { action }),
-  livRecords: () => getJson<LivRecordSummary[]>("/api/v1/liv-records"),
-  livConfiguration: () => getJson<LivConfiguration>("/api/v1/liv-records/configuration"),
-  livStaffContext: (staffId: string) =>
-    getJson<LivStaffContext>(`/api/v1/liv-records/staff/${staffId}/context`),
-  createLivRecord: (request: SaveLivRecordRequest) => sendJson("/api/v1/liv-records", "POST", request),
-  updateLivRecord: (id: string, request: SaveLivRecordRequest) =>
-    sendJson(`/api/v1/liv-records/${id}`, "PUT", request),
-  addLivVisit: (id: string, request: SaveLivVisitRequest) =>
-    sendJson<SaveLivVisitRequest, { id: string; visitNumber: number }>(`/api/v1/liv-records/${id}/visits`, "POST", request),
-  updateLivVisit: (id: string, visitId: string, request: SaveLivVisitRequest) =>
-    sendJson(`/api/v1/liv-records/${id}/visits/${visitId}`, "PUT", request),
-  addLivStage: (id: string, request: SaveLivStageRequest) =>
+  livRecords: (process = "liv") => getJson<LivRecordSummary[]>(`/api/v1/liv-records?process=${encodeURIComponent(process)}`),
+  livConfiguration: (process = "liv") => getJson<LivConfiguration>(`/api/v1/liv-records/configuration?process=${encodeURIComponent(process)}`),
+  livStaffContext: (staffId: string, process = "liv") =>
+    getJson<LivStaffContext>(`/api/v1/liv-records/staff/${staffId}/context?process=${encodeURIComponent(process)}`),
+  createLivRecord: (request: SaveLivRecordRequest, process = "liv") => sendJson(`/api/v1/liv-records?process=${encodeURIComponent(process)}`, "POST", request),
+  updateLivRecord: (id: string, request: SaveLivRecordRequest, process = "liv") =>
+    sendJson(`/api/v1/liv-records/${id}?process=${encodeURIComponent(process)}`, "PUT", request),
+  addLivVisit: (id: string, request: SaveLivVisitRequest, process = "liv") =>
+    sendJson<SaveLivVisitRequest, { id: string; visitNumber: number }>(`/api/v1/liv-records/${id}/visits?process=${encodeURIComponent(process)}`, "POST", request),
+  updateLivVisit: (id: string, visitId: string, request: SaveLivVisitRequest, process = "liv") =>
+    sendJson(`/api/v1/liv-records/${id}/visits/${visitId}?process=${encodeURIComponent(process)}`, "PUT", request),
+  addLivStage: (id: string, request: SaveLivStageRequest, process = "liv") =>
     sendJson<SaveLivStageRequest, { id: string; stageType: string; stageOrder: number; visitId?: string }>(
-      `/api/v1/liv-records/${id}/stages`, "POST", request
+      `/api/v1/liv-records/${id}/stages?process=${encodeURIComponent(process)}`, "POST", request
     ),
-  updateLivStage: (id: string, stageId: string, request: SaveLivStageRequest) =>
-    sendJson(`/api/v1/liv-records/${id}/stages/${stageId}`, "PUT", request),
-  completeLivCycle: (id: string, openFollowUp = true) =>
-    sendJson<{ openFollowUp: boolean }, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete`, "POST", { openFollowUp }),
-  changeLivStatus: (id: string, action: "close" | "reopen" | "archive") =>
-    sendJson(`/api/v1/liv-records/${id}/status`, "POST", { action }),
+  updateLivStage: (id: string, stageId: string, request: SaveLivStageRequest, process = "liv") =>
+    sendJson(`/api/v1/liv-records/${id}/stages/${stageId}?process=${encodeURIComponent(process)}`, "PUT", request),
+  completeLivCycle: (id: string, openFollowUp = true, process = "liv") =>
+    sendJson<{ openFollowUp: boolean }, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete?process=${encodeURIComponent(process)}`, "POST", { openFollowUp }),
+  changeLivStatus: (id: string, action: "close" | "reopen" | "archive", process = "liv") =>
+    sendJson(`/api/v1/liv-records/${id}/status?process=${encodeURIComponent(process)}`, "POST", { action }),
   probationCases: () => getJson<ProbationCase[]>("/api/v1/probation-observations"),
   probationConfiguration: () => getJson<ProbationConfiguration>("/api/v1/probation-observations/configuration"),
   probationStaffContext: (staffId: string) =>
@@ -479,8 +479,8 @@ export const api = {
   academicYears: () => getJson<AcademicYearSummary[]>("/api/v1/academic-years"),
   elevateStatusBadgeAssets: (academicYear: string) =>
     getJson<ElevateStatusBadgeAssetSummary[]>(`/api/v1/elevate-status/badge-assets?academicYear=${encodeURIComponent(academicYear)}`),
-  elevateStatusBadgeContent: (academicYear: string, levelNumber: number) =>
-    getApiBlob(`/api/v1/elevate-status/badge-assets/${levelNumber}/content?academicYear=${encodeURIComponent(academicYear)}`),
+  elevateStatusBadgeContent: (academicYear: string, levelNumber: number, assetVersion: string) =>
+    getApiBlob(`/api/v1/elevate-status/badge-assets/${levelNumber}/content?academicYear=${encodeURIComponent(academicYear)}&version=${encodeURIComponent(assetVersion)}`),
   uploadElevateStatusBadge: (academicYear: string, levelNumber: number, file: File) => {
     const form = new FormData();
     form.append("file", file);

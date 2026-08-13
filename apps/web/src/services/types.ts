@@ -577,7 +577,7 @@ export type DashboardSummary = {
 
 export type ProcessDashboardRecordSummary = {
   id: string;
-  processKey: "learning_walk" | "liv" | "eli" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session" | "probation_case";
+  processKey: "learning_walk" | "als_learning_walk" | "liv" | "als_liv" | "eli" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session" | "probation_case";
   title: string;
   summary?: string;
   recordDate?: string;
@@ -606,7 +606,7 @@ export type ProcessDashboardRecordSummary = {
 };
 
 export type DashboardProcessConfiguration = {
-  processKey: "overview" | "learning_walk" | "liv" | "eli" | "probation_case" | "elevate_environment" | "coaching_session" | "work_scrutiny" | "cpd_event" | "elevate_status" | "actions";
+  processKey: "overview" | "learning_walk" | "als_learning_walk" | "liv" | "als_liv" | "eli" | "probation_case" | "elevate_environment" | "coaching_session" | "work_scrutiny" | "cpd_event" | "elevate_status" | "actions";
   label: string;
   isEnabled: boolean;
   displayOrder: number;
@@ -954,6 +954,7 @@ export type StaffProfileLivSummary = {
   status: "in_progress" | "closed";
   createdAt: string;
   updatedAt?: string;
+  processKey: "liv" | "als_liv";
 };
 
 export type StaffProfileProbationSummary = {

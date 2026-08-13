@@ -26,13 +26,15 @@ const tileDescriptions: Partial<Record<AppRoute, string>> = {
   admin: "Users, permissions, templates and settings",
   learning: "Record and review learning walks",
   liv: "Learning and Innovation Visits",
+  als_learning: "ALS-specific learning walks and focus areas",
+  als_liv: "ALS Learning and Innovation Visits",
   probation: "Support colleagues through probation",
   elevate: "Audit and improve learning environments",
   practice: "Elevate Learning and Innovation",
   coaching: "Coaching cycles and mentoring sessions",
   scrutiny: "Sample and review learners' work",
   cpd: "Log and manage professional development",
-  profile: "Your teaching and learning profile and reflections",
+  profile: "Your teaching and learning profile and records",
   actions: "Track actions assigned to you and your teams"
 };
 
@@ -83,6 +85,7 @@ export function Home({ user, tiles, onNavigate }: HomeProps) {
   const firstName = user.displayName.split(" ")[0] || user.displayName;
   const { salutation, message } = greetingFor(new Date());
   const visibleTiles = tiles.filter((tile) => tile.key !== "home");
+  const firstVisibleAlsRoute = visibleTiles.find((tile) => tile.key === "als_learning" || tile.key === "als_liv")?.key;
 
   return (
     <div className="route-stack home-stack">
@@ -101,20 +104,22 @@ export function Home({ user, tiles, onNavigate }: HomeProps) {
         {visibleTiles.map((tile) => {
           const Icon = navigationItems.find((item) => item.key === tile.key)?.icon;
           return (
-            <button
-              className="home-tile"
-              key={tile.key}
-              onClick={() => onNavigate(tile.key)}
-              type="button"
-            >
-              <span aria-hidden="true" className="home-tile-glyph">
-                {Icon ? <Icon size={24} strokeWidth={1.8} /> : null}
-              </span>
-              <span className="home-tile-text">
-                <strong>{tile.label}</strong>
-                <span>{tileDescriptions[tile.key] ?? ""}</span>
-              </span>
-            </button>
+            <div className={tile.key === firstVisibleAlsRoute ? "home-tile-entry home-tile-entry-als-start" : "home-tile-entry"} key={tile.key}>
+              {tile.key === firstVisibleAlsRoute ? <div className="home-tiles-divider"><span>Additional Learning Support</span></div> : null}
+              <button
+                className="home-tile"
+                onClick={() => onNavigate(tile.key)}
+                type="button"
+              >
+                <span aria-hidden="true" className="home-tile-glyph">
+                  {Icon ? <Icon size={24} strokeWidth={1.8} /> : null}
+                </span>
+                <span className="home-tile-text">
+                  <strong>{tile.label}</strong>
+                  <span>{tileDescriptions[tile.key] ?? ""}</span>
+                </span>
+              </button>
+            </div>
           );
         })}
       </nav>

@@ -51,6 +51,9 @@ param messagingReplyToAddress string = ''
 @description('Redirect all non-production messages to this address. Required when messaging is enabled outside production.')
 param messagingTestRecipient string = ''
 
+@description('Mailbox that receives production availability, server error and capacity alerts.')
+param operationsAlertEmail string = ''
+
 @description('Temporarily permit one public IP to run first-time migrations. Disable after migration.')
 param enableSqlMigrationAccess bool = false
 
@@ -376,6 +379,109 @@ resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   }
 }
 
+var runtimeAppSettings = concat([
+  {
+    name: 'ASPNETCORE_ENVIRONMENT'
+    value: 'Production'
+  }
+  {
+    name: 'ASPNETCORE_FORWARDEDHEADERS_ENABLED'
+    value: 'true'
+  }
+  {
+    name: 'ASPNETCORE_HTTP_PORTS'
+    value: '8080'
+  }
+  {
+    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+    value: appInsights.properties.ConnectionString
+  }
+  {
+    name: 'ApplicationInsightsAgent_EXTENSION_VERSION'
+    value: '~3'
+  }
+  {
+    name: 'Authentication__AllowDevelopmentUser'
+    value: 'false'
+  }
+  {
+    name: 'Authentication__TenantId'
+    value: entraTenantId
+  }
+  {
+    name: 'Authentication__Audience'
+    value: entraApiAudience
+  }
+  {
+    name: 'ConnectionStrings__TlqsDatabase'
+    value: sqlConnectionString
+  }
+  {
+    name: 'Storage__AccountUri'
+    value: storage.properties.primaryEndpoints.blob
+  }
+  {
+    name: 'Storage__EvidenceContainer'
+    value: evidenceContainer.name
+  }
+  {
+    name: 'WEBSITE_RUN_FROM_PACKAGE'
+    value: '1'
+  }
+], messagingEnabled ? [
+  {
+    name: 'Messaging__Enabled'
+    value: 'true'
+  }
+  {
+    name: 'Messaging__Provider'
+    value: 'MicrosoftGraph'
+  }
+  {
+    name: 'Messaging__TenantId'
+    value: entraTenantId
+  }
+  {
+    name: 'Messaging__ClientId'
+    value: messagingClientId
+  }
+  {
+    name: 'Messaging__ClientSecret'
+    value: '@Microsoft.KeyVault(SecretUri=${keyVault.properties.vaultUri}secrets/messaging-graph-client-secret)'
+  }
+  {
+    name: 'Messaging__SenderAddress'
+    value: messagingSenderAddress
+  }
+  {
+    name: 'Messaging__ReplyToAddress'
+    value: messagingReplyToAddress
+  }
+  {
+    name: 'Messaging__ApplicationUrl'
+    value: 'https://${appServiceName}.azurewebsites.net'
+  }
+  {
+    name: 'Messaging__TestMode'
+    value: isProduction ? 'false' : 'true'
+  }
+  {
+    name: 'Messaging__TestRecipient'
+    value: messagingTestRecipient
+  }
+] : [])
+
+var runtimeSiteConfig = {
+  linuxFxVersion: 'DOTNETCORE|10.0'
+  alwaysOn: isProduction
+  ftpsState: 'Disabled'
+  http20Enabled: true
+  healthCheckPath: '/health/ready'
+  minTlsVersion: '1.2'
+  vnetRouteAllEnabled: isProduction
+  appSettings: runtimeAppSettings
+}
+
 resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
   name: appServiceName
   location: location
@@ -388,106 +494,113 @@ resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
     httpsOnly: true
     clientAffinityEnabled: false
     virtualNetworkSubnetId: isProduction ? appSubnet.id : null
-    siteConfig: {
-      linuxFxVersion: 'DOTNETCORE|10.0'
-      alwaysOn: isProduction
-      ftpsState: 'Disabled'
-      http20Enabled: true
-      healthCheckPath: '/health/ready'
-      minTlsVersion: '1.2'
-      vnetRouteAllEnabled: isProduction
-      appSettings: concat([
+    siteConfig: runtimeSiteConfig
+  }
+}
+
+// Production releases are validated in this slot before they are swapped live.
+// After a successful swap the previous production build remains in this slot,
+// which gives IT a fast, package-level rollback path.
+resource productionStagingSlot 'Microsoft.Web/sites/slots@2023-12-01' = if (isProduction) {
+  name: 'staging'
+  parent: apiApp
+  location: location
+  kind: 'app,linux'
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    serverFarmId: plan.id
+    httpsOnly: true
+    clientAffinityEnabled: false
+    virtualNetworkSubnetId: appSubnet.id
+    siteConfig: runtimeSiteConfig
+  }
+}
+
+resource operationsActionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = if (isProduction && !empty(operationsAlertEmail)) {
+  name: '${suffix}-operations'
+  location: 'global'
+  properties: {
+    groupShortName: 'iElevateOps'
+    enabled: true
+    emailReceivers: [
+      {
+        name: 'i-Elevate operations'
+        emailAddress: operationsAlertEmail
+        useCommonAlertSchema: true
+      }
+    ]
+  }
+}
+
+resource appServiceErrorAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (isProduction && !empty(operationsAlertEmail)) {
+  name: '${suffix}-http-5xx'
+  location: 'global'
+  properties: {
+    description: 'i-Elevate returned more than five server errors in five minutes.'
+    severity: 1
+    enabled: true
+    scopes: [
+      apiApp.id
+    ]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
         {
-          name: 'ASPNETCORE_ENVIRONMENT'
-          value: 'Production'
+          name: 'Http5xxThreshold'
+          criterionType: 'StaticThresholdCriterion'
+          metricName: 'Http5xx'
+          metricNamespace: 'Microsoft.Web/sites'
+          operator: 'GreaterThan'
+          threshold: 5
+          timeAggregation: 'Total'
         }
-        {
-          name: 'ASPNETCORE_FORWARDEDHEADERS_ENABLED'
-          value: 'true'
-        }
-        {
-          name: 'ASPNETCORE_HTTP_PORTS'
-          value: '8080'
-        }
-        {
-          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-          value: appInsights.properties.ConnectionString
-        }
-        {
-          name: 'ApplicationInsightsAgent_EXTENSION_VERSION'
-          value: '~3'
-        }
-        {
-          name: 'Authentication__AllowDevelopmentUser'
-          value: 'false'
-        }
-        {
-          name: 'Authentication__TenantId'
-          value: entraTenantId
-        }
-        {
-          name: 'Authentication__Audience'
-          value: entraApiAudience
-        }
-        {
-          name: 'ConnectionStrings__TlqsDatabase'
-          value: sqlConnectionString
-        }
-        {
-          name: 'Storage__AccountUri'
-          value: storage.properties.primaryEndpoints.blob
-        }
-        {
-          name: 'Storage__EvidenceContainer'
-          value: evidenceContainer.name
-        }
-        {
-          name: 'WEBSITE_RUN_FROM_PACKAGE'
-          value: '1'
-        }
-      ], messagingEnabled ? [
-        {
-          name: 'Messaging__Enabled'
-          value: 'true'
-        }
-        {
-          name: 'Messaging__Provider'
-          value: 'MicrosoftGraph'
-        }
-        {
-          name: 'Messaging__TenantId'
-          value: entraTenantId
-        }
-        {
-          name: 'Messaging__ClientId'
-          value: messagingClientId
-        }
-        {
-          name: 'Messaging__ClientSecret'
-          value: '@Microsoft.KeyVault(SecretUri=${keyVault.properties.vaultUri}secrets/messaging-graph-client-secret)'
-        }
-        {
-          name: 'Messaging__SenderAddress'
-          value: messagingSenderAddress
-        }
-        {
-          name: 'Messaging__ReplyToAddress'
-          value: messagingReplyToAddress
-        }
-        {
-          name: 'Messaging__ApplicationUrl'
-          value: 'https://${appServiceName}.azurewebsites.net'
-        }
-        {
-          name: 'Messaging__TestMode'
-          value: isProduction ? 'false' : 'true'
-        }
-        {
-          name: 'Messaging__TestRecipient'
-          value: messagingTestRecipient
-        }
-      ] : [])
+      ]
     }
+    autoMitigate: true
+    actions: [
+      {
+        actionGroupId: operationsActionGroup!.id
+      }
+    ]
+  }
+}
+
+resource sqlCapacityAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (isProduction && !empty(operationsAlertEmail)) {
+  name: '${suffix}-sql-cpu'
+  location: 'global'
+  properties: {
+    description: 'i-Elevate Azure SQL CPU averaged more than 80 percent for 15 minutes.'
+    severity: 2
+    enabled: true
+    scopes: [
+      sqlDatabase.id
+    ]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          name: 'SqlCpuThreshold'
+          criterionType: 'StaticThresholdCriterion'
+          metricName: 'cpu_percent'
+          metricNamespace: 'Microsoft.Sql/servers/databases'
+          operator: 'GreaterThan'
+          threshold: 80
+          timeAggregation: 'Average'
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: [
+      {
+        actionGroupId: operationsActionGroup!.id
+      }
+    ]
   }
 }
 
@@ -511,9 +624,32 @@ resource keyVaultRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04
   }
 }
 
+resource stagingBlobRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (isProduction) {
+  name: guid(storage.id, productionStagingSlot!.id, blobContributorRoleId)
+  scope: storage
+  properties: {
+    principalId: productionStagingSlot!.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: blobContributorRoleId
+  }
+}
+
+resource stagingKeyVaultRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (isProduction) {
+  name: guid(keyVault.id, productionStagingSlot!.id, keyVaultSecretsUserRoleId)
+  scope: keyVault
+  properties: {
+    principalId: productionStagingSlot!.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRoleId
+  }
+}
+
 output appServiceName string = apiApp.name
 output appUrl string = 'https://${apiApp.properties.defaultHostName}'
 output appManagedIdentityObjectId string = apiApp.identity.principalId
+output stagingSlotName string = isProduction ? productionStagingSlot!.name : ''
+output stagingSlotUrl string = isProduction ? 'https://${appServiceName}-staging.azurewebsites.net' : ''
+output stagingManagedIdentityObjectId string = isProduction ? productionStagingSlot!.identity.principalId : ''
 output sqlServerName string = sqlServer.name
 output sqlServerFqdn string = sqlServer.properties.fullyQualifiedDomainName
 output sqlDatabaseName string = sqlDatabase.name

@@ -119,7 +119,10 @@ Invoke-Step "Build the production web application" {
 }
 
 Invoke-Step "Publish API artifact" {
-    dotnet publish $apiProject --configuration Release --no-build --output $apiOutput
+    # Azure App Service is Linux-only in infra/azure/main.bicep. Publishing for
+    # that runtime removes unused Windows and macOS native libraries from the
+    # release package and materially reduces deployment/startup transfer time.
+    dotnet publish $apiProject --configuration Release --runtime linux-x64 --self-contained false --output $apiOutput
 }
 
 Get-ChildItem -LiteralPath (Join-Path $webRoot "dist") -Force |

@@ -121,6 +121,8 @@ const processDefinitions: ProcessDefinition[] = [
   { key: "overview", label: "Executive overview", shortLabel: "Overview", singular: "record", icon: Sparkles, tone: "teal" },
   { key: "learning_walk", label: "Learning Walks", shortLabel: "Learning Walks", singular: "learning walk", icon: BookOpenCheck, tone: "teal" },
   { key: "liv", label: "LIV", shortLabel: "LIV", singular: "LIV record", icon: Target, tone: "blue" },
+  { key: "als_learning_walk", label: "ALS Learning Walks", shortLabel: "ALS Walks", singular: "ALS learning walk", icon: BookOpenCheck, tone: "teal" },
+  { key: "als_liv", label: "ALS LIV", shortLabel: "ALS LIV", singular: "ALS LIV record", icon: Target, tone: "blue" },
   { key: "eli", label: "Elevate Learning and Innovation", shortLabel: "ELI", singular: "assessment", icon: Sparkles, tone: "violet" },
   { key: "probation_case", label: "Probationary Observations", shortLabel: "Probation", singular: "probation case", icon: UsersRound, tone: "blue" },
   { key: "elevate_environment", label: "Elevate Environments", shortLabel: "Environments", singular: "environment audit", icon: Building2, tone: "amber" },
@@ -146,7 +148,7 @@ const fallbackConfiguration: DashboardConfiguration = {
     label: definition.label,
     isEnabled: true,
     displayOrder: (index + 1) * 10,
-    primaryVisual: ["overview", "learning_walk", "liv", "eli", "probation_case", "elevate_environment", "work_scrutiny", "cpd_event", "elevate_status"].includes(definition.key) ? "bar" : "donut",
+    primaryVisual: ["overview", "learning_walk", "als_learning_walk", "liv", "als_liv", "eli", "probation_case", "elevate_environment", "work_scrutiny", "cpd_event", "elevate_status"].includes(definition.key) ? "bar" : "donut",
     showTrend: true,
     showAreaComparison: true,
     showOutcomes: true,
@@ -238,19 +240,19 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
       if (selectedProcess === "cpd_event") {
         void load(api.cpdAttendanceDashboard(academicYear), setCpdAttendance);
       }
-      if (selectedProcess === "liv") {
-        void load(api.livLifecycleDashboard(academicYear), setLivLifecycle);
+      if (selectedProcess === "liv" || selectedProcess === "als_liv") {
+        void load(api.livLifecycleDashboard(academicYear, selectedProcess), setLivLifecycle);
       }
-      if (selectedProcess === "learning_walk") {
-        void load(api.learningWalkThemes(), setLearningWalkThemeGroups);
+      if (selectedProcess === "learning_walk" || selectedProcess === "als_learning_walk") {
+        void load(api.learningWalkThemes(selectedProcess), setLearningWalkThemeGroups);
       }
     }
     return () => { cancelled = true; };
   }, [academicYear, canViewReports, selectedProcess]);
 
   const configuredProcesses = useMemo(() => configuration.processes
-    .filter((item) => item.isEnabled)
-    .sort((left, right) => left.displayOrder - right.displayOrder), [configuration]);
+    .filter((item) => item.isEnabled && canAccessDashboardProcess(item.processKey, user.permissions))
+    .sort((left, right) => left.displayOrder - right.displayOrder), [configuration, user.permissions]);
 
   useEffect(() => {
     if (!configuredProcesses.some((item) => item.processKey === selectedProcess)) {
@@ -422,12 +424,12 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
         const attendanceResult = await safe(api.cpdAttendanceDashboard(academicYear), cpdAttendance);
         setCpdAttendance(attendanceResult.value); supplementalFailures.push(attendanceResult.failed);
       }
-      if (selectedProcess === "liv") {
-        const livResult = await safe(api.livLifecycleDashboard(academicYear), livLifecycle);
+      if (selectedProcess === "liv" || selectedProcess === "als_liv") {
+        const livResult = await safe(api.livLifecycleDashboard(academicYear, selectedProcess), livLifecycle);
         setLivLifecycle(livResult.value); supplementalFailures.push(livResult.failed);
       }
-      if (selectedProcess === "learning_walk") {
-        const themeResult = await safe(api.learningWalkThemes(), learningWalkThemeGroups);
+      if (selectedProcess === "learning_walk" || selectedProcess === "als_learning_walk") {
+        const themeResult = await safe(api.learningWalkThemes(selectedProcess), learningWalkThemeGroups);
         setLearningWalkThemeGroups(themeResult.value); supplementalFailures.push(themeResult.failed);
       }
     }
@@ -740,9 +742,12 @@ function ProcessOverview({ definition, configuration, records, actions, cpdAtten
   onOpenStaff: (staffId: string) => void;
 }) {
   const outcomeRows = buildOutcomeRows(facts.filter((fact) => fact.dimensionKey !== "practice_statement_outcome"));
-  const outcomeGroups = definition.key === "learning_walk" ? buildLearningWalkOutcomeGroups(facts, learningWalkThemeGroups) : [];
+  const isLearningWalk = definition.key === "learning_walk" || definition.key === "als_learning_walk";
+  const isLiv = definition.key === "liv" || definition.key === "als_liv";
+  const isAlsLiv = definition.key === "als_liv";
+  const outcomeGroups = isLearningWalk ? buildLearningWalkOutcomeGroups(facts, learningWalkThemeGroups) : [];
   const eliOutcomeGroups = definition.key === "eli" ? buildEliOutcomeGroups(facts) : [];
-  const hasOutcomeVisual = definition.key === "learning_walk" ? outcomeGroups.length > 0 : definition.key === "eli" ? eliOutcomeGroups.length > 0 : outcomeRows.length > 0;
+  const hasOutcomeVisual = isLearningWalk ? outcomeGroups.length > 0 : definition.key === "eli" ? eliOutcomeGroups.length > 0 : outcomeRows.length > 0;
   const frequencyRows = buildFrequencyRows(facts, records, actions);
   const organisationRows = buildOrganisationPerformanceRows(records, facts, actions, staffParticipationRows, livLifecycleRows);
   const metrics = buildProcessMetrics(definition.key, records, facts, actions, staffParticipation, livLifecycle);
@@ -751,18 +756,18 @@ function ProcessOverview({ definition, configuration, records, actions, cpdAtten
   return <>
     <div className="intelligence-section-title"><div><span>{definition.shortLabel}</span><h2>Teaching and learning position</h2></div><p>Every measure below is calculated from existing structured form data. Narrative notes are not scored.</p></div>
     <section className="intelligence-briefing panel intelligence-process-briefing">
-      <div><span className="intelligence-section-label"><ShieldCheck size={15} />{definition.key === "liv" ? "Completed LIVs" : "Leadership reading"}</span><h2>{briefing.headline}</h2><p>{briefing.detail}</p></div>
+      <div><span className="intelligence-section-label"><ShieldCheck size={15} />{isLiv ? `Completed ${isAlsLiv ? "ALS LIVs" : "LIVs"}` : "Leadership reading"}</span><h2>{briefing.headline}</h2><p>{briefing.detail}</p></div>
       <div className="intelligence-briefing-signal"><span>{briefing.signalLabel}</span><strong>{briefing.signalValue}</strong><small>{briefing.signalDetail}</small></div>
     </section>
     <div className="intelligence-kpi-grid">
       {metrics.map((metric) => <MetricCard detail={metric.detail} key={metric.label} label={metric.label} tone={metric.tone} value={metric.value} />)}
     </div>
-    {definition.key === "liv" ? <LivLifecyclePanel totals={livLifecycle} /> : null}
+    {isLiv ? <LivLifecyclePanel processKey={definition.key} totals={livLifecycle} /> : null}
     <div className={`intelligence-chart-grid${configuration.showTrend && hasOutcomeVisual && !frequencyRows.length && !configuration.showActions ? " intelligence-chart-grid-solo-trend" : ""}`}>
       {configuration.showTrend ? <TrendChart title="Activity over time" subtitle={`${formatTrendGranularity(trendGranularity)} records in the current filtered view`} data={trendData} /> : null}
-      {configuration.showOutcomes && definition.key === "learning_walk" && outcomeGroups.length ? <OutcomeDrilldown groups={outcomeGroups} /> : null}
+      {configuration.showOutcomes && isLearningWalk && outcomeGroups.length ? <OutcomeDrilldown groups={outcomeGroups} /> : null}
       {configuration.showOutcomes && definition.key === "eli" && eliOutcomeGroups.length ? <OutcomeDrilldown childLabel="Statement" groups={eliOutcomeGroups} subtitle="Practice-area position first; expand an area to see the statement answers that produce its score" title="Practice outcome matrix" /> : null}
-      {configuration.showOutcomes && !["learning_walk", "eli"].includes(definition.key) && outcomeRows.length ? <OutcomeMatrix rows={outcomeRows} /> : null}
+      {configuration.showOutcomes && !["learning_walk", "als_learning_walk", "eli"].includes(definition.key) && outcomeRows.length ? <OutcomeMatrix rows={outcomeRows} /> : null}
       {configuration.showOutcomes && frequencyRows.length ? <FrequencyProfile processKey={definition.key} records={records.length} rows={frequencyRows} /> : null}
       {configuration.showActions ? <ActionRecords actions={actions} /> : null}
     </div>
@@ -806,18 +811,26 @@ function LegacyProcessOverview({ definition, configuration, records, actions, tr
   </>;
 }
 
-function LivLifecyclePanel({ totals }: { totals: LivLifecycleTotals }) {
-  const steps = [
-    { label: "LIV requested", value: totals.requestedCount, detail: "ELI requests and planned Probation Observation 2 LIVs" },
-    { label: "Case started", value: totals.caseStartedCount, detail: "A LIV case has been opened" },
-    { label: "Visit date recorded", value: totals.scheduledCount, detail: "The visit form contains a date" },
-    { label: "Visit completed", value: totals.visitedCount, detail: `${totals.completedVisitCount} completed visit form${totals.completedVisitCount === 1 ? "" : "s"}` },
-    { label: "LIV closed", value: totals.completedCount, detail: "The LIV case is complete" }
-  ];
+function LivLifecyclePanel({ totals, processKey }: { totals: LivLifecycleTotals; processKey: DashboardProcessKey }) {
+  const isAlsLiv = processKey === "als_liv";
+  const steps = isAlsLiv
+    ? [
+        { label: "ALS LIV case opened", value: totals.caseStartedCount, detail: "An ALS LIV record has been created" },
+        { label: "Visit date recorded", value: totals.scheduledCount, detail: "The ALS visit form contains a date" },
+        { label: "Visit completed", value: totals.visitedCount, detail: `${totals.completedVisitCount} completed visit form${totals.completedVisitCount === 1 ? "" : "s"}` },
+        { label: "ALS LIV closed", value: totals.completedCount, detail: "The ALS LIV case is complete" }
+      ]
+    : [
+        { label: "LIV requested", value: totals.requestedCount, detail: "ELI requests and planned Probation Observation 2 LIVs" },
+        { label: "Case started", value: totals.caseStartedCount, detail: "A LIV case has been opened" },
+        { label: "Visit date recorded", value: totals.scheduledCount, detail: "The visit form contains a date" },
+        { label: "Visit completed", value: totals.visitedCount, detail: `${totals.completedVisitCount} completed visit form${totals.completedVisitCount === 1 ? "" : "s"}` },
+        { label: "LIV closed", value: totals.completedCount, detail: "The LIV case is complete" }
+      ];
   return <section className="panel liv-lifecycle-panel">
-    <div className="intelligence-card-heading"><div><h3>LIV journey</h3><span>ELI requests and Probation Observation 2 are tracked through the shared LIV workflow</span></div><Target size={18} /></div>
+    <div className="intelligence-card-heading"><div><h3>{isAlsLiv ? "ALS LIV journey" : "LIV journey"}</h3><span>{isAlsLiv ? "ALS cases are tracked independently from case opening to completion" : "ELI requests and Probation Observation 2 are tracked through the shared LIV workflow"}</span></div><Target size={18} /></div>
     <div className="liv-lifecycle-grid">{steps.map((step, index) => <article key={step.label}><span>{index + 1}</span><strong>{step.value}</strong><b>{step.label}</b><small>{step.detail}</small></article>)}</div>
-    <p className="intelligence-definition-note"><strong>Reporting definition:</strong> Probation Observation 2 is counted in both Probationary Observations and LIV because it is a dual process. “Visit completed” only counts a LIV visit saved as completed, so opening a case or drafting a visit does not inflate delivery.</p>
+    <p className="intelligence-definition-note"><strong>Reporting definition:</strong> {isAlsLiv ? "ALS LIV figures include ALS LIV records only. “Visit completed” counts a visit saved as completed; opening a case or drafting a visit does not inflate delivery." : "Probation Observation 2 is counted in both Probationary Observations and LIV because it is a dual process. “Visit completed” only counts a LIV visit saved as completed, so opening a case or drafting a visit does not inflate delivery."}</p>
   </section>;
 }
 
@@ -910,10 +923,10 @@ function OrganisationPerformance({ processKey, rows, facultyNames, onOpenDetail 
 function OrganisationPerformanceLine({ processKey, row, onOpenDetail, isFaculty = false }: { processKey: DashboardProcessKey; row: OrganisationPerformanceRow; onOpenDetail: (row: OrganisationPerformanceRow, detail: "records" | "actions") => void; isFaculty?: boolean }) {
   const coverageAvailable = row.activeStaffCount > 0;
   const outcomeAvailable = row.ratingCount > 0;
-  const activityValue = processKey === "liv"
+  const activityValue = processKey === "liv" || processKey === "als_liv"
     ? `${row.livVisitedCount} / ${row.livRequestedCount}`
     : coverageAvailable ? `${percentage(row.participatingStaffCount, row.activeStaffCount)}%` : String(row.recordCount);
-  const activityDetail = processKey === "liv"
+  const activityDetail = processKey === "liv" || processKey === "als_liv"
     ? "requests visited"
     : coverageAvailable ? `${row.participatingStaffCount} of ${row.activeStaffCount} staff` : `${row.recordCount === 1 ? "record" : "records"} in view`;
   const outcomeValue = outcomeAvailable ? `${percentage(row.secureOrAboveCount, row.ratingCount)}%` : row.recordCount ? `${percentage(row.completedCount, row.recordCount)}%` : "—";
@@ -1289,21 +1302,21 @@ function buildProcessMetrics(
   const actionMetric: MetricDefinition = { label: "Open actions", value: openActions.length, detail: `${overdueActions.length} overdue`, tone: overdueActions.length ? "amber" : "blue" };
   const secureMetric: MetricDefinition = { label: "Secure practice or above", value: numericFacts.length ? `${percentage(secure, numericFacts.length)}%` : "—", detail: numericFacts.length ? `${secure} of ${numericFacts.length} rated responses` : "No scored responses", tone: "violet" };
 
-  if (processKey === "learning_walk") {
+  if (processKey === "learning_walk" || processKey === "als_learning_walk") {
     const selectedFocuses = new Set(facts.filter((fact) => fact.dimensionKey === "focus").map((fact) => `${fact.sourceRecordId}:${fact.seriesKey}`)).size;
     return [
-      { label: "Learning Walks", value: records.length, detail: `${complete} submitted records`, tone: "teal" },
+      { label: processKey === "als_learning_walk" ? "ALS Learning Walks" : "Learning Walks", value: records.length, detail: `${complete} submitted records`, tone: "teal" },
       { label: "Focus selections", value: selectedFocuses, detail: "Multiple focus areas are counted", tone: "blue" },
       secureMetric,
       actionMetric
     ];
   }
-  if (processKey === "liv") return [
-    { label: "LIV requested", value: liv.requestedCount, detail: "Submitted through ELI", tone: "teal" },
+  if (processKey === "liv" || processKey === "als_liv") return [
+    { label: processKey === "als_liv" ? "ALS LIV cases" : "LIV requested", value: liv.requestedCount, detail: processKey === "als_liv" ? "Opened in the ALS workflow" : "Submitted through ELI", tone: "teal" },
     { label: "Visit date recorded", value: liv.scheduledCount, detail: `${liv.caseStartedCount} cases started`, tone: "blue" },
     { label: "Visit completed", value: liv.visitedCount, detail: `${liv.completedVisitCount} completed visit forms`, tone: "green" },
-    { label: "Elevate practitioners", value: liv.practitionerStaffCount, detail: liv.practitionerStaffDenominator ? `${percentage(liv.practitionerStaffCount, liv.practitionerStaffDenominator)}% of ${liv.practitionerStaffDenominator} staff with a LIV case` : "No LIV cases in view", tone: "violet" },
-    { label: "LIV closed", value: liv.completedCount, detail: `${openActions.length} open actions · ${overdueActions.length} overdue`, tone: overdueActions.length ? "amber" : "violet" }
+    { label: "Elevate practitioners", value: liv.practitionerStaffCount, detail: liv.practitionerStaffDenominator ? `${percentage(liv.practitionerStaffCount, liv.practitionerStaffDenominator)}% of ${liv.practitionerStaffDenominator} staff with a ${processKey === "als_liv" ? "ALS LIV" : "LIV"} case` : `No ${processKey === "als_liv" ? "ALS LIV" : "LIV"} cases in view`, tone: "violet" },
+    { label: processKey === "als_liv" ? "ALS LIV closed" : "LIV closed", value: liv.completedCount, detail: `${openActions.length} open actions · ${overdueActions.length} overdue`, tone: overdueActions.length ? "amber" : "violet" }
   ];
   if (processKey === "eli") return [
     { label: "ELI submissions", value: records.length, detail: `${complete} submitted assessments`, tone: "teal" },
@@ -1383,14 +1396,15 @@ function buildProcessBriefing(processKey: DashboardProcessKey, records: ProcessD
   const outcomes = buildOutcomeRows(facts.filter((fact) => fact.dimensionKey !== "practice_statement_outcome"));
   const priority = outcomes[0];
   const overdue = actions.filter((action) => !action.completedDate && action.isOverdue).length;
-  if (processKey === "liv") {
+  if (processKey === "liv" || processKey === "als_liv") {
     const scheduledConversion = liv.requestedCount ? percentage(liv.scheduledCount, liv.requestedCount) : 0;
+    const isAlsLiv = processKey === "als_liv";
     return {
-      headline: `${liv.visitedCount} completed LIV${liv.visitedCount === 1 ? "" : "s"}.`,
+      headline: `${liv.visitedCount} completed ${isAlsLiv ? "ALS LIV" : "LIV"}${liv.visitedCount === 1 ? "" : "s"}.`,
       detail: `${liv.scheduledCount} have a visit date recorded and ${liv.visitedCount} have at least one completed visit. Draft visits are excluded from delivery counts.`,
-      signalLabel: "Request to scheduled",
-      signalValue: liv.requestedCount ? `${scheduledConversion}%` : "No requests",
-      signalDetail: `${liv.scheduledCount} of ${liv.requestedCount} requests`
+      signalLabel: isAlsLiv ? "Case to scheduled" : "Request to scheduled",
+      signalValue: liv.requestedCount ? `${scheduledConversion}%` : isAlsLiv ? "No cases" : "No requests",
+      signalDetail: `${liv.scheduledCount} of ${liv.requestedCount} ${isAlsLiv ? "cases" : "requests"}`
     };
   }
   if (priority) return {
@@ -1578,6 +1592,7 @@ function staffCoverageLabel(processKey: DashboardProcessKey) {
   const labels: Partial<Record<DashboardProcessKey, string>> = {
     eli: "ELI submission rate",
     liv: "Completed LIV coverage",
+    als_liv: "Completed ALS LIV coverage",
     cpd_event: "CPD participation",
     coaching_session: "Coaching and mentoring reach"
   };
@@ -1587,6 +1602,7 @@ function staffCoverageLabel(processKey: DashboardProcessKey) {
 function frequencyProfileCopy(processKey: DashboardProcessKey) {
   const copy: Partial<Record<DashboardProcessKey, { title: string; subtitle: string }>> = {
     learning_walk: { title: "Focus coverage", subtitle: "Number and share of Learning Walks containing each selected focus" },
+    als_learning_walk: { title: "Focus coverage", subtitle: "Number and share of ALS Learning Walks containing each selected focus" },
     probation_case: { title: "Areas not observed", subtitle: "Completed observations where an area was explicitly marked as not observed" },
     coaching_session: { title: "Coaching focus areas", subtitle: "Distinct records using each configured coaching focus" },
     work_scrutiny: { title: "Course coverage", subtitle: "Scrutiny records associated with each configured course" },
@@ -1597,7 +1613,7 @@ function frequencyProfileCopy(processKey: DashboardProcessKey) {
 }
 
 function isStaffCoverageProcess(processKey: DashboardProcessKey) {
-  return ["eli", "liv", "cpd_event", "coaching_session"].includes(processKey);
+  return ["eli", "liv", "als_liv", "cpd_event", "coaching_session"].includes(processKey);
 }
 
 function percentage(count: number, total: number) {
@@ -1606,7 +1622,7 @@ function percentage(count: number, total: number) {
 
 function actionMatchesProcess(action: ActionSummary, processKey: DashboardProcessKey) {
   const map: Partial<Record<DashboardProcessKey, string[]>> = {
-    learning_walk: ["learning_walk"], liv: ["liv"], eli: ["elevate_practice"], probation_case: ["probation_observation"],
+    learning_walk: ["learning_walk"], als_learning_walk: ["als_learning_walk"], liv: ["liv"], als_liv: ["als_liv"], eli: ["elevate_practice"], probation_case: ["probation_observation"],
     elevate_environment: ["elevate_environment"], coaching_session: ["coaching_mentoring"],
     work_scrutiny: ["work_scrutiny"], cpd_event: ["cpd", "cpd_event"]
   };
@@ -1616,7 +1632,9 @@ function actionMatchesProcess(action: ActionSummary, processKey: DashboardProces
 function dashboardExportModuleKey(processKey: DashboardProcessKey) {
   const map: Partial<Record<DashboardProcessKey, string>> = {
     learning_walk: "learning-walks",
+    als_learning_walk: "als-learning-walks",
     liv: "liv",
+    als_liv: "als-liv",
     eli: "elevate-practice",
     probation_case: "probation",
     elevate_environment: "elevate-environments",
@@ -1640,7 +1658,7 @@ function getRecordDate(record: ProcessDashboardRecordSummary) { return record.re
 function compareRecords(left: ProcessDashboardRecordSummary, right: ProcessDashboardRecordSummary, sort: SortKey) { if (sort === "date_asc") return getRecordDate(left).localeCompare(getRecordDate(right)); if (sort === "title") return left.title.localeCompare(right.title); if (sort === "area") return (left.areaCode ?? "").localeCompare(right.areaCode ?? ""); if (sort === "status") return left.status.localeCompare(right.status); return getRecordDate(right).localeCompare(getRecordDate(left)); }
 function formatArea(record: ProcessDashboardRecordSummary) { return record.parentAreaCode && record.areaCode && record.parentAreaCode !== record.areaCode ? `${record.parentAreaCode} / ${record.areaCode}` : record.areaCode ?? "Unassigned"; }
 function formatRecordFocus(record: ProcessDashboardRecordSummary) { return splitValues(record.theme).join(", ") || record.detail || record.summary || "Not recorded"; }
-function formatRecordMeasure(record: ProcessDashboardRecordSummary) { if (record.processKey === "cpd_event") return `${record.participantCount} participants · ${formatDuration(record.learningMinutes)}`; if (record.scoreCount) return `${(record.scoreTotal / record.scoreCount).toFixed(1)} / ${record.scoreMaximum}`; if (record.processKey === "probation_case") return record.sampleSize ? `Observation ${record.sampleSize}` : "Started"; if (record.processKey === "liv") return `${record.sampleSize} visits`; if (record.processKey === "work_scrutiny") return `${record.sampleSize} sampled`; return record.ownerDisplayName ?? record.subjectDisplayName ?? "Recorded"; }
+function formatRecordMeasure(record: ProcessDashboardRecordSummary) { if (record.processKey === "cpd_event") return `${record.participantCount} participants · ${formatDuration(record.learningMinutes)}`; if (record.scoreCount) return `${(record.scoreTotal / record.scoreCount).toFixed(1)} / ${record.scoreMaximum}`; if (record.processKey === "probation_case") return record.sampleSize ? `Observation ${record.sampleSize}` : "Started"; if (record.processKey === "liv" || record.processKey === "als_liv") return `${record.sampleSize} visits`; if (record.processKey === "work_scrutiny") return `${record.sampleSize} sampled`; return record.ownerDisplayName ?? record.subjectDisplayName ?? "Recorded"; }
 function formatDuration(minutes: number) { const hours = Math.floor(minutes / 60); const remainder = minutes % 60; return hours ? `${hours}h${remainder ? ` ${remainder}m` : ""}` : `${remainder}m`; }
 function formatLabel(value: string) { return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase()); }
 function formatDate(value?: string) { return value ? new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${value.slice(0, 10)}T00:00:00`)) : "No date"; }
@@ -1683,6 +1701,15 @@ function collectDashboardOrgOptions(orgUnits: OrgUnitSummary[], user: CurrentUse
     faculties: faculties.sort((left, right) => left.name.localeCompare(right.name)),
     teams: teams.sort((left, right) => left.name.localeCompare(right.name))
   };
+}
+
+function canAccessDashboardProcess(processKey: DashboardProcessKey, permissions: readonly string[]) {
+  if (permissions.includes("reports.view_all")) return true;
+  if (processKey === "learning_walk") return permissions.includes("learning_walk.submit");
+  if (processKey === "als_learning_walk") return permissions.includes("als_learning_walk.submit");
+  if (processKey === "liv") return permissions.includes("liv.submit") || permissions.includes("liv.manage");
+  if (processKey === "als_liv") return permissions.includes("als_liv.submit") || permissions.includes("als_liv.manage");
+  return true;
 }
 
 function downloadCsv(filename: string, rows: Array<Array<string | number>>) {

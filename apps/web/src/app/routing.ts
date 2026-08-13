@@ -18,6 +18,8 @@ const routePaths: Record<AppRoute, string> = {
   admin: "/admin",
   learning: "/learning-walks",
   liv: "/liv",
+  als_learning: "/als-learning-walks",
+  als_liv: "/als-liv",
   probation: "/probationary-observations",
   elevate: "/learning-environments",
   practice: "/learning-innovation",

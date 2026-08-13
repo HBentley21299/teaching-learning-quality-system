@@ -140,7 +140,7 @@ public static class PlatformOperationsEndpoints
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
             if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
             return Results.Ok(await store.GetStaffProfileLivPageAsync(
-                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken));
+                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, user, cancellationToken));
         });
 
         api.MapGet("/staff-profiles/{staffId:guid}/probation", async (
@@ -367,7 +367,7 @@ public static class PlatformOperationsEndpoints
             CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
-            if (!user.HasPermission(PermissionKeys.ExportsCreate)) return Results.Forbid();
+            if (!user.HasPermission(PermissionKeys.ExportsCreate) || !CanExportModule(user, moduleKey)) return Results.Forbid();
             var filter = new ExportFilter(
                 academicYear, facultyCode, teamCode, fromDate, toDate,
                 staffId, reviewerId, status, recordType);
@@ -387,6 +387,7 @@ public static class PlatformOperationsEndpoints
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
             var report = await store.GetRecordReportAsync(recordId, user, cancellationToken);
             if (report is null) return Results.NotFound();
+            if (!CanExportModule(user, report.RecordType)) return Results.Forbid();
             var result = exporter.CreateRecordReport(report);
             await store.RecordExportAuditAsync(report.RecordType, "docx", new ExportFilter(null, null, null, null, null, null, null, null, null), user, cancellationToken);
             return Results.File(result.Content, result.ContentType, result.FileName);
@@ -418,4 +419,17 @@ public static class PlatformOperationsEndpoints
         || SqlFoundationDataStore.CanViewAllStaffProfiles(user)
         || (user.HasPermission(PermissionKeys.ReportsViewScoped)
             && await store.IsStaffProfileInScopeAsync(staffId, user, cancellationToken));
+
+    private static bool CanExportModule(CurrentUser user, string moduleKey)
+    {
+        if (user.HasPermission(PermissionKeys.ReportsViewAll)) return true;
+        return moduleKey.Trim().ToLowerInvariant() switch
+        {
+            "learning_walk" or "learning-walks" => user.HasPermission(PermissionKeys.LearningWalkSubmit),
+            "als_learning_walk" or "als-learning-walks" => user.HasPermission(PermissionKeys.AlsLearningWalkSubmit),
+            "liv" => user.HasPermission(PermissionKeys.LivSubmit) || user.HasPermission(PermissionKeys.LivManage),
+            "als_liv" or "als-liv" => user.HasPermission(PermissionKeys.AlsLivSubmit) || user.HasPermission(PermissionKeys.AlsLivManage),
+            _ => true
+        };
+    }
 }

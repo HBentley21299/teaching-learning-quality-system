@@ -1,5 +1,7 @@
 # i-Elevate Teaching and Learning System
 
+> **IT deployment:** begin with [DEPLOYMENT-START-HERE.md](DEPLOYMENT-START-HERE.md). It reduces the first Azure deployment to one settings file and one command.
+
 Web application for managing a college's Teaching and Learning workflows: Learning Walks, Work Scrutiny, managed and self-logged CPD, LIV (Learning and Innovation Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
 
 - React + TypeScript frontend in `apps/web`
@@ -101,7 +103,7 @@ Deployment requirements and rollback checks are maintained in
 [`docs/deployment/v1-readiness.md`](docs/deployment/v1-readiness.md).
 
 For the first Azure deployment, follow
-[`docs/deployment/azure-v1.md`](docs/deployment/azure-v1.md). The guarded
+[`DEPLOYMENT-START-HERE.md`](DEPLOYMENT-START-HERE.md). The guarded
 `scripts/deploy-azure.ps1` command provisions infrastructure, applies database
-migrations, grants the App Service managed identity database access, deploys the
-same-origin UI/API package, closes temporary SQL access and checks readiness.
+migrations, grants managed identities database access, deploys and verifies the
+staging slot, swaps it live, closes temporary SQL access and checks readiness.

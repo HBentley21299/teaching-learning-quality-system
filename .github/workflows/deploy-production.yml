@@ -71,16 +71,38 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy App Service package
+      - name: Deploy package to staging slot
         shell: pwsh
         run: >-
           az webapp deploy
           --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
           --name "${{ vars.AZURE_APP_SERVICE_NAME }}"
+          --slot staging
           --src-path .artifacts/v1/tlqs-v1.zip
           --type zip
           --clean true
           --restart true
+          --output none
+      - name: Verify staging health
+        shell: pwsh
+        run: |
+          $url = "https://${{ vars.AZURE_APP_SERVICE_NAME }}-staging.azurewebsites.net"
+          $deadline = (Get-Date).AddMinutes(3)
+          do {
+            try {
+              $health = Invoke-RestMethod -Uri "$url/health/ready" -TimeoutSec 10
+              if ($health.status -eq 'healthy' -and $health.database -eq 'connected') { exit 0 }
+            } catch { Start-Sleep -Seconds 5 }
+          } while ((Get-Date) -lt $deadline)
+          throw "The staging slot did not become healthy. Production was not changed."
+      - name: Swap healthy release into production
+        shell: pwsh
+        run: >-
+          az webapp deployment slot swap
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --name "${{ vars.AZURE_APP_SERVICE_NAME }}"
+          --slot staging
+          --target-slot production
           --output none
       - name: Verify production health
         shell: pwsh
@@ -93,4 +115,4 @@ jobs:
               if ($health.status -eq 'healthy' -and $health.database -eq 'connected') { exit 0 }
             } catch { Start-Sleep -Seconds 5 }
           } while ((Get-Date) -lt $deadline)
-          throw "Production did not become healthy after deployment."
+          throw "Production was swapped but did not become healthy. Run scripts/rollback-azure-slot.ps1 immediately."

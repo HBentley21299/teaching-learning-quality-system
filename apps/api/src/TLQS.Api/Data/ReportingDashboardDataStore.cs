@@ -12,14 +12,16 @@ public sealed partial class SqlFoundationDataStore
         new("overview", "Executive overview", true, 10, "bar", true, true, true, true),
         new("learning_walk", "Learning Walks", true, 20, "bar", true, true, true, true),
         new("liv", "LIV", true, 30, "bar", true, true, true, true),
-        new("eli", "Elevate Learning and Innovation", true, 40, "bar", true, true, true, false),
-        new("probation_case", "Probationary Observations", true, 50, "bar", true, true, true, true),
-        new("elevate_environment", "Elevate Environments", true, 60, "bar", true, true, true, true),
-        new("coaching_session", "Coaching and Mentoring", true, 70, "donut", true, true, true, true),
-        new("work_scrutiny", "Work Scrutiny", true, 80, "bar", true, true, true, true),
-        new("cpd_event", "CPD", true, 90, "bar", true, true, true, false),
-        new("elevate_status", "Elevate Status", true, 100, "bar", false, true, true, false),
-        new("actions", "Actions", true, 110, "donut", true, true, true, true)
+        new("als_learning_walk", "ALS Learning Walks", true, 40, "bar", true, true, true, true),
+        new("als_liv", "ALS LIV", true, 50, "bar", true, true, true, true),
+        new("eli", "Elevate Learning and Innovation", true, 60, "bar", true, true, true, false),
+        new("probation_case", "Probationary Observations", true, 70, "bar", true, true, true, true),
+        new("elevate_environment", "Elevate Environments", true, 80, "bar", true, true, true, true),
+        new("coaching_session", "Coaching and Mentoring", true, 90, "donut", true, true, true, true),
+        new("work_scrutiny", "Work Scrutiny", true, 100, "bar", true, true, true, true),
+        new("cpd_event", "CPD", true, 110, "bar", true, true, true, false),
+        new("elevate_status", "Elevate Status", true, 120, "bar", false, true, true, false),
+        new("actions", "Actions", true, 130, "donut", true, true, true, true)
     ];
 
     private static readonly HashSet<string> DashboardVisualTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -114,6 +116,13 @@ public sealed partial class SqlFoundationDataStore
                 WHERE record.archived_at IS NULL
                   AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
                   AND (
+                      record.record_type NOT IN (N'learning_walk', N'als_learning_walk', N'liv', N'als_liv')
+                      OR (record.record_type = N'learning_walk' AND @canViewStandardLearningWalk = 1)
+                      OR (record.record_type = N'als_learning_walk' AND @canViewAlsLearningWalk = 1)
+                      OR (record.record_type = N'liv' AND @canViewStandardLiv = 1)
+                      OR (record.record_type = N'als_liv' AND @canViewAlsLiv = 1)
+                  )
+                  AND (
                         record.owner_staff_id = @currentStaffId
                         OR record.subject_staff_id = @currentStaffId
                         OR (@canViewScopedActivities = 1 AND (
@@ -141,20 +150,20 @@ public sealed partial class SqlFoundationDataStore
             );
 
             INSERT #facts
-                SELECT record.id, N'learning_walk' process_key, record.occurred_on, record.org_unit_id,
+                SELECT record.id, record.record_type process_key, record.occurred_on, record.org_unit_id,
                        record.area_code, record.area_name, record.parent_area_code,
                        N'focus' dimension_key, CONVERT(nvarchar(80), theme.theme_id) series_key,
                        theme.theme_name_snapshot series_label, CONVERT(nvarchar(80), theme.theme_id) value_key,
                        theme.theme_name_snapshot value_label, CONVERT(decimal(10,2), NULL) numeric_value
                 FROM #visible_records record
                 JOIN quality.learning_walk_record_themes theme ON theme.record_id = record.id
-                WHERE record.record_type = N'learning_walk'
+                WHERE record.record_type IN (N'learning_walk', N'als_learning_walk')
 
                 ;
 
             INSERT #facts
 
-                SELECT record.id, N'learning_walk', record.occurred_on, record.org_unit_id,
+                SELECT record.id, record.record_type, record.occurred_on, record.org_unit_id,
                        record.area_code, record.area_name, record.parent_area_code,
                        N'focus_outcome', rating.focus_id, rating.focus_name, CONVERT(nvarchar(20), rating.score),
                        rating.rating, rating.score
@@ -169,13 +178,13 @@ public sealed partial class SqlFoundationDataStore
                     score decimal(10,2) '$.score',
                     rating nvarchar(200) '$.rating'
                 ) rating
-                WHERE record.record_type = N'learning_walk'
+                WHERE record.record_type IN (N'learning_walk', N'als_learning_walk')
 
                 ;
 
             INSERT #facts
 
-                SELECT record.id, N'liv', COALESCE(visit.visit_date, record.occurred_on), record.org_unit_id,
+                SELECT record.id, record.record_type, COALESCE(visit.visit_date, record.occurred_on), record.org_unit_id,
                        record.area_code, record.area_name, record.parent_area_code,
                        N'focus_outcome', focus.value_key, focus.display_name, descriptor.descriptor_key,
                        descriptor.visible_wording, rating.hidden_numeric_value
@@ -185,7 +194,7 @@ public sealed partial class SqlFoundationDataStore
                 JOIN quality.liv_visit_ratings rating ON rating.visit_id = visit.id AND rating.is_not_applicable = 0
                 JOIN core.lookup_values focus ON focus.id = rating.focus_lookup_value_id
                 JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id
-                WHERE record.record_type = N'liv'
+                WHERE record.record_type IN (N'liv', N'als_liv')
 
                 ;
 
@@ -333,6 +342,10 @@ public sealed partial class SqlFoundationDataStore
             command =>
             {
                 AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
+                command.Parameters.AddWithValue("@canViewAlsLiv", currentUser.HasPermission(PermissionKeys.AlsLivSubmit) || currentUser.HasPermission(PermissionKeys.AlsLivManage));
                 command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
             },
             reader => new DashboardDimensionFactSummary(
@@ -392,6 +405,14 @@ public sealed partial class SqlFoundationDataStore
               ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id END
             WHERE action.archived_at IS NULL
               AND (
+                    @canViewAll = 1
+                    OR COALESCE(action.source_form_type, record.record_type, N'standalone') NOT IN (N'learning_walk', N'als_learning_walk', N'liv', N'als_liv')
+                    OR (COALESCE(action.source_form_type, record.record_type) = N'learning_walk' AND @canViewStandardLearningWalk = 1)
+                    OR (COALESCE(action.source_form_type, record.record_type) = N'als_learning_walk' AND @canViewAlsLearningWalk = 1)
+                    OR (COALESCE(action.source_form_type, record.record_type) = N'liv' AND @canViewStandardLiv = 1)
+                    OR (COALESCE(action.source_form_type, record.record_type) = N'als_liv' AND @canViewAlsLiv = 1)
+              )
+              AND (
                     record.academic_year_key = @academicYear
                     OR (record.id IS NULL AND action.created_at >= @startDate AND action.created_at < @endDateExclusive)
               )
@@ -423,6 +444,10 @@ public sealed partial class SqlFoundationDataStore
             command =>
             {
                 AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
+                command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
+                command.Parameters.AddWithValue("@canViewAlsLiv", currentUser.HasPermission(PermissionKeys.AlsLivSubmit) || currentUser.HasPermission(PermissionKeys.AlsLivManage));
                 command.Parameters.AddWithValue("@academicYear", academicYear);
                 command.Parameters.AddWithValue("@startDate", startDate);
                 command.Parameters.AddWithValue("@endDateExclusive", endDate.AddDays(1));
@@ -623,11 +648,24 @@ public sealed partial class SqlFoundationDataStore
                            JOIN quality.liv_visits visit ON visit.liv_record_id = liv.id
                            CROSS JOIN selected_year academic_year
                            WHERE liv.subject_staff_id = staff.id
+                             AND liv.process_key = N'liv'
                              AND liv.archived_at IS NULL
                              AND visit.archived_at IS NULL
                              AND visit.visit_status = N'completed'
                              AND visit.visit_date BETWEEN academic_year.start_date AND academic_year.end_date
                        ) THEN 1 ELSE 0 END liv_participation,
+                       CASE WHEN EXISTS (
+                           SELECT 1
+                           FROM quality.liv_records liv
+                           JOIN quality.liv_visits visit ON visit.liv_record_id = liv.id
+                           CROSS JOIN selected_year academic_year
+                           WHERE liv.subject_staff_id = staff.id
+                             AND liv.process_key = N'als_liv'
+                             AND liv.archived_at IS NULL
+                             AND visit.archived_at IS NULL
+                             AND visit.visit_status = N'completed'
+                             AND visit.visit_date BETWEEN academic_year.start_date AND academic_year.end_date
+                       ) THEN 1 ELSE 0 END als_liv_participation,
                        CASE WHEN EXISTS (
                            SELECT 1
                            FROM cpd.cpd_attendance attendance
@@ -657,6 +695,7 @@ public sealed partial class SqlFoundationDataStore
             CROSS APPLY (VALUES
                 (N'eli', staff.eli_participation),
                 (N'liv', staff.liv_participation),
+                (N'als_liv', staff.als_liv_participation),
                 (N'cpd_event', staff.cpd_participation),
                 (N'coaching_session', staff.coaching_participation)
             ) metric(process_key, is_participating)
@@ -745,7 +784,8 @@ public sealed partial class SqlFoundationDataStore
     public Task<IReadOnlyList<LivLifecycleDashboardSummary>> GetLivLifecycleDashboardAsync(
         string academicYear,
         CurrentUser currentUser,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        string processKey = "liv") =>
         QueryAsync(
             """
             WITH eli_requests AS (
@@ -768,8 +808,10 @@ public sealed partial class SqlFoundationDataStore
                 LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
                 LEFT JOIN quality.liv_records liv
                   ON liv.source_elevate_assessment_id = assessment.id
+                 AND liv.process_key = @processKey
                  AND liv.archived_at IS NULL
                 WHERE assessment.academic_year = @academicYear
+                  AND @processKey = N'liv'
                   AND assessment.status = N'submitted'
                   AND assessment.archived_at IS NULL
                   AND staff.archived_at IS NULL
@@ -784,6 +826,44 @@ public sealed partial class SqlFoundationDataStore
                             OR EXISTS (
                                 SELECT 1 FROM org.fn_visible_org_units(@currentUserAccountId) visible_unit
                                 WHERE visible_unit.org_unit_id = COALESCE(source_record.org_unit_id, staff.primary_org_unit_id)
+                            )
+                        ))
+                  )
+            ),
+            als_liv_requests AS (
+                SELECT liv.id request_id,
+                       liv.subject_staff_id,
+                       COALESCE(liv.org_unit_id, record.org_unit_id, staff.primary_org_unit_id) org_unit_id,
+                       org_unit.code area_code,
+                       org_unit.name area_name,
+                       parent_org.code parent_area_code,
+                       liv.id liv_id,
+                       liv.status liv_status,
+                       liv.is_elevate_practitioner
+                FROM quality.liv_records liv
+                JOIN core.records record ON record.id = liv.record_id
+                JOIN people.staff staff ON staff.id = liv.subject_staff_id
+                LEFT JOIN org.org_units org_unit
+                  ON org_unit.id = COALESCE(liv.org_unit_id, record.org_unit_id, staff.primary_org_unit_id)
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                WHERE @processKey = N'als_liv'
+                  AND liv.process_key = N'als_liv'
+                  AND record.academic_year_key = @academicYear
+                  AND liv.archived_at IS NULL
+                  AND record.archived_at IS NULL
+                  AND staff.archived_at IS NULL
+                  AND (
+                        @canViewAll = 1
+                        OR liv.subject_staff_id = @currentStaffId
+                        OR liv.reviewer_staff_id = @currentStaffId
+                        OR (@canViewScopedActivities = 1 AND (
+                            EXISTS (
+                                SELECT 1 FROM org.fn_visible_staff(@currentUserAccountId) visible_staff
+                                WHERE visible_staff.staff_id = liv.subject_staff_id
+                            )
+                            OR EXISTS (
+                                SELECT 1 FROM org.fn_visible_org_units(@currentUserAccountId) visible_unit
+                                WHERE visible_unit.org_unit_id = COALESCE(liv.org_unit_id, record.org_unit_id, staff.primary_org_unit_id)
                             )
                         ))
                   )
@@ -809,8 +889,10 @@ public sealed partial class SqlFoundationDataStore
                 LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
                 LEFT JOIN quality.liv_records liv
                   ON liv.id = observation.linked_liv_record_id
+                 AND liv.process_key = @processKey
                  AND liv.archived_at IS NULL
                 WHERE probation.academic_year = @academicYear
+                  AND @processKey = N'liv'
                   AND probation.archived_at IS NULL
                   AND staff.archived_at IS NULL
                   AND (
@@ -836,6 +918,9 @@ public sealed partial class SqlFoundationDataStore
             visible_requests AS (
                 SELECT request_id, subject_staff_id, org_unit_id, area_code, area_name, parent_area_code, liv_id, liv_status, is_elevate_practitioner
                 FROM eli_requests
+                UNION ALL
+                SELECT request_id, subject_staff_id, org_unit_id, area_code, area_name, parent_area_code, liv_id, liv_status, is_elevate_practitioner
+                FROM als_liv_requests
                 UNION ALL
                 SELECT request_id, subject_staff_id, org_unit_id, area_code, area_name, parent_area_code, liv_id, liv_status, is_elevate_practitioner
                 FROM probation_liv_requests
@@ -883,6 +968,7 @@ public sealed partial class SqlFoundationDataStore
             {
                 AddScopeParameters(command, currentUser);
                 command.Parameters.AddWithValue("@academicYear", academicYear);
+                command.Parameters.AddWithValue("@processKey", processKey);
             },
             reader => new LivLifecycleDashboardSummary(
                 GetGuidOrNull(reader, 0),

@@ -8,6 +8,7 @@ public static class PermissionKeys
     public const string PermissionsManage = "permissions.manage";
     public const string FormsManage = "forms.manage";
     public const string LearningWalkSubmit = "learning_walk.submit";
+    public const string AlsLearningWalkSubmit = "als_learning_walk.submit";
     public const string WorkScrutinySubmit = "work_scrutiny.submit";
     public const string CpdManage = "cpd.manage";
     public const string CpdSelfLog = "cpd.self_log";
@@ -22,6 +23,8 @@ public static class PermissionKeys
     public const string LivSubmit = "liv.submit";
     public const string LivManage = "liv.manage";
     public const string LivSensitiveRead = "liv.sensitive.read";
+    public const string AlsLivSubmit = "als_liv.submit";
+    public const string AlsLivManage = "als_liv.manage";
     public const string ElevateSubmit = "elevate.submit";
     public const string ElevateManage = "elevate.manage";
     public const string ElevatePracticeSubmit = "elevate_practice.submit";
@@ -43,6 +46,7 @@ public static class PermissionKeys
         PermissionsManage,
         FormsManage,
         LearningWalkSubmit,
+        AlsLearningWalkSubmit,
         WorkScrutinySubmit,
         CpdManage,
         CpdSelfLog,
@@ -57,6 +61,8 @@ public static class PermissionKeys
         LivSubmit,
         LivManage,
         LivSensitiveRead,
+        AlsLivSubmit,
+        AlsLivManage,
         ElevateSubmit,
         ElevateManage,
         ElevatePracticeSubmit,

@@ -103,7 +103,12 @@ public sealed partial class SqlFoundationDataStore
                 (SELECT COUNT(*) FROM quality.liv_records liv
                  JOIN core.records record_row ON record_row.id = liv.record_id AND record_row.archived_at IS NULL
                  WHERE liv.subject_staff_id = @staffId AND liv.archived_at IS NULL
-                   AND record_row.academic_year_key = @academicYear),
+                   AND record_row.academic_year_key = @academicYear
+                   AND (
+                       liv.subject_staff_id = @currentStaffId
+                       OR (liv.process_key = N'liv' AND @canViewStandardLiv = 1)
+                       OR (liv.process_key = N'als_liv' AND @canViewAlsLiv = 1)
+                   )),
                 (SELECT COUNT(*) FROM quality.probation_cases probation
                  WHERE probation.subject_staff_id = @staffId AND probation.archived_at IS NULL
                    AND (
@@ -128,6 +133,8 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@endDate", endDate.ToDateTime(TimeOnly.MinValue));
                 command.Parameters.AddWithValue("@canViewAllProbation", currentUser.HasPermission(PermissionKeys.ProbationManage) || currentUser.HasPermission(PermissionKeys.ReportsViewAll));
                 command.Parameters.AddWithValue("@canViewScopedProbation", currentUser.HasPermission(PermissionKeys.ProbationSubmit) || currentUser.HasPermission(PermissionKeys.ReportsViewScoped));
+                command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.ReportsViewAll) || currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
+                command.Parameters.AddWithValue("@canViewAlsLiv", currentUser.HasPermission(PermissionKeys.ReportsViewAll) || currentUser.HasPermission(PermissionKeys.AlsLivSubmit) || currentUser.HasPermission(PermissionKeys.AlsLivManage));
                 command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
                 command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
             },
@@ -273,7 +280,7 @@ public sealed partial class SqlFoundationDataStore
     }
 
     public async Task<PagedResult<StaffProfileLivSummary>> GetStaffProfileLivPageAsync(
-        Guid staffId, string academicYear, int page, int pageSize, CancellationToken cancellationToken)
+        Guid staffId, string academicYear, int page, int pageSize, CurrentUser currentUser, CancellationToken cancellationToken)
     {
         (page, pageSize) = NormalizePage(page, pageSize);
         var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
@@ -282,15 +289,23 @@ public sealed partial class SqlFoundationDataStore
             AND liv.archived_at IS NULL
             AND record_row.archived_at IS NULL
             AND record_row.academic_year_key = @academicYear
+            AND (
+                liv.subject_staff_id = @currentStaffId
+                OR (liv.process_key = N'liv' AND @canViewStandardLiv = 1)
+                OR (liv.process_key = N'als_liv' AND @canViewAlsLiv = 1)
+            )
             """;
-        var total = await CountAsync(
+        var countRows = await QueryAsync(
             $"SELECT COUNT(*) FROM quality.liv_records liv JOIN core.records record_row ON record_row.id=liv.record_id WHERE {whereClause};",
-            staffId, academicYear, startDate, endDate, cancellationToken);
+            command => AddLivProfileParameters(command, staffId, academicYear, startDate, endDate, currentUser),
+            reader => reader.GetInt32(0),
+            cancellationToken);
+        var total = countRows[0];
         var items = await QueryAsync(
             $"""
             SELECT liv.id, liv.record_id, record_row.title, record_row.record_date,
                    reviewer.display_name, parent.code, area.code, liv.current_stage,
-                   liv.status, liv.created_at, liv.updated_at
+                   liv.status, liv.created_at, liv.updated_at, liv.process_key
             FROM quality.liv_records liv
             JOIN core.records record_row ON record_row.id = liv.record_id
             LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
@@ -300,12 +315,16 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY COALESCE(liv.updated_at, liv.created_at) DESC, liv.id
             OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
             """,
-            command => AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize),
+            command =>
+            {
+                AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize);
+                AddLivProfileAccessParameters(command, currentUser);
+            },
             reader => new StaffProfileLivSummary(
                 reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), GetDateOnlyOrNull(reader, 3),
                 GetStringOrNull(reader, 4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6),
                 GetStringOrNull(reader, 7) ?? "case_created", reader.GetString(8),
-                reader.GetFieldValue<DateTimeOffset>(9), GetDateTimeOffsetOrNull(reader, 10)),
+                reader.GetFieldValue<DateTimeOffset>(9), GetDateTimeOffsetOrNull(reader, 10), reader.GetString(11)),
             cancellationToken);
         return CreatePage(items, page, pageSize, total);
     }
@@ -429,6 +448,28 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@endDate", endDate.ToDateTime(TimeOnly.MinValue));
         command.Parameters.AddWithValue("@offset", (page - 1) * pageSize);
         command.Parameters.AddWithValue("@pageSize", pageSize);
+    }
+
+    private static void AddLivProfileParameters(
+        Microsoft.Data.SqlClient.SqlCommand command,
+        Guid staffId,
+        string academicYear,
+        DateOnly startDate,
+        DateOnly endDate,
+        CurrentUser currentUser)
+    {
+        command.Parameters.AddWithValue("@staffId", staffId);
+        command.Parameters.AddWithValue("@academicYear", academicYear);
+        command.Parameters.AddWithValue("@startDate", startDate.ToDateTime(TimeOnly.MinValue));
+        command.Parameters.AddWithValue("@endDate", endDate.ToDateTime(TimeOnly.MinValue));
+        AddLivProfileAccessParameters(command, currentUser);
+    }
+
+    private static void AddLivProfileAccessParameters(Microsoft.Data.SqlClient.SqlCommand command, CurrentUser currentUser)
+    {
+        command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
+        command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.ReportsViewAll) || currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
+        command.Parameters.AddWithValue("@canViewAlsLiv", currentUser.HasPermission(PermissionKeys.ReportsViewAll) || currentUser.HasPermission(PermissionKeys.AlsLivSubmit) || currentUser.HasPermission(PermissionKeys.AlsLivManage));
     }
 
     private static void AddProbationProfileParameters(

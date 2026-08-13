@@ -284,6 +284,40 @@ html {
   opacity: 1;
 }
 
+.nav-section-divider {
+  align-items: center;
+  color: var(--text-subtle);
+  display: flex;
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  margin: 9px 8px 3px;
+  padding-top: 10px;
+  position: relative;
+  text-transform: uppercase;
+}
+
+.nav-section-divider::before {
+  background: var(--line);
+  content: "";
+  height: 1px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+@media (min-width: 761px) {
+  .app-shell-nav-collapsed .nav-section-divider {
+    margin-inline: 0;
+    width: 44px;
+  }
+
+  .app-shell-nav-collapsed .nav-section-divider span {
+    display: none;
+  }
+}
+
 .topbar {
   background: var(--topbar-bg);
   backdrop-filter: blur(20px) saturate(1.6);
@@ -939,6 +973,39 @@ h1, h2, h3 {
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.home-tile-entry {
+  display: contents;
+}
+
+.home-tile-entry-als-start {
+  display: contents;
+}
+
+.home-tiles-divider {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 0.74rem;
+  font-weight: 650;
+  gap: 12px;
+  grid-column: 1 / -1;
+  letter-spacing: 0.05em;
+  margin-top: 8px;
+  text-transform: uppercase;
+}
+
+.home-tiles-divider::before,
+.home-tiles-divider::after {
+  background: var(--line);
+  content: "";
+  flex: 1;
+  height: 1px;
+}
+
+.home-tile-entry .home-tile {
+  width: 100%;
 }
 
 .home-tile {

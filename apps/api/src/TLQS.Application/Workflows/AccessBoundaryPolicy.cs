@@ -15,6 +15,7 @@ public static class AccessBoundaryPolicy
         var expectedModuleKey = recordType.Trim().ToLowerInvariant() switch
         {
             "learning_walk" => "learning_walks",
+            "als_learning_walk" => "learning_walks",
             "work_scrutiny" => "work_scrutiny",
             "cpd_event" => "cpd",
             "elevate_environment" => "elevate_environments",

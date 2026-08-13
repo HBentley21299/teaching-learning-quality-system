@@ -30,7 +30,9 @@ export const navigationItems = [
   { key: "scrutiny", label: "Work Scrutiny", icon: ClipboardCheck },
   { key: "cpd", label: "CPD", icon: GraduationCap },
   { key: "profile", label: "Staff Profile", icon: UserRound },
-  { key: "actions", label: "Actions", icon: ListChecks }
+  { key: "actions", label: "Actions", icon: ListChecks },
+  { key: "als_learning", label: "ALS Learning Walks", icon: Activity },
+  { key: "als_liv", label: "ALS LIV", icon: Lightbulb }
 ] as const;
 
 export type AppRoute = (typeof navigationItems)[number]["key"];
@@ -48,8 +50,10 @@ const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
     "records.manage",
     "messaging.manage"
   ],
-  learning: ["learning_walk.submit", "forms.manage", "reports.view_all", "reports.view_scoped"],
+  learning: ["learning_walk.submit", "forms.manage"],
   liv: ["liv.submit", "liv.manage"],
+  als_learning: ["als_learning_walk.submit", "forms.manage"],
+  als_liv: ["als_liv.submit", "als_liv.manage"],
   probation: ["probation.submit", "probation.manage"],
   elevate: ["elevate.submit", "elevate.manage", "forms.manage", "reports.view_all", "reports.view_scoped"],
   practice: ["elevate_practice.submit"],
