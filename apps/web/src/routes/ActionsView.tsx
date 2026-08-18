@@ -10,7 +10,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DataTable } from "../components/DataTable";
 import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { ExportExcelButton } from "../components/ExportButtons";
@@ -80,6 +80,13 @@ function formatDateTime(value?: string) {
   return value ? new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "Not recorded";
 }
 
+function nextDate(value?: string) {
+  if (!value) return "";
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + 1));
+  return date.toISOString().slice(0, 10);
+}
+
 export function ActionsView({ academicYear, actions, staff, orgUnits, user, onChanged, initialStaffId = "", initialActionId = "", onOpenSource, onActionOpened, onActionClosed }: ActionsViewProps) {
   const [localActions, setLocalActions] = useState(actions);
   const [statusMessage, setStatusMessage] = useState("");
@@ -121,11 +128,19 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   const [editVisibility, setEditVisibility] = useState<ActionVisibility>("staff_and_management");
   const [deletingId, setDeletingId] = useState("");
   const [deletionReason, setDeletionReason] = useState("");
+  const extensionPanelRef = useRef<HTMLElement | null>(null);
 
   const canManageActions = user.permissions.includes("actions.manage");
   const canViewTeamActions = canManageActions
     || user.permissions.includes("reports.view_scoped")
     || user.permissions.includes("reports.view_all");
+
+  useEffect(() => {
+    if (!extendingId) return;
+    window.requestAnimationFrame(() => {
+      extensionPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [extendingId]);
 
   useEffect(() => {
     if (!includeDeleted) {
@@ -348,6 +363,11 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
         </section>
       ) : null}
 
+      {extendingId ? <section className="panel" ref={extensionPanelRef}><div className="panel-heading"><h2>Extend action</h2><span>The original implementation date remains in the audit history</span></div><div className="entry-form"><div className="entry-field-grid">
+        <label className="entry-field"><span>Revised implementation date</span><input min={nextDate(localActions.find((action) => action.id === extendingId)?.dueDate)} onChange={(event) => setExtendedDueDate(event.target.value)} type="date" value={extendedDueDate} /></label>
+        <label className="entry-field entry-field-wide"><span>Extension reason</span><textarea onChange={(event) => setExtensionReason(event.target.value)} rows={3} value={extensionReason} /></label>
+      </div><div className="toolbar"><Button icon={X} onClick={() => { setExtendingId(""); setExtendedDueDate(""); setExtensionReason(""); }}>Cancel</Button><Button disabled={isSaving} icon={CalendarClock} onClick={() => void extendAction(extendingId)} variant="primary">{isSaving ? "Extending…" : "Extend action"}</Button></div></div></section> : null}
+
       <section className="panel action-inbox-panel">
         <div className="panel-heading"><h2>Action inbox</h2><span>{visibleActions.length} matching action{visibleActions.length === 1 ? "" : "s"}</span></div>
         <div className="action-filter-grid">
@@ -375,7 +395,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
               <Button icon={Eye} onClick={() => void showDetail(row)} variant="quiet">View</Button>
               {row.isDeleted ? <Button icon={RotateCcw} onClick={() => void restoreAction(row.id)} variant="quiet">Restore</Button> : null}
               {!row.isDeleted && canManageActions ? <Button icon={Pencil} onClick={() => void beginEdit(row)} variant="quiet">Edit</Button> : null}
-              {!row.isDeleted && row.dueDate && !row.completedDate && row.statusKey !== "cancelled" && (canManageActions || row.ownerStaffId === user.staffId) ? <Button icon={CalendarClock} onClick={() => { setExtendingId(row.id); setExtendedDueDate(""); setExtensionReason(""); }} variant="quiet">Extend</Button> : null}
+              {!row.isDeleted && row.dueDate && !row.completedDate && row.statusKey !== "cancelled" && (canManageActions || row.ownerStaffId === user.staffId) ? <Button icon={CalendarClock} onClick={() => { setStatusMessage(""); setExtendingId(row.id); setExtendedDueDate(nextDate(row.dueDate)); setExtensionReason(""); }} variant="quiet">Extend</Button> : null}
               {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageActions || row.ownerStaffId === user.staffId) ? <Button icon={CheckCircle2} onClick={() => setCompletingId(row.id)} variant="quiet">Complete</Button> : null}
               {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageActions || row.ownerStaffId === user.staffId) ? <Button icon={XCircle} onClick={() => setCancellingId(row.id)} variant="quiet">Cancel</Button> : null}
               {!row.isDeleted && canManageActions && (row.completedDate || row.statusKey === "cancelled") ? <Button icon={RotateCcw} onClick={() => void reopenAction(row.id)} variant="quiet">Reopen</Button> : null}
@@ -421,10 +441,6 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
       {cancellingId ? <ActionNotePanel heading="Cancel action" label="Cancellation reason" value={cancellationComments} onChange={setCancellationComments} onCancel={() => { setCancellingId(""); setCancellationComments(""); }} onSave={() => void cancelAction(cancellingId)} saveLabel="Cancel action" saving={isSaving} danger /> : null}
       {deletingId ? <ActionNotePanel heading="Delete action" label="Deletion reason" value={deletionReason} onChange={setDeletionReason} onCancel={() => { setDeletingId(""); setDeletionReason(""); }} onSave={() => void deleteAction()} saveLabel="Delete action" saving={isSaving} danger /> : null}
 
-      {extendingId ? <section className="panel"><div className="panel-heading"><h2>Extend action</h2><span>The original implementation date remains in the audit history</span></div><div className="entry-form"><div className="entry-field-grid">
-        <label className="entry-field"><span>Revised implementation date</span><input min={localActions.find((action) => action.id === extendingId)?.dueDate} onChange={(event) => setExtendedDueDate(event.target.value)} type="date" value={extendedDueDate} /></label>
-        <label className="entry-field entry-field-wide"><span>Extension reason</span><textarea onChange={(event) => setExtensionReason(event.target.value)} rows={3} value={extensionReason} /></label>
-      </div><div className="toolbar"><Button icon={X} onClick={() => { setExtendingId(""); setExtendedDueDate(""); setExtensionReason(""); }}>Cancel</Button><Button disabled={isSaving} icon={CalendarClock} onClick={() => void extendAction(extendingId)} variant="primary">Extend action</Button></div></div></section> : null}
     </div>
   );
 }
