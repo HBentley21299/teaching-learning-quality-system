@@ -163,7 +163,8 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\059_reporting_performance_indexes.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\060_als_liv_and_learning_walks.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\061_als_liv_source_uniqueness.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\062_als_liv_practitioner_catalogue.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\062_als_liv_practitioner_catalogue.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\063_scope_function_inlining.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

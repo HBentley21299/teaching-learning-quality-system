@@ -1926,8 +1926,24 @@ public sealed partial class SqlFoundationDataStore(
         string? academicYear = null)
     {
         var canViewAll = CanViewAllRecords(currentUser);
+        var canViewScopedActivities = CanViewScopedActivities(currentUser);
         var canIncludeDeleted = includeDeleted && currentUser.HasPermission(PermissionKeys.ActionsManage);
-        const string sql = """
+        /*
+            The academic year filter is omitted entirely rather than written as
+            "@academicYear IS NULL OR ...". A catch-all predicate like that forces
+            one plan to serve both the filtered and unfiltered cases, and the
+            unfiltered case is the one the dashboards actually request.
+        */
+        var hasAcademicYear = !string.IsNullOrWhiteSpace(academicYear);
+        var academicYearFilter = hasAcademicYear
+            ? """
+              AND (
+                    r.academic_year_key = @academicYear
+                    OR (r.id IS NULL AND a.created_at >= @academicYearStart AND a.created_at < @academicYearEnd)
+              )
+              """
+            : string.Empty;
+        var sql = $"""
             WITH visible_staff AS (
                 SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
             ),
@@ -2023,19 +2039,15 @@ public sealed partial class SqlFoundationDataStore(
                 WHERE extension.action_id = a.id
                 ORDER BY extension.created_at DESC
             ) latest_extension
-            WHERE (@includeDeleted = 1 OR a.archived_at IS NULL)
+            WHERE ({SqlBit(canIncludeDeleted)} = 1 OR a.archived_at IS NULL)
+            {academicYearFilter}
               AND (
-                    @academicYear IS NULL
-                    OR r.academic_year_key = @academicYear
-                    OR (r.id IS NULL AND a.created_at >= @academicYearStart AND a.created_at < @academicYearEnd)
-              )
-              AND (
-                    @canViewAll = 1
+                    {SqlBit(canViewAll)} = 1
                     OR a.owner_staff_id = @currentStaffId
                     OR a.subject_staff_id = @currentStaffId
                     OR r.owner_staff_id = @currentStaffId
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND (
                             EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                             OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = a.subject_staff_id)
@@ -2044,16 +2056,16 @@ public sealed partial class SqlFoundationDataStore(
                     )
               )
               AND (
-                    @canViewAll = 1
+                    {SqlBit(canViewAll)} = 1
                     OR a.visibility_setting = 'staff_and_management'
                     OR (a.visibility_setting = 'owner_only' AND a.owner_staff_id = @currentStaffId)
                     OR (a.visibility_setting = 'source_editors' AND (
                         a.created_by_user_account_id = @currentUserAccountId
                         OR r.owner_staff_id = @currentStaffId
                     ))
-                    OR (a.visibility_setting = 'management_only' AND @canViewScopedActivities = 1)
+                    OR (a.visibility_setting = 'management_only' AND {SqlBit(canViewScopedActivities)} = 1)
               )
-            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE);
+            OPTION (LOOP JOIN, MAXDOP 1);
             """;
 
         var actions = await QueryAsync(
@@ -2061,17 +2073,19 @@ public sealed partial class SqlFoundationDataStore(
             command =>
             {
                 AddScopeParameters(command, currentUser);
-                command.Parameters.AddWithValue("@includeDeleted", canIncludeDeleted);
-                command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
-                if (AcademicYearPolicy.TryGetBounds(academicYear, out var academicYearStart, out var academicYearEnd))
+                if (hasAcademicYear)
                 {
-                    command.Parameters.AddWithValue("@academicYearStart", academicYearStart);
-                    command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.AddDays(1));
-                }
-                else
-                {
-                    command.Parameters.AddWithValue("@academicYearStart", DBNull.Value);
-                    command.Parameters.AddWithValue("@academicYearEnd", DBNull.Value);
+                    command.Parameters.AddWithValue("@academicYear", academicYear!);
+                    if (AcademicYearPolicy.TryGetBounds(academicYear, out var academicYearStart, out var academicYearEnd))
+                    {
+                        command.Parameters.AddWithValue("@academicYearStart", academicYearStart);
+                        command.Parameters.AddWithValue("@academicYearEnd", academicYearEnd.AddDays(1));
+                    }
+                    else
+                    {
+                        command.Parameters.AddWithValue("@academicYearStart", DBNull.Value);
+                        command.Parameters.AddWithValue("@academicYearEnd", DBNull.Value);
+                    }
                 }
             },
             reader =>
@@ -2235,9 +2249,24 @@ public sealed partial class SqlFoundationDataStore(
     public Task<IReadOnlyList<ProcessDashboardRecordSummary>> GetProcessDashboardRecordsAsync(
         CurrentUser currentUser,
         CancellationToken cancellationToken,
-        string? academicYear = null) =>
-        QueryAsync(
-            """
+        string? academicYear = null)
+    {
+        var canViewAll = CanViewAllRecords(currentUser);
+        var canViewScopedActivities = CanViewScopedActivities(currentUser);
+        var canViewStandardLearningWalk = currentUser.HasPermission(PermissionKeys.LearningWalkSubmit);
+        var canViewAlsLearningWalk = currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit);
+        var canViewStandardLiv = currentUser.HasPermission(PermissionKeys.LivSubmit)
+            || currentUser.HasPermission(PermissionKeys.LivManage);
+        var canViewAlsLiv = currentUser.HasPermission(PermissionKeys.AlsLivSubmit)
+            || currentUser.HasPermission(PermissionKeys.AlsLivManage);
+        // Omitted rather than written as a catch-all, for the reason given in GetActionsAsync.
+        var hasAcademicYear = !string.IsNullOrWhiteSpace(academicYear);
+        var academicYearFilter = hasAcademicYear
+            ? "AND r.academic_year_key = @academicYear"
+            : string.Empty;
+
+        return QueryAsync(
+            $"""
             WITH visible_staff AS (
                 SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
             ),
@@ -2492,7 +2521,7 @@ public sealed partial class SqlFoundationDataStore(
                     WHERE event.record_id = r.id
                       AND event.archived_at IS NULL
                       AND (
-                            @canViewAll = 1
+                            {SqlBit(canViewAll)} = 1
                             OR attendance.staff_id = @currentStaffId
                             OR EXISTS (
                                 SELECT 1 FROM visible_org_units unit
@@ -2503,38 +2532,38 @@ public sealed partial class SqlFoundationDataStore(
                 ) area_metrics
             ) cpd_metrics
             WHERE r.archived_at IS NULL
-              AND (@academicYear IS NULL OR r.academic_year_key = @academicYear)
+            {academicYearFilter}
               AND r.record_type IN ('learning_walk', 'als_learning_walk', 'work_scrutiny', 'cpd_event', 'elevate_environment', 'coaching_session', 'probation_case', 'liv', 'als_liv', 'elevate_practice_assessment')
               AND (
                     COALESCE(coaching_session.status, probation_case.status, dashboard_liv_record.status, eli_assessment.status, latest_submission.status, 'submitted') <> 'draft'
                     OR r.owner_staff_id = @currentStaffId
-                    OR @canViewAll = 1
+                    OR {SqlBit(canViewAll)} = 1
               )
               AND (
-                    @canViewAll = 1
+                    {SqlBit(canViewAll)} = 1
                     OR (r.owner_staff_id = @currentStaffId AND (
                         r.record_type NOT IN ('learning_walk', 'als_learning_walk', 'liv', 'als_liv')
-                        OR (r.record_type = 'learning_walk' AND @canViewStandardLearningWalk = 1)
-                        OR (r.record_type = 'als_learning_walk' AND @canViewAlsLearningWalk = 1)
-                        OR (r.record_type = 'liv' AND @canViewStandardLiv = 1)
-                        OR (r.record_type = 'als_liv' AND @canViewAlsLiv = 1)
+                        OR (r.record_type = 'learning_walk' AND {SqlBit(canViewStandardLearningWalk)} = 1)
+                        OR (r.record_type = 'als_learning_walk' AND {SqlBit(canViewAlsLearningWalk)} = 1)
+                        OR (r.record_type = 'liv' AND {SqlBit(canViewStandardLiv)} = 1)
+                        OR (r.record_type = 'als_liv' AND {SqlBit(canViewAlsLiv)} = 1)
                     ))
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'learning_walk'
-                        AND @canViewStandardLearningWalk = 1
+                        AND {SqlBit(canViewStandardLearningWalk)} = 1
                         AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'als_learning_walk'
-                        AND @canViewAlsLearningWalk = 1
+                        AND {SqlBit(canViewAlsLearningWalk)} = 1
                         AND EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.owner_staff_id)
                         AND EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                     )
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'work_scrutiny'
                         AND (
                             EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
@@ -2542,7 +2571,7 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'elevate_environment'
                         AND (
                             EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
@@ -2550,7 +2579,7 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'cpd_event'
                         AND EXISTS (
                             SELECT 1
@@ -2567,7 +2596,7 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'coaching_session'
                         AND (
                             r.owner_staff_id = @currentStaffId
@@ -2585,16 +2614,16 @@ public sealed partial class SqlFoundationDataStore(
                                 WHERE reviewer.probation_case_id = probation_case.id
                                   AND reviewer.staff_id = @currentStaffId
                             )
-                            OR (@canViewScopedActivities = 1 AND (
+                            OR ({SqlBit(canViewScopedActivities)} = 1 AND (
                                 EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = r.subject_staff_id)
                                 OR EXISTS (SELECT 1 FROM visible_org_units unit WHERE unit.org_unit_id = r.org_unit_id)
                             ))
                         )
                     )
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'liv'
-                        AND @canViewStandardLiv = 1
+                        AND {SqlBit(canViewStandardLiv)} = 1
                         AND (
                             dashboard_liv_record.reviewer_staff_id = @currentStaffId
                             OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = dashboard_liv_record.subject_staff_id)
@@ -2602,9 +2631,9 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'als_liv'
-                        AND @canViewAlsLiv = 1
+                        AND {SqlBit(canViewAlsLiv)} = 1
                         AND (
                             dashboard_liv_record.reviewer_staff_id = @currentStaffId
                             OR EXISTS (SELECT 1 FROM visible_staff staff WHERE staff.staff_id = dashboard_liv_record.subject_staff_id)
@@ -2612,7 +2641,7 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
                     OR (
-                        @canViewScopedActivities = 1
+                        {SqlBit(canViewScopedActivities)} = 1
                         AND r.record_type = 'elevate_practice_assessment'
                         AND (
                             eli_assessment.staff_id = @currentStaffId
@@ -2621,17 +2650,20 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
               )
-            ORDER BY COALESCE(r.record_date, CONVERT(date, r.created_at)) DESC, r.created_at DESC
-            OPTION (LOOP JOIN, MAXDOP 1, RECOMPILE, MAX_GRANT_PERCENT = 1);
+            -- r.id is only a tiebreaker: many records share a record_date and a
+            -- created_at, and without it their relative order is whatever the
+            -- current plan happens to produce, so the list reshuffles between
+            -- requests. It is not a meaningful sort key.
+            ORDER BY COALESCE(r.record_date, CONVERT(date, r.created_at)) DESC, r.created_at DESC, r.id
+            OPTION (LOOP JOIN, MAXDOP 1, MAX_GRANT_PERCENT = 1);
             """,
             command =>
             {
                 AddScopeParameters(command, currentUser);
-                command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
-                command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
-                command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
-                command.Parameters.AddWithValue("@canViewAlsLiv", currentUser.HasPermission(PermissionKeys.AlsLivSubmit) || currentUser.HasPermission(PermissionKeys.AlsLivManage));
-                command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
+                if (hasAcademicYear)
+                {
+                    command.Parameters.AddWithValue("@academicYear", academicYear!);
+                }
             },
             reader => new ProcessDashboardRecordSummary(
                 reader.GetGuid(0),
@@ -2662,6 +2694,7 @@ public sealed partial class SqlFoundationDataStore(
                 GetGuidOrNull(reader, 25),
                 GetStringOrNull(reader, 26)),
             cancellationToken);
+    }
 
     public Task<IReadOnlyList<LearningWalkRollupSummary>> GetLearningWalkRollupAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
         QueryAsync(
@@ -8565,6 +8598,21 @@ public sealed partial class SqlFoundationDataStore(
 
         return results;
     }
+
+    /*
+        Permission flags are written into the SQL text as literals rather than
+        passed as parameters. They are derived from the caller's permissions,
+        never from request input, so there is nothing to inject.
+
+        The reason is plan caching. These flags gate large OR branches, so the
+        optimiser can only simplify them away when it can see their values.
+        That used to be achieved with OPTION (RECOMPILE), which meant these
+        queries were recompiled on every request - measured at ~780ms of
+        compilation against ~110ms of execution for the actions list. Emitting
+        the flags as literals gives the optimiser the same constants while
+        letting each distinct permission profile keep its own cached plan.
+    */
+    private static string SqlBit(bool value) => value ? "1" : "0";
 
     private static void AddScopeParameters(SqlCommand command, CurrentUser currentUser)
     {
