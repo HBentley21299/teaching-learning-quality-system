@@ -15,17 +15,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  infrastructure:
-    name: Azure infrastructure
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-      - name: Compile and lint Bicep
-        run: |
-          az bicep build --file infra/azure/main.bicep --outfile /tmp/tlqs-main.json
-          az bicep lint --file infra/azure/main.bicep
-
   api:
     name: API
     runs-on: windows-latest
@@ -40,7 +29,16 @@ jobs:
       - name: Validate deployment scripts
         shell: pwsh
         run: |
-          $files = @('scripts/apply-database.ps1', 'scripts/deploy-azure.ps1', 'scripts/new-deployment-package.ps1', 'scripts/verify-v1.ps1')
+          $files = @(
+            'scripts/apply-database.ps1',
+            'scripts/deploy-on-premises.ps1',
+            'scripts/grant-on-premises-database-access.ps1',
+            'scripts/new-deployment-package.ps1',
+            'scripts/new-on-premises-release.ps1',
+            'scripts/rollback-on-premises.ps1',
+            'scripts/set-bootstrap-admin.ps1',
+            'scripts/verify-v1.ps1'
+          )
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null
@@ -54,7 +52,7 @@ jobs:
       - name: Test
         run: dotnet test apps/api/TLQS.sln --configuration Release --no-build
       - name: Publish
-        run: dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj --configuration Release --runtime linux-x64 --self-contained false --output artifacts/api
+        run: dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj --configuration Release --runtime win-x64 --self-contained false --output artifacts/api
       - uses: actions/upload-artifact@v6
         with:
           name: tlqs-api

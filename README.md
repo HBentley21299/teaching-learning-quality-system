@@ -1,13 +1,13 @@
 # i-Elevate Teaching and Learning System
 
-> **IT deployment:** begin with [DEPLOYMENT-START-HERE.md](DEPLOYMENT-START-HERE.md). It reduces the first Azure deployment to one settings file and one command.
+> **IT deployment:** begin with [DEPLOYMENT-START-HERE.md](DEPLOYMENT-START-HERE.md). Production uses Windows IIS and the college's on-campus Microsoft SQL Server, with one settings file and one deployment command.
 
 Web application for managing a college's Teaching and Learning workflows: Learning Walks, Work Scrutiny, managed and self-logged CPD, LIV (Learning and Innovation Visit) records, staff profiles, actions, audit trail and role-scoped reporting dashboards.
 
 - React + TypeScript frontend in `apps/web`
 - ASP.NET Core (.NET 10) API in `apps/api` (ADO.NET data access, no EF runtime dependency)
-- SQL Server / Azure SQL schema in `database`
-- Azure infrastructure templates in `infra`
+- Microsoft SQL Server schema in `database`
+- Windows/IIS release and database deployment tools in `scripts`
 - Architecture and data model notes in `docs`
 
 ## Local Setup
@@ -91,7 +91,7 @@ development and the current origin in a production build.
 - Version form templates so historical submissions remain readable.
 - Write an `ops.audit_logs` row for every state change, inside the same transaction.
 
-## V1 Deployment Preparation
+## Production deployment preparation
 
 Run the release gate locally with:
 
@@ -102,8 +102,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-v1.ps1
 Deployment requirements and rollback checks are maintained in
 [`docs/deployment/v1-readiness.md`](docs/deployment/v1-readiness.md).
 
-For the first Azure deployment, follow
+For the first on-campus deployment, follow
 [`DEPLOYMENT-START-HERE.md`](DEPLOYMENT-START-HERE.md). The guarded
-`scripts/deploy-azure.ps1` command provisions infrastructure, applies database
-migrations, grants managed identities database access, deploys and verifies the
-staging slot, swaps it live, closes temporary SQL access and checks readiness.
+`scripts/deploy-on-premises.ps1` command verifies the release, applies tracked
+database migrations, deploys to a versioned IIS directory, checks readiness and
+returns IIS to the previous release automatically if startup fails.

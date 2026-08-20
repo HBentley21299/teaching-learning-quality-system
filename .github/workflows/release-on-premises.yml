@@ -1,0 +1,60 @@
+name: Build on-premises release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tlqs-on-premises-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Verify and package Windows/IIS release
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      VITE_API_BASE_URL: ""
+      VITE_ENTRA_CLIENT_ID: ${{ vars.ENTRA_SPA_CLIENT_ID }}
+      VITE_ENTRA_TENANT_ID: ${{ vars.ENTRA_TENANT_ID }}
+      VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_API_SCOPE }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Microsoft Entra build settings
+        shell: pwsh
+        run: |
+          $required = @{
+            ENTRA_SPA_CLIENT_ID = '${{ vars.ENTRA_SPA_CLIENT_ID }}'
+            ENTRA_TENANT_ID = '${{ vars.ENTRA_TENANT_ID }}'
+            ENTRA_API_SCOPE = '${{ vars.ENTRA_API_SCOPE }}'
+          }
+          $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Key)
+          if ($missing.Count -gt 0) { throw "Missing repository variables: $($missing -join ', ')" }
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Verify release
+        shell: pwsh
+        run: .\scripts\verify-v1.ps1
+      - name: Create IIS package
+        shell: pwsh
+        run: |
+          $release = Get-Content .artifacts/v1/release.json -Raw | ConvertFrom-Json
+          $shortCommit = $release.gitCommit.Substring(0, 8)
+          .\scripts\new-deployment-package.ps1 -SourceDirectory .artifacts/v1/api -DestinationPath ".artifacts/v1/i-elevate-$shortCommit-win-x64.zip"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: i-elevate-on-premises-release
+          path: |
+            .artifacts/v1/i-elevate-*-win-x64.zip
+            .artifacts/v1/release.json
+            .artifacts/v1/manifest.json
+          if-no-files-found: error
+          retention-days: 30

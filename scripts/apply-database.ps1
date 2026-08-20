@@ -9,8 +9,6 @@ param(
 
     [string[]] $SqlCmdOptions = @(),
 
-    [switch] $UseAzureAuthentication,
-
     [switch] $ExcludeOfficialStaffData,
 
     [switch] $BaselineExistingDatabase
@@ -33,28 +31,7 @@ function Invoke-Native {
     }
 }
 
-$azureAccessToken = $null
-if ($UseAzureAuthentication) {
-    if ($null -eq (Get-Command "az" -ErrorAction SilentlyContinue)) {
-        throw "Azure CLI was not found. Install it and run 'az login' before applying an Azure database."
-    }
-    if ($null -eq (Get-Command "Invoke-Sqlcmd" -ErrorAction SilentlyContinue)) {
-        try {
-            Import-Module SqlServer -ErrorAction Stop
-        }
-        catch {
-            throw "The SqlServer PowerShell module is required for token-based Azure SQL migrations. Install it with 'Install-Module SqlServer -Scope CurrentUser'."
-        }
-    }
-    $azureAccessToken = ((@(& az account get-access-token `
-        --resource "https://database.windows.net/" `
-        --query accessToken `
-        --output tsv) -join "").Trim())
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($azureAccessToken)) {
-        throw "Azure CLI could not acquire an Azure SQL access token. Run 'az login' and try again."
-    }
-}
-elseif ($null -eq (Get-Command $SqlCmd -ErrorAction SilentlyContinue)) {
+if ($null -eq (Get-Command $SqlCmd -ErrorAction SilentlyContinue)) {
     throw "sqlcmd was not found. Install SQL Server command line tools or pass -SqlCmd with the full path."
 }
 
@@ -63,16 +40,6 @@ function Invoke-DatabaseQuery {
         [Parameter(Mandatory = $true)]
         [string] $Query
     )
-
-    if ($UseAzureAuthentication) {
-        return @(Invoke-Sqlcmd `
-            -ServerInstance $Server `
-            -Database $Database `
-            -AccessToken $azureAccessToken `
-            -Query $Query `
-            -AbortOnError `
-            -ErrorAction Stop)
-    }
 
     $arguments = @("-S", $Server, "-d", $Database, "-E", "-b", "-h", "-1", "-W") +
         $SqlCmdOptions + @("-Q", $Query)
@@ -94,6 +61,15 @@ function Get-ScalarValue {
         return [string]$first[0]
     }
     return ([string]$first).Trim()
+}
+
+$serverMajorVersion = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion'));")
+if ([int]$serverMajorVersion -lt 14) {
+    throw "i-Elevate requires Microsoft SQL Server 2017 or later. The connected server reported major version $serverMajorVersion."
+}
+$databaseCompatibilityLevel = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")
+if ([int]$databaseCompatibilityLevel -lt 140) {
+    throw "Database '$Database' must use compatibility level 140 or later. Ask the DBA to update it before applying migrations."
 }
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -255,19 +231,8 @@ foreach ($script in $scripts) {
     }
 
     Write-Host "Applying $migrationKey"
-    if ($UseAzureAuthentication) {
-        Invoke-Sqlcmd `
-            -ServerInstance $Server `
-            -Database $Database `
-            -AccessToken $azureAccessToken `
-            -InputFile $script `
-            -AbortOnError `
-            -ErrorAction Stop
-    }
-    else {
-        $arguments = @("-S", $Server, "-d", $Database, "-E", "-b") + $SqlCmdOptions + @("-i", $script)
-        Invoke-Native -FilePath $SqlCmd -Arguments $arguments
-    }
+    $arguments = @("-S", $Server, "-d", $Database, "-E", "-b") + $SqlCmdOptions + @("-i", $script)
+    Invoke-Native -FilePath $SqlCmd -Arguments $arguments
     Invoke-DatabaseQuery -Query "INSERT dbo.schema_migrations (migration_key, checksum_sha256) VALUES (N'$escapedKey', '$checksum');" | Out-Null
 }
 

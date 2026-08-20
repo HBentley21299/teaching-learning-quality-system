@@ -1,168 +1,172 @@
-# Deploying i-Elevate: start here
+# Deploy i-Elevate on campus
 
-This is the short handover guide for the college IT team. The repository already contains the Azure infrastructure, database migrations, release checks and deployment automation.
+This is the main deployment guide. i-Elevate runs as one website on a Windows IIS server and stores its data in the college's existing Microsoft SQL Server environment. It does not require an Azure subscription, Azure SQL, App Service, Blob Storage or Key Vault.
 
-## What the deployment creates
+Staff still sign in with their college Microsoft 365 account through Microsoft Entra ID.
 
-One command provisions and configures:
+Some Microsoft authentication libraries retain `Azure` in their technical package name. They are used only to sign users in or send approved Microsoft 365 email and do not require Azure hosting or an Azure subscription.
 
-- the i-Elevate website and API on Linux Azure App Service;
-- a separate production staging slot for safe releases and rollback;
-- Azure SQL Database;
-- a production virtual network and private SQL/Blob endpoints;
-- protected Blob Storage;
-- Key Vault;
-- Application Insights, Log Analytics and baseline operational email alerts;
-- managed identities and least-privilege runtime access.
+## What IT provides once
 
-Production authentication uses college Microsoft 365 accounts through Microsoft Entra ID. No production passwords are stored by i-Elevate.
+1. A Windows Server with IIS and an HTTPS certificate.
+2. Microsoft SQL Server 2019 or 2022 and an empty database named `iElevate`.
+3. A dedicated Windows service account, preferably a group managed service account (gMSA), for the IIS application pool.
+4. Two Microsoft Entra app registrations: one API registration and one single-page application registration.
+5. DNS for the final address, for example `https://i-elevate.college.ac.uk`.
+6. A backup location and normal monitoring for the IIS server and SQL database.
 
-## Before starting
+The application server and SQL Server can be separate machines. SQL Server should not be exposed to the internet.
 
-IT needs:
+## Software needed
 
-1. An Azure subscription and permission to create resources and role assignments.
-2. An Entra group to administer Azure SQL.
-3. An Entra API app registration.
-4. An Entra browser/SPA app registration.
-5. The object ID and college email of the initial i-Elevate administrator.
-6. An approved, clean Git commit—not an uncommitted working folder.
+On the application/deployment server install:
 
-Install on the deployment workstation:
-
+- IIS, including IIS Management Tools;
+- the .NET 10 Hosting Bundle;
+- .NET 10 SDK and Node.js 24 to build from the repository;
 - Git;
-- Azure CLI;
-- .NET 10 SDK;
-- Node.js 24;
-- PowerShell `SqlServer` module:
+- Microsoft `sqlcmd` command-line tools.
+
+Run this check from the repository:
 
 ```powershell
-Install-Module SqlServer -Scope CurrentUser
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 ```
 
-## Entra setup in plain English
+## One-time setup
 
-Create two app registrations in the college tenant.
+### 1. Prepare SQL Server
 
-### 1. API registration
+Ask the DBA to:
 
-- Name: `i-Elevate API`.
-- Supported account type: this organisation only.
-- Under **Expose an API**, set the Application ID URI to `api://<API client ID>`.
-- Add delegated scope `access_as_user`.
-- Record the API client ID.
+- create an empty `iElevate` database;
+- use compatibility level 140 or later;
+- create a SQL Server login for the IIS service account;
+- require encrypted connections using a certificate trusted by the application server;
+- configure full, differential and transaction-log backups.
 
-### 2. Browser registration
+From a Windows account authorised by the DBA, give the application account its runtime access:
 
-- Name: `i-Elevate Web`.
+```powershell
+.\scripts\grant-on-premises-database-access.ps1 `
+  -Server "<sql-server>\<instance>" `
+  -Database "iElevate" `
+  -RuntimePrincipal "<COLLEGE\iElevateServiceAccount$>"
+```
+
+The deployment operator uses a separate account with permission to create and alter objects in this database. The website account is not given `db_owner`.
+
+### 2. Create the IIS website
+
+In IIS Manager:
+
+1. Create an application pool named `i-Elevate`.
+2. Set **.NET CLR version** to **No Managed Code**.
+3. Set the application pool identity to the approved service account.
+4. Create a website named `i-Elevate` using that application pool.
+5. Give it the final HTTPS binding and certificate.
+6. Point it temporarily at an empty folder such as `C:\inetpub\i-elevate\placeholder`.
+
+The deployment script changes the physical folder after a release passes its checks.
+
+### 3. Create the Microsoft Entra registrations
+
+Create two single-tenant app registrations.
+
+**i-Elevate API**
+
+- Under **Expose an API**, use `api://<API client ID>`.
+- Add the delegated scope `access_as_user`.
+
+**i-Elevate Web**
+
 - Platform: **Single-page application**.
+- Redirect and logout URL: the exact final HTTPS website address.
 - Add delegated permission `api://<API client ID>/access_as_user`.
 - Grant administrator consent.
-- After the first Azure provisioning run, add both URLs as SPA redirect/logout URLs:
-  - `https://<app-name>.azurewebsites.net`
-  - `https://<app-name>-staging.azurewebsites.net`
 
-Replace `<app-name>` with the App Service name printed by deployment. Add the final custom-domain URL later if one is used. Do not add wildcard or localhost URLs to production.
+Apply the college's normal MFA and Conditional Access policies. The website does not store staff passwords.
 
-## Deploy in four steps
+### 4. Complete one settings file
 
-### Step 1: get the approved repository
-
-```powershell
-git clone <repository-url>
-cd <repository-folder>
-git status --short
-```
-
-`git status --short` must return nothing.
-
-### Step 2: fill in one settings file
+From the repository root:
 
 ```powershell
 Copy-Item .\deployment.settings.example.psd1 .\deployment.settings.psd1
 notepad .\deployment.settings.psd1
 ```
 
-Replace every value inside `<angle brackets>`. The completed file is ignored by Git. Do not email or commit it.
+Replace every value containing `<angle brackets>`. The completed file is ignored by Git. With the recommended Windows database authentication it contains no SQL password, but it should still remain on the controlled deployment server.
 
-### Step 3: sign in to Azure
+Use the same service account for `RuntimePrincipal`, the IIS application pool identity and the SQL database user.
 
-```powershell
-az login --tenant <college-tenant-id>
-az account set --subscription <subscription-id>
-```
+## First deployment
 
-Confirm the displayed subscription before continuing:
+Use a clean, approved Git commit. Run PowerShell as an administrator on the IIS server, using an account that is also authorised to apply database changes:
 
 ```powershell
-az account show --output table
+.\scripts\deploy-on-premises.ps1 -InitialDeployment
 ```
 
-### Step 4: deploy
+The command builds and tests the application, audits dependencies, applies tracked database migrations, links the first administrator, deploys a versioned IIS release and verifies `/health/ready` before completing.
+
+If IT supplies a pre-built approved ZIP, use:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-azure-deployment.ps1
+.\scripts\deploy-on-premises.ps1 `
+  -InitialDeployment `
+  -PackagePath "D:\ApprovedReleases\i-elevate-xxxxxxxx-win-x64.zip"
 ```
 
-The command will:
+## Acceptance check
 
-1. Reject missing settings or uncommitted source changes.
-2. Build and test the release.
-3. Audit production dependencies.
-4. Provision/update Azure resources.
-5. Temporarily allow only the operator's public IP to run migrations.
-6. Apply tracked forward-only database migrations.
-7. Configure the initial administrator and managed identities.
-8. Deploy to the staging slot and check its health.
-9. Swap the healthy release into production.
-10. Close temporary SQL access and check production health.
+Before opening access to staff, confirm:
 
-Allow approximately 20–40 minutes for the first run. If the script stops, read the final error, correct the stated item and run the same command again. The infrastructure and migrations are designed to be repeatable.
-
-## First sign-in and acceptance check
-
-Open the production URL printed by the script and sign in as the bootstrap administrator.
-
-Before inviting staff, verify:
-
-- the academic year is correct;
-- staff and organisation data are correct;
-- one test account at each required permission level sees only its intended menus/data;
-- a draft and submitted record can be created for every process;
-- faculty/team dashboard filters and record links work;
-- exports open correctly;
-- audit history is created;
-- uploaded Elevate Status artwork displays on dashboards and profiles.
+- the website opens over HTTPS and Microsoft sign-in works;
+- the first administrator can open Admin Centre;
+- the current academic year, staff and organisation structure are correct;
+- one test account at each permission level sees only its permitted teams and records;
+- one record can be created and submitted for every process;
+- actions, dashboards, exports and audit history work;
+- an Elevate Status image can be uploaded and displayed;
+- SQL and application backups are running;
+- the service desk receives a test application-down alert.
 
 Use fictitious acceptance records and remove them before launch.
 
-## Releasing a later version
+## Later updates
 
-Use the protected GitHub `production` environment, or rerun the same deployment command from a clean checkout of the newly approved commit. Production packages go to the staging slot first and are swapped live only after the readiness endpoint succeeds.
-
-## Emergency rollback
-
-After a successful deployment, the previous production build remains in the staging slot. To swap it back:
+Do not replace or reset the database. Take or verify a restorable SQL backup, check out the approved release commit, then run:
 
 ```powershell
-.\scripts\rollback-azure-slot.ps1 `
-  -ResourceGroup "rg-ielevate-prod" `
-  -AppServiceName "<app-service-name>"
+.\scripts\deploy-on-premises.ps1 -DatabaseBackupConfirmed
 ```
 
-The rollback script checks that the old slot is healthy before changing production, then checks production again afterward. Database migrations are forward-only; do not manually reverse them.
+Each update is installed in a new folder. The old application remains available for rollback and live records remain in SQL Server.
 
-## Items IT still owns
+For an application-only fix with no database changes:
 
-These cannot safely be guessed by the application developer:
+```powershell
+.\scripts\deploy-on-premises.ps1 -SkipDatabase
+```
 
-- the Azure subscription, production region and budget;
-- Entra registrations, consent, MFA and Conditional Access;
-- custom domain, DNS and certificate;
-- alert recipients and operational support rota;
-- agreed backup recovery point/time and SQL long-term retention;
-- whether Key Vault needs a private endpoint under college policy;
-- information-governance approval for staff data;
-- whether general evidence-file attachments are required at launch.
+## Roll back the application
 
-The comprehensive configuration, security and operational checklist is in [docs/deployment/azure-it-handover.md](docs/deployment/azure-it-handover.md).
+The successful deployment prints the retained previous release path. To return IIS to it:
+
+```powershell
+.\scripts\rollback-on-premises.ps1 `
+  -ReleasePath "C:\inetpub\i-elevate\releases\release-yyyyMMdd-HHmmss"
+```
+
+This changes the application files only. Database migrations are forward-only and must never be manually reversed. If data itself must be recovered, stop and use the DBA-approved database restore procedure.
+
+## Support ownership
+
+- **Application owner:** approved releases, application testing and user guidance.
+- **MIS/DBA:** SQL permissions, backups, restores, maintenance and performance.
+- **IT infrastructure:** IIS, Windows patching, DNS, certificates, firewall and monitoring.
+- **Identity team:** Microsoft Entra registrations, consent, MFA and Conditional Access.
+- **Product owner:** permission testing and go-live approval.
+
+The concise production checklist is in [docs/deployment/v1-readiness.md](docs/deployment/v1-readiness.md). Email and export configuration is in [docs/deployment/messaging-and-exports.md](docs/deployment/messaging-and-exports.md).

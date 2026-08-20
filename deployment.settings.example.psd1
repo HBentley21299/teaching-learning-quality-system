@@ -1,38 +1,36 @@
 @{
     # Copy this file to deployment.settings.psd1 and replace every value in
-    # angle brackets. deployment.settings.psd1 is ignored by Git.
-    ResourceGroup = "rg-ielevate-prod"
-    Location = "uksouth"
-    SqlLocation = "uksouth"
-    EnvironmentName = "prod"
-    AppName = "tlqs"
+    # angle brackets. The completed file is ignored by Git.
 
-    # Microsoft Entra and Azure SQL details supplied by the college IT team.
-    SqlAdministratorLogin = "<entra-sql-administrator-group-name>"
-    SqlAdministratorObjectId = "<entra-sql-administrator-group-object-id>"
-    SqlAdministratorPrincipalType = "Group"
+    # Existing IIS site and application pool on the Windows application server.
+    SiteName = "i-Elevate"
+    AppPoolName = "i-Elevate"
+    RuntimePrincipal = "<COLLEGE\iElevateServiceAccount$>"
+    InstallRoot = "C:\inetpub\i-elevate"
+    ApplicationUrl = "https://<i-elevate-college-address>"
+
+    # Existing on-campus Microsoft SQL Server database. Windows integrated
+    # authentication is strongly recommended; no database password is required.
+    SqlServer = "<sql-server>\<instance>"
+    SqlDatabase = "iElevate"
+    SqlConnectionString = "Server=<sql-server>\<instance>;Database=iElevate;Integrated Security=True;Encrypt=True;TrustServerCertificate=False;MultipleActiveResultSets=True;Application Name=i-Elevate"
+
+    # Persistent, access-controlled folder on the application server. The
+    # deployment script grants the runtime service account access to this folder.
+    DataProtectionKeyPath = "C:\ProgramData\i-Elevate\DataProtection-Keys"
+
+    # Microsoft Entra application registrations supplied by the identity team.
     EntraTenantId = "<college-tenant-id>"
     EntraApiAudience = "<api-app-client-id>"
     EntraSpaClientId = "<spa-app-client-id>"
     EntraApiScope = "api://<api-app-client-id>/access_as_user"
 
-    # This email must already exist as an active staff record in the deployed
-    # database. The object ID must be the same person's Entra object ID.
+    # This email must exist as an active staff account in the database. The
+    # object ID is that person's Microsoft Entra object ID.
     BootstrapAdminEmail = "<initial-administrator-college-email>"
     BootstrapAdminObjectId = "<initial-administrator-entra-object-id>"
 
-    # Shared mailbox or distribution list monitored by the IT support team.
-    OperationsAlertEmail = "<it-operations-alert-email>"
-
-    # Set to $true only when the college has approved importing the supplied
-    # official organisation/staff seed into this Azure environment.
+    # Set to $true only when the supplied college organisation/staff seed is the
+    # approved production starting dataset.
     IncludeOfficialStaffData = $true
-
-    # Keep email disabled for the first deployment. See the detailed handover
-    # before enabling it.
-    EnableMessaging = $false
-    MessagingClientId = ""
-    MessagingSenderAddress = ""
-    MessagingReplyToAddress = ""
-    MessagingTestRecipient = ""
 }

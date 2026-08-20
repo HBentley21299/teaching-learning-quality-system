@@ -1,153 +1,55 @@
-# V1 Deployment Readiness
+# Production readiness checklist
 
-This is the release gate for the first production deployment of the i-Elevate
-Teaching and Learning System. A successful build is necessary, but it is not the
-same as approval to use live staff data.
+Use this checklist after following [DEPLOYMENT-START-HERE.md](../../DEPLOYMENT-START-HERE.md).
 
-## V1 Topology
+## Hosting
 
-- React production artifact and ASP.NET Core API on one Azure App Service origin.
-- Azure SQL Database using managed identity at runtime.
-- Azure Blob Storage for evidence, with public access disabled.
-- Microsoft Entra ID for staff sign-in and Conditional Access.
-- Application Insights and Azure Monitor for logs, metrics and alerts.
+- [ ] Supported Windows Server is patched and monitored.
+- [ ] IIS and the .NET 10 Hosting Bundle are installed.
+- [ ] The final HTTPS address, DNS record and trusted certificate are active.
+- [ ] The IIS application pool runs as the approved dedicated service account.
+- [ ] `DataProtectionKeyPath` is outside the release folders and included in server backup.
+- [ ] The production website cannot serve directory listings or plain HTTP.
 
-The release still emits independent web and API artifacts, but V1 copies the web
-artifact into the API `wwwroot`. This avoids CORS and split-release failures for
-the initial 500-user deployment. The frontend can move to a static host later
-without changing the API or data model.
+## Database
 
-## Current Release Command
+- [ ] SQL Server 2019 or 2022 is used with compatibility level 140 or later.
+- [ ] Traffic from the IIS server is permitted and encrypted.
+- [ ] The website account has `db_datareader`, `db_datawriter` and `EXECUTE`, not `db_owner`.
+- [ ] A separate deployment account can apply migrations.
+- [ ] Full, differential and transaction-log backups meet the agreed recovery targets.
+- [ ] A restore has been tested and recorded.
+- [ ] No local reset or test-data script is available to routine production operators.
 
-Run from the repository root:
+## Identity and permissions
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-v1.ps1
-```
+- [ ] Separate Microsoft Entra API and browser registrations are configured.
+- [ ] Only the exact production HTTPS redirect/logout address is registered.
+- [ ] `access_as_user` is exposed, assigned and granted administrator consent.
+- [ ] MFA and Conditional Access apply.
+- [ ] The bootstrap administrator identity matches the intended staff account.
+- [ ] Admin, Teaching and Learning, Director, Head of Faculty, Programme Leader, ALS leadership and staff access have been tested.
+- [ ] Faculty/team scope is correct across profiles, forms, actions, dashboards and exports.
 
-The command must finish successfully and produce:
+## Application
 
-```text
-.artifacts/v1/api
-.artifacts/v1/web
-.artifacts/v1/release.json
-.artifacts/v1/manifest.json
-```
+- [ ] The release came from a clean, approved Git commit.
+- [ ] Build, automated tests and dependency audits passed.
+- [ ] `/health/live` returns HTTP 200.
+- [ ] `/health/ready` returns HTTP 200 and reports the database connected.
+- [ ] Every process can save, submit and reopen according to role.
+- [ ] Actions, dashboards, drill-down links, Excel exports and Word exports work.
+- [ ] Audit rows are created for changes.
+- [ ] Tablet and keyboard use has no blocking issue.
+- [ ] Test records and test accounts have been removed or disabled.
 
-Release artifacts require a clean Git working tree. `-AllowDirty` is available
-only for development verification and marks the resulting release metadata as dirty.
+## Operations
 
-CI performs the same Release build, tests and dependency audits and publishes
-`tlqs-api` and `tlqs-web` artifacts for 14 days.
+- [ ] Application and IIS logs are collected without request bodies, tokens or staff narrative.
+- [ ] Alerts cover website failure, repeated HTTP 500 responses, SQL connection failure, low disk space and failed backups.
+- [ ] The service desk knows the website owner, DBA owner and escalation route.
+- [ ] The immediately previous application release is retained.
+- [ ] The application rollback and database restore procedures have been rehearsed.
+- [ ] Messaging remains disabled until its sender, credentials, safe test recipient and support owner are approved.
 
-## Required API Configuration
-
-Store values in App Service configuration or Key Vault references. Do not put
-production values in `appsettings.json`.
-
-| Setting | Requirement |
-| --- | --- |
-| `ASPNETCORE_ENVIRONMENT` | `Production` |
-| `ConnectionStrings__TlqsDatabase` | Encrypted Azure SQL connection using managed identity |
-| `Authentication__TenantId` | College Entra tenant ID |
-| `Authentication__Audience` | API app registration client ID |
-| `Cors__AllowedOrigins__0` | Exact HTTPS web origin |
-| `Storage__AccountUri` | Evidence storage account Blob endpoint |
-| `Storage__EvidenceContainer` | `evidence` |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Production Application Insights resource |
-| `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | `true` on App Service |
-
-Messaging remains disabled until its separate production gate is complete. When
-enabled, add these settings through the Bicep deployment parameters and Key Vault:
-
-| Setting | Requirement |
-| --- | --- |
-| `Messaging__Enabled` | `true` only after the Graph delivery test passes |
-| `Messaging__TenantId` | College Entra tenant ID |
-| `Messaging__ClientId` | Client ID of the dedicated Graph email application |
-| `Messaging__ClientSecret` | Key Vault reference to `messaging-graph-client-secret` |
-| `Messaging__SenderAddress` | Licensed or shared college mailbox used by `sendMail` |
-| `Messaging__ReplyToAddress` | Monitored college reply-to mailbox, if different |
-| `Messaging__ApplicationUrl` | Exact HTTPS application origin |
-| `Messaging__TestMode` | `false` in production; `true` in non-production |
-| `Messaging__TestRecipient` | Mandatory safe sink address in non-production |
-
-The API fails during startup when the database or production authentication
-settings are absent. Local origins are permitted only in `Development`.
-
-## Required Web Build Configuration
-
-| Setting | Requirement |
-| --- | --- |
-| `VITE_API_BASE_URL` | HTTPS API origin; leave blank only when API is reverse-proxied on the same origin |
-| `VITE_API_TIMEOUT_MS` | `30000` unless load testing supports a tighter limit |
-| `VITE_ENTRA_CLIENT_ID` | SPA app registration client ID |
-| `VITE_ENTRA_TENANT_ID` | College Entra tenant ID |
-| `VITE_ENTRA_API_SCOPE` | Delegated API scope, such as `api://<client-id>/access_as_user` |
-
-Register the exact production and staging redirect URIs in Entra. Do not use
-wildcard redirect URIs.
-
-## Identity And Database Gates
-
-- Create separate Entra registrations for the SPA and API.
-- Configure the API audience and delegated scope, then grant the SPA access.
-- Apply college MFA and Conditional Access policies outside the application.
-- Keep one controlled break-glass administrator and test its audit trail.
-- Give the App Service managed identity data access, not `db_owner`.
-- Use a separate migration identity for schema changes.
-- Grant the runtime identity only required read/write and stored-procedure rights.
-- Verify every seeded staff email maps to the intended Entra account.
-
-## Infrastructure Gate
-
-`infra/azure/main.bicep` provisions the executable V1 environment: App Service,
-Azure SQL, private endpoints and DNS, VNet integration, Blob Storage, Key Vault,
-Application Insights and Log Analytics. Runtime database and Blob access use the
-App Service managed identity. SQL public access is disabled except for the exact
-operator IP while the guarded deployment script applies migrations.
-
-Production approval still requires college IT to confirm the chosen Azure
-subscription, region, DNS name, Entra registrations, budget alerts, backup
-restore test and Conditional Access policy. Infrastructure readiness does not
-replace information-governance approval for live staff data.
-
-## Pre-Production Test Gate
-
-- `/health/live` returns HTTP 200 without testing dependencies.
-- `/health/ready` returns HTTP 200 only when Azure SQL is available.
-- Unavailable SQL causes `/health/ready` to return HTTP 503.
-- Entra sign-in, sign-out and expired-token recovery work on desktop and tablet.
-- Admin, Teaching & Learning, Director, Head of Faculty, Programme Leader and Tutor accounts are tested.
-- Faculty/team scope is verified across staff, records, actions and dashboards.
-- Learning Walk, Work Scrutiny, CPD, LIV, Elevate, Coaching and Action workflows complete against staging data.
-- Audit entries are written for create, edit, submit, manager change, action closure and archive operations.
-- No production dependency vulnerability is reported by the release gate.
-- Tablet layouts and keyboard navigation complete without blocking defects.
-- Every Excel export opens without repair warnings and contains only the requesting
-  user's permitted staff and organisation scope.
-- Word record reports open without repair warnings; final college branding is an
-  approval item rather than a schema dependency.
-- Messaging test mode resolves recipients, renders only approved parameters and
-  produces one outbox row when the same event is replayed.
-
-## Monitoring Gate
-
-- Alert on readiness failures, repeated HTTP 5xx responses and failed sign-ins.
-- Alert on Azure SQL capacity, connection failures and storage errors.
-- Retain API logs with trace IDs long enough to investigate staff-reported issues.
-- Create a release annotation containing the Git commit and artifact digest.
-- Do not log access tokens, request bodies, reflections or other sensitive staff content.
-
-## Deployment And Rollback
-
-1. Take or verify a restorable database backup.
-2. Apply forward-only database migrations using the migration identity.
-3. Deploy the API to a staging slot and wait for `/health/ready`.
-4. Deploy the web artifact and run the role/scope smoke tests.
-5. Swap or promote only after approval from the product owner and IT owner.
-6. Record the Git commit and artifact manifest used for the release.
-
-For rollback, restore the previous web/API artifacts first. Database migrations
-must remain backward compatible for the release window; never run the local
-database reset scripts against Azure SQL.
+Production should not open to staff until the product owner, IT owner and DBA have accepted this checklist.
