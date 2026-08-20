@@ -1,4 +1,4 @@
-param([switch] $Azure)
+param()
 
 $ErrorActionPreference = "Stop"
 $missingRequired = [System.Collections.Generic.List[string]]::new()
@@ -37,25 +37,9 @@ if ($null -eq $sqlcmd) {
     Write-Host "sqlcmd: $($sqlcmd.Source)"
 }
 
-if ($Azure) {
-    if ($null -eq (Get-Command az -ErrorAction SilentlyContinue)) {
-        Write-Warning "Azure CLI not found. Install it before deployment."
-        $missingRequired.Add("Azure CLI")
-    }
-    if ($null -eq (Get-Command Invoke-Sqlcmd -ErrorAction SilentlyContinue)) {
-        try {
-            Import-Module SqlServer -ErrorAction Stop
-        }
-        catch {
-            Write-Warning "The SqlServer PowerShell module is missing. Install it with: Install-Module SqlServer -Scope CurrentUser"
-            $missingRequired.Add("SqlServer PowerShell module")
-        }
-    }
-}
-
 $localDb = Get-Command sqllocaldb -ErrorAction SilentlyContinue
 if ($null -eq $localDb) {
-    Write-Warning "SQL Server LocalDB not found. Use Azure SQL, SQL Server Developer, or install LocalDB for local development."
+    Write-Warning "SQL Server LocalDB not found. Use SQL Server Developer or install LocalDB for local development."
 } else {
     Write-Host "SQL LocalDB: $($localDb.Source)"
 }

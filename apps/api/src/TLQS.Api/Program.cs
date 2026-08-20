@@ -29,7 +29,26 @@ builder.Services.AddSingleton<ExcelExportService>();
 builder.Services.AddSingleton<WordExportService>();
 builder.Services.Configure<ExportBrandingOptions>(builder.Configuration.GetSection("ExportBranding"));
 builder.Services.Configure<MessagingOptions>(builder.Configuration.GetSection("Messaging"));
-builder.Services.AddDataProtection().SetApplicationName("TLQS");
+var dataProtection = builder.Services.AddDataProtection().SetApplicationName("TLQS");
+var dataProtectionKeyPath = builder.Configuration["DataProtection:KeyPath"];
+if (!string.IsNullOrWhiteSpace(dataProtectionKeyPath))
+{
+    Directory.CreateDirectory(dataProtectionKeyPath);
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyPath));
+    if (OperatingSystem.IsWindows())
+    {
+        // The production IIS application is single-server. Machine-scoped DPAPI
+        // keeps the key ring encrypted at rest without introducing another
+        // secret store. Keep this directory in the server backup and re-enter
+        // messaging credentials after a full server rebuild.
+        dataProtection.ProtectKeysWithDpapi(protectToLocalMachine: true);
+    }
+}
+else if (!builder.Environment.IsDevelopment())
+{
+    throw new InvalidOperationException(
+        "DataProtection:KeyPath must be configured in production so protected settings survive application restarts.");
+}
 builder.Services.AddHttpClient<IEmailProvider, ConfiguredEmailProvider>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(30);

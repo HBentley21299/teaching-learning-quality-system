@@ -1,7 +1,9 @@
 param(
     [switch] $SkipInstall,
     [switch] $SkipSecurityAudit,
-    [switch] $AllowDirty
+    [switch] $AllowDirty,
+    [ValidateSet("win-x64")]
+    [string] $RuntimeIdentifier = "win-x64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -119,10 +121,9 @@ Invoke-Step "Build the production web application" {
 }
 
 Invoke-Step "Publish API artifact" {
-    # Azure App Service is Linux-only in infra/azure/main.bicep. Publishing for
-    # that runtime removes unused Windows and macOS native libraries from the
-    # release package and materially reduces deployment/startup transfer time.
-    dotnet publish $apiProject --configuration Release --runtime linux-x64 --self-contained false --output $apiOutput
+    # Production is hosted on Windows IIS. The .NET Hosting Bundle supplies the
+    # runtime and ASP.NET Core Module on the server.
+    dotnet publish $apiProject --configuration Release --runtime $RuntimeIdentifier --self-contained false --output $apiOutput
 }
 
 Get-ChildItem -LiteralPath (Join-Path $webRoot "dist") -Force |
@@ -145,8 +146,8 @@ if ($configuredEntraSettings.Count -eq $entraBuildSettings.Count) {
     }
 }
 
-# V1 is deployed as one same-origin App Service package. Keep the standalone web
-# artifact as well so the frontend can move to a static host without a rebuild.
+# Production is deployed as one same-origin IIS application. Keep the standalone
+# web artifact as well so the frontend can move without changing the data model.
 $apiWebRoot = Join-Path $apiOutput "wwwroot"
 New-Item -ItemType Directory -Force -Path $apiWebRoot | Out-Null
 Get-ChildItem -LiteralPath $webOutput -Force |

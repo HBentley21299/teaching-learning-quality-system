@@ -1,11 +1,5 @@
-# Delivery Pipelines
+# Delivery pipelines
 
-The active CI and release-artifact workflow is:
+`.github/workflows/ci.yml` builds and tests every approved change.
 
-```text
-.github/workflows/ci.yml
-```
-
-Keep the executable workflow in one place. Azure deployment automation will be
-added here only after the V1 infrastructure, Entra registrations, deployment
-environments and approval gates have been confirmed.
+`.github/workflows/release-on-premises.yml` creates a checksummed Windows/IIS release ZIP when an authorised maintainer runs it manually. It never connects to the college network or deploys directly to IIS or SQL Server. College IT downloads the approved package and uses the guarded on-premises deployment script.

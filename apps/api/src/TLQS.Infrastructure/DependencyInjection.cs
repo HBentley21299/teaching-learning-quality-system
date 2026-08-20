@@ -1,7 +1,4 @@
-using Azure.Identity;
-using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TLQS.Application.Security;
@@ -20,19 +17,9 @@ public static class DependencyInjection
             options.UseSqlServer(connectionString, sql => sql.EnableRetryOnFailure());
         });
 
-        services.AddAzureClients(builder =>
-        {
-            var storageUri = configuration["Storage:AccountUri"];
-            if (!string.IsNullOrWhiteSpace(storageUri))
-            {
-                builder.AddBlobServiceClient(new Uri(storageUri));
-                builder.UseCredential(new DefaultAzureCredential());
-            }
-        });
-
         services.AddScoped<IPermissionService, PermissionService>();
         services.AddScoped<IAccessScopeService, AccessScopeService>();
-        services.AddScoped<IFileStorageService, BlobFileStorageService>();
+        services.AddScoped<IFileStorageService, FileStorageNamingService>();
 
         return services;
     }
@@ -43,7 +30,7 @@ public interface IFileStorageService
     Task<string> CreateUploadNameAsync(string originalFileName, CancellationToken cancellationToken);
 }
 
-public sealed class BlobFileStorageService : IFileStorageService
+public sealed class FileStorageNamingService : IFileStorageService
 {
     public Task<string> CreateUploadNameAsync(string originalFileName, CancellationToken cancellationToken)
     {

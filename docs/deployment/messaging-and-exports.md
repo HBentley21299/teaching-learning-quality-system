@@ -17,14 +17,14 @@ free-form recipient addresses are not available to template editors.
 
 Email attachments are intentionally disabled in V1. The schema reserves managed
 attachment metadata, but the application will not accept an attachment configuration
-until Blob retrieval, file-size controls and malware scanning are delivered together.
+until approved college storage retrieval, file-size controls and malware scanning are delivered together.
 
 Production Graph requirements:
 
 - Dedicated Entra confidential application with `Mail.Send` application permission.
 - Administrator consent and an Exchange application-access restriction for the
   approved sender mailbox.
-- Client secret stored as `messaging-graph-client-secret` in the provisioned Key Vault.
+- Client secret entered in Admin Centre and protected by the application's persistent Windows Data Protection key ring.
 - Non-production `TestMode=true` with a mandatory safe test recipient.
 - Sender, reply-to, final application URL and operational owner agreed before enablement.
 
@@ -41,7 +41,7 @@ scores are deliberately excluded from user-facing exports.
 
 Interactive requests are limited to 25,000 rows per worksheet. A truncation warning
 is included in the workbook; users must narrow filters and export again. The
-`ops.export_jobs` table reserves the contract for future Blob-backed asynchronous
+`ops.export_jobs` table reserves the contract for future storage-backed asynchronous
 exports if real usage exceeds this V1 boundary.
 
 Word output is a basic, valid Open XML record report with central branding settings,

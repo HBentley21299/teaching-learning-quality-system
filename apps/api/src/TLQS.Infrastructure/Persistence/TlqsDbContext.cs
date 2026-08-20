@@ -139,7 +139,7 @@ public sealed class TlqsDbContext(DbContextOptions<TlqsDbContext> options) : DbC
                 if (property.Name == "RowVersion")
                 {
                     property.ValueGenerated = ValueGenerated.OnAddOrUpdate;
-                    property.SetIsConcurrencyToken(true);
+                    property.IsConcurrencyToken = true;
                 }
             }
         }

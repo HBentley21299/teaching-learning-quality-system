@@ -10,7 +10,7 @@ The system is a modular monolith. It is deployed as one web application and one 
 - API: ASP.NET Core REST API under `/api/v1`.
 - Application: workflows, validation, permission checks, scope filtering, reporting orchestration.
 - Domain: staff, organisation, records, forms, actions, evidence, CPD, reporting.
-- Infrastructure: Azure SQL, Blob Storage, Entra ID, Key Vault, notifications, audit, telemetry.
+- Infrastructure: on-campus Microsoft SQL Server, Windows IIS, Microsoft Entra ID, notifications, audit and telemetry.
 
 ## Core Platform Engines
 
@@ -32,7 +32,7 @@ The system is a modular monolith. It is deployed as one web application and one 
 - Interactive exports have a 25,000-row limit per worksheet and always record the
   applied filters and requesting user.
 - Domain events and message deliveries use database-backed claims and expiring
-  locks, so multiple App Service instances cannot send the same event twice.
+  locks, so overlapping application workers cannot send the same event twice.
 - Membership describes where a staff member works. Management access comes only
   from explicit scopes, manager relationships or global permissions.
 
@@ -41,7 +41,7 @@ The system is a modular monolith. It is deployed as one web application and one 
 - New modules must register into the module and record system.
 - Server-side queries must enforce permission and scope.
 - Template versioning is required for auditability.
-- Files live in Blob Storage; the database stores metadata and relationships.
+- Elevate Status artwork is versioned in SQL Server. General evidence-file uploads require a separately approved college storage and malware-scanning service before they are enabled.
 - Staff identity, user account, and Entra identity are separate concepts.
 - New notifications must publish a standard domain event; modules must not call
   Microsoft Graph directly.
