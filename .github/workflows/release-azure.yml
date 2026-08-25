@@ -36,7 +36,7 @@ jobs:
           if ($env:ENTRA_API_SCOPE -ne "api://$($env:ENTRA_API_CLIENT_ID)/access_as_user") {
             throw 'ENTRA_API_SCOPE does not match ENTRA_API_CLIENT_ID.'
           }
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       - uses: actions/setup-node@v6
