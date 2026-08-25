@@ -27,7 +27,8 @@ const routePaths: Record<AppRoute, string> = {
   scrutiny: "/work-scrutiny",
   cpd: "/cpd",
   profile: "/profile",
-  actions: "/actions"
+  actions: "/actions",
+  qa: "/qa-hub"
 };
 
 const pathRoutes = new Map(Object.entries(routePaths).map(([route, path]) => [path, route as AppRoute]));
@@ -86,6 +87,12 @@ export function parseAppLocation(pathname = window.location.pathname): AppLocati
   }
   if (segments[0] === "admin") {
     return { ...empty, route: "admin", adminTab: segments[1] || "overview" };
+  }
+  if (segments[0] === "qa-hub" && segments[1] === "question-bank") {
+    return { ...empty, route: "admin", adminTab: "qa-reviews" };
+  }
+  if (segments[0] === "qa-hub") {
+    return { ...empty, route: "qa" };
   }
 
   return { ...empty, route: pathRoutes.get(normalized) ?? "dashboard" };

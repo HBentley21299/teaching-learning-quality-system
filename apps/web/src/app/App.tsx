@@ -22,6 +22,7 @@ import type {
   CurrentUser,
   ModuleSummary,
   OrgUnitSummary,
+  QaHubSummary,
   StaffProfileSummary,
   StaffSummary
 } from "../services/types";
@@ -38,6 +39,7 @@ const StaffProfileWorkspace = lazy(() => import("../routes/StaffProfileWorkspace
 const ElevatePractice = lazy(() => import("../routes/ElevatePractice").then((module) => ({ default: module.ElevatePractice })));
 const CoachingMentoring = lazy(() => import("../routes/CoachingMentoring").then((module) => ({ default: module.CoachingMentoring })));
 const MyTeam = lazy(() => import("../routes/MyTeam").then((module) => ({ default: module.MyTeam })));
+const QaHub = lazy(() => import("../routes/QaHub").then((module) => ({ default: module.QaHub })));
 
 const emptyUser: CurrentUser = {
   displayName: "Loading...",
@@ -62,6 +64,7 @@ export function App() {
   const [profilesLoaded, setProfilesLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [qaHubSummary, setQaHubSummary] = useState<QaHubSummary | null>(null);
   const [profileStaffId, setProfileStaffId] = useState(initialLocation.profileStaffId);
   const [actionStaffId, setActionStaffId] = useState(initialLocation.actionStaffId);
   const [actionDetailId, setActionDetailId] = useState(initialLocation.actionDetailId);
@@ -140,6 +143,20 @@ export function App() {
     void loadCoreData();
   }, [loadCoreData]);
 
+  const hasQaPermission = user.permissions.some((permission) => permission.startsWith("qa_reviews.view_"));
+
+  useEffect(() => {
+    if (!user.userAccountId || !hasQaPermission) {
+      setQaHubSummary(null);
+      return;
+    }
+    let cancelled = false;
+    void api.qaHubSummary()
+      .then((summary) => { if (!cancelled) setQaHubSummary(summary); })
+      .catch(() => { if (!cancelled) setQaHubSummary(null); });
+    return () => { cancelled = true; };
+  }, [hasQaPermission, user.userAccountId]);
+
   useEffect(() => {
     if (!user.userAccountId || modulesLoaded || route !== "admin") return;
     let cancelled = false;
@@ -150,7 +167,7 @@ export function App() {
   }, [modulesLoaded, route, user.userAccountId]);
 
   useEffect(() => {
-    const staffRoutes: AppRoute[] = ["staff", "admin", "learning", "liv", "als_learning", "als_liv", "probation", "elevate", "coaching", "scrutiny", "cpd", "profile", "actions"];
+    const staffRoutes: AppRoute[] = ["staff", "admin", "learning", "liv", "als_learning", "als_liv", "probation", "elevate", "coaching", "scrutiny", "cpd", "profile", "actions", "qa"];
     if (!user.userAccountId || staffLoaded || !staffRoutes.includes(route)) return;
     let cancelled = false;
     void api.staff()
@@ -219,11 +236,15 @@ export function App() {
     }
   }, [academicYear, route]);
 
-  const visibleNavigationItems = useMemo(
+  const accessibleNavigationItems = useMemo(
     () => navigationItems.filter((item) => canAccessRoute(item.key, user.permissions)),
     [user.permissions]
   );
-  const activeItem = useMemo(() => visibleNavigationItems.find((item) => item.key === route), [route, visibleNavigationItems]);
+  const visibleNavigationItems = useMemo(
+    () => accessibleNavigationItems.filter((item) => !("hidden" in item && item.hidden)),
+    [accessibleNavigationItems]
+  );
+  const activeItem = useMemo(() => accessibleNavigationItems.find((item) => item.key === route), [route, accessibleNavigationItems]);
   const firstVisibleAlsRoute = visibleNavigationItems.find((item) => item.key === "als_learning" || item.key === "als_liv")?.key;
 
   useEffect(() => {
@@ -282,6 +303,15 @@ export function App() {
 
   function openActionSource(action: ActionSummary) {
     if (!action.sourceRecordId) return;
+    if (action.sourceFormType === "qa_review") {
+      setSourceRecordId("");
+      setActionStaffId("");
+      setActionDetailId("");
+      setProfileStaffId("");
+      setRoute("qa");
+      writePath(`/qa-hub/reviews/${action.sourceRecordId}/actions`);
+      return;
+    }
     setSourceRecordId(action.sourceRecordId);
     setActionStaffId("");
     setActionDetailId("");
@@ -307,6 +337,15 @@ export function App() {
   }
 
   function openStaffRecord(recordType: string, recordId: string, staffId: string) {
+    if (recordType === "qa_review") {
+      setSourceRecordId("");
+      setActionStaffId("");
+      setActionDetailId("");
+      setProfileStaffId("");
+      setRoute("qa");
+      writePath(`/qa-hub/reviews/${recordId}/actions`);
+      return;
+    }
     setSourceRecordId(recordId);
     setActionStaffId("");
     setActionDetailId("");
@@ -493,6 +532,7 @@ export function App() {
             <Suspense fallback={<div className="route-stack"><p className="muted-copy">Loading this workspace...</p></div>}>
               {route === "home" ? (
                 <Home
+                  canAccessQaHub={qaHubSummary?.canAccessHub === true}
                   onNavigate={navigate}
                   tiles={visibleNavigationItems}
                   user={user}
@@ -585,6 +625,15 @@ export function App() {
               {route === "actions" ? (
                 <ActionsView academicYear={academicYear} actions={yearActions} initialActionId={actionDetailId} initialStaffId={actionStaffId} onActionClosed={handleActionClosed} onActionOpened={handleActionOpened} onChanged={refreshActions} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} />
               ) : null}
+              {route === "qa" ? (
+                <QaHub
+                  academicYears={academicYears}
+                  onReturnToElevate={() => navigate("home")}
+                  orgUnits={orgUnits}
+                  staff={staff}
+                  user={user}
+                />
+              ) : null}
             </Suspense>
           )}
         </div>
@@ -614,6 +663,7 @@ function routeForRecordType(recordType: string): AppRoute {
     als_liv: "als_liv",
     probation_case: "probation",
     probation_observation: "probation",
+    qa_review: "qa",
     work_scrutiny: "scrutiny"
   };
   return routes[recordType] ?? "dashboard";

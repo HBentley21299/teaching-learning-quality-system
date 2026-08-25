@@ -8616,6 +8616,7 @@ public sealed partial class SqlFoundationDataStore(
             "als_liv" => "action_theme_als_liv",
             "probation_observation" => "action_theme_probation_observation",
             "cpd" or "cpd_event" => "action_theme_cpd",
+            "qa_review" => "action_theme_qa_review",
             "standalone" => "action_theme_standalone",
             _ => null
         };

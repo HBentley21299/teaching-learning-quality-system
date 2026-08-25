@@ -20,9 +20,11 @@ public sealed partial class SqlFoundationDataStore
     {
         var normalizedKey = NormalizeExportModuleKey(moduleKey);
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        var sheets = normalizedKey switch
+        var sheets = (normalizedKey switch
         {
             "staff" => await BuildStaffExportAsync(connection, filter, currentUser, cancellationToken),
+            "dashboard-overview" => await BuildGenericRecordExportAsync(connection, null, "Dashboard Records", filter, currentUser, cancellationToken),
+            "elevate-status" => await BuildElevateStatusExportAsync(connection, filter, currentUser, cancellationToken),
             "actions" => await BuildActionExportAsync(connection, filter, currentUser, cancellationToken),
             "cpd" => await BuildCpdExportAsync(connection, filter, currentUser, cancellationToken),
             "coaching" => await BuildCoachingExportAsync(connection, filter, currentUser, cancellationToken),
@@ -36,11 +38,91 @@ public sealed partial class SqlFoundationDataStore
             "elevate-environments" => await BuildElevateEnvironmentExportAsync(connection, filter, currentUser, cancellationToken),
             "probation" => await BuildProbationExportAsync(connection, filter, currentUser, cancellationToken),
             _ => throw new WorkflowValidationException("Select a supported export area.")
-        };
+        }).ToList();
+        var questionRecordType = DashboardQuestionRecordType(normalizedKey);
+        if (questionRecordType is not null || normalizedKey == "dashboard-overview")
+        {
+            var questionResults = await BuildQuestionLevelResultsAsync(
+                connection, questionRecordType, filter, currentUser, cancellationToken);
+            if (questionResults.Rows.Count > 0)
+            {
+                var existingIndex = sheets.FindIndex(sheet =>
+                    string.Equals(sheet.Name, questionResults.Name, StringComparison.OrdinalIgnoreCase));
+                if (existingIndex >= 0) sheets[existingIndex] = questionResults;
+                else sheets.Add(questionResults);
+            }
+        }
         return new ExportWorkbookData(
             normalizedKey, ExportDisplayName(normalizedKey), filter,
             currentUser.DisplayName, DateTimeOffset.UtcNow, sheets);
     }
+
+    private async Task<ExportSheet> BuildQuestionLevelResultsAsync(
+        SqlConnection connection,
+        string? recordType,
+        ExportFilter filter,
+        CurrentUser user,
+        CancellationToken cancellationToken) =>
+        await ReadExportSheetAsync(connection, "Question-Level Results", $"""
+            {ScopedRecordsCte}
+            SELECT TOP (@exportTake)
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID],
+                   record_row.title AS [Record title], record_row.record_type AS [Process],
+                   COALESCE(status_value.display_name, status_value.value_key, N'Draft') AS [Record status],
+                   record_row.record_date AS [Record date], record_row.academic_year_key AS [Academic year],
+                   faculty.code AS [Faculty code], faculty.name AS [Faculty],
+                   team.code AS [Team code], team.name AS [Team],
+                   subject.display_name AS [Staff member], owner.display_name AS [Reviewer or owner],
+                   submission.status AS [Form status], section.title AS [Section],
+                   CONCAT(field.field_key, CASE WHEN expanded.item_key IS NULL THEN N'' ELSE CONCAT(N':', expanded.item_key COLLATE DATABASE_DEFAULT) END) AS [Question key],
+                   CONCAT(field.label, CASE WHEN expanded.item_label IS NULL THEN N'' ELSE CONCAT(N' - ', expanded.item_label COLLATE DATABASE_DEFAULT) END) AS [Question],
+                   field.field_type AS [Response type],
+                   CASE WHEN expanded.item_key IS NOT NULL OR expanded.item_label IS NOT NULL
+                        THEN expanded.item_response COLLATE DATABASE_DEFAULT
+                        ELSE COALESCE(response.response_text, CONVERT(nvarchar(100), response.response_number),
+                             CONVERT(nvarchar(30), response.response_date, 23), lookup_value.display_name,
+                             response.response_json) END AS [Response],
+                   response.updated_at AS [Response updated at]
+            FROM scoped_records record_row
+            LEFT JOIN core.lookup_values status_value ON status_value.id = record_row.status_lookup_value_id
+            LEFT JOIN people.staff subject ON subject.id = record_row.subject_staff_id
+            LEFT JOIN people.staff owner ON owner.id = record_row.owner_staff_id
+            LEFT JOIN org.org_units area ON area.id = record_row.org_unit_id
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            JOIN forms.form_submissions submission ON submission.record_id = record_row.id AND submission.archived_at IS NULL
+            JOIN forms.form_responses response ON response.form_submission_id = submission.id AND response.archived_at IS NULL
+            JOIN forms.form_fields field ON field.id = response.form_field_id
+            JOIN forms.form_sections section ON section.id = field.form_section_id
+            LEFT JOIN core.lookup_values lookup_value ON lookup_value.id = response.response_lookup_value_id
+            OUTER APPLY (
+                SELECT COALESCE(response.response_json,
+                    CASE WHEN ISJSON(response.response_text) = 1 THEN response.response_text END) AS json_value
+            ) json_source
+            OUTER APPLY (
+                SELECT CAST(NULL AS nvarchar(200)) AS item_key,
+                       CAST(NULL AS nvarchar(500)) AS item_label,
+                       CAST(NULL AS nvarchar(max)) AS item_response,
+                       0 AS item_order
+                WHERE LEFT(LTRIM(COALESCE(json_source.json_value, N'')), 1) <> N'['
+                   OR json_source.json_value = N'[]'
+                UNION ALL
+                SELECT COALESCE(JSON_VALUE(item.[value], N'$.focusId'), JSON_VALUE(item.[value], N'$.id'), item.[key]),
+                       COALESCE(JSON_VALUE(item.[value], N'$.focusName'), JSON_VALUE(item.[value], N'$.name'), JSON_VALUE(item.[value], N'$.label')),
+                       COALESCE(
+                           NULLIF(CONCAT(
+                               JSON_VALUE(item.[value], N'$.rating'),
+                               CASE WHEN JSON_VALUE(item.[value], N'$.score') IS NULL THEN N''
+                                    ELSE CONCAT(N' (', JSON_VALUE(item.[value], N'$.score'), N')') END), N''),
+                           JSON_VALUE(item.[value], N'$.value'),
+                           item.[value]),
+                       TRY_CONVERT(int, item.[key]) + 1
+                FROM OPENJSON(json_source.json_value) item
+                WHERE LEFT(LTRIM(COALESCE(json_source.json_value, N'')), 1) = N'['
+            ) expanded
+            ORDER BY record_row.record_date DESC, record_row.created_at DESC,
+                     section.display_order, field.display_order, expanded.item_order;
+            """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
 
     public async Task<RecordReportData?> GetRecordReportAsync(
         Guid recordId,
@@ -387,7 +469,7 @@ public sealed partial class SqlFoundationDataStore
 
     private async Task<IReadOnlyList<ExportSheet>> BuildGenericRecordExportAsync(
         SqlConnection connection,
-        string recordType,
+        string? recordType,
         string sheetName,
         ExportFilter filter,
         CurrentUser user,
@@ -536,6 +618,36 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY staff.display_name, membership.is_primary DESC, unit.name;
             """, command => AddExportParameters(command, user, filter), cancellationToken);
         return [staff, memberships];
+    }
+
+    private async Task<IReadOnlyList<ExportSheet>> BuildElevateStatusExportAsync(
+        SqlConnection connection, ExportFilter filter, CurrentUser user, CancellationToken cancellationToken)
+    {
+        var sheets = (await BuildStaffExportAsync(connection, filter, user, cancellationToken)).ToList();
+        var awards = await ReadExportSheetAsync(connection, "Elevate Status Awards", """
+            WITH visible_staff AS (SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId))
+            SELECT TOP (@exportTake)
+                   CONVERT(nvarchar(36), award.id) AS [Award ID], staff.display_name AS [Staff member],
+                   staff.email AS [Email], faculty.code AS [Faculty code], faculty.name AS [Faculty],
+                   team.code AS [Team code], team.name AS [Team], award.academic_year_key AS [Academic year],
+                   award.level_number AS [Level], award.qualifying_attendance_count AS [Qualifying attendance],
+                   award.implementation_impact AS [Implementation impact], award.confirmed_at AS [Confirmed at]
+            FROM cpd.elevate_status_awards award
+            JOIN people.staff staff ON staff.id = award.staff_id
+            JOIN visible_staff visible ON visible.staff_id = staff.id
+            LEFT JOIN org.org_units area ON area.id = staff.primary_org_unit_id
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            WHERE award.archived_at IS NULL
+              AND (@academicYear IS NULL OR award.academic_year_key = @academicYear)
+              AND (@staffId IS NULL OR staff.id = @staffId)
+              AND ((@facultyCode IS NULL AND @teamCode IS NULL)
+                   OR faculty.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@facultyCode, N','))
+                   OR team.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@teamCode, N',')))
+            ORDER BY staff.display_name, award.level_number;
+            """, command => AddExportParameters(command, user, filter), cancellationToken);
+        sheets.Add(awards);
+        return sheets;
     }
 
     private async Task<IReadOnlyList<ExportSheet>> BuildActionExportAsync(
@@ -1151,6 +1263,21 @@ public sealed partial class SqlFoundationDataStore
         var key => key
     };
 
+    private static string? DashboardQuestionRecordType(string key) => key switch
+    {
+        "learning-walks" => "learning_walk",
+        "als-learning-walks" => "als_learning_walk",
+        "liv" => "liv",
+        "als-liv" => "als_liv",
+        "work-scrutiny" => "work_scrutiny",
+        "elevate-environments" => "elevate_environment",
+        "elevate-practice" => "elevate_practice_assessment",
+        "coaching" => "coaching_session",
+        "cpd" => "cpd_event",
+        "probation" => "probation_case",
+        _ => null
+    };
+
     private static string ExportDisplayName(string key) => key switch
     {
         "learning-walks" => "Learning Walks",
@@ -1166,6 +1293,8 @@ public sealed partial class SqlFoundationDataStore
         "liv" => "Learning and Innovation Visits",
         "staff" => "Staff",
         "probation" => "Probationary Observations",
+        "dashboard-overview" => "Teaching and Learning Overview",
+        "elevate-status" => "i-Elevate Status",
         _ => key
     };
 

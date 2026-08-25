@@ -1,0 +1,21 @@
+{
+  "moduleKey": "qa_reviews",
+  "name": "QA Reviews",
+  "routePrefix": "/qa-hub",
+  "permissions": [
+    "qa_reviews.view_all",
+    "qa_reviews.view_scoped",
+    "qa_reviews.view_assigned",
+    "qa_reviews.submit_all",
+    "qa_reviews.submit_scoped",
+    "qa_reviews.submit_assigned",
+    "qa_reviews.manage",
+    "qa_reviews.correct",
+    "qa_reviews.remove"
+  ],
+  "recordTypes": ["qa_review", "qa_evidence"],
+  "usesFormEngine": false,
+  "usesActionEngine": true,
+  "usesEvidenceEngine": false,
+  "dashboardWidgets": ["qa_review_coverage", "qa_review_outcomes", "qa_review_actions"]
+}

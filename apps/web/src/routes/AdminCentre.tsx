@@ -1,5 +1,6 @@
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { CollapsibleSection } from "../components/CollapsibleSection";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -24,6 +25,7 @@ import { AdminManagedLists } from "./AdminManagedLists";
 import { AdminRecordsPanel } from "./AdminRecordsPanel";
 import { OrganisationStructureAdmin } from "./OrganisationStructureAdmin";
 import { MessagingAdminPanel } from "./MessagingAdminPanel";
+import { QaQuestionBankAdmin } from "./QaQuestionBankAdmin";
 
 export function AdminCentre({
   user,
@@ -50,6 +52,7 @@ export function AdminCentre({
     ["Director", "Scoped reports and review activity", "Assigned org units"],
     ["Head of Faculty", "Faculty records, actions and dashboards", "Assigned faculty"],
     ["Programme Leader", "Team records, actions and dashboards", "Assigned team"],
+    ["QA Staff", "QA Review access and evidence submission", "Permission driven"],
     ["Tutor", "Own profile, records and actions", "Self"]
   ];
   const canManagePeople = user.permissions.includes("users.manage") || user.permissions.includes("permissions.manage");
@@ -58,7 +61,8 @@ export function AdminCentre({
   const canManageForms = user.permissions.includes("forms.manage");
   const canManageRecords = user.permissions.includes("records.manage");
   const canManageMessaging = user.permissions.includes("messaging.manage");
-  const canUseAdmin = canManagePeople || canManageOrganisation || canManageLists || canManageForms || canManageRecords || canManageMessaging;
+  const canManageQa = user.permissions.includes("qa_reviews.manage");
+  const canUseAdmin = canManagePeople || canManageOrganisation || canManageLists || canManageForms || canManageRecords || canManageMessaging || canManageQa;
   const tabAccess: Record<AdminTabKey, boolean> = {
     overview: canUseAdmin,
     "staff-access": canManagePeople,
@@ -68,13 +72,24 @@ export function AdminCentre({
     elevate: canManageRecords || user.permissions.includes("users.manage"),
     records: canManageRecords,
     messaging: canManageMessaging,
-    dashboards: canManageRecords
+    dashboards: canManageRecords,
+    "qa-reviews": canManageQa
   };
   const visibleTabs = adminTabs.filter((tab) => tabAccess[tab.key]);
+  const visibleAreas = adminAreas
+    .map((area) => ({ ...area, tabs: area.tabs.filter((tab) => tabAccess[tab.key]) }))
+    .filter((area) => area.tabs.length > 0);
+  const activeArea = visibleAreas.find((area) => area.tabs.some((tab) => tab.key === activeTab)) ?? visibleAreas[0];
 
   function selectTab(tab: AdminTabKey) {
     setActiveTab(tab);
     onTabChange?.(tab);
+  }
+
+  function selectArea(area: AdminArea) {
+    const accessibleTabs = area.tabs.filter((tab) => tabAccess[tab.key]);
+    const nextTab = accessibleTabs.find((tab) => tab.key === activeTab) ?? accessibleTabs[0];
+    if (nextTab) selectTab(nextTab.key);
   }
 
   useEffect(() => {
@@ -113,27 +128,41 @@ export function AdminCentre({
         <div>
           <p className="eyebrow">Configuration</p>
           <h1>Admin centre</h1>
+          <p>Manage people, workflows, system data and QA configuration from focused workspaces.</p>
         </div>
       </div>
 
-      <div className="admin-tab-bar" role="tablist" aria-label="Admin centre sections">
-        {visibleTabs.map((tab) => {
-          const Icon = tab.icon;
+      <div className="admin-primary-nav" role="tablist" aria-label="Admin centre areas">
+        {visibleAreas.map((area) => {
+          const Icon = area.icon;
+          const isActive = activeArea?.key === area.key;
           return (
             <button
-              aria-selected={activeTab === tab.key}
-              className={activeTab === tab.key ? "admin-tab admin-tab-active" : "admin-tab"}
-              key={tab.key}
-              onClick={() => selectTab(tab.key)}
+              aria-selected={isActive}
+              className={isActive ? "admin-primary-tab is-active" : "admin-primary-tab"}
+              key={area.key}
+              onClick={() => selectArea(area)}
               role="tab"
               type="button"
             >
-              <Icon size={16} aria-hidden="true" />
-              <span>{tab.label}</span>
+              <Icon size={18} aria-hidden="true" />
+              <span><strong>{area.label}</strong><small>{area.description}</small></span>
             </button>
           );
         })}
       </div>
+
+      {activeArea && activeArea.tabs.length > 1 ? (
+        <div className="admin-subnav" role="tablist" aria-label={`${activeArea.label} sections`}>
+          <span>In this area</span>
+          <div>
+            {activeArea.tabs.map((tab) => {
+              const Icon = tab.icon;
+              return <button aria-selected={activeTab === tab.key} className={activeTab === tab.key ? "is-active" : ""} key={tab.key} onClick={() => selectTab(tab.key)} role="tab" type="button"><Icon size={15} aria-hidden="true" />{tab.label}</button>;
+            })}
+          </div>
+        </div>
+      ) : null}
 
       {activeTab === "overview" ? (
         <AdminOverview
@@ -143,33 +172,57 @@ export function AdminCentre({
           user={user}
         />
       ) : null}
-      {activeTab === "staff-access" ? <div className="route-stack"><StaffAdminPanel user={user} /><PermissionAdminPanel user={user} /></div> : null}
+      {activeTab === "staff-access" ? <div className="route-stack admin-collapsible-stack">
+        <CollapsibleSection defaultExpanded storageKey="admin-staff-accounts" statusSummary="Create, search and maintain staff accounts" title="Staff accounts"><StaffAdminPanel user={user} /></CollapsibleSection>
+        <CollapsibleSection storageKey="admin-role-allocations" statusSummary="Allocate permission levels and review effective access" title="Roles and permissions"><PermissionAdminPanel user={user} /></CollapsibleSection>
+      </div> : null}
       {activeTab === "organisation" ? <OrganisationStructureAdmin /> : null}
-      {activeTab === "lists" ? <div className="route-stack"><CoachingConfigurationAdmin /><AdminManagedLists /><LearningWalkThemeAdminPanel /><LearningWalkThemeAdminPanel processKey="als_learning_walk" title="ALS Learning Walk themes and focus areas" subtitle="Used by ALS Learning Walks and ALS reporting" /><LearningWalkThemeAdminPanel processKey="als_liv_practitioner" title="ALS LIV Elevate practitioner areas" subtitle="Standalone configurable areas used only by ALS LIV" /></div> : null}
+      {activeTab === "lists" ? <div className="route-stack admin-collapsible-stack">
+        <CollapsibleSection defaultExpanded storageKey="admin-configurable-lists" statusSummary="Govern dropdown and checklist values used across i-Elevate" title="Configurable lists"><AdminManagedLists /></CollapsibleSection>
+        <CollapsibleSection storageKey="admin-coaching-workflow" statusSummary="Set the maximum number of actions created per coaching session" title="Coaching workflow"><CoachingConfigurationAdmin /></CollapsibleSection>
+        <CollapsibleSection storageKey="admin-learning-walk-themes" statusSummary="Shared by Learning Walks, LIV and teaching and learning reporting" title="Teaching and Learning themes"><LearningWalkThemeAdminPanel /></CollapsibleSection>
+        <CollapsibleSection storageKey="admin-als-learning-walk-themes" statusSummary="Used by ALS Learning Walks and ALS reporting" title="ALS Learning Walk themes"><LearningWalkThemeAdminPanel processKey="als_learning_walk" title="ALS Learning Walk themes and focus areas" subtitle="Used by ALS Learning Walks and ALS reporting" /></CollapsibleSection>
+        <CollapsibleSection storageKey="admin-als-liv-areas" statusSummary="Standalone areas used only by ALS LIV" title="ALS LIV practitioner areas"><LearningWalkThemeAdminPanel processKey="als_liv_practitioner" title="ALS LIV Elevate practitioner areas" subtitle="Standalone configurable areas used only by ALS LIV" /></CollapsibleSection>
+      </div> : null}
       {activeTab === "forms" ? <FormBuilder embedded user={user} /> : null}
-      {activeTab === "elevate" ? <div className="route-stack">
-        {user.permissions.includes("elevate_status.manage") ? <ElevateStatusAssetsAdmin /> : null}
-        <AdminElevatePractice />
+      {activeTab === "elevate" ? <div className="route-stack admin-collapsible-stack">
+        {user.permissions.includes("elevate_status.manage") ? <CollapsibleSection defaultExpanded storageKey="admin-elevate-status-assets" statusSummary="Manage the visual assets used for Elevate status" title="Elevate status assets"><ElevateStatusAssetsAdmin /></CollapsibleSection> : null}
+        <CollapsibleSection storageKey="admin-elevate-practice" statusSummary="Configure Learning and Innovation practice records" title="Elevate practice"><AdminElevatePractice /></CollapsibleSection>
       </div> : null}
       {activeTab === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
       {activeTab === "messaging" ? <MessagingAdminPanel /> : null}
       {activeTab === "dashboards" ? <DashboardAdminPanel /> : null}
+      {activeTab === "qa-reviews" ? <QaQuestionBankAdmin /> : null}
     </div>
   );
 }
 
-type AdminTabKey = "overview" | "staff-access" | "organisation" | "lists" | "forms" | "elevate" | "records" | "messaging" | "dashboards";
+type AdminTabKey = "overview" | "staff-access" | "organisation" | "lists" | "forms" | "elevate" | "records" | "messaging" | "dashboards" | "qa-reviews";
+type AdminAreaKey = "overview" | "people" | "configuration" | "operations" | "qa";
+type AdminTab = { key: AdminTabKey; label: string; icon: typeof SlidersHorizontal };
+type AdminArea = { key: AdminAreaKey; label: string; description: string; icon: typeof SlidersHorizontal; tabs: AdminTab[] };
 
-const adminTabs: Array<{ key: AdminTabKey; label: string; icon: typeof SlidersHorizontal }> = [
+const adminTabs: AdminTab[] = [
   { key: "overview", label: "Overview", icon: SlidersHorizontal },
   { key: "staff-access", label: "Staff & Access", icon: UserCog },
-  { key: "organisation", label: "Organisation Structure", icon: Building2 },
-  { key: "lists", label: "Admin Lists", icon: ListChecks },
+  { key: "organisation", label: "Organisation", icon: Building2 },
+  { key: "lists", label: "Lists & Lookups", icon: ListChecks },
   { key: "forms", label: "Forms", icon: FileText },
   { key: "elevate", label: "Elevate Records", icon: Sparkles },
   { key: "records", label: "Records", icon: Database },
   { key: "messaging", label: "Messaging", icon: Mail },
-  { key: "dashboards", label: "Dashboards", icon: LayoutDashboard }
+  { key: "dashboards", label: "Dashboards", icon: LayoutDashboard },
+  { key: "qa-reviews", label: "Question Bank", icon: ShieldCheck }
+];
+
+const tabsByKey = new Map(adminTabs.map((tab) => [tab.key, tab]));
+const adminTab = (key: AdminTabKey) => tabsByKey.get(key)!;
+const adminAreas: AdminArea[] = [
+  { key: "overview", label: "Overview", description: "System summary", icon: LayoutDashboard, tabs: [adminTab("overview")] },
+  { key: "people", label: "People & structure", description: "Accounts, access and teams", icon: UserCog, tabs: [adminTab("staff-access"), adminTab("organisation")] },
+  { key: "configuration", label: "Configuration", description: "Lists, forms and workflows", icon: SlidersHorizontal, tabs: [adminTab("lists"), adminTab("forms"), adminTab("elevate"), adminTab("dashboards")] },
+  { key: "operations", label: "Operations", description: "Records and messaging", icon: Database, tabs: [adminTab("records"), adminTab("messaging")] },
+  { key: "qa", label: "QA Reviews", description: "Questions and templates", icon: ShieldCheck, tabs: [adminTab("qa-reviews")] }
 ];
 
 function AdminOverview({
@@ -231,11 +284,7 @@ function AdminOverview({
         </section>
       </div>
 
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Role model</h2>
-          <span>RBAC plus scope</span>
-        </div>
+      <CollapsibleSection defaultExpanded={false} statusSummary="Reference guide for role-based access and organisation scope" storageKey="admin-overview-role-model" title="Role model">
         <div className="permission-grid">
           {permissionRows.map(([role, permissions, scope]) => (
             <div className="permission-row" key={role}>
@@ -245,7 +294,7 @@ function AdminOverview({
             </div>
           ))}
         </div>
-      </section>
+      </CollapsibleSection>
     </>
   );
 }

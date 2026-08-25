@@ -26,6 +26,7 @@ if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("TlqsDat
 builder.Services.AddSingleton<SqlFoundationDataStore>();
 builder.Services.AddSingleton<MessagingConfigurationStore>();
 builder.Services.AddSingleton<ExcelExportService>();
+builder.Services.AddSingleton<QaPdfReportService>();
 builder.Services.AddSingleton<WordExportService>();
 builder.Services.Configure<ExportBrandingOptions>(builder.Configuration.GetSection("ExportBranding"));
 builder.Services.Configure<MessagingOptions>(builder.Configuration.GetSection("Messaging"));
@@ -267,6 +268,7 @@ app.MapGet("/health", ReadinessAsync);
 
 app.MapFoundationEndpoints();
 app.MapPlatformOperationsEndpoints();
+app.MapQaReviewEndpoints();
 if (useLocalLogins)
 {
     app.MapLocalAuthEndpoints();

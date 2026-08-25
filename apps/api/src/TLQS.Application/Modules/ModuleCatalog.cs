@@ -23,6 +23,7 @@ public static class ModuleCatalog
         new("coaching_mentoring", "Coaching and Mentoring", "/coaching-mentoring", ["coaching.submit", "coaching.manage"], ["coaching_session"], false),
         new("evidence", "Staff Development Evidence", "/evidence", ["evidence.submit", "evidence.review"], ["impact_evidence"], true),
         new("actions", "Actions", "/actions", ["actions.manage"], ["action"], false),
-        new("reporting", "Reporting", "/reports", ["reports.view_all", "reports.view_scoped"], ["dashboard"], false)
+        new("reporting", "Reporting", "/reports", ["reports.view_all", "reports.view_scoped"], ["dashboard"], false),
+        new("qa_reviews", "QA Reviews", "/qa-hub", ["qa_reviews.view_all", "qa_reviews.view_scoped", "qa_reviews.view_assigned"], ["qa_review", "qa_evidence"], false)
     ];
 }

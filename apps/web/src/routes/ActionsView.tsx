@@ -52,6 +52,7 @@ const sourceLabels: Record<string, string> = {
   elevate_practice: "Elevate Learning and Innovation",
   learning_walk: "Learning Walk",
   liv: "LIV",
+  qa_review: "QA Review",
   standalone: "Standalone",
   work_scrutiny: "Work Scrutiny"
 };

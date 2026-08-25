@@ -79,11 +79,11 @@ public sealed class ExcelExportService
                 { WorkbookViewId = 0U }));
             var columns = new S.Columns();
             for (uint index = 1; index <= data.Columns.Count; index++)
-                columns.Append(new S.Column { Min = index, Max = index, Width = index == 1 ? 24D : 20D, CustomWidth = true });
+                columns.Append(new S.Column { Min = index, Max = index, Width = ColumnWidth(data, (int)index - 1), CustomWidth = true });
             writer.WriteElement(columns);
             writer.WriteStartElement(new S.SheetData());
             WriteRow(writer, data.Columns.Cast<string?>(), 1U);
-            foreach (var row in data.Rows) WriteRow(writer, row, 0U);
+            foreach (var row in data.Rows) WriteRow(writer, row, 2U);
             writer.WriteEndElement();
             if (data.Columns.Count > 0)
             {
@@ -131,8 +131,23 @@ public sealed class ExcelExportService
         new S.CellFormats(
             new S.CellFormat { FontId = 0U, FillId = 0U, BorderId = 0U },
             new S.CellFormat { FontId = 1U, FillId = 2U, BorderId = 0U, ApplyFont = true, ApplyFill = true,
-                Alignment = new S.Alignment { WrapText = true, Vertical = S.VerticalAlignmentValues.Center } }),
+                Alignment = new S.Alignment { WrapText = true, Vertical = S.VerticalAlignmentValues.Center } },
+            new S.CellFormat { FontId = 0U, FillId = 0U, BorderId = 0U,
+                Alignment = new S.Alignment { WrapText = true, Vertical = S.VerticalAlignmentValues.Top } }),
         new S.CellStyles(new S.CellStyle { Name = "Normal", FormatId = 0U, BuiltinId = 0U }));
+
+    private static double ColumnWidth(ExportSheet sheet, int index)
+    {
+        var heading = sheet.Columns[index];
+        if (heading is "Criterion" or "Detail") return 68D;
+        if (heading is "Action" or "Team without submitted evidence") return 48D;
+        if (heading is "Assigned to" or "Teams") return 38D;
+        if (heading is "Theme/Week") return 28D;
+        if (heading is "% of rated responses") return 24D;
+        if (heading.Contains('%', StringComparison.Ordinal) || heading is "Below" or "At" or "Above" or "N/A" or "Rated" or "Count") return 13D;
+        if (sheet.Columns.Count <= 2 && index == 1) return 52D;
+        return index == 0 ? 26D : 22D;
+    }
 
     private static string ColumnName(int number)
     {

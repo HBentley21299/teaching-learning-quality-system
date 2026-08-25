@@ -116,6 +116,297 @@ export type ActionSummary = {
   isDeleted: boolean;
 };
 
+export type QaCapabilities = {
+  canConfigure: boolean;
+  canSubmitEvidence: boolean;
+  canCorrectEvidence: boolean;
+  canRemoveEvidence: boolean;
+  canClose: boolean;
+  canReopen: boolean;
+  canArchive: boolean;
+  canExport: boolean;
+  canManageActions: boolean;
+};
+
+export type QaReviewSummary = {
+  id: string;
+  title: string;
+  academicYear: string;
+  theme: string;
+  status: "draft" | "open" | "closed" | "reopened" | "archived";
+  plannedOpenDate?: string;
+  closingDate: string;
+  ownerName: string;
+  teamCount: number;
+  activityCount: number;
+  evidenceCount: number;
+  rowVersion: string;
+  capabilities: QaCapabilities;
+};
+
+export type QaHubSummary = {
+  canAccessHub: boolean;
+  canManageReviews: boolean;
+  canMonitorActions: boolean;
+  openReviewCount: number;
+  accessibleReviewCount: number;
+  reviews: QaReviewSummary[];
+};
+
+export type QaQuestionSummary = {
+  id: string;
+  activityTypeId: string;
+  activityKey: string;
+  activityName: string;
+  versionNumber: number;
+  themeOrWeek?: string;
+  questionText: string;
+  guidance?: string;
+  displayOrder: number;
+  isRequired: boolean;
+  allowsNotApplicable: boolean;
+  commentRequiredAtExpected: boolean;
+  isActive: boolean;
+  sourceStatus: "active" | "draft" | "inactive" | "frozen";
+  questionTag: string;
+  createdAt: string;
+};
+
+export type QaActivityTemplateSummary = {
+  id: string;
+  activityTypeId: string;
+  templateKey: string;
+  name: string;
+  description?: string;
+  isActive: boolean;
+  questionCount: number;
+  rowVersion: string;
+};
+
+export type QaActivityTypeSummary = {
+  id: string;
+  activityKey: string;
+  name: string;
+  description?: string;
+  displayOrder: number;
+  isActive: boolean;
+  templates: QaActivityTemplateSummary[];
+};
+
+export type QaScopeSummary = {
+  orgUnitId: string;
+  scopeType: "faculty" | "team";
+  code: string;
+  name: string;
+  parentOrgUnitId?: string;
+  parentCode?: string;
+  parentName?: string;
+};
+
+export type QaReviewActivitySummary = {
+  id: string;
+  activityTypeId: string;
+  activityKey: string;
+  name: string;
+  templateId: string;
+  templateName: string;
+  displayOrder: number;
+  questions: QaQuestionSummary[];
+};
+
+export type QaEvidenceSummary = {
+  id: string;
+  reviewId: string;
+  reviewActivityId: string;
+  activityName: string;
+  status: "draft" | "submitted";
+  teamOrgUnitId: string;
+  facultyName: string;
+  teamName: string;
+  courseProgramme?: string;
+  courseLevel?: string;
+  subjectStaffName?: string;
+  reviewerStaffId: string;
+  reviewerName: string;
+  activityAt: string;
+  sampleSize?: number;
+  responseCount: number;
+  submittedAt?: string;
+  versionNumber: number;
+  rowVersion: string;
+  canEdit: boolean;
+  canRemove: boolean;
+};
+
+export type QaCloseValidationSummary = {
+  activitiesWithoutEvidence: string[];
+  teamsWithoutEvidence: string[];
+  draftSubmissionCount: number;
+  missingRequiredResponseCount: number;
+  evidenceCount: number;
+  ratedResponseCount: number;
+  sampleCount: number;
+};
+
+export type QaReviewDetail = {
+  review: QaReviewSummary;
+  questionTag: string;
+  ownerStaffId: string;
+  scope: QaScopeSummary[];
+  activities: QaReviewActivitySummary[];
+  evidence: QaEvidenceSummary[];
+  closeValidation?: QaCloseValidationSummary;
+};
+
+export type SaveQaReviewRequest = {
+  title: string;
+  academicYear: string;
+  theme: string;
+  questionTag: string;
+  ownerStaffId: string;
+  plannedOpenDate?: string;
+  closingDate: string;
+  teamOrgUnitIds: string[];
+  activities: { activityTypeId: string; templateId: string; questionIds: string[] }[];
+  rowVersion?: string;
+};
+
+export type QaEvidenceResponseSummary = {
+  reviewQuestionId: string;
+  themeOrWeek?: string;
+  questionText: string;
+  guidance?: string;
+  displayOrder: number;
+  isRequired: boolean;
+  allowsNotApplicable: boolean;
+  commentRequiredAtExpected: boolean;
+  outcome?: "below" | "at" | "above" | "not_applicable";
+  comment?: string;
+  notApplicableReason?: string;
+};
+
+export type QaEvidenceRevisionSummary = { versionNumber: number; reason?: string; createdBy: string; createdAt: string };
+
+export type QaEvidenceDetail = {
+  evidence: QaEvidenceSummary;
+  teamOrgUnitIds: string[];
+  teamNames: string[];
+  contextualNotes?: string;
+  evidenceLinks: string[];
+  keyStrengths?: string;
+  areasForImprovement?: string;
+  recommendedActions?: string;
+  additionalContext?: string;
+  subjectStaffId?: string;
+  responses: QaEvidenceResponseSummary[];
+  revisions: QaEvidenceRevisionSummary[];
+};
+
+export type SaveQaEvidenceRequest = {
+  reviewActivityId: string;
+  teamOrgUnitId: string;
+  teamOrgUnitIds?: string[];
+  courseProgramme?: string;
+  courseLevel?: string;
+  subjectStaffId?: string;
+  activityAt: string;
+  sampleSize?: number;
+  contextualNotes?: string;
+  evidenceLinks?: string[];
+  keyStrengths?: string;
+  areasForImprovement?: string;
+  recommendedActions?: string;
+  additionalContext?: string;
+  responses: { reviewQuestionId: string; outcome?: string; comment?: string; notApplicableReason?: string }[];
+  correctionReason?: string;
+  rowVersion?: string;
+};
+
+export type QaDashboardBreakdown = { key: string; label: string; below: number; at: number; above: number; notApplicable: number; rated: number; atOrAbovePercentage: number };
+export type QaDashboardQuestionBreakdown = { activityKey: string; activityLabel: string; questionId: string; themeOrWeek?: string; questionText: string; below: number; at: number; above: number; notApplicable: number; rated: number; belowPercentage: number; atPercentage: number; abovePercentage: number };
+export type QaDashboardSummary = {
+  reviewId: string;
+  evidenceCount: number;
+  facultyCount: number;
+  teamCount: number;
+  courseCount: number;
+  sampleCount: number;
+  belowCount: number;
+  atCount: number;
+  aboveCount: number;
+  notApplicableCount: number;
+  ratedCount: number;
+  atOrAbovePercentage: number;
+  byActivity: QaDashboardBreakdown[];
+  questions: QaDashboardQuestionBreakdown[];
+  byTeam: QaDashboardBreakdown[];
+  byTheme: QaDashboardBreakdown[];
+  timeline: { date: string; evidenceCount: number; responseCount: number }[];
+  teamsWithoutEvidence: string[];
+  linkedActionCount: number;
+  openActionCount: number;
+  snapshotVersion: number;
+};
+
+export type QaAuditSummary = { id: string; action: string; summary?: string; reason?: string; actorName: string; createdAt: string };
+
+export type QaActionOwnerOption = { staffId: string; displayName: string };
+export type QaActionTeamOption = { teamOrgUnitId: string; teamName: string; programmeLeader?: QaActionOwnerOption };
+export type QaActionFacultyOption = {
+  facultyOrgUnitId: string;
+  facultyName: string;
+  headOfFaculty?: QaActionOwnerOption;
+  teams: QaActionTeamOption[];
+};
+export type QaReviewActionOptions = {
+  reviewId: string;
+  reviewTitle: string;
+  creationMode: "admin" | "review_owner" | "hof" | "pl";
+  canCreateWholeReview: boolean;
+  faculties: QaActionFacultyOption[];
+};
+export type QaActionAssignmentSummary = {
+  actionId: string;
+  staffId: string;
+  staffName: string;
+  assignmentRole: "hof" | "pl";
+  sourceOrgUnitId: string;
+  sourceOrgUnitName: string;
+  status: string;
+  completedDate?: string;
+};
+export type QaActionGroupSummary = {
+  id: string;
+  reviewId: string;
+  reviewTitle: string;
+  facultyOrgUnitId?: string;
+  facultyName: string;
+  teamOrgUnitIds: string[];
+  teamNames: string[];
+  title: string;
+  detail?: string;
+  dueDate: string;
+  status: "open" | "overdue" | "reviewed" | "closed";
+  createdAt: string;
+  creatorStaffId?: string;
+  creatorName: string;
+  reviewedAt?: string;
+  closedAt?: string;
+  closeNote?: string;
+  assignments: QaActionAssignmentSummary[];
+  rowVersion: string;
+  canReview: boolean;
+  canClose: boolean;
+};
+export type CreateQaActionGroupRequest = {
+  facultyOrgUnitId?: string;
+  teamOrgUnitIds: string[];
+  title: string;
+  detail?: string;
+  dueDate: string;
+  wholeReview?: boolean;
+};
+
 export type DashboardActionSummary = Pick<ActionSummary,
   | "id"
   | "sourceRecordId"

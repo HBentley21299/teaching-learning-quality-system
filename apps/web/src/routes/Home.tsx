@@ -1,6 +1,7 @@
 import { navigationItems, type AppRoute } from "../app/navigation";
 import { EliStage } from "../components/EliScene";
 import type { CurrentUser } from "../services/types";
+import { WorkspaceSwitch } from "../components/WorkspaceSwitch";
 
 /**
  * Landing page: a time-aware personalised greeting from ELI, plus a grid of
@@ -17,6 +18,7 @@ type HomeProps = {
   user: CurrentUser;
   tiles: readonly HomeTile[];
   onNavigate: (route: AppRoute) => void;
+  canAccessQaHub: boolean;
 };
 
 const tileDescriptions: Partial<Record<AppRoute, string>> = {
@@ -81,7 +83,7 @@ function greetingFor(now: Date) {
   return { salutation, message };
 }
 
-export function Home({ user, tiles, onNavigate }: HomeProps) {
+export function Home({ user, tiles, onNavigate, canAccessQaHub }: HomeProps) {
   const firstName = user.displayName.split(" ")[0] || user.displayName;
   const { salutation, message } = greetingFor(new Date());
   const visibleTiles = tiles.filter((tile) => tile.key !== "home");
@@ -89,6 +91,7 @@ export function Home({ user, tiles, onNavigate }: HomeProps) {
 
   return (
     <div className="route-stack home-stack">
+      {canAccessQaHub ? <WorkspaceSwitch active="elevate" onChange={(workspace) => { if (workspace === "qa") onNavigate("qa"); }} /> : null}
       <section className="panel home-hero">
         <div className="home-hero-copy">
           <p className="eyebrow">i-Elevate</p>

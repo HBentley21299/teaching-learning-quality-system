@@ -10,6 +10,7 @@ import {
   MessagesSquare,
   Sparkles,
   Settings,
+  ShieldCheck,
   UserRound,
   Users,
   UsersRound
@@ -32,7 +33,8 @@ export const navigationItems = [
   { key: "profile", label: "Staff Profile", icon: UserRound },
   { key: "actions", label: "Actions", icon: ListChecks },
   { key: "als_learning", label: "ALS Learning Walks", icon: Activity },
-  { key: "als_liv", label: "ALS LIV", icon: Lightbulb }
+  { key: "als_liv", label: "ALS LIV", icon: Lightbulb },
+  { key: "qa", label: "QA Hub", icon: ShieldCheck, hidden: true }
 ] as const;
 
 export type AppRoute = (typeof navigationItems)[number]["key"];
@@ -48,7 +50,8 @@ const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
     "lists.manage",
     "forms.manage",
     "records.manage",
-    "messaging.manage"
+    "messaging.manage",
+    "qa_reviews.manage"
   ],
   learning: ["learning_walk.submit", "forms.manage"],
   liv: ["liv.submit", "liv.manage"],
@@ -59,7 +62,8 @@ const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
   practice: ["elevate_practice.submit"],
   coaching: ["coaching.submit", "coaching.manage"],
   scrutiny: ["work_scrutiny.submit", "forms.manage", "reports.view_all", "reports.view_scoped"],
-  cpd: ["cpd.self_log", "cpd.manage"]
+  cpd: ["cpd.self_log", "cpd.manage"],
+  qa: ["qa_reviews.view_all", "qa_reviews.view_scoped", "qa_reviews.view_assigned"]
 };
 
 /**

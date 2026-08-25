@@ -108,6 +108,18 @@ import type {
   UpdateFormSubmissionRequest,
   UpdateFormTemplateStructureRequest,
   UpdateLearningWalkThemeMappingRequest
+  ,QaActivityTypeSummary
+  ,QaAuditSummary
+  ,QaDashboardSummary
+  ,QaActionGroupSummary
+  ,QaReviewActionOptions
+  ,CreateQaActionGroupRequest
+  ,QaEvidenceDetail
+  ,QaHubSummary
+  ,QaQuestionSummary
+  ,QaReviewDetail
+  ,SaveQaEvidenceRequest
+  ,SaveQaReviewRequest
 } from "./types";
 
 import { clearLocalSession, getAccessToken, getLocalToken } from "./auth";
@@ -302,6 +314,54 @@ async function downloadApiFile(url: string): Promise<ApiResult> {
 }
 
 export const api = {
+  qaHubSummary: () => getJson<QaHubSummary>("/api/v1/qa-hub/summary"),
+  qaActivityTypes: () => getJson<QaActivityTypeSummary[]>("/api/v1/qa-hub/activities"),
+  qaQuestions: (activityTypeId?: string, includeInactive = false) => {
+    const query = new URLSearchParams();
+    if (activityTypeId) query.set("activityTypeId", activityTypeId);
+    if (includeInactive) query.set("includeInactive", "true");
+    return getJson<QaQuestionSummary[]>(`/api/v1/qa-hub/questions${query.size ? `?${query}` : ""}`);
+  },
+  saveQaQuestion: (questionId: string | undefined, request: Omit<QaQuestionSummary, "id" | "activityKey" | "activityName" | "versionNumber" | "createdAt">) =>
+    sendJson<Omit<QaQuestionSummary, "id" | "activityKey" | "activityName" | "versionNumber" | "createdAt">, QaQuestionSummary>(`/api/v1/qa-hub/questions${questionId ? `/${questionId}` : ""}`, questionId ? "PUT" : "POST", request),
+  qaReview: (reviewId: string) => getJson<QaReviewDetail>(`/api/v1/qa-hub/reviews/${reviewId}`),
+  createQaReview: (request: SaveQaReviewRequest) => sendJson<SaveQaReviewRequest, { id: string }>("/api/v1/qa-hub/reviews", "POST", request),
+  updateQaReview: (reviewId: string, request: SaveQaReviewRequest) => sendJson<SaveQaReviewRequest, QaReviewDetail>(`/api/v1/qa-hub/reviews/${reviewId}`, "PUT", request),
+  transitionQaReview: (reviewId: string, action: "open" | "close" | "reopen" | "archive", reason: string | undefined, rowVersion: string) =>
+    sendJson<{ reason?: string; rowVersion: string }, QaReviewDetail>(`/api/v1/qa-hub/reviews/${reviewId}/${action}`, "POST", { reason, rowVersion }),
+  duplicateQaTemplate: (templateId: string, name: string, description?: string) =>
+    sendJson(`/api/v1/qa-hub/templates/${templateId}/duplicate`, "POST", { name, description }),
+  qaEvidence: (evidenceId: string) => getJson<QaEvidenceDetail>(`/api/v1/qa-hub/evidence/${evidenceId}`),
+  saveQaEvidence: (reviewId: string, evidenceId: string | undefined, request: SaveQaEvidenceRequest, submit = false) => {
+    const path = evidenceId
+      ? `/api/v1/qa-hub/reviews/${reviewId}/evidence/${evidenceId}${submit ? "/submit" : ""}`
+      : `/api/v1/qa-hub/reviews/${reviewId}/evidence${submit ? "/submit" : ""}`;
+    return sendJson<SaveQaEvidenceRequest, QaEvidenceDetail>(path, evidenceId && !submit ? "PUT" : "POST", request);
+  },
+  removeQaEvidence: (evidenceId: string, reason: string) => sendJson(`/api/v1/qa-hub/evidence/${evidenceId}`, "DELETE", { reason }),
+  qaDashboard: (reviewId: string, facultyOrgUnitId?: string, teamOrgUnitId?: string) => {
+    const query = new URLSearchParams();
+    if (facultyOrgUnitId) query.set("facultyOrgUnitId", facultyOrgUnitId);
+    if (teamOrgUnitId) query.set("teamOrgUnitId", teamOrgUnitId);
+    return getJson<QaDashboardSummary>(`/api/v1/qa-hub/reviews/${reviewId}/dashboard${query.size ? `?${query}` : ""}`);
+  },
+  qaReviewActionOptions: (reviewId: string) => getJson<QaReviewActionOptions>(`/api/v1/qa-hub/reviews/${reviewId}/action-options`),
+  qaActionReviewOptions: () => getJson<QaReviewActionOptions[]>("/api/v1/qa-hub/action-options"),
+  qaReviewActions: (reviewId: string) => getJson<QaActionGroupSummary[]>(`/api/v1/qa-hub/reviews/${reviewId}/actions`),
+  createQaReviewAction: (reviewId: string, request: CreateQaActionGroupRequest) =>
+    sendJson<CreateQaActionGroupRequest, QaActionGroupSummary>(`/api/v1/qa-hub/reviews/${reviewId}/actions`, "POST", request),
+  qaAdminActions: () => getJson<QaActionGroupSummary[]>("/api/v1/qa-hub/actions"),
+  reviewQaActionGroup: (groupId: string, rowVersion: string) =>
+    sendJson<{ rowVersion: string }, QaActionGroupSummary>(`/api/v1/qa-hub/actions/${groupId}/review`, "POST", { rowVersion }),
+  closeQaActionGroup: (groupId: string, rowVersion: string) =>
+    sendJson<{ rowVersion: string }, QaActionGroupSummary>(`/api/v1/qa-hub/actions/${groupId}/close`, "POST", { rowVersion }),
+  qaAudit: (reviewId: string) => getJson<QaAuditSummary[]>(`/api/v1/qa-hub/reviews/${reviewId}/audit`),
+  exportQaReview: (reviewId: string, format: "pdf" | "xlsx", facultyOrgUnitId?: string, teamOrgUnitId?: string) => {
+    const query = new URLSearchParams();
+    if (facultyOrgUnitId) query.set("facultyOrgUnitId", facultyOrgUnitId);
+    if (teamOrgUnitId) query.set("teamOrgUnitId", teamOrgUnitId);
+    return downloadApiFile(`/api/v1/qa-hub/reviews/${reviewId}/report.${format}${query.size ? `?${query}` : ""}`);
+  },
   changePassword: (request: { currentPassword: string; newPassword: string }) =>
     sendJson("/api/v1/auth/change-password", "POST", request),
   adminSetUserPassword: (userAccountId: string, newPassword: string) =>
@@ -311,6 +371,13 @@ export const api = {
     Object.entries(filters).forEach(([key, value]) => { if (value) query.set(key, value); });
     const suffix = query.size > 0 ? `?${query.toString()}` : "";
     return downloadApiFile(`/api/v1/exports/excel/${encodeURIComponent(moduleKey)}${suffix}`);
+  },
+  exportDashboard: (moduleKey: string, format: "pdf" | "xlsx", filters: ExportFilters = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value) query.set(key, value); });
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    const routeFormat = format === "xlsx" ? "excel" : "pdf";
+    return downloadApiFile(`/api/v1/exports/${routeFormat}/${encodeURIComponent(moduleKey)}${suffix}`);
   },
   exportRecordWord: (recordId: string) =>
     downloadApiFile(`/api/v1/exports/word/records/${encodeURIComponent(recordId)}`),

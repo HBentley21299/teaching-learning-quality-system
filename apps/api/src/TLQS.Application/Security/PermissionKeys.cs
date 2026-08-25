@@ -37,6 +37,16 @@ public static class PermissionKeys
     public const string MessagingManage = "messaging.manage";
     public const string MessagingSend = "messaging.send";
     public const string ExportsCreate = "exports.create";
+    public const string QaReviewsViewAll = "qa_reviews.view_all";
+    public const string QaReviewsViewScoped = "qa_reviews.view_scoped";
+    public const string QaReviewsViewAssigned = "qa_reviews.view_assigned";
+    public const string QaReviewsSubmitAll = "qa_reviews.submit_all";
+    public const string QaReviewsSubmitScoped = "qa_reviews.submit_scoped";
+    public const string QaReviewsSubmitAssigned = "qa_reviews.submit_assigned";
+    public const string QaReviewsManage = "qa_reviews.manage";
+    public const string QaReviewsCorrect = "qa_reviews.correct";
+    public const string QaReviewsRemove = "qa_reviews.remove";
+    public const string QaReviewsActionsAdmin = "qa_reviews.actions_admin";
 
     public static readonly string[] All =
     [
@@ -74,6 +84,16 @@ public static class PermissionKeys
         ReportsViewScoped,
         MessagingManage,
         MessagingSend,
-        ExportsCreate
+        ExportsCreate,
+        QaReviewsViewAll,
+        QaReviewsViewScoped,
+        QaReviewsViewAssigned,
+        QaReviewsSubmitAll,
+        QaReviewsSubmitScoped,
+        QaReviewsSubmitAssigned,
+        QaReviewsManage,
+        QaReviewsCorrect,
+        QaReviewsRemove,
+        QaReviewsActionsAdmin
     ];
 }

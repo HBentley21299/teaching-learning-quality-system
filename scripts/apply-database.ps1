@@ -139,7 +139,15 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\059_reporting_performance_indexes.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\060_als_liv_and_learning_walks.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\061_als_liv_source_uniqueness.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\062_als_liv_practitioner_catalogue.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\062_als_liv_practitioner_catalogue.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\063_qa_reviews.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\064_qa_permission_driven_access.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\065_qa_active_review_and_question_tags.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\066_qa_evidence_team_scope_and_question_dashboard.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\067_qa_review_actions.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\068_qa_question_bank_reset.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\069_qa_form_questions.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\070_qa_action_workflow_and_inclusion_walks.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

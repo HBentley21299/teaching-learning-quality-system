@@ -10,6 +10,8 @@ import {
   ClipboardCheck,
   ClipboardList,
   Download,
+  FileSpreadsheet,
+  FileText,
   GraduationCap,
   MessagesSquare,
   RefreshCw,
@@ -180,6 +182,7 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
   const [actionDetailPage, setActionDetailPage] = useState(1);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [exportError, setExportError] = useState("");
   const [recordDetailExpanded, setRecordDetailExpanded] = useState(false);
   const [actionDetailExpanded, setActionDetailExpanded] = useState(false);
@@ -450,42 +453,11 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
     setRecordDetailExpanded(false); setActionDetailExpanded(false); setExportError("");
   }
 
-  async function exportCurrentView() {
-    if (selectedProcess === "elevate_status") {
-      downloadCsv(`i-elevate-status-${academicYear.replace("/", "-")}.csv`, [
-        ["Organisation area", "Staff in academic year", ...elevateLevelDefinitions.map((level) => `Level ${level.level} or above`)],
-        ...elevateStatusInScope.map((row) => [
-          row.areaName ?? row.areaCode ?? "Unassigned", row.staffCount,
-          ...elevateLevelDefinitions.map((level) => {
-            const count = elevateStatusLevelCount(row, level.level);
-            return `${count} (${percentage(count, row.staffCount)}%)`;
-          })
-        ]),
-        ["Overall", elevateStatusTotals.staffCount, ...elevateStatusTotals.levelCounts.map((count) => `${count} (${percentage(count, elevateStatusTotals.staffCount)}%)`)]
-      ]);
-      return;
-    }
-    if (selectedProcess === "actions") {
-      downloadCsv(`i-elevate-actions-${academicYear.replace("/", "-")}.csv`, [
-        ["Theme", "Action", "Owner", "Area", "Due", "Status"],
-        ...visibleActions.map((action) => [
-          action.actionTheme, action.title, action.ownerStaffName ?? "Unassigned",
-          action.teamCode ?? action.facultyCode ?? "Unassigned", action.dueDate ?? "",
-          action.completedDate ? "Complete" : action.isOverdue ? "Overdue" : "Open"
-        ])
-      ]);
-      return;
-    }
+  async function exportCurrentView(format: "pdf" | "xlsx") {
     const moduleKey = dashboardExportModuleKey(selectedProcess);
-    if (!moduleKey) {
-      downloadCsv(`i-elevate-${selectedProcess}-${academicYear.replace("/", "-")}.csv`, [
-        ["Process", "Record", "Date", "Area", "Status", "Theme or focus", "Measure"],
-        ...visibleRecords.map((record) => [getProcessDefinition(record.processKey).label, record.title, getRecordDate(record), formatArea(record), formatLabel(record.status), splitValues(record.theme).join(", "), formatRecordMeasure(record)])
-      ]);
-      return;
-    }
     setIsExporting(true); setExportError("");
-    const result = await api.exportExcel(moduleKey, {
+    setIsExportMenuOpen(false);
+    const result = await api.exportDashboard(moduleKey, format, {
       academicYear,
       facultyCode: selectedFaculty?.code,
       teamCode: selectedTeam?.code,
@@ -494,7 +466,7 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
       status: statusFilter === "all" ? undefined : statusFilter
     });
     setIsExporting(false);
-    if (!result.ok) setExportError(result.message ?? "The full form export could not be created.");
+    if (!result.ok) setExportError(result.message ?? `The ${format === "pdf" ? "PDF" : "Excel"} dashboard report could not be created.`);
   }
 
   function openOrganisationDetail(row: OrganisationPerformanceRow, detail: "records" | "actions") {
@@ -522,7 +494,10 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
         </div>
         <div className="intelligence-header-actions">
           <span className="intelligence-data-state"><i />Permission-scoped live data</span>
-          <Button disabled={isExporting} icon={Download} onClick={() => void exportCurrentView()} variant="secondary">{isExporting ? "Exporting forms" : "Export view"}</Button>
+          <div className="qa-report-menu">
+            <button aria-expanded={isExportMenuOpen} aria-haspopup="menu" className="button button-secondary qa-report-trigger" disabled={isExporting} onClick={() => setIsExportMenuOpen((current) => !current)} type="button"><Download aria-hidden="true" size={16} /><span>{isExporting ? "Preparing report…" : "Report"}</span><ChevronDown aria-hidden="true" size={15} /></button>
+            {isExportMenuOpen ? <><button aria-label="Close report menu" className="qa-report-menu-backdrop" onClick={() => setIsExportMenuOpen(false)} type="button" /><div className="qa-report-menu-list" role="menu"><button onClick={() => void exportCurrentView("pdf")} role="menuitem" type="button"><FileText aria-hidden="true" size={18} /><span><strong>PDF dashboard report</strong><small>Polished dashboard summary with expanded datasets</small></span></button><button onClick={() => void exportCurrentView("xlsx")} role="menuitem" type="button"><FileSpreadsheet aria-hidden="true" size={18} /><span><strong>Excel data report</strong><small>Full records and question-by-question form results</small></span></button></div></> : null}
+          </div>
           <Button disabled={isRefreshing} icon={RefreshCw} onClick={() => void refresh()}>{isRefreshing ? "Refreshing" : "Refresh"}</Button>
         </div>
       </header>
@@ -1631,6 +1606,9 @@ function actionMatchesProcess(action: ActionSummary, processKey: DashboardProces
 
 function dashboardExportModuleKey(processKey: DashboardProcessKey) {
   const map: Partial<Record<DashboardProcessKey, string>> = {
+    overview: "dashboard-overview",
+    actions: "actions",
+    elevate_status: "elevate-status",
     learning_walk: "learning-walks",
     als_learning_walk: "als-learning-walks",
     liv: "liv",
@@ -1642,7 +1620,7 @@ function dashboardExportModuleKey(processKey: DashboardProcessKey) {
     work_scrutiny: "work-scrutiny",
     cpd_event: "cpd"
   };
-  return map[processKey];
+  return map[processKey] ?? "dashboard-overview";
 }
 
 function getProcessDefinition(processKey: DashboardProcessKey | RecordProcessKey) { return processDefinitions.find((item) => item.key === processKey) ?? processDefinitions[0]; }
@@ -1710,10 +1688,4 @@ function canAccessDashboardProcess(processKey: DashboardProcessKey, permissions:
   if (processKey === "liv") return permissions.includes("liv.submit") || permissions.includes("liv.manage");
   if (processKey === "als_liv") return permissions.includes("als_liv.submit") || permissions.includes("als_liv.manage");
   return true;
-}
-
-function downloadCsv(filename: string, rows: Array<Array<string | number>>) {
-  const content = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
-  const url = URL.createObjectURL(new Blob(["\ufeff", content], { type: "text/csv;charset=utf-8" }));
-  const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url);
 }

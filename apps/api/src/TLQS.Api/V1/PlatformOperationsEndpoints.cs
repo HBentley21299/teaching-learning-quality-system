@@ -377,6 +377,33 @@ public static class PlatformOperationsEndpoints
             return Results.File(result.Content, result.ContentType, result.FileName);
         }).RequireRateLimiting("sensitive");
 
+        api.MapGet("/exports/pdf/{moduleKey}", async (
+            string moduleKey,
+            string? academicYear,
+            string? facultyCode,
+            string? teamCode,
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            Guid? staffId,
+            Guid? reviewerId,
+            string? status,
+            string? recordType,
+            ClaimsPrincipal principal,
+            SqlFoundationDataStore store,
+            QaPdfReportService exporter,
+            CancellationToken cancellationToken) =>
+        {
+            var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
+            if (!user.HasPermission(PermissionKeys.ExportsCreate) || !CanExportModule(user, moduleKey)) return Results.Forbid();
+            var filter = new ExportFilter(
+                academicYear, facultyCode, teamCode, fromDate, toDate,
+                staffId, reviewerId, status, recordType);
+            var report = await store.GetExportWorkbookAsync(moduleKey, filter, user, cancellationToken);
+            var result = exporter.CreateDashboardReport(report);
+            await store.RecordExportAuditAsync(moduleKey, "pdf", filter, user, cancellationToken);
+            return Results.File(result.Content, result.ContentType, result.FileName);
+        }).RequireRateLimiting("sensitive");
+
         api.MapGet("/exports/word/records/{recordId:guid}", async (
             Guid recordId,
             ClaimsPrincipal principal,
