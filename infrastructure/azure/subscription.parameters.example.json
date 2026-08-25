@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": { "value": "rg-ielevate-prod-uks" },
+    "location": { "value": "uksouth" },
+    "namePrefix": { "value": "ielevate-oldham" },
+    "environmentName": { "value": "prod" },
+    "entraTenantId": { "value": "<college-tenant-id>" },
+    "entraApiAudience": { "value": "<api-app-client-id>" },
+    "sqlEntraAdministratorLogin": { "value": "<entra-administrator-email>" },
+    "sqlEntraAdministratorObjectId": { "value": "<entra-administrator-object-id>" },
+    "sqlAdministratorPassword": { "value": "<supply-securely-at-deployment>" },
+    "deploymentIpAddress": { "value": "<temporary-public-ip-for-migrations>" },
+    "appServiceSkuName": { "value": "B1" },
+    "appServiceSkuTier": { "value": "Basic" },
+    "sqlMaximumVcores": { "value": 2 },
+    "sqlAutoPauseDelayMinutes": { "value": 60 }
+  }
+}

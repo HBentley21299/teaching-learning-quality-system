@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Threading.RateLimiting;
+using Azure.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -32,7 +33,24 @@ builder.Services.Configure<ExportBrandingOptions>(builder.Configuration.GetSecti
 builder.Services.Configure<MessagingOptions>(builder.Configuration.GetSection("Messaging"));
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("TLQS");
 var dataProtectionKeyPath = builder.Configuration["DataProtection:KeyPath"];
-if (!string.IsNullOrWhiteSpace(dataProtectionKeyPath))
+var dataProtectionBlobUri = builder.Configuration["DataProtection:BlobUri"];
+var dataProtectionKeyVaultKeyIdentifier = builder.Configuration["DataProtection:KeyVaultKeyIdentifier"];
+if (!string.IsNullOrWhiteSpace(dataProtectionBlobUri)
+    || !string.IsNullOrWhiteSpace(dataProtectionKeyVaultKeyIdentifier))
+{
+    if (string.IsNullOrWhiteSpace(dataProtectionBlobUri)
+        || string.IsNullOrWhiteSpace(dataProtectionKeyVaultKeyIdentifier))
+    {
+        throw new InvalidOperationException(
+            "DataProtection:BlobUri and DataProtection:KeyVaultKeyIdentifier must both be configured for Azure-hosted data protection.");
+    }
+
+    var azureCredential = new DefaultAzureCredential();
+    dataProtection
+        .PersistKeysToAzureBlobStorage(new Uri(dataProtectionBlobUri), azureCredential)
+        .ProtectKeysWithAzureKeyVault(new Uri(dataProtectionKeyVaultKeyIdentifier), azureCredential);
+}
+else if (!string.IsNullOrWhiteSpace(dataProtectionKeyPath))
 {
     Directory.CreateDirectory(dataProtectionKeyPath);
     dataProtection.PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyPath));
@@ -48,7 +66,7 @@ if (!string.IsNullOrWhiteSpace(dataProtectionKeyPath))
 else if (!builder.Environment.IsDevelopment())
 {
     throw new InvalidOperationException(
-        "DataProtection:KeyPath must be configured in production so protected settings survive application restarts.");
+        "Configure either DataProtection:KeyPath or the Azure Blob and Key Vault data-protection settings in production.");
 }
 builder.Services.AddHttpClient<IEmailProvider, ConfiguredEmailProvider>(client =>
 {

@@ -2,7 +2,7 @@ param(
     [switch] $SkipInstall,
     [switch] $SkipSecurityAudit,
     [switch] $AllowDirty,
-    [ValidateSet("win-x64")]
+    [ValidateSet("win-x64", "linux-x64")]
     [string] $RuntimeIdentifier = "win-x64"
 )
 
@@ -121,8 +121,8 @@ Invoke-Step "Build the production web application" {
 }
 
 Invoke-Step "Publish API artifact" {
-    # Production is hosted on Windows IIS. The .NET Hosting Bundle supplies the
-    # runtime and ASP.NET Core Module on the server.
+    # Both the on-premises IIS release and Azure Linux App Service release are
+    # framework-dependent. The selected host supplies the matching .NET runtime.
     dotnet publish $apiProject --configuration Release --runtime $RuntimeIdentifier --self-contained false --output $apiOutput
 }
 

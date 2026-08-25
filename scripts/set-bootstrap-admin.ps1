@@ -4,7 +4,10 @@ param(
     [Parameter(Mandatory = $true)][string] $Email,
     [Parameter(Mandatory = $true)][Guid] $TenantId,
     [Parameter(Mandatory = $true)][Guid] $ObjectId,
-    [string] $SqlCmd = "sqlcmd"
+    [string] $SqlCmd = "sqlcmd",
+    [ValidateSet("Windows", "Entra")]
+    [string] $Authentication = "Windows",
+    [string[]] $SqlCmdOptions = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,6 +73,8 @@ VALUES (@UserAccountId, N'deployment', N'deployment.bootstrap_admin_confirmed',
 COMMIT TRANSACTION;
 "@
 
-& $SqlCmd -S $Server -d $Database -E -b -Q $query
+$authenticationArguments = if ($Authentication -eq "Entra") { @("-G") } else { @("-E") }
+$arguments = @("-S", $Server, "-d", $Database) + $authenticationArguments + @("-b") + $SqlCmdOptions + @("-Q", $query)
+& $SqlCmd @arguments
 if ($LASTEXITCODE -ne 0) { throw "Bootstrap administrator configuration failed with exit code $LASTEXITCODE." }
 Write-Host "Bootstrap administrator confirmed: $Email" -ForegroundColor Green

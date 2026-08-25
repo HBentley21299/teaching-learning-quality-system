@@ -9,6 +9,9 @@ param(
 
     [string[]] $SqlCmdOptions = @(),
 
+    [ValidateSet("Windows", "Entra")]
+    [string] $Authentication = "Windows",
+
     [switch] $ExcludeOfficialStaffData,
 
     [switch] $BaselineExistingDatabase
@@ -41,7 +44,8 @@ function Invoke-DatabaseQuery {
         [string] $Query
     )
 
-    $arguments = @("-S", $Server, "-d", $Database, "-E", "-b", "-h", "-1", "-W") +
+    $authenticationArguments = if ($Authentication -eq "Entra") { @("-G") } else { @("-E") }
+    $arguments = @("-S", $Server, "-d", $Database) + $authenticationArguments + @("-b", "-h", "-1", "-W") +
         $SqlCmdOptions + @("-Q", $Query)
     $output = @(& $SqlCmd @arguments)
     if ($LASTEXITCODE -ne 0) {
@@ -63,8 +67,12 @@ function Get-ScalarValue {
     return ([string]$first).Trim()
 }
 
-$serverMajorVersion = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion'));")
-if ([int]$serverMajorVersion -lt 14) {
+$serverDetails = @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT CONCAT(CONVERT(int, SERVERPROPERTY('ProductMajorVersion')), '|', CONVERT(int, SERVERPROPERTY('EngineEdition')));")
+$serverParts = (Get-ScalarValue $serverDetails).Split('|')
+$serverMajorVersion = [int]$serverParts[0]
+$engineEdition = [int]$serverParts[1]
+$isAzureSqlDatabase = $engineEdition -eq 5
+if (!$isAzureSqlDatabase -and $serverMajorVersion -lt 14) {
     throw "i-Elevate requires Microsoft SQL Server 2017 or later. The connected server reported major version $serverMajorVersion."
 }
 $databaseCompatibilityLevel = Get-ScalarValue @(Invoke-DatabaseQuery -Query "SET NOCOUNT ON; SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")
@@ -239,7 +247,8 @@ foreach ($script in $scripts) {
     }
 
     Write-Host "Applying $migrationKey"
-    $arguments = @("-S", $Server, "-d", $Database, "-E", "-b") + $SqlCmdOptions + @("-i", $script)
+    $authenticationArguments = if ($Authentication -eq "Entra") { @("-G") } else { @("-E") }
+    $arguments = @("-S", $Server, "-d", $Database) + $authenticationArguments + @("-b") + $SqlCmdOptions + @("-i", $script)
     Invoke-Native -FilePath $SqlCmd -Arguments $arguments
     Invoke-DatabaseQuery -Query "INSERT dbo.schema_migrations (migration_key, checksum_sha256) VALUES (N'$escapedKey', '$checksum');" | Out-Null
 }
