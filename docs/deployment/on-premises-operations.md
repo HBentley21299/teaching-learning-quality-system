@@ -1,6 +1,8 @@
-# On-premises operations reference
+# On-premises contingency reference
 
-This document covers the operational details behind the short deployment guide. It is not an additional installation process.
+Azure is the primary production target. This document retains the operational
+details for an explicitly approved Windows/IIS contingency deployment. Do not mix
+these settings, packages or procedures with the Azure deployment path.
 
 ## Production layout
 

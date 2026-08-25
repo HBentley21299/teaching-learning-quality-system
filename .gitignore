@@ -12,12 +12,15 @@ node_modules/
 .nuget/
 .nuget-feed/
 .tmp/
+tmp/
 .localappdata/
 .artifacts/
 dist/
 coverage/
 .env
 deployment.settings.psd1
+infrastructure/azure/subscription.parameters.json
+infrastructure/azure/*.parameters.local.json
 .env.*
 !.env.example
 !**/.env.example
@@ -36,3 +39,7 @@ deployment.settings.psd1
 TestResults/
 playwright-report/
 apps/web/.vite/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp

@@ -44,7 +44,7 @@ var applicationInsightsName = 'appi-${namePrefix}-${environmentName}'
 var dataProtectionContainerName = 'data-protection'
 var dataProtectionKeyName = 'data-protection'
 var applicationUrl = 'https://${webAppName}.azurewebsites.net'
-var sqlConnectionString = 'Server=tcp:${sqlServerName}.database.windows.net,1433;Database=${sqlDatabaseName};Authentication=Active Directory Default;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;MultipleActiveResultSets=True;Application Name=i-Elevate'
+var sqlConnectionString = 'Server=tcp:${sqlServerName}${environment().suffixes.sqlServerHostname},1433;Database=${sqlDatabaseName};Authentication=Active Directory Default;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;MultipleActiveResultSets=True;Application Name=i-Elevate'
 var commonTags = {
   application: 'i-Elevate'
   environment: environmentName
@@ -174,22 +174,18 @@ resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
   properties: {
     administratorLogin: sqlAdministratorLogin
     administratorLoginPassword: sqlAdministratorPassword
+    administrators: {
+      administratorType: 'ActiveDirectory'
+      azureADOnlyAuthentication: false
+      login: sqlEntraAdministratorLogin
+      principalType: 'User'
+      sid: sqlEntraAdministratorObjectId
+      tenantId: entraTenantId
+    }
     minimalTlsVersion: '1.2'
     publicNetworkAccess: 'Enabled'
     restrictOutboundNetworkAccess: 'Disabled'
-  }
-}
-
-resource sqlEntraAdministrator 'Microsoft.Sql/servers/administrators@2023-08-01-preview' = {
-  parent: sqlServer
-  name: 'ActiveDirectory'
-  properties: {
-    administratorType: 'ActiveDirectory'
-    azureADOnlyAuthentication: false
-    login: sqlEntraAdministratorLogin
-    principalType: 'User'
-    sid: sqlEntraAdministratorObjectId
-    tenantId: entraTenantId
+    version: '12.0'
   }
 }
 
@@ -206,14 +202,13 @@ resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
   }
   properties: {
     autoPauseDelay: sqlAutoPauseDelayMinutes
-    minCapacity: 0.5
+    // The Azure API supports a 0.5-vCore serverless minimum, while the generated
+    // Bicep type currently models this property as an integer.
+    minCapacity: json('0.5')
     readScale: 'Disabled'
     requestedBackupStorageRedundancy: 'Local'
     zoneRedundant: false
   }
-  dependsOn: [
-    sqlEntraAdministrator
-  ]
 }
 
 resource allowAzureServices 'Microsoft.Sql/servers/firewallRules@2023-08-01-preview' = {
@@ -301,11 +296,11 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'DataProtection__BlobUri'
-          value: 'https://${storage.name}.blob.core.windows.net/${dataProtectionContainer.name}/keys.xml'
+          value: 'https://${storage.name}.blob.${environment().suffixes.storage}/${dataProtectionContainer.name}/keys.xml'
         }
         {
           name: 'DataProtection__KeyVaultKeyIdentifier'
-          value: 'https://${keyVault.name}.vault.azure.net/keys/${dataProtectionKey.name}'
+          value: 'https://${keyVault.name}${environment().suffixes.keyvaultDns}/keys/${dataProtectionKey.name}'
         }
         {
           name: 'Messaging__ApplicationUrl'
@@ -374,7 +369,7 @@ resource keyVaultRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04
 
 output applicationUrl string = applicationUrl
 output applicationInsightsName string = applicationInsights.name
-output dataProtectionBlobUri string = 'https://${storage.name}.blob.core.windows.net/${dataProtectionContainer.name}/keys.xml'
+output dataProtectionBlobUri string = 'https://${storage.name}.blob.${environment().suffixes.storage}/${dataProtectionContainer.name}/keys.xml'
 output keyVaultName string = keyVault.name
 output logAnalyticsName string = logAnalytics.name
 output sqlDatabaseName string = sqlDatabase.name

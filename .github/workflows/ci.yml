@@ -31,8 +31,10 @@ jobs:
         run: |
           $files = @(
             'scripts/apply-database.ps1',
+            'scripts/deploy-azure.ps1',
             'scripts/deploy-on-premises.ps1',
             'scripts/grant-on-premises-database-access.ps1',
+            'scripts/new-azure-release.ps1',
             'scripts/new-deployment-package.ps1',
             'scripts/new-on-premises-release.ps1',
             'scripts/rollback-on-premises.ps1',
@@ -45,17 +47,20 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
             if ($errors.Count -gt 0) { throw "$file has PowerShell parse errors: $($errors -join '; ')" }
           }
+      - name: Compile Azure infrastructure
+        shell: pwsh
+        run: az bicep build --file infrastructure/azure/subscription.bicep --outfile "${{ runner.temp }}/subscription.json"
       - name: Audit dependencies
         run: dotnet list apps/api/TLQS.sln package --vulnerable --include-transitive --source https://api.nuget.org/v3/index.json
       - name: Build
         run: dotnet build apps/api/TLQS.sln --configuration Release --no-restore
       - name: Test
         run: dotnet test apps/api/TLQS.sln --configuration Release --no-build
-      - name: Publish
-        run: dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj --configuration Release --runtime win-x64 --self-contained false --output artifacts/api
+      - name: Publish Linux App Service package
+        run: dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj --configuration Release --runtime linux-x64 --self-contained false --output artifacts/api
       - uses: actions/upload-artifact@v6
         with:
-          name: tlqs-api
+          name: tlqs-api-linux-x64
           path: artifacts/api
           if-no-files-found: error
           retention-days: 14

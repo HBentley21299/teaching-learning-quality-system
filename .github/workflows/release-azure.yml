@@ -1,0 +1,68 @@
+name: Build Azure release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tlqs-azure-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Verify and package Linux App Service release
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Microsoft Entra build settings
+        shell: pwsh
+        env:
+          ENTRA_TENANT_ID: ${{ vars.ENTRA_TENANT_ID }}
+          ENTRA_API_CLIENT_ID: ${{ vars.ENTRA_API_CLIENT_ID }}
+          ENTRA_SPA_CLIENT_ID: ${{ vars.ENTRA_SPA_CLIENT_ID }}
+          ENTRA_API_SCOPE: ${{ vars.ENTRA_API_SCOPE }}
+        run: |
+          $required = @{
+            ENTRA_TENANT_ID = $env:ENTRA_TENANT_ID
+            ENTRA_API_CLIENT_ID = $env:ENTRA_API_CLIENT_ID
+            ENTRA_SPA_CLIENT_ID = $env:ENTRA_SPA_CLIENT_ID
+            ENTRA_API_SCOPE = $env:ENTRA_API_SCOPE
+          }
+          $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Key)
+          if ($missing.Count -gt 0) { throw "Missing repository variables: $($missing -join ', ')" }
+          if ($env:ENTRA_API_SCOPE -ne "api://$($env:ENTRA_API_CLIENT_ID)/access_as_user") {
+            throw 'ENTRA_API_SCOPE does not match ENTRA_API_CLIENT_ID.'
+          }
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Build verified Azure release
+        shell: pwsh
+        env:
+          ENTRA_TENANT_ID: ${{ vars.ENTRA_TENANT_ID }}
+          ENTRA_API_CLIENT_ID: ${{ vars.ENTRA_API_CLIENT_ID }}
+          ENTRA_SPA_CLIENT_ID: ${{ vars.ENTRA_SPA_CLIENT_ID }}
+          ENTRA_API_SCOPE: ${{ vars.ENTRA_API_SCOPE }}
+        run: |
+          .\scripts\new-azure-release.ps1 `
+            -EntraTenantId $env:ENTRA_TENANT_ID `
+            -EntraApiAudience $env:ENTRA_API_CLIENT_ID `
+            -EntraSpaClientId $env:ENTRA_SPA_CLIENT_ID `
+            -EntraApiScope $env:ENTRA_API_SCOPE
+      - uses: actions/upload-artifact@v6
+        with:
+          name: i-elevate-azure-release
+          path: |
+            .artifacts/azure/i-elevate-linux-x64.zip
+            .artifacts/v1/release.json
+            .artifacts/v1/manifest.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,55 +1,70 @@
 # Production readiness checklist
 
-Use this checklist after following [DEPLOYMENT-START-HERE.md](../../DEPLOYMENT-START-HERE.md).
+Use this checklist with [DEPLOYMENT-START-HERE.md](../../DEPLOYMENT-START-HERE.md).
+Record evidence, owner and completion date in the college's controlled change or
+service-management record.
 
-## Hosting
+## Governance and cost
 
-- [ ] Supported Windows Server is patched and monitored.
-- [ ] IIS and the .NET 10 Hosting Bundle are installed.
-- [ ] The final HTTPS address, DNS record and trusted certificate are active.
-- [ ] The IIS application pool runs as the approved dedicated service account.
-- [ ] `DataProtectionKeyPath` is outside the release folders and included in server backup.
-- [ ] The production website cannot serve directory listings or plain HTTP.
+- [ ] The production service, data owner, support owner and technical owner are named.
+- [ ] The Azure subscription, cost centre, budget and cost alerts are approved.
+- [ ] UK South and the proposed services meet data-protection and college policy.
+- [ ] The private repository is college-owned and has at least two administrators.
+- [ ] The release commit, tag, package SHA-256 and approver are recorded.
+
+## Azure platform
+
+- [ ] Infrastructure was created from the reviewed Bicep templates.
+- [ ] App Service enforces HTTPS and the approved minimum TLS configuration.
+- [ ] The managed identity, Key Vault and Storage role assignments are correct.
+- [ ] Application Insights and Log Analytics collect operational telemetry.
+- [ ] Alerts route to a monitored college support channel.
+- [ ] Resource locks, tags, diagnostic retention and policy compliance are reviewed.
 
 ## Database
 
-- [ ] SQL Server 2019 or 2022 is used with compatibility level 140 or later.
-- [ ] Traffic from the IIS server is permitted and encrypted.
-- [ ] The website account has `db_datareader`, `db_datawriter` and `EXECUTE`, not `db_owner`.
-- [ ] A separate deployment account can apply migrations.
-- [ ] Full, differential and transaction-log backups meet the agreed recovery targets.
-- [ ] A restore has been tested and recorded.
-- [ ] No local reset or test-data script is available to routine production operators.
+- [ ] Azure SQL networking permits only the approved migration and application paths.
+- [ ] The App Service managed identity has runtime access, not `db_owner`.
+- [ ] A separate Entra administrator can apply migrations and perform recovery.
+- [ ] Every tracked migration is recorded in `dbo.schema_migrations`.
+- [ ] Backup retention and point-in-time restore meet the agreed recovery targets.
+- [ ] A restore test has been completed and recorded.
+- [ ] No demo seed, reset or test-data script has been used in production.
 
-## Identity and permissions
+## Identity and access
 
-- [ ] Separate Microsoft Entra API and browser registrations are configured.
-- [ ] Only the exact production HTTPS redirect/logout address is registered.
-- [ ] `access_as_user` is exposed, assigned and granted administrator consent.
-- [ ] MFA and Conditional Access apply.
-- [ ] The bootstrap administrator identity matches the intended staff account.
-- [ ] Admin, Teaching and Learning, Director, Head of Faculty, Programme Leader, ALS leadership and staff access have been tested.
-- [ ] Faculty/team scope is correct across profiles, forms, actions, dashboards and exports.
+- [ ] Separate single-tenant API and browser registrations are in college ownership.
+- [ ] Only approved HTTPS redirect/logout addresses are registered.
+- [ ] The `access_as_user` delegated permission has tenant administrator consent.
+- [ ] MFA and Conditional Access policies apply.
+- [ ] The bootstrap administrator is the intended active staff account.
+- [ ] Admin, Teaching and Learning, Director, Head of Faculty, Programme Leader,
+      QA Staff, ALS leadership and Tutor access have been tested.
+- [ ] Faculty and team scope is correct across forms, profiles, actions, dashboards
+      and exports.
 
-## Application
+## Application acceptance
 
-- [ ] The release came from a clean, approved Git commit.
-- [ ] Build, automated tests and dependency audits passed.
-- [ ] `/health/live` returns HTTP 200.
-- [ ] `/health/ready` returns HTTP 200 and reports the database connected.
-- [ ] Every process can save, submit and reopen according to role.
-- [ ] Actions, dashboards, drill-down links, Excel exports and Word exports work.
-- [ ] Audit rows are created for changes.
-- [ ] Tablet and keyboard use has no blocking issue.
-- [ ] Test records and test accounts have been removed or disabled.
+- [ ] CI, release build, automated tests and dependency audits pass.
+- [ ] `/health/live` and `/health/ready` return HTTP 200.
+- [ ] Each enabled process can save, submit and reopen as designed.
+- [ ] QA review setup, evidence, closure, dashboard, actions and reports work.
+- [ ] Audit rows are written for every tested mutation.
+- [ ] Excel, PDF and Word exports open correctly where supported.
+- [ ] Keyboard and tablet use has no blocking issue.
+- [ ] Test accounts and records have been removed or disabled.
 
-## Operations
+## Operations and recovery
 
-- [ ] Application and IIS logs are collected without request bodies, tokens or staff narrative.
-- [ ] Alerts cover website failure, repeated HTTP 500 responses, SQL connection failure, low disk space and failed backups.
-- [ ] The service desk knows the website owner, DBA owner and escalation route.
-- [ ] The immediately previous application release is retained.
-- [ ] The application rollback and database restore procedures have been rehearsed.
-- [ ] Messaging remains disabled until its sender, credentials, safe test recipient and support owner are approved.
+- [ ] Logs exclude access tokens, request bodies and staff narrative.
+- [ ] Alerts cover availability, repeated server errors, database connectivity,
+      capacity and failed backups.
+- [ ] The service desk has the support contacts, escalation route and runbook.
+- [ ] Deployment and rollback responsibilities are documented.
+- [ ] The previous approved application package and its checksum are retained.
+- [ ] Database recovery and application redeployment have been rehearsed.
+- [ ] Messaging remains disabled until sender identity, credentials, recipients and
+      support ownership are approved.
 
-Production should not open to staff until the product owner, IT owner and DBA have accepted this checklist.
+Production should not open to staff until the product owner, technical owner,
+information-governance owner and service owner have accepted this checklist.
