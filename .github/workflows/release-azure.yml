@@ -57,7 +57,7 @@ jobs:
             -EntraApiAudience $env:ENTRA_API_CLIENT_ID `
             -EntraSpaClientId $env:ENTRA_SPA_CLIENT_ID `
             -EntraApiScope $env:ENTRA_API_SCOPE
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: i-elevate-azure-release
           path: |

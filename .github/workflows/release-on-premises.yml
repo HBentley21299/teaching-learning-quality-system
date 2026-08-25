@@ -49,7 +49,7 @@ jobs:
           $release = Get-Content .artifacts/v1/release.json -Raw | ConvertFrom-Json
           $shortCommit = $release.gitCommit.Substring(0, 8)
           .\scripts\new-deployment-package.ps1 -SourceDirectory .artifacts/v1/api -DestinationPath ".artifacts/v1/i-elevate-$shortCommit-win-x64.zip"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: i-elevate-on-premises-release
           path: |
