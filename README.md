@@ -68,6 +68,7 @@ connection are supplied through protected configuration.
 | Path | Purpose |
 | --- | --- |
 | `.github/workflows` | Continuous integration and reproducible release packaging |
+| `Dockerfile` | Production Linux container build for college-hosted deployment |
 | `apps/api` | API, application, domain and infrastructure projects |
 | `apps/web` | React frontend and static assets |
 | `database/migrations` | Ordered, forward-only production migrations |
@@ -137,3 +138,7 @@ The repository also retains the guarded Windows/IIS release and rollback scripts
 They are documented in
 [docs/deployment/on-premises-operations.md](docs/deployment/on-premises-operations.md)
 for contingency use; they are not the primary handover target.
+
+For the college-hosted Linux container option, use the root `Dockerfile` and
+[container operations reference](docs/deployment/container-operations.md). The
+database remains separately hosted on OC-DB; it is never built into the image.
