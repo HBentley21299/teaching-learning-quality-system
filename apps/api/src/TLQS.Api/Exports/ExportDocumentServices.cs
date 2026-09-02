@@ -187,12 +187,102 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
 
     public GeneratedExport CreateRecordReport(RecordReportData data)
     {
+        if (string.Equals(data.RecordType, "uco_tla_review", StringComparison.OrdinalIgnoreCase))
+            return CreateUcoTlaRecordReport(data);
         var templateName = TemplateName(data.RecordType);
         var templatePath = templateName is null ? null : FindTemplate(templateName);
         return templatePath is null
             ? CreateGenericRecordReport(data)
             : CreateTemplateRecordReport(data, templatePath);
     }
+
+    private GeneratedExport CreateUcoTlaRecordReport(RecordReportData data)
+    {
+        using var stream = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document, true))
+        {
+            var main = document.AddMainDocumentPart();
+            main.Document = new W.Document(new W.Body());
+            AddStyles(main);
+            var headerId = AddHeader(main);
+            var footerId = AddFooter(main);
+            var body = main.Document.Body!;
+
+            body.Append(Heading("UCO Teaching, Learning and Assessment Review", 1));
+            body.Append(Paragraph($"Academic year {data.AcademicYear} | {Humanize(data.Status)}", "Subtitle"));
+            body.Append(DetailsTable([
+                ("Lecturer name", data.StaffName),
+                ("Observer name", data.ReviewerName),
+                ("Date/time observation", Value(data, "Date/time of observation") ?? data.RecordDate?.ToString("dd MMM yyyy")),
+                ("Session type", Value(data, "Session type")),
+                ("Course title", Value(data, "Course title")),
+                ("Module title", Value(data, "Module title")),
+                ("Level", Value(data, "Level")),
+                ("Number on register", Value(data, "Number on register")),
+                ("Number present", Value(data, "Number present")),
+                ("Number arriving late", Value(data, "Number arriving late"))
+            ]));
+
+            AppendUcoSections(body, data, [
+                "Teaching and learning activities",
+                "Delivery and facilitation of teaching and learning"
+            ]);
+
+            body.Append(PageBreak());
+            AppendUcoSections(body, data, [
+                "Teaching, learning and assessment materials",
+                "Findings and actions"
+            ]);
+
+            body.Append(PageBreak());
+            AppendUcoSections(body, data, ["Reflection and development"]);
+            body.Append(Heading("Action Plan for Your Development", 2));
+            if (data.Actions.Count == 0)
+                body.Append(Paragraph("No structured development actions were recorded.", "Normal"));
+            else
+                body.Append(ActionTable(data.Actions));
+
+            body.Append(Heading("Professional Discussion and Authenticated Sign-off", 2));
+            body.Append(DetailsTable([
+                ("Professional discussion", Value(data, "Professional discussion")),
+                ("Lecturer acknowledgement", Value(data, "Lecturer acknowledgement")),
+                ("Observer final sign-off", Value(data, "Observer final sign-off")),
+                ("Further professional discussion or observation required?", Value(data, "Further professional discussion or observation required?")),
+                ("Follow-up type", Value(data, "Follow-up type")),
+                ("Agreed follow-up date and time", Value(data, "Follow-up date and time")),
+                ("Follow-up outcome", Value(data, "Follow-up outcome"))
+            ]));
+
+            body.Append(new W.SectionProperties(
+                new W.HeaderReference { Type = W.HeaderFooterValues.Default, Id = headerId },
+                new W.FooterReference { Type = W.HeaderFooterValues.Default, Id = footerId },
+                new W.PageSize { Width = 11906U, Height = 16838U },
+                new W.PageMargin { Top = 900, Right = 900U, Bottom = 900, Left = 900U, Header = 450U, Footer = 450U }));
+            main.Document.Save();
+        }
+        return new GeneratedExport(
+            stream.ToArray(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            $"uco-tla-review-{SafeFileName(data.StaffName ?? data.Title)}-{data.RecordDate?.ToString("yyyy-MM-dd") ?? DateTime.UtcNow.ToString("yyyy-MM-dd")}.docx");
+    }
+
+    private static void AppendUcoSections(W.Body body, RecordReportData data, IReadOnlyCollection<string> sectionNames)
+    {
+        foreach (var section in data.Sections.Where(section => sectionNames.Contains(section.Title, StringComparer.OrdinalIgnoreCase)))
+        {
+            var populated = section.Fields.Where(field => !string.IsNullOrWhiteSpace(field.Value)).ToArray();
+            if (populated.Length == 0) continue;
+            body.Append(Heading(section.Title, 2));
+            foreach (var field in populated)
+            {
+                body.Append(Paragraph(field.Label, "FieldLabel"));
+                body.Append(Paragraph(field.Value!, "Normal"));
+            }
+        }
+    }
+
+    private static W.Paragraph PageBreak() =>
+        new(new W.Run(new W.Break { Type = W.BreakValues.Page }));
 
     private GeneratedExport CreateTemplateRecordReport(RecordReportData data, string templatePath)
     {

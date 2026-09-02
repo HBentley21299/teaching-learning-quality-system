@@ -24,7 +24,8 @@ import type {
   OrgUnitSummary,
   QaHubSummary,
   StaffProfileSummary,
-  StaffSummary
+  StaffSummary,
+  UcoTlaAccessSummary
 } from "../services/types";
 
 const Home = lazy(() => import("../routes/Home").then((module) => ({ default: module.Home })));
@@ -40,6 +41,7 @@ const ElevatePractice = lazy(() => import("../routes/ElevatePractice").then((mod
 const CoachingMentoring = lazy(() => import("../routes/CoachingMentoring").then((module) => ({ default: module.CoachingMentoring })));
 const MyTeam = lazy(() => import("../routes/MyTeam").then((module) => ({ default: module.MyTeam })));
 const QaHub = lazy(() => import("../routes/QaHub").then((module) => ({ default: module.QaHub })));
+const UcoTlaReviews = lazy(() => import("../routes/UcoTlaReviews").then((module) => ({ default: module.UcoTlaReviews })));
 
 const emptyUser: CurrentUser = {
   displayName: "Loading...",
@@ -65,6 +67,8 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [qaHubSummary, setQaHubSummary] = useState<QaHubSummary | null>(null);
+  const [ucoAccess, setUcoAccess] = useState<UcoTlaAccessSummary | null>(null);
+  const [ucoAccessLoaded, setUcoAccessLoaded] = useState(false);
   const [profileStaffId, setProfileStaffId] = useState(initialLocation.profileStaffId);
   const [actionStaffId, setActionStaffId] = useState(initialLocation.actionStaffId);
   const [actionDetailId, setActionDetailId] = useState(initialLocation.actionDetailId);
@@ -158,6 +162,21 @@ export function App() {
   }, [hasQaPermission, user.userAccountId]);
 
   useEffect(() => {
+    if (!user.userAccountId) {
+      setUcoAccess(null);
+      setUcoAccessLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    setUcoAccessLoaded(false);
+    void api.ucoTlaAccess()
+      .then((summary) => { if (!cancelled) setUcoAccess(summary); })
+      .catch(() => { if (!cancelled) setUcoAccess(null); })
+      .finally(() => { if (!cancelled) setUcoAccessLoaded(true); });
+    return () => { cancelled = true; };
+  }, [user.userAccountId]);
+
+  useEffect(() => {
     if (!user.userAccountId || modulesLoaded || route !== "admin") return;
     let cancelled = false;
     void api.modules()
@@ -236,9 +255,15 @@ export function App() {
     }
   }, [academicYear, route]);
 
+  const effectivePermissions = useMemo(
+    () => ucoAccess?.canAccess && !user.permissions.includes("uco_tla.manage")
+      ? [...user.permissions, "uco_tla.manage"]
+      : user.permissions,
+    [ucoAccess?.canAccess, user.permissions]
+  );
   const accessibleNavigationItems = useMemo(
-    () => navigationItems.filter((item) => canAccessRoute(item.key, user.permissions)),
-    [user.permissions]
+    () => navigationItems.filter((item) => canAccessRoute(item.key, effectivePermissions)),
+    [effectivePermissions]
   );
   const visibleNavigationItems = useMemo(
     () => accessibleNavigationItems.filter((item) => !("hidden" in item && item.hidden)),
@@ -248,7 +273,8 @@ export function App() {
   const firstVisibleAlsRoute = visibleNavigationItems.find((item) => item.key === "als_learning" || item.key === "als_liv")?.key;
 
   useEffect(() => {
-    if (isLoading || !user.userAccountId || pendingRecordId || sourceRecordId || canAccessRoute(route, user.permissions)) return;
+    if (isLoading || !user.userAccountId || pendingRecordId || sourceRecordId
+        || ((route === "uco" || route === "dashboard") && !ucoAccessLoaded) || canAccessRoute(route, effectivePermissions)) return;
     setRoute("home");
     setProfileStaffId("");
     setActionStaffId("");
@@ -256,7 +282,7 @@ export function App() {
     setAdminTab("overview");
     setLinkError("You do not have permission to open that area.");
     writePath(routePath("home"), true);
-  }, [isLoading, pendingRecordId, route, sourceRecordId, user.permissions, user.userAccountId, writePath]);
+  }, [effectivePermissions, isLoading, pendingRecordId, route, sourceRecordId, ucoAccessLoaded, user.userAccountId, writePath]);
 
   const yearActions = useMemo(
     () => academicYear ? actions.filter((action) => action.academicYear === academicYear) : actions,
@@ -299,6 +325,15 @@ export function App() {
     setSourceRecordId(elevateRecordId);
     setRoute("profile");
     writePath(recordPath(elevateRecordId));
+  }
+
+  function openUcoTlaReview(recordId: string) {
+    setSourceRecordId(recordId);
+    setActionStaffId("");
+    setActionDetailId("");
+    setProfileStaffId("");
+    setRoute("uco");
+    writePath(`/uco-tla-reviews/${recordId}`);
   }
 
   function openActionSource(action: ActionSummary) {
@@ -542,10 +577,12 @@ export function App() {
                 <Dashboard
                   academicYear={academicYear}
                   orgUnits={orgUnits}
+                  ucoAccess={ucoAccess}
                   user={user}
                   onOpenAction={openActionDetails}
                   onOpenRecord={openDashboardRecord}
                   onOpenStaff={openTeamProfile}
+                  onOpenUcoReview={openUcoTlaReview}
                 />
               ) : null}
               {route === "staff" ? <StaffProfiles academicYear={academicYear} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffSelected={(staffId) => writePath(staffPath(staffId))} profiles={profiles} staff={staff} user={user} /> : null}
@@ -590,6 +627,7 @@ export function App() {
                   initialSourceRecordId={sourceRecordId}
                   onActionsChanged={refreshActions}
                   onOpenEliReport={openElevateReport}
+                  onOpenUcoTlaReview={openUcoTlaReview}
                   onRecordClosed={() => handleRecordClosed("probation")}
                   onRecordOpened={handleRecordOpened}
                   orgUnits={orgUnits}
@@ -624,6 +662,16 @@ export function App() {
               {route === "profile" ? <StaffProfileWorkspace academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffChanged={(staffId) => writePath(staffPath(staffId))} profiles={profiles} staff={staff} user={user} /> : null}
               {route === "actions" ? (
                 <ActionsView academicYear={academicYear} actions={yearActions} initialActionId={actionDetailId} initialStaffId={actionStaffId} onActionClosed={handleActionClosed} onActionOpened={handleActionOpened} onChanged={refreshActions} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} />
+              ) : null}
+              {route === "uco" ? (
+                <UcoTlaReviews
+                  access={ucoAccess}
+                  academicYear={academicYear}
+                  initialRecordId={sourceRecordId}
+                  onActionsChanged={refreshActions}
+                  onRecordClosed={() => handleRecordClosed("uco")}
+                  onRecordOpened={handleRecordOpened}
+                />
               ) : null}
               {route === "qa" ? (
                 <QaHub
@@ -663,6 +711,7 @@ function routeForRecordType(recordType: string): AppRoute {
     als_liv: "als_liv",
     probation_case: "probation",
     probation_observation: "probation",
+    uco_tla_review: "uco",
     qa_review: "qa",
     work_scrutiny: "scrutiny"
   };

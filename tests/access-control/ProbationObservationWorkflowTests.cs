@@ -33,6 +33,23 @@ public sealed class ProbationObservationWorkflowTests
     }
 
     [Fact]
+    public void ExistingCaseForAcademicYearPreventsDuplicateCreation()
+    {
+        var exception = Assert.Throws<WorkflowValidationException>(() =>
+            ProbationObservationWorkflow.ValidateCaseCreation(true, "2026/27"));
+
+        Assert.Equal(
+            "A probationary observation cycle already exists for this staff member in 2026/27. Open the existing cycle instead.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void StaffWithoutCaseForAcademicYearCanCreateCycle()
+    {
+        ProbationObservationWorkflow.ValidateCaseCreation(false, "2026/27");
+    }
+
+    [Fact]
     public void ObservationOneRequiresTheNextObservationDateStage()
     {
         Assert.Equal(

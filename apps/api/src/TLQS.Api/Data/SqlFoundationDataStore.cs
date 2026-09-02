@@ -78,6 +78,14 @@ public sealed partial class SqlFoundationDataStore(
               AND ua.archived_at IS NULL
               AND s.account_status = 'active'
               AND s.archived_at IS NULL
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM auth.local_credentials pending_local
+                    WHERE pending_local.email = @email
+                      AND pending_local.user_account_id IS NULL
+                      AND @providerSubjectId IS NULL
+                      AND @tenantId IS NULL
+                )
             ORDER BY CASE WHEN ua.id = @identityAccountId THEN 0 ELSE 1 END, ua.created_at DESC;
             """,
             connection);
@@ -1609,6 +1617,7 @@ public sealed partial class SqlFoundationDataStore(
                 ORDER BY fsub.created_at DESC
             ) latest_submission
             WHERE r.archived_at IS NULL
+              AND (r.record_type <> N'uco_tla_review' OR @canManageUco = 1)
               AND (@academicYear IS NULL OR r.academic_year_key = @academicYear)
               AND (
                     COALESCE(latest_submission.status, 'submitted') <> 'draft'
@@ -1749,6 +1758,7 @@ public sealed partial class SqlFoundationDataStore(
             LEFT JOIN org.org_units org_unit ON org_unit.id = r.org_unit_id
             LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
             WHERE r.id = @id
+              AND (r.record_type <> N'uco_tla_review' OR @canManageUco = 1)
               AND (@includeArchived = 1 OR r.archived_at IS NULL)
               AND (
                     fsub.status <> 'draft'
@@ -1926,7 +1936,8 @@ public sealed partial class SqlFoundationDataStore(
         string? academicYear = null)
     {
         var canViewAll = CanViewAllRecords(currentUser);
-        var canIncludeDeleted = includeDeleted && currentUser.HasPermission(PermissionKeys.ActionsManage);
+        var canIncludeDeleted = includeDeleted && (currentUser.HasPermission(PermissionKeys.ActionsManage)
+                                                   || UcoTlaReviewAccessPolicy.CanManageAll(currentUser));
         const string sql = """
             WITH visible_staff AS (
                 SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
@@ -2025,12 +2036,19 @@ public sealed partial class SqlFoundationDataStore(
             ) latest_extension
             WHERE (@includeDeleted = 1 OR a.archived_at IS NULL)
               AND (
+                    r.record_type <> N'uco_tla_review'
+                    OR @canManageUco = 1
+                    OR a.owner_staff_id = @currentStaffId
+                    OR a.subject_staff_id = @currentStaffId
+              )
+              AND (
                     @academicYear IS NULL
                     OR r.academic_year_key = @academicYear
                     OR (r.id IS NULL AND a.created_at >= @academicYearStart AND a.created_at < @academicYearEnd)
               )
               AND (
                     @canViewAll = 1
+                    OR (r.record_type = N'uco_tla_review' AND @canManageUco = 1)
                     OR a.owner_staff_id = @currentStaffId
                     OR a.subject_staff_id = @currentStaffId
                     OR r.owner_staff_id = @currentStaffId
@@ -2174,6 +2192,7 @@ public sealed partial class SqlFoundationDataStore(
             FROM core.records r
             JOIN core.modules m ON m.id = r.module_id
             WHERE r.archived_at IS NULL
+              AND (r.record_type <> N'uco_tla_review' OR @canManageUco = 1)
               AND (
                     @canViewAll = 1
                     OR (r.owner_staff_id = @currentStaffId AND (
@@ -3359,10 +3378,9 @@ public sealed partial class SqlFoundationDataStore(
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
-        var canManageVisibleAction = AccessBoundaryPolicy.CanManageVisibleAction(
-            currentUser,
-            (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
-                .Any(action => action.Id == actionId));
+        var visibleAction = (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
+            .FirstOrDefault(action => action.Id == actionId);
+        var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
 
         if (request.OwnerStaffId.HasValue)
         {
@@ -3616,10 +3634,9 @@ public sealed partial class SqlFoundationDataStore(
             throw new WorkflowValidationException("Enter a reason for extending the action.");
         }
 
-        var canManageVisibleAction = AccessBoundaryPolicy.CanManageVisibleAction(
-            currentUser,
-            (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
-                .Any(action => action.Id == actionId));
+        var visibleAction = (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
+            .FirstOrDefault(action => action.Id == actionId);
+        var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
@@ -3814,6 +3831,22 @@ public sealed partial class SqlFoundationDataStore(
             cancellationToken);
         var context = contextRows.FirstOrDefault() ?? new ActionOwnerContext(subjectStaffId, null, null, null, null);
         var effectiveSourceFormType = context.SourceFormType ?? sourceFormType;
+        if (string.Equals(effectiveSourceFormType, "uco_tla_review", StringComparison.OrdinalIgnoreCase)
+            && UcoTlaReviewAccessPolicy.CanManageAll(currentUser))
+        {
+            return (await GetUcoTlaStaffOptionsAsync(cancellationToken))
+                .Select(candidate => new ActionOwnerOptionSummary(
+                    candidate.StaffId,
+                    candidate.DisplayName,
+                    candidate.StaffId == context.SubjectStaffId ? "Staff member"
+                        : candidate.StaffId == currentUser.StaffId ? "You"
+                        : "UCO staff",
+                    null,
+                    null))
+                .OrderBy(option => option.Relationship == "UCO staff")
+                .ThenBy(option => option.DisplayName)
+                .ToArray();
+        }
         HashSet<Guid>? leaderOwnerIds = null;
         if (RequiresLeaderActionOwner(effectiveSourceFormType))
         {
@@ -3889,6 +3922,12 @@ public sealed partial class SqlFoundationDataStore(
                 SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)
             )
             SELECT CONVERT(bit, CASE
+                WHEN @canManageUco = 1 AND @sourceRecordId IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM core.records uco_record
+                    WHERE uco_record.id = @sourceRecordId
+                      AND uco_record.record_type = N'uco_tla_review'
+                      AND uco_record.archived_at IS NULL
+                ) THEN 1
                 WHEN (
                     @subjectStaffId IS NULL
                     OR EXISTS (
@@ -3951,10 +3990,9 @@ public sealed partial class SqlFoundationDataStore(
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
-        var canManageVisibleAction = AccessBoundaryPolicy.CanManageVisibleAction(
-            currentUser,
-            (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
-                .Any(action => action.Id == actionId));
+        var visibleAction = (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
+            .FirstOrDefault(action => action.Id == actionId);
+        var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
         if (!canManageVisibleAction)
         {
             return FormSubmissionUpdateResult.Forbidden;
@@ -4006,10 +4044,9 @@ public sealed partial class SqlFoundationDataStore(
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
-        var canManageVisibleAction = AccessBoundaryPolicy.CanManageVisibleAction(
-            currentUser,
-            (await GetActionsAsync(currentUser, includeDeleted: true, cancellationToken))
-                .Any(action => action.Id == actionId));
+        var visibleAction = (await GetActionsAsync(currentUser, includeDeleted: true, cancellationToken))
+            .FirstOrDefault(action => action.Id == actionId);
+        var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
         if (!canManageVisibleAction)
         {
             return FormSubmissionUpdateResult.Forbidden;
@@ -8572,6 +8609,8 @@ public sealed partial class SqlFoundationDataStore(
         command.Parameters.AddWithValue("@currentStaffId", ToDbValue(currentUser.StaffId));
         command.Parameters.AddWithValue("@canViewAll", CanViewAllRecords(currentUser));
         command.Parameters.AddWithValue("@canViewScopedActivities", CanViewScopedActivities(currentUser));
+        command.Parameters.AddWithValue("@canManageUco", UcoTlaReviewAccessPolicy.CanManageAll(currentUser));
+        command.Parameters.AddWithValue("@canViewUco", UcoTlaReviewAccessPolicy.CanViewAll(currentUser));
     }
 
     private static bool CanViewAllStaff(CurrentUser currentUser) =>
@@ -8593,6 +8632,9 @@ public sealed partial class SqlFoundationDataStore(
         || currentUser.HasPermission(PermissionKeys.CoachingSubmit)
         || currentUser.HasPermission(PermissionKeys.CoachingManage)
         || currentUser.HasPermission(PermissionKeys.ActionsManage);
+
+    private static bool CanManageVisibleAction(CurrentUser currentUser, ActionSummary? action) =>
+        AccessBoundaryPolicy.CanManageVisibleAction(currentUser, action is not null, action?.SourceFormType);
 
     private static string NormalizeActionVisibility(string? visibilitySetting, bool publishedToStaff)
     {
@@ -8617,6 +8659,7 @@ public sealed partial class SqlFoundationDataStore(
             "probation_observation" => "action_theme_probation_observation",
             "cpd" or "cpd_event" => "action_theme_cpd",
             "qa_review" => "action_theme_qa_review",
+            "uco_tla_review" => "action_theme_uco_tla_review",
             "standalone" => "action_theme_standalone",
             _ => null
         };

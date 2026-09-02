@@ -31,6 +31,7 @@ const tileDescriptions: Partial<Record<AppRoute, string>> = {
   als_learning: "ALS-specific learning walks and focus areas",
   als_liv: "ALS Learning and Innovation Visits",
   probation: "Support colleagues through probation",
+  uco: "University teaching, learning and assessment reviews",
   elevate: "Audit and improve learning environments",
   practice: "Elevate Learning and Innovation",
   coaching: "Coaching cycles and mentoring sessions",
@@ -87,7 +88,11 @@ export function Home({ user, tiles, onNavigate, canAccessQaHub }: HomeProps) {
   const firstName = user.displayName.split(" ")[0] || user.displayName;
   const { salutation, message } = greetingFor(new Date());
   const visibleTiles = tiles.filter((tile) => tile.key !== "home");
-  const firstVisibleAlsRoute = visibleTiles.find((tile) => tile.key === "als_learning" || tile.key === "als_liv")?.key;
+  const standardTiles = visibleTiles.filter((tile) => tile.key !== "uco" && tile.key !== "als_learning" && tile.key !== "als_liv");
+  const ucoTiles = visibleTiles.filter((tile) => tile.key === "uco");
+  const alsTiles = visibleTiles.filter((tile) => tile.key === "als_learning" || tile.key === "als_liv");
+  const orderedTiles = [...standardTiles, ...ucoTiles, ...alsTiles];
+  const firstVisibleAlsRoute = alsTiles[0]?.key;
 
   return (
     <div className="route-stack home-stack">
@@ -104,11 +109,16 @@ export function Home({ user, tiles, onNavigate, canAccessQaHub }: HomeProps) {
       </section>
 
       <nav aria-label="Areas you can access" className="home-tiles">
-        {visibleTiles.map((tile) => {
+        {orderedTiles.map((tile) => {
           const Icon = navigationItems.find((item) => item.key === tile.key)?.icon;
+          const sectionLabel = tile.key === "uco"
+            ? "University Centre Oldham"
+            : tile.key === firstVisibleAlsRoute
+              ? "Additional Learning Support"
+              : undefined;
           return (
-            <div className={tile.key === firstVisibleAlsRoute ? "home-tile-entry home-tile-entry-als-start" : "home-tile-entry"} key={tile.key}>
-              {tile.key === firstVisibleAlsRoute ? <div className="home-tiles-divider"><span>Additional Learning Support</span></div> : null}
+            <div className={sectionLabel ? "home-tile-entry home-tile-entry-section-start" : "home-tile-entry"} key={tile.key}>
+              {sectionLabel ? <div className="home-tiles-divider"><span>{sectionLabel}</span></div> : null}
               <button
                 className="home-tile"
                 onClick={() => onNavigate(tile.key)}

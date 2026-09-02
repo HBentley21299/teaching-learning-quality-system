@@ -535,20 +535,44 @@ BEGIN TRY
         id uniqueidentifier NOT NULL
     );
     INSERT INTO @courses (sample_number, id)
-    SELECT sample_number, NEWID() FROM @participants;
+    SELECT participant.sample_number,
+           COALESCE(existing.id, NEWID())
+    FROM @participants participant
+    OUTER APPLY (
+        SELECT TOP (1) course.id
+        FROM curriculum.courses course
+        WHERE course.course_code = CONCAT(N'PROFILE-', RIGHT(CONCAT(N'000', participant.sample_number), 3))
+          AND course.academic_year = @academicYear
+          AND course.source_system = N'TLQS_COMPLETE_PROFILE_TEST'
+        ORDER BY course.created_at, course.id
+    ) existing;
 
-    INSERT INTO curriculum.courses (
+    MERGE curriculum.courses AS target
+    USING (
+        SELECT course.id,
+               CONCAT(N'PROFILE-', RIGHT(CONCAT(N'000', participant.sample_number), 3)) course_code,
+               CONCAT(@marker, N' Course ', RIGHT(CONCAT(N'000', participant.sample_number), 3)) course_name,
+               participant.org_unit_id
+        FROM @courses course
+        JOIN @participants participant ON participant.sample_number = course.sample_number
+    ) AS source
+       ON target.id = source.id
+    WHEN MATCHED THEN UPDATE SET
+        course_code = source.course_code,
+        course_name = source.course_name,
+        org_unit_id = source.org_unit_id,
+        academic_year = @academicYear,
+        is_active = 1,
+        source_system = N'TLQS_COMPLETE_PROFILE_TEST',
+        archived_at = NULL,
+        updated_at = sysutcdatetime()
+    WHEN NOT MATCHED THEN INSERT (
         id, course_code, course_name, org_unit_id, academic_year,
         is_active, source_system, created_at
-    )
-    SELECT course.id,
-           CONCAT(N'PROFILE-', RIGHT(CONCAT(N'000', participant.sample_number), 3)),
-           CONCAT(@marker, N' Course ', RIGHT(CONCAT(N'000', participant.sample_number), 3)),
-           participant.org_unit_id, @academicYear, 1,
-           N'TLQS_COMPLETE_PROFILE_TEST',
-           CONVERT(datetimeoffset, '2025-08-01T00:00:00+00:00')
-    FROM @courses course
-    JOIN @participants participant ON participant.sample_number = course.sample_number;
+    ) VALUES (
+        source.id, source.course_code, source.course_name, source.org_unit_id, @academicYear,
+        1, N'TLQS_COMPLETE_PROFILE_TEST', CONVERT(datetimeoffset, '2025-08-01T00:00:00+00:00')
+    );
 
     INSERT INTO quality.activities (
         id, record_id, activity_type, activity_date, subject_staff_id,

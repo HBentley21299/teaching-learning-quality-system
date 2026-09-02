@@ -47,6 +47,7 @@ public static class PermissionKeys
     public const string QaReviewsCorrect = "qa_reviews.correct";
     public const string QaReviewsRemove = "qa_reviews.remove";
     public const string QaReviewsActionsAdmin = "qa_reviews.actions_admin";
+    public const string UcoTlaManage = "uco_tla.manage";
 
     public static readonly string[] All =
     [
@@ -94,6 +95,7 @@ public static class PermissionKeys
         QaReviewsManage,
         QaReviewsCorrect,
         QaReviewsRemove,
-        QaReviewsActionsAdmin
+        QaReviewsActionsAdmin,
+        UcoTlaManage
     ];
 }

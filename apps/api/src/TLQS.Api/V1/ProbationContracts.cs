@@ -25,7 +25,7 @@ public sealed record ProbationStaffContextSummary(
     string? PrimaryFocus,
     string? SecondaryFocus,
     string? DesiredOutcome,
-    bool HasActiveProbationCase);
+    bool HasProbationCaseForAcademicYear);
 
 public sealed record CreateProbationCaseRequest(
     Guid SubjectStaffId,
@@ -102,6 +102,7 @@ public sealed record ProbationObservationSummary(
     string Status,
     Guid? LinkedLivRecordId,
     Guid? LinkedLivSourceRecordId,
+    Guid? LinkedUcoTlaReviewId,
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
     IReadOnlyList<ProbationStageSummary> Stages,

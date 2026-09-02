@@ -95,20 +95,54 @@ public sealed partial class SqlFoundationDataStore
                 }
             }
 
-            await using (var existingCommand = new SqlCommand(
-                """
-                SELECT COUNT_BIG(*)
-                FROM people.staff staff
-                LEFT JOIN auth.user_accounts account ON account.staff_id = staff.id
-                LEFT JOIN auth.auth_identities provider_identity ON provider_identity.user_account_id = account.id
-                    AND provider_identity.provider = @provider
-                    AND provider_identity.tenant_id = @tenantId
-                    AND provider_identity.provider_subject_id = @providerSubjectId
-                WHERE staff.email = @email OR provider_identity.id IS NOT NULL;
-                """,
-                connection,
-                (SqlTransaction)transaction))
+            Guid? reusableStaffId = null;
+            Guid? reusableUserAccountId = null;
+            if (!isEntra)
             {
+                await using var reusableCommand = new SqlCommand(
+                    """
+                    SELECT TOP (1) staff.id, account.id
+                    FROM auth.local_credentials credential
+                    JOIN people.staff staff
+                      ON staff.email = credential.email
+                     AND staff.account_status = N'active'
+                     AND staff.archived_at IS NULL
+                    JOIN auth.user_accounts account
+                      ON account.staff_id = staff.id
+                     AND account.account_status = N'active'
+                     AND account.is_disabled = 0
+                     AND account.archived_at IS NULL
+                    WHERE credential.email = @email
+                      AND credential.user_account_id IS NULL
+                    ORDER BY account.created_at DESC;
+                    """,
+                    connection,
+                    (SqlTransaction)transaction);
+                reusableCommand.Parameters.AddWithValue("@email", normalizedEmail);
+                await using var reusableReader = await reusableCommand.ExecuteReaderAsync(cancellationToken);
+                if (await reusableReader.ReadAsync(cancellationToken))
+                {
+                    reusableStaffId = reusableReader.GetGuid(0);
+                    reusableUserAccountId = reusableReader.GetGuid(1);
+                }
+            }
+
+            var isLocalReOnboarding = reusableStaffId.HasValue && reusableUserAccountId.HasValue;
+            if (!isLocalReOnboarding)
+            {
+                await using var existingCommand = new SqlCommand(
+                    """
+                    SELECT COUNT_BIG(*)
+                    FROM people.staff staff
+                    LEFT JOIN auth.user_accounts account ON account.staff_id = staff.id
+                    LEFT JOIN auth.auth_identities provider_identity ON provider_identity.user_account_id = account.id
+                        AND provider_identity.provider = @provider
+                        AND provider_identity.tenant_id = @tenantId
+                        AND provider_identity.provider_subject_id = @providerSubjectId
+                    WHERE staff.email = @email OR provider_identity.id IS NOT NULL;
+                    """,
+                    connection,
+                    (SqlTransaction)transaction);
                 existingCommand.Parameters.AddWithValue("@tenantId", tenantId);
                 existingCommand.Parameters.AddWithValue("@provider", provider);
                 existingCommand.Parameters.AddWithValue("@providerSubjectId", providerObjectId.ToString());
@@ -130,12 +164,116 @@ public sealed partial class SqlFoundationDataStore
                     ?? throw new WorkflowValidationException("The selected staff category has not been configured."));
             }
 
-            var staffId = Guid.NewGuid();
-            var userAccountId = Guid.NewGuid();
+            var staffId = reusableStaffId ?? Guid.NewGuid();
+            var userAccountId = reusableUserAccountId ?? Guid.NewGuid();
             var externalId = $"ENTRA_{providerObjectId:N}";
 
             await using (var createCommand = new SqlCommand(
                 """
+                IF @isLocalReOnboarding = 1
+                BEGIN
+                    UPDATE people.staff
+                    SET primary_org_unit_id = @teamId,
+                        account_status = N'active',
+                        staff_category = @staffCategory,
+                        onboarding_source = N'self_service',
+                        onboarded_at = sysutcdatetime(),
+                        archived_at = NULL,
+                        updated_at = sysutcdatetime()
+                    WHERE id = @staffId;
+
+                    UPDATE auth.user_accounts
+                    SET account_status = N'active',
+                        is_disabled = 0,
+                        last_login_at = sysutcdatetime(),
+                        archived_at = NULL,
+                        updated_at = sysutcdatetime()
+                    WHERE id = @userAccountId;
+
+                    MERGE auth.auth_identities AS target
+                    USING (SELECT @provider provider, @tenantId tenant_id, @providerSubjectId provider_subject_id) AS source
+                       ON target.provider = source.provider
+                      AND target.tenant_id = source.tenant_id
+                      AND target.provider_subject_id = source.provider_subject_id
+                    WHEN MATCHED THEN UPDATE SET
+                        user_account_id = @userAccountId,
+                        email_claim = @email,
+                        archived_at = NULL,
+                        updated_at = sysutcdatetime()
+                    WHEN NOT MATCHED THEN INSERT (
+                        user_account_id, provider, tenant_id, provider_subject_id, email_claim
+                    ) VALUES (
+                        @userAccountId, @provider, @tenantId, @providerSubjectId, @email
+                    );
+
+                    IF NOT EXISTS (
+                        SELECT 1 FROM auth.user_roles
+                        WHERE user_account_id = @userAccountId
+                          AND role_id = @roleId
+                          AND active_to IS NULL
+                    )
+                        INSERT INTO auth.user_roles (
+                            user_account_id, role_id, active_from, assignment_source
+                        ) VALUES (
+                            @userAccountId, @roleId, sysutcdatetime(), N'self_service'
+                        );
+
+                    UPDATE auth.access_scopes
+                    SET is_active = 1,
+                        archived_at = NULL,
+                        assignment_source = N'self_service',
+                        updated_at = sysutcdatetime()
+                    WHERE user_account_id = @userAccountId
+                      AND scope_type = N'self'
+                      AND staff_id = @staffId;
+
+                    IF @@ROWCOUNT = 0
+                        INSERT INTO auth.access_scopes (
+                            user_account_id, scope_type, staff_id, is_active, assignment_source
+                        ) VALUES (
+                            @userAccountId, N'self', @staffId, 1, N'self_service'
+                        );
+
+                    DECLARE @today date = CONVERT(date, sysutcdatetime());
+                    DECLARE @membershipId uniqueidentifier = (
+                        SELECT TOP (1) id
+                        FROM org.staff_org_memberships
+                        WHERE staff_id = @staffId
+                          AND org_unit_id = @teamId
+                          AND membership_type = N'member'
+                        ORDER BY CASE WHEN archived_at IS NULL AND active_to IS NULL THEN 0 ELSE 1 END,
+                                 created_at DESC
+                    );
+
+                    UPDATE org.staff_org_memberships
+                    SET is_primary = 0,
+                        active_to = COALESCE(active_to, @today),
+                        archived_at = COALESCE(archived_at, sysutcdatetime()),
+                        assignment_source = N'self_service',
+                        updated_at = sysutcdatetime()
+                    WHERE staff_id = @staffId
+                      AND id <> COALESCE(@membershipId, '00000000-0000-0000-0000-000000000000')
+                      AND archived_at IS NULL;
+
+                    IF @membershipId IS NULL
+                        INSERT INTO org.staff_org_memberships (
+                            staff_id, org_unit_id, membership_type, is_primary, active_from,
+                            created_by_user_account_id, assignment_source
+                        ) VALUES (
+                            @staffId, @teamId, N'member', 1, @today,
+                            @userAccountId, N'self_service'
+                        );
+                    ELSE
+                        UPDATE org.staff_org_memberships
+                        SET is_primary = 1,
+                            active_to = NULL,
+                            archived_at = NULL,
+                            assignment_source = N'self_service',
+                            updated_at = sysutcdatetime()
+                        WHERE id = @membershipId;
+                END
+                ELSE
+                BEGIN
                 INSERT INTO people.staff (
                     id, external_id, display_name, email, primary_org_unit_id,
                     account_status, staff_category, onboarding_source, onboarded_at
@@ -177,6 +315,7 @@ public sealed partial class SqlFoundationDataStore
                     @staffId, @teamId, N'member', 1, CONVERT(date, sysutcdatetime()),
                     @userAccountId, N'self_service'
                 );
+                END;
                 """,
                 connection,
                 (SqlTransaction)transaction))
@@ -193,7 +332,24 @@ public sealed partial class SqlFoundationDataStore
                 createCommand.Parameters.AddWithValue("@provider", provider);
                 createCommand.Parameters.AddWithValue("@providerSubjectId", providerObjectId.ToString());
                 createCommand.Parameters.AddWithValue("@roleId", roleId);
+                createCommand.Parameters.AddWithValue("@isLocalReOnboarding", isLocalReOnboarding);
                 await createCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (!isEntra)
+            {
+                await using var linkCredentialCommand = new SqlCommand(
+                    """
+                    UPDATE auth.local_credentials
+                    SET user_account_id = @userAccountId,
+                        updated_at = sysutcdatetime()
+                    WHERE email = @email;
+                    """,
+                    connection,
+                    (SqlTransaction)transaction);
+                linkCredentialCommand.Parameters.AddWithValue("@userAccountId", userAccountId);
+                linkCredentialCommand.Parameters.AddWithValue("@email", normalizedEmail);
+                await linkCredentialCommand.ExecuteNonQueryAsync(cancellationToken);
             }
 
             await WriteAuditAsync(
@@ -203,8 +359,10 @@ public sealed partial class SqlFoundationDataStore
                 null,
                 "staff",
                 staffId,
-                "staff.self_onboarded",
-                $"{normalizedDisplayName} completed trusted self-onboarding.",
+                isLocalReOnboarding ? "staff.test_reonboarded" : "staff.self_onboarded",
+                isLocalReOnboarding
+                    ? $"{normalizedDisplayName} repeated trusted onboarding for local testing."
+                    : $"{normalizedDisplayName} completed trusted self-onboarding.",
                 null,
                 JsonSerializer.Serialize(new
                 {
@@ -214,7 +372,8 @@ public sealed partial class SqlFoundationDataStore
                     request.TeamOrgUnitId,
                     staffCategory = category,
                     initialRole = roleKey,
-                    source = "self_service"
+                    source = "self_service",
+                    preservedExistingProfile = isLocalReOnboarding
                 }),
                 cancellationToken);
 

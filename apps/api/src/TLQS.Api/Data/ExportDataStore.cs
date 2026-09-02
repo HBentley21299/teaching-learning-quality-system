@@ -37,6 +37,7 @@ public sealed partial class SqlFoundationDataStore
             "work-scrutiny" => await BuildGenericRecordExportAsync(connection, "work_scrutiny", "Work Scrutiny", filter, currentUser, cancellationToken),
             "elevate-environments" => await BuildElevateEnvironmentExportAsync(connection, filter, currentUser, cancellationToken),
             "probation" => await BuildProbationExportAsync(connection, filter, currentUser, cancellationToken),
+            "uco-tla-reviews" => await BuildUcoTlaExportAsync(connection, filter, currentUser, cancellationToken),
             _ => throw new WorkflowValidationException("Select a supported export area.")
         }).ToList();
         var questionRecordType = DashboardQuestionRecordType(normalizedKey);
@@ -135,7 +136,7 @@ public sealed partial class SqlFoundationDataStore
             WITH visible_staff AS (SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)),
                  visible_org AS (SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId))
             SELECT record_row.id, record_row.title, record_row.record_type,
-                   COALESCE(status_value.display_name, status_value.value_key, N'Draft'),
+                   COALESCE(uco_review.workflow_status, status_value.display_name, status_value.value_key, N'Draft'),
                    subject.display_name, reviewer.display_name,
                    COALESCE(record_row.org_unit_name_snapshot, unit.name), record_row.academic_year_key, record_row.record_date,
                    record_row.created_at, COALESCE(creator.display_name, N'System')
@@ -146,13 +147,22 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN org.org_units unit ON unit.id = record_row.org_unit_id
             LEFT JOIN auth.user_accounts creator_account ON creator_account.id = record_row.created_by_user_account_id
             LEFT JOIN people.staff creator ON creator.id = creator_account.staff_id
+            LEFT JOIN quality.uco_tla_reviews uco_review ON uco_review.record_id = record_row.id
             WHERE record_row.id = @recordId
               AND record_row.archived_at IS NULL
               AND (
-                  @canViewAll = 1
-                  OR record_row.created_by_user_account_id = @currentUserAccountId
-                  OR EXISTS (SELECT 1 FROM visible_staff WHERE staff_id IN (record_row.subject_staff_id, record_row.owner_staff_id))
-                  OR EXISTS (SELECT 1 FROM visible_org WHERE org_unit_id = record_row.org_unit_id)
+                  (record_row.record_type = N'uco_tla_review'
+                   AND uco_review.workflow_status = N'completed'
+                   AND (@canViewUco = 1
+                        OR @currentStaffId IN (uco_review.lecturer_staff_id, uco_review.observer_staff_id)
+                        OR subject.line_manager_staff_id = @currentStaffId))
+                  OR
+                  (record_row.record_type <> N'uco_tla_review' AND (
+                      @canViewAll = 1
+                      OR record_row.created_by_user_account_id = @currentUserAccountId
+                      OR EXISTS (SELECT 1 FROM visible_staff WHERE staff_id IN (record_row.subject_staff_id, record_row.owner_staff_id))
+                      OR EXISTS (SELECT 1 FROM visible_org WHERE org_unit_id = record_row.org_unit_id)
+                  ))
               );
             """, connection);
         AddScopeParameters(command, currentUser);
@@ -191,6 +201,8 @@ public sealed partial class SqlFoundationDataStore
             reader => new RecordReportResponse(reader.GetString(0), reader.GetString(1), GetStringOrNull(reader, 2)),
             cancellationToken)).ToList();
         fields.AddRange(await GetSpecialistRecordResponsesAsync(connection, recordId, header.RecordType, currentUser, cancellationToken));
+        if (string.Equals(header.RecordType, "uco_tla_review", StringComparison.OrdinalIgnoreCase))
+            fields.AddRange(await GetUcoTlaReportResponsesAsync(connection, recordId, cancellationToken));
         var actions = await QueryOnConnectionAsync(
             connection,
             """
@@ -1260,6 +1272,7 @@ public sealed partial class SqlFoundationDataStore
         "elevate_practice" => "elevate-practice",
         "coaching_mentoring" => "coaching",
         "probation_observation" => "probation",
+        "uco_tla_review" => "uco-tla-reviews",
         var key => key
     };
 
@@ -1293,6 +1306,7 @@ public sealed partial class SqlFoundationDataStore
         "liv" => "Learning and Innovation Visits",
         "staff" => "Staff",
         "probation" => "Probationary Observations",
+        "uco-tla-reviews" => "UCO TLA Reviews",
         "dashboard-overview" => "Teaching and Learning Overview",
         "elevate-status" => "i-Elevate Status",
         _ => key

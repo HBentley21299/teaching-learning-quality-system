@@ -21,6 +21,7 @@ const routePaths: Record<AppRoute, string> = {
   als_learning: "/als-learning-walks",
   als_liv: "/als-liv",
   probation: "/probationary-observations",
+  uco: "/uco-tla-reviews",
   elevate: "/learning-environments",
   practice: "/learning-innovation",
   coaching: "/coaching-mentoring",
@@ -93,6 +94,9 @@ export function parseAppLocation(pathname = window.location.pathname): AppLocati
   }
   if (segments[0] === "qa-hub") {
     return { ...empty, route: "qa" };
+  }
+  if (segments[0] === "uco-tla-reviews") {
+    return { ...empty, route: "uco", sourceRecordId: segments[1] || "" };
   }
 
   return { ...empty, route: pathRoutes.get(normalized) ?? "dashboard" };

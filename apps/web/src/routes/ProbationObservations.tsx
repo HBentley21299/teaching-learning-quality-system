@@ -48,6 +48,7 @@ type Props = {
   user: CurrentUser;
   onActionsChanged?: () => Promise<void>;
   onOpenEliReport: (staffId: string, elevateRecordId: string) => void;
+  onOpenUcoTlaReview: (recordId: string) => void;
   initialSourceRecordId?: string;
   onRecordOpened?: (recordId: string) => void;
   onRecordClosed?: () => void;
@@ -68,6 +69,7 @@ export function ProbationObservations({
   user,
   onActionsChanged,
   onOpenEliReport,
+  onOpenUcoTlaReview,
   initialSourceRecordId = "",
   onRecordOpened,
   onRecordClosed
@@ -126,10 +128,12 @@ export function ProbationObservations({
   useEffect(() => {
     if (!initialSourceRecordId || cases.length === 0) return;
     const match = cases.find((item) => item.recordId === initialSourceRecordId
-      || item.observations.some((observation) => observation.linkedLivSourceRecordId === initialSourceRecordId));
+      || item.observations.some((observation) => observation.linkedLivSourceRecordId === initialSourceRecordId
+        || observation.linkedUcoTlaReviewId === initialSourceRecordId));
     if (match) {
       openCase(match);
-      const linked = match.observations.find((observation) => observation.linkedLivSourceRecordId === initialSourceRecordId);
+    const linked = match.observations.find((observation) => observation.linkedLivSourceRecordId === initialSourceRecordId
+      || observation.linkedUcoTlaReviewId === initialSourceRecordId);
       setSelectedObservationNumber(linked?.observationNumber ?? match.currentObservationNumber);
     }
   }, [cases, initialSourceRecordId]);
@@ -197,6 +201,7 @@ export function ProbationObservations({
         onObservationChange={(number) => { setSelectedObservationNumber(number); setSelectedLivCycleId(""); }}
         onLivCycleChange={setSelectedLivCycleId}
         onOpenEliReport={onOpenEliReport}
+        onOpenUcoTlaReview={onOpenUcoTlaReview}
       />
     );
   }
@@ -218,7 +223,7 @@ export function ProbationObservations({
             <div className="entry-field"><span>Lead reviewer</span><div className="probation-auto-reviewer"><strong>{user.displayName}</strong><small>Assigned from your signed-in account</small></div></div>
           </div>
           {staffContext ? <ProbationEliContext context={staffContext} /> : null}
-          <div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsCreating(false)}>Cancel</Button><Button disabled={isSaving || !subjectStaffId || Boolean(staffContext?.hasActiveProbationCase)} icon={Plus} onClick={() => void createCase()} variant="primary">{isSaving ? "Creating..." : "Create cycle"}</Button></div>
+          <div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsCreating(false)}>Cancel</Button><Button disabled={isSaving || !subjectStaffId || Boolean(staffContext?.hasProbationCaseForAcademicYear)} icon={Plus} onClick={() => void createCase()} variant="primary">{isSaving ? "Creating..." : "Create cycle"}</Button></div>
         </section>
       ) : null}
 
@@ -246,7 +251,7 @@ export function ProbationObservations({
   );
 }
 
-function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRecords, actions, selectedObservationNumber, selectedLivCycleId, staff, onBack, onChanged, onObservationChange, onLivCycleChange, onOpenEliReport }: {
+function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRecords, actions, selectedObservationNumber, selectedLivCycleId, staff, onBack, onChanged, onObservationChange, onLivCycleChange, onOpenEliReport, onOpenUcoTlaReview }: {
   record: ProbationCase;
   configuration: ProbationConfiguration;
   livConfiguration: LivConfiguration;
@@ -260,6 +265,7 @@ function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRe
   onObservationChange: (number: 1 | 2 | 3) => void;
   onLivCycleChange: (id: string) => void;
   onOpenEliReport: (staffId: string, elevateRecordId: string) => void;
+  onOpenUcoTlaReview: (recordId: string) => void;
 }) {
   const observation = record.observations.find((item) => item.observationNumber === selectedObservationNumber)
     ?? record.observations.find((item) => item.observationNumber === record.currentObservationNumber)!;
@@ -307,19 +313,24 @@ function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRe
       <div className="probation-observation-switcher" aria-label="Probation observation progress">
         {record.observations.map((item) => {
           const available = item.status !== "not_started" || item.observationNumber === record.currentObservationNumber;
-          return <button className={item.observationNumber === observation.observationNumber ? "is-active" : ""} disabled={!available} key={item.id} onClick={() => onObservationChange(item.observationNumber)} type="button"><span>{item.status === "completed" ? <CheckCircle2 size={18} /> : item.observationNumber}</span><strong>Observation {item.observationNumber}</strong><small>{item.observationNumber === 2 ? "LIV" : "Probation template"} / {formatStatus(item.status)}</small></button>;
+          return <button className={item.observationNumber === observation.observationNumber ? "is-active" : ""} disabled={!available} key={item.id} onClick={() => onObservationChange(item.observationNumber)} type="button"><span>{item.status === "completed" ? <CheckCircle2 size={18} /> : item.observationNumber}</span><strong>Observation {item.observationNumber}</strong><small>{item.observationNumber === 2 ? (item.observationType === "uco_tla" ? "UCO TLA" : "LIV") : "Probation template"} / {formatStatus(item.status)}</small></button>;
         })}
       </div>
 
       {observation.observationNumber === 2 ? (
-        linkedLiv ? (
+        observation.linkedUcoTlaReviewId ? (
+          <section className="panel probation-start-liv">
+            <div><span className="probation-stage-icon"><ClipboardCheck size={22} /></span><h2>Observation 2 / UCO TLA Review</h2><p>This shared review is completed in the dedicated UCO workflow. Completing it also completes this probation observation.</p></div>
+            <Button icon={ClipboardCheck} onClick={() => onOpenUcoTlaReview(observation.linkedUcoTlaReviewId!)} variant="primary">Open UCO TLA Review</Button>
+          </section>
+        ) : linkedLiv ? (
           <section className="probation-linked-liv">
             <div className="dashboard-section-heading"><div><h2>Observation 2 / LIV</h2><span>This is one shared record and also appears in the staff member's LIV history.</span></div></div>
             <LivCaseWorkspace actions={actions.filter((action) => action.sourceRecordId === linkedLiv.recordId)} configuration={livConfiguration} cycleId={selectedLivCycleId} embedded onBack={() => undefined} onChanged={onChanged} onCycleChange={onLivCycleChange} record={linkedLiv} staff={staff} />
           </section>
         ) : (
           <section className="panel probation-start-liv">
-            <div><span className="probation-stage-icon"><Eye size={22} /></span><h2>Observation 2 uses the normal LIV process</h2><p>Starting this observation creates one LIV record that remains visible here and in the LIV tab.</p></div>
+            <div><span className="probation-stage-icon"><Eye size={22} /></span><h2>Observation 2 can use LIV or a UCO TLA Review</h2><p>Start a standard LIV here. A UCO Teaching & Learning coordinator can instead link this observation when creating a UCO TLA Review.</p></div>
             {record.canEdit && record.currentObservationNumber === 2 ? <Button disabled={isSaving} icon={Plus} onClick={() => void startLiv()} variant="primary">{isSaving ? "Starting..." : "Start Observation 2 LIV"}</Button> : <span className="status-pill status-draft">Waiting for Observation 1</span>}
           </section>
         )
@@ -548,7 +559,7 @@ function ProbationActions({ record, observation, stage, actions, staff, onChange
 }
 
 function ProbationEliContext({ context }: { context: ProbationStaffContext }) {
-  return <details className="probation-eli-disclosure"><summary><span><strong>ELI information</strong><small>{context.assessmentId ? `${context.academicYear} report available` : "No submitted report"}</small></span><ChevronDown aria-hidden="true" size={18} /></summary><div className="probation-eli-context"><div><span>ELI report</span><strong>{context.assessmentId ? `${context.academicYear} submitted` : "No submitted report"}</strong></div><div><span>Primary focus</span><strong>{context.primaryFocus ?? "Not provided"}</strong></div><div><span>Secondary focus</span><strong>{context.secondaryFocus ?? "Not provided"}</strong></div><div><span>Desired outcome</span><strong>{context.desiredOutcome ?? "Not provided"}</strong></div>{context.hasActiveProbationCase ? <p className="notice-row">This staff member already has an active probationary observation cycle.</p> : null}</div></details>;
+  return <details className="probation-eli-disclosure"><summary><span><strong>ELI information</strong><small>{context.assessmentId ? `${context.academicYear} report available` : "No submitted report"}</small></span><ChevronDown aria-hidden="true" size={18} /></summary><div className="probation-eli-context"><div><span>ELI report</span><strong>{context.assessmentId ? `${context.academicYear} submitted` : "No submitted report"}</strong></div><div><span>Primary focus</span><strong>{context.primaryFocus ?? "Not provided"}</strong></div><div><span>Secondary focus</span><strong>{context.secondaryFocus ?? "Not provided"}</strong></div><div><span>Desired outcome</span><strong>{context.desiredOutcome ?? "Not provided"}</strong></div>{context.hasProbationCaseForAcademicYear ? <p className="notice-row">This staff member already has a probationary observation cycle for the current academic year.</p> : null}</div></details>;
 }
 
 function stageToRequest(stage: ProbationStage): SaveProbationStageRequest {

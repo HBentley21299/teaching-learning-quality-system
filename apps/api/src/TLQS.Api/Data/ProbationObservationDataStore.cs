@@ -132,9 +132,10 @@ public sealed partial class SqlFoundationDataStore
                         ELSE secondary_focus.display_name END,
                    information.desired_outcome,
                    CASE WHEN EXISTS (
-                       SELECT 1 FROM quality.probation_cases active_case
-                       WHERE active_case.subject_staff_id = staff.id
-                         AND active_case.status = N'in_progress' AND active_case.archived_at IS NULL
+                       SELECT 1 FROM quality.probation_cases existing_case
+                       WHERE existing_case.subject_staff_id = staff.id
+                         AND existing_case.academic_year = @academicYear
+                         AND existing_case.archived_at IS NULL
                    ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
             FROM people.staff staff
             OUTER APPLY (
@@ -244,15 +245,15 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT observation.probation_case_id, observation.id, observation.observation_number,
                    observation.observation_type, observation.status, observation.linked_liv_record_id,
-                   liv.record_id, observation.started_at, observation.completed_at
+                   liv.record_id, observation.linked_uco_tla_review_id, observation.started_at, observation.completed_at
             FROM quality.probation_observations observation
             LEFT JOIN quality.liv_records liv ON liv.id = observation.linked_liv_record_id
             ORDER BY observation.probation_case_id, observation.observation_number;
             """,
             reader => new ProbationObservationRow(
                 reader.GetGuid(0), reader.GetGuid(1), reader.GetByte(2), reader.GetString(3), reader.GetString(4),
-                GetGuidOrNull(reader, 5), GetGuidOrNull(reader, 6), GetDateTimeOffsetOrNull(reader, 7),
-                GetDateTimeOffsetOrNull(reader, 8)),
+                GetGuidOrNull(reader, 5), GetGuidOrNull(reader, 6), GetGuidOrNull(reader, 7),
+                GetDateTimeOffsetOrNull(reader, 8), GetDateTimeOffsetOrNull(reader, 9)),
             cancellationToken);
         var stages = await QueryAsync(
             """
@@ -310,7 +311,7 @@ public sealed partial class SqlFoundationDataStore
                 var visit = visits.FirstOrDefault(item => item.ObservationId == row.Id);
                 return new ProbationObservationSummary(
                     row.Id, row.ObservationNumber, row.ObservationType, row.Status, row.LinkedLivRecordId,
-                    row.LinkedLivSourceRecordId, row.StartedAt, row.CompletedAt, rowStages,
+                    row.LinkedLivSourceRecordId, row.LinkedUcoTlaReviewId, row.StartedAt, row.CompletedAt, rowStages,
                     visit is null ? null : new ProbationVisitSummary(
                         visit.DeliveryAreaKey, visit.DeliveryAreaName, visit.ObservationDate, visit.ObservationTime,
                         visit.CourseName, visit.CourseGroup, visit.CourseLevel, visit.KeyPoints,
@@ -341,6 +342,7 @@ public sealed partial class SqlFoundationDataStore
             && request.TeachingLearningReviewerStaffId.Value == currentUser.StaffId.Value)
             throw new WorkflowValidationException("The lead reviewer and optional Teaching and Learning reviewer must be different staff members.");
 
+        var academicYear = GetCurrentAcademicYear();
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         try
@@ -352,10 +354,15 @@ public sealed partial class SqlFoundationDataStore
                 currentUser.UserAccountId.Value,
                 currentUser.StaffId.Value,
                 cancellationToken);
+            await ValidateNoProbationCaseForAcademicYearAsync(
+                connection,
+                transaction,
+                request.SubjectStaffId,
+                academicYear,
+                cancellationToken);
             if (request.TeachingLearningReviewerStaffId.HasValue)
                 await ValidateProbationReviewerAsync(connection, transaction, request.TeachingLearningReviewerStaffId.Value, "teaching_learning", cancellationToken);
             var moduleId = await GetModuleIdAsync(connection, transaction, "probation_observations", cancellationToken);
-            var academicYear = GetCurrentAcademicYear();
             var caseId = Guid.NewGuid();
             var recordId = Guid.NewGuid();
             var observationOneId = Guid.NewGuid();
@@ -448,11 +455,44 @@ public sealed partial class SqlFoundationDataStore
             await transaction.CommitAsync(cancellationToken);
             return caseId;
         }
+        catch (SqlException exception) when (
+            (exception.Number is 2601 or 2627)
+            && exception.Message.Contains("ux_probation_cases_staff_year_active", StringComparison.OrdinalIgnoreCase))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw new WorkflowValidationException(ProbationObservationWorkflow.ExistingCaseMessage(academicYear));
+        }
         catch
         {
             await transaction.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    private static async Task ValidateNoProbationCaseForAcademicYearAsync(
+        SqlConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        Guid subjectStaffId,
+        string academicYear,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT CAST(CASE WHEN EXISTS (
+                SELECT 1
+                FROM quality.probation_cases WITH (UPDLOCK, HOLDLOCK)
+                WHERE subject_staff_id = @subjectStaffId
+                  AND academic_year = @academicYear
+                  AND archived_at IS NULL
+            ) THEN 1 ELSE 0 END AS bit);
+            """,
+            connection,
+            (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@subjectStaffId", subjectStaffId);
+        command.Parameters.AddWithValue("@academicYear", academicYear);
+
+        var hasExistingCase = (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
+        ProbationObservationWorkflow.ValidateCaseCreation(hasExistingCase, academicYear);
     }
 
     private static async Task ValidateProbationCreatorScopeAsync(
@@ -775,6 +815,7 @@ public sealed partial class SqlFoundationDataStore
                 SELECT probation.record_id, probation.subject_staff_id, probation.org_unit_id,
                        probation.source_elevate_assessment_id, probation.status, probation.current_observation_number,
                        observation.id, observation.status, observation.linked_liv_record_id,
+                       observation.linked_uco_tla_review_id,
                        leader.staff_id,
                        CASE WHEN @canManage = 1 OR probation.created_by_user_account_id = @currentUserAccountId
                             OR EXISTS (
@@ -800,7 +841,7 @@ public sealed partial class SqlFoundationDataStore
                     rows.Add(new ProbationLivSourceRow(
                         reader.GetGuid(0), reader.GetGuid(1), GetGuidOrNull(reader, 2), GetGuidOrNull(reader, 3),
                         reader.GetString(4), reader.GetByte(5), reader.GetGuid(6), reader.GetString(7),
-                        GetGuidOrNull(reader, 8), reader.GetGuid(9), reader.GetBoolean(10)));
+                        GetGuidOrNull(reader, 8), GetGuidOrNull(reader, 9), reader.GetGuid(10), reader.GetBoolean(11)));
                 }
             }
             var source = rows.FirstOrDefault();
@@ -808,6 +849,8 @@ public sealed partial class SqlFoundationDataStore
             if (!source.CanEdit) throw new WorkflowValidationException("You cannot start this probation LIV observation.");
             if (source.CurrentObservationNumber != 2 || source.CaseStatus != "in_progress")
                 throw new WorkflowValidationException("Complete Observation 1 before starting the probation LIV.");
+            if (source.LinkedUcoTlaReviewId.HasValue)
+                throw new WorkflowValidationException("Observation 2 is already linked to a UCO TLA Review and cannot also use LIV.");
             if (source.LinkedLivRecordId.HasValue)
             {
                 await using var existing = new SqlCommand("SELECT record_id FROM quality.liv_records WHERE id = @id;", connection, (SqlTransaction)transaction);
@@ -852,7 +895,8 @@ public sealed partial class SqlFoundationDataStore
                 UPDATE quality.probation_observations
                 SET linked_liv_record_id = @livId, status = N'in_progress', started_at = sysutcdatetime(),
                     updated_by_user_account_id = @createdBy, updated_at = sysutcdatetime()
-                WHERE id = @observationId AND linked_liv_record_id IS NULL;
+                WHERE id = @observationId AND linked_liv_record_id IS NULL
+                  AND linked_uco_tla_review_id IS NULL;
                 """, connection, (SqlTransaction)transaction))
             {
                 command.Parameters.AddWithValue("@recordId", livRecordId);
@@ -1007,7 +1051,8 @@ public sealed partial class SqlFoundationDataStore
     private sealed record ProbationReviewerRow(Guid CaseId, ProbationReviewerSummary Reviewer);
     private sealed record ProbationObservationRow(
         Guid CaseId, Guid Id, int ObservationNumber, string ObservationType, string Status,
-        Guid? LinkedLivRecordId, Guid? LinkedLivSourceRecordId, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt);
+        Guid? LinkedLivRecordId, Guid? LinkedLivSourceRecordId, Guid? LinkedUcoTlaReviewId,
+        DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt);
     private sealed record ProbationStageRow(
         Guid ObservationId, Guid Id, string StageType, int StageOrder, string StageStatus,
         string? ContextText, string? AimsText, string? LearnerActivityText, string? ReflectionText,
@@ -1023,5 +1068,5 @@ public sealed partial class SqlFoundationDataStore
     private sealed record ProbationLivSourceRow(
         Guid CaseRecordId, Guid SubjectStaffId, Guid? OrgUnitId, Guid? SourceElevateAssessmentId,
         string CaseStatus, int CurrentObservationNumber, Guid ObservationId, string ObservationStatus,
-        Guid? LinkedLivRecordId, Guid LeaderReviewerStaffId, bool CanEdit);
+        Guid? LinkedLivRecordId, Guid? LinkedUcoTlaReviewId, Guid LeaderReviewerStaffId, bool CanEdit);
 }

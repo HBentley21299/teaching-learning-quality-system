@@ -100,6 +100,7 @@ public sealed partial class SqlFoundationDataStore
                 LEFT JOIN org.org_units org_unit ON org_unit.id = COALESCE(record.org_unit_id, subject_staff.primary_org_unit_id, owner_staff.primary_org_unit_id)
                 LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
                 WHERE record.archived_at IS NULL
+                  AND (record.record_type <> N'uco_tla_review' OR @canManageUco = 1)
                   AND (@academicYear IS NULL OR record.academic_year_key = @academicYear);
             END
             ELSE
@@ -114,6 +115,7 @@ public sealed partial class SqlFoundationDataStore
                 LEFT JOIN org.org_units org_unit ON org_unit.id = COALESCE(record.org_unit_id, subject_staff.primary_org_unit_id, owner_staff.primary_org_unit_id)
                 LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
                 WHERE record.archived_at IS NULL
+                  AND (record.record_type <> N'uco_tla_review' OR @canManageUco = 1)
                   AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
                   AND (
                       record.record_type NOT IN (N'learning_walk', N'als_learning_walk', N'liv', N'als_liv')
@@ -404,6 +406,8 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN org.org_units team
               ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id END
             WHERE action.archived_at IS NULL
+              AND (COALESCE(action.source_form_type, record.record_type, N'standalone') <> N'uco_tla_review'
+                   OR @canManageUco = 1)
               AND (
                     @canViewAll = 1
                     OR COALESCE(action.source_form_type, record.record_type, N'standalone') NOT IN (N'learning_walk', N'als_learning_walk', N'liv', N'als_liv')

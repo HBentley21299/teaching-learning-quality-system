@@ -30,6 +30,7 @@ import { ElevateStatusBadgeImage } from "../components/ElevateStatusBadgeImage";
 import { Button } from "../design-system/Button";
 import { actionPath, recordPath, staffPath } from "../app/routing";
 import { api } from "../services/api";
+import { UcoTlaDashboard } from "./UcoTlaDashboard";
 import type {
   DashboardActionSummary as ActionSummary,
   CurrentUser,
@@ -43,7 +44,8 @@ import type {
   LivLifecycleDashboardSummary,
   OrgUnitSummary,
   ProcessDashboardRecordSummary,
-  StaffParticipationDashboardSummary
+  StaffParticipationDashboardSummary,
+  UcoTlaAccessSummary
 } from "../services/types";
 
 type DashboardProcessKey = DashboardProcessConfiguration["processKey"];
@@ -53,10 +55,12 @@ type SortKey = "date_desc" | "date_asc" | "title" | "area" | "status";
 type DashboardProps = {
   academicYear: string;
   orgUnits: OrgUnitSummary[];
+  ucoAccess: UcoTlaAccessSummary | null;
   user: CurrentUser;
   onOpenAction: (actionId: string, staffId: string) => void;
   onOpenRecord: (recordId: string) => void;
   onOpenStaff: (staffId: string) => void;
+  onOpenUcoReview: (recordId: string) => void;
 };
 
 type ProcessDefinition = {
@@ -158,7 +162,7 @@ const fallbackConfiguration: DashboardConfiguration = {
   }))
 };
 
-export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRecord, onOpenStaff }: DashboardProps) {
+export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenAction, onOpenRecord, onOpenStaff, onOpenUcoReview }: DashboardProps) {
   const [actions, setActions] = useState<ActionSummary[]>([]);
   const [processRecords, setProcessRecords] = useState<ProcessDashboardRecordSummary[]>([]);
   const [configuration, setConfiguration] = useState<DashboardConfiguration>(fallbackConfiguration);
@@ -189,7 +193,14 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
   const [intelligenceError, setIntelligenceError] = useState("");
 
   const canViewReports = user.permissions.includes("reports.view_all") || user.permissions.includes("reports.view_scoped");
+  const canViewUco = ucoAccess?.canAccess === true;
   const canViewAll = user.permissions.includes("reports.view_all");
+  const [dashboardArea, setDashboardArea] = useState<"leadership" | "uco">(canViewReports ? "leadership" : "uco");
+
+  useEffect(() => {
+    if (dashboardArea === "leadership" && !canViewReports && canViewUco) setDashboardArea("uco");
+    if (dashboardArea === "uco" && !canViewUco && canViewReports) setDashboardArea("leadership");
+  }, [canViewReports, canViewUco, dashboardArea]);
 
   useEffect(() => {
     if (!canViewReports) return;
@@ -480,12 +491,20 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
     window.setTimeout(() => document.getElementById(detail === "records" ? "dashboard-record-detail" : "dashboard-action-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
   }
 
-  if (!canViewReports) {
+  if (!canViewReports && !canViewUco) {
     return <div className="route-stack"><div className="route-header"><div><p className="eyebrow">Leadership intelligence</p><h1>Dashboard</h1></div></div><section className="panel dashboard-access-panel"><AlertTriangle size={20} aria-hidden="true" /><div><h2>Reporting access is not assigned</h2><p>Your actions and staff profile remain available from the main navigation.</p></div></section></div>;
+  }
+
+  if (dashboardArea === "uco" && canViewUco && ucoAccess) {
+    return <div className="route-stack intelligence-dashboard">
+      <DashboardAreaSwitch active="uco" canViewReports={canViewReports} onChange={setDashboardArea} />
+      <UcoTlaDashboard access={ucoAccess} academicYear={academicYear} onOpenReview={onOpenUcoReview} />
+    </div>;
   }
 
   return (
     <div className="route-stack intelligence-dashboard">
+      {canViewUco ? <DashboardAreaSwitch active="leadership" canViewReports={canViewReports} onChange={setDashboardArea} /> : null}
       <header className="intelligence-header">
         <div>
           <p className="eyebrow">Leadership intelligence · {academicYear}</p>
@@ -598,6 +617,14 @@ export function Dashboard({ academicYear, orgUnits, user, onOpenAction, onOpenRe
       </CollapsibleSection></div> : null}
     </div>
   );
+}
+
+function DashboardAreaSwitch({ active, canViewReports, onChange }: { active: "leadership" | "uco"; canViewReports: boolean; onChange: (area: "leadership" | "uco") => void }) {
+  if (!canViewReports) return null;
+  return <nav aria-label="Dashboard areas" className="dashboard-area-switch">
+    <button aria-pressed={active === "leadership"} className={active === "leadership" ? "is-active" : ""} onClick={() => onChange("leadership")} type="button">College dashboard</button>
+    <button aria-pressed={active === "uco"} className={active === "uco" ? "is-active" : ""} onClick={() => onChange("uco")} type="button">UCO TLA Reviews</button>
+  </nav>;
 }
 
 function ExecutiveOverview({ records, facts, actions, trendData, trendGranularity, processData }: {

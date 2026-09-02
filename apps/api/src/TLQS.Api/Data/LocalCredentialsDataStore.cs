@@ -30,8 +30,7 @@ public sealed partial class SqlFoundationDataStore
                 CASE WHEN account.id IS NULL THEN 1 ELSE 0 END AS awaiting_onboarding
             FROM auth.local_credentials lc
             LEFT JOIN auth.user_accounts account
-                ON account.staff_id = (SELECT TOP (1) s.id FROM people.staff s
-                                       WHERE s.email = lc.email AND s.archived_at IS NULL)
+                ON account.id = lc.user_account_id
                 AND account.is_disabled = 0
                 AND account.account_status = 'active'
                 AND account.archived_at IS NULL

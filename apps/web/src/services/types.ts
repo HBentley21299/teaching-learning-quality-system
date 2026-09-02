@@ -116,6 +116,148 @@ export type ActionSummary = {
   isDeleted: boolean;
 };
 
+export type UcoTlaStaffOption = {
+  staffId: string;
+  displayName: string;
+  email: string;
+  jobTitle?: string;
+  isUcoMember: boolean;
+  isCoordinator: boolean;
+};
+
+export type UcoTlaAccessSummary = {
+  canAccess: boolean;
+  canCreate: boolean;
+  canManage: boolean;
+  canExport: boolean;
+  ucoStaff: UcoTlaStaffOption[];
+};
+
+export type UcoTlaCapabilities = {
+  canEditObserverSection: boolean;
+  canRecordProfessionalDiscussion: boolean;
+  canReflect: boolean;
+  canFinalise: boolean;
+  canReopen: boolean;
+  canManageFollowUp: boolean;
+  canCreateLinkedReview: boolean;
+  canViewObserverFindings: boolean;
+  canViewCompletedReport: boolean;
+  canExport: boolean;
+};
+
+export type UcoTlaReviewSummary = {
+  recordId: string;
+  title: string;
+  academicYear: string;
+  workflowStatus: string;
+  lecturerStaffId: string;
+  lecturerName: string;
+  observerStaffId: string;
+  observerName: string;
+  observationAt?: string;
+  courseTitle?: string;
+  moduleTitle?: string;
+  professionalDiscussionAt?: string;
+  followUpAt?: string;
+  followUpStatus?: string;
+  openActionCount: number;
+  overdueActionCount: number;
+  completedSectionCount: number;
+  rowVersion: string;
+  capabilities: UcoTlaCapabilities;
+};
+
+export type UcoTlaActionPlan = {
+  id?: string;
+  displayOrder: number;
+  actionType: "essential" | "advisable" | "good_practice";
+  target: string;
+  achievementMethod: string;
+  ownerStaffId: string;
+  ownerName?: string;
+  dueDate: string;
+  centralActionId?: string;
+};
+
+export type UcoTlaFollowUp = {
+  followUpType: "discussion" | "observation";
+  scheduledAt: string;
+  status: "scheduled" | "completed" | "cancelled";
+  outcomeNotes?: string;
+  linkedReviewRecordId?: string;
+  completedAt?: string;
+  rowVersion: string;
+};
+
+export type UcoTlaReviewDetail = {
+  review: UcoTlaReviewSummary;
+  formSubmissionId: string;
+  sessionType?: string;
+  courseLevel?: string;
+  numberRegistered?: number;
+  numberPresent?: number;
+  numberLate?: number;
+  responses: Record<string, string | undefined>;
+  actionPlan: UcoTlaActionPlan[];
+  followUp?: UcoTlaFollowUp;
+  probationObservationId?: string;
+  parentReviewRecordId?: string;
+  sectionCompletion: Record<string, boolean>;
+  lecturerAcknowledgedAt?: string;
+  lecturerSignatoryName?: string;
+  observerSignedAt?: string;
+  observerSignatoryName?: string;
+  reopenedAt?: string;
+  reopenReason?: string;
+};
+
+export type UcoTlaDashboardSummary = {
+  reviewsThisYear: number;
+  completedReviews: number;
+  activeUcoStaff: number;
+  coveredUcoStaff: number;
+  coveragePercent: number;
+  awaitingLecturer: number;
+  followUpsDue: number;
+  openActions: number;
+  overdueActions: number;
+  practiceHighlights: {
+    recordId: string;
+    lecturerName: string;
+    courseTitle: string;
+    moduleTitle: string;
+    observationAt: string;
+    category: string;
+    narrative: string;
+  }[];
+  reviews: UcoTlaReviewSummary[];
+};
+
+export type CreateUcoTlaReviewRequest = {
+  lecturerStaffId: string;
+  observerStaffId: string;
+  academicYear: string;
+};
+
+export type SaveUcoTlaObserverSectionRequest = {
+  observationAt: string;
+  sessionType: string;
+  courseTitle: string;
+  moduleTitle: string;
+  courseLevel: string;
+  numberRegistered?: number;
+  numberPresent?: number;
+  numberLate?: number;
+  responses: Record<string, string | undefined>;
+  actionPlan: UcoTlaActionPlan[];
+  professionalDiscussionAt?: string;
+  followUp?: Omit<UcoTlaFollowUp, "rowVersion" | "linkedReviewRecordId" | "completedAt">;
+  rowVersion: string;
+  sectionKey?: string;
+  isSectionComplete?: boolean;
+};
+
 export type QaCapabilities = {
   canConfigure: boolean;
   canSubmitEvidence: boolean;
@@ -662,7 +804,7 @@ export type ProbationStaffContext = {
   primaryFocus?: string;
   secondaryFocus?: string;
   desiredOutcome?: string;
-  hasActiveProbationCase: boolean;
+  hasProbationCaseForAcademicYear: boolean;
 };
 
 export type ProbationReviewer = {
@@ -709,10 +851,11 @@ export type ProbationStage = {
 export type ProbationObservation = {
   id: string;
   observationNumber: 1 | 2 | 3;
-  observationType: "probation" | "liv";
+  observationType: "probation" | "liv" | "uco_tla";
   status: "not_started" | "in_progress" | "completed";
   linkedLivRecordId?: string;
   linkedLivSourceRecordId?: string;
+  linkedUcoTlaReviewId?: string;
   startedAt?: string;
   completedAt?: string;
   stages: ProbationStage[];

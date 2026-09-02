@@ -24,6 +24,7 @@ public static class ModuleCatalog
         new("evidence", "Staff Development Evidence", "/evidence", ["evidence.submit", "evidence.review"], ["impact_evidence"], true),
         new("actions", "Actions", "/actions", ["actions.manage"], ["action"], false),
         new("reporting", "Reporting", "/reports", ["reports.view_all", "reports.view_scoped"], ["dashboard"], false),
-        new("qa_reviews", "QA Reviews", "/qa-hub", ["qa_reviews.view_all", "qa_reviews.view_scoped", "qa_reviews.view_assigned"], ["qa_review", "qa_evidence"], false)
+        new("qa_reviews", "QA Reviews", "/qa-hub", ["qa_reviews.view_all", "qa_reviews.view_scoped", "qa_reviews.view_assigned"], ["qa_review", "qa_evidence"], false),
+        new("uco_tla_reviews", "UCO TLA Reviews", "/uco-tla-reviews", ["uco_tla.manage", "records.manage"], ["uco_tla_review"], true)
     ];
 }

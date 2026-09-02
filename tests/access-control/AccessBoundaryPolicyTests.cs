@@ -22,6 +22,25 @@ public sealed class AccessBoundaryPolicyTests
         Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(CreateUser(PermissionKeys.ActionsManage), true));
     }
 
+    [Fact]
+    public void UcoPermissionOnlyManagesVisibleUcoActions()
+    {
+        var user = CreateUser(PermissionKeys.UcoTlaManage);
+
+        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "uco_tla_review"));
+        Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "learning_walk"));
+        Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user, false, "uco_tla_review"));
+    }
+
+    [Fact]
+    public void RecordAdministratorCanManageVisibleUcoActions()
+    {
+        var user = CreateUser(PermissionKeys.RecordsManage);
+
+        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "uco_tla_review"));
+        Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "learning_walk"));
+    }
+
     [Theory]
     [InlineData("learning_walk", "learning_walks", true)]
     [InlineData("als_learning_walk", "learning_walks", true)]

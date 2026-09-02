@@ -77,4 +77,49 @@ public sealed class MessagingAndExportTests
         Assert.Contains("Learning Walk", text);
         Assert.Contains("Complete record detail", text);
     }
+
+    [Fact]
+    public void Uco_word_export_uses_the_three_part_form_and_contains_no_rating_judgement()
+    {
+        var service = new WordExportService(Options.Create(new ExportBrandingOptions()));
+        var export = service.CreateRecordReport(new RecordReportData(
+            Guid.NewGuid(), "UCO TLA Review", "uco_tla_review", "Completed",
+            "Test lecturer", "Test observer", "UCO", "2025/26",
+            new DateOnly(2026, 6, 10), DateTimeOffset.Parse("2026-06-10T12:00:00Z"),
+            "Test coordinator",
+            [
+                new RecordReportSection("Course Details and Authenticated Sign-off", [
+                    new RecordReportField("Session type", "Seminar"),
+                    new RecordReportField("Level", "6")
+                ]),
+                new RecordReportSection("Teaching and learning activities", [
+                    new RecordReportField("Academic/research skills", "Students evaluated current research.")
+                ]),
+                new RecordReportSection("Delivery and facilitation of teaching and learning", [
+                    new RecordReportField("Structure, pace and organisation of session", "A clear sequence was observed.")
+                ]),
+                new RecordReportSection("Teaching, learning and assessment materials", [
+                    new RecordReportField("Module handbook", "Current and accessible.")
+                ]),
+                new RecordReportSection("Findings and actions", [
+                    new RecordReportField("Aspects of good practice", "Specific inclusive questioning.")
+                ]),
+                new RecordReportSection("Reflection and development", [
+                    new RecordReportField("Lecturer reflection on observation and professional discussion", "I will build on this approach.")
+                ])
+            ],
+            [new RecordReportAction("Share questioning model", "Demonstrate at CPD", "Test lecturer",
+                new DateOnly(2026, 9, 1), "Open", null, null, null)]));
+
+        using var stream = new MemoryStream(export.Content);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var body = document.MainDocumentPart!.Document.Body!;
+        var validationErrors = new OpenXmlValidator().Validate(document).ToArray();
+        Assert.Empty(validationErrors);
+        Assert.Equal(2, body.Descendants<DocumentFormat.OpenXml.Wordprocessing.Break>()
+            .Count(value => value.Type?.Value == DocumentFormat.OpenXml.Wordprocessing.BreakValues.Page));
+        Assert.Contains("Authenticated Sign-off", body.InnerText);
+        Assert.DoesNotContain("Moderator", body.InnerText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Rating", body.InnerText, StringComparison.OrdinalIgnoreCase);
+    }
 }

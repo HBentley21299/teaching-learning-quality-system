@@ -120,6 +120,11 @@ import type {
   ,QaReviewDetail
   ,SaveQaEvidenceRequest
   ,SaveQaReviewRequest
+  ,CreateUcoTlaReviewRequest
+  ,SaveUcoTlaObserverSectionRequest
+  ,UcoTlaAccessSummary
+  ,UcoTlaDashboardSummary
+  ,UcoTlaReviewDetail
 } from "./types";
 
 import { clearLocalSession, getAccessToken, getLocalToken } from "./auth";
@@ -314,6 +319,32 @@ async function downloadApiFile(url: string): Promise<ApiResult> {
 }
 
 export const api = {
+  ucoTlaAccess: () => getJson<UcoTlaAccessSummary>("/api/v1/uco-tla-reviews/access"),
+  ucoTlaReviews: () => getJson<UcoTlaReviewDetail["review"][]>("/api/v1/uco-tla-reviews"),
+  ucoTlaDashboard: (academicYear?: string) => {
+    const query = new URLSearchParams();
+    if (academicYear) query.set("academicYear", academicYear);
+    return getJson<UcoTlaDashboardSummary>(`/api/v1/uco-tla-reviews/dashboard${query.size ? `?${query}` : ""}`);
+  },
+  ucoTlaReview: (recordId: string) => getJson<UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}`),
+  createUcoTlaReview: (request: CreateUcoTlaReviewRequest) =>
+    sendJson<CreateUcoTlaReviewRequest, { recordId: string }>("/api/v1/uco-tla-reviews", "POST", request),
+  updateUcoTlaReview: (recordId: string, request: SaveUcoTlaObserverSectionRequest) =>
+    sendJson<SaveUcoTlaObserverSectionRequest, UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}`, "PUT", request),
+  submitUcoTlaReview: (recordId: string, rowVersion: string) =>
+    sendJson<{ rowVersion: string }, UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}/submit`, "POST", { rowVersion }),
+  acknowledgeUcoTlaReview: (recordId: string, lecturerReflection: string, rowVersion: string) =>
+    sendJson<{ lecturerReflection: string; rowVersion: string }, UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}/lecturer-acknowledgement`, "POST", { lecturerReflection, rowVersion }),
+  saveUcoTlaDiscussion: (recordId: string, professionalDiscussionAt: string, rowVersion: string) =>
+    sendJson<{ professionalDiscussionAt: string; rowVersion: string }, UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}/professional-discussion`, "PUT", { professionalDiscussionAt, rowVersion }),
+  finaliseUcoTlaReview: (recordId: string, rowVersion: string) =>
+    sendJson<{ rowVersion: string }, UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}/finalise`, "POST", { rowVersion }),
+  reopenUcoTlaReview: (recordId: string, reason: string, rowVersion: string) =>
+    sendJson<{ reason: string; rowVersion: string }, UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}/reopen`, "POST", { reason, rowVersion }),
+  saveUcoTlaFollowUp: (recordId: string, request: { followUpType: string; scheduledAt: string; status: string; outcomeNotes?: string; rowVersion?: string }) =>
+    sendJson<typeof request, UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}/follow-up`, "PUT", request),
+  createLinkedUcoTlaReview: (recordId: string, request: { observerStaffId: string; observationAt: string; sessionType: string; courseTitle: string; moduleTitle: string; courseLevel: string }) =>
+    sendJson<typeof request, { recordId: string }>(`/api/v1/uco-tla-reviews/${recordId}/linked-review`, "POST", request),
   qaHubSummary: () => getJson<QaHubSummary>("/api/v1/qa-hub/summary"),
   qaActivityTypes: () => getJson<QaActivityTypeSummary[]>("/api/v1/qa-hub/activities"),
   qaQuestions: (activityTypeId?: string, includeInactive = false) => {

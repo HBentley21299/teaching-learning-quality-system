@@ -979,7 +979,8 @@ h1, h2, h3 {
   display: contents;
 }
 
-.home-tile-entry-als-start {
+.home-tile-entry-als-start,
+.home-tile-entry-section-start {
   display: contents;
 }
 

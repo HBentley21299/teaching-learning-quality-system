@@ -10,6 +10,12 @@ public static class AccessBoundaryPolicy
     public static bool CanManageVisibleAction(CurrentUser currentUser, bool actionIsVisible) =>
         actionIsVisible && currentUser.HasPermission(PermissionKeys.ActionsManage);
 
+    public static bool CanManageVisibleAction(CurrentUser currentUser, bool actionIsVisible, string? sourceFormType) =>
+        actionIsVisible
+        && (currentUser.HasPermission(PermissionKeys.ActionsManage)
+            || (UcoTlaReviewAccessPolicy.CanManageAll(currentUser)
+                && string.Equals(sourceFormType, "uco_tla_review", StringComparison.OrdinalIgnoreCase)));
+
     public static bool IsTemplateCompatible(string recordType, string moduleKey)
     {
         var expectedModuleKey = recordType.Trim().ToLowerInvariant() switch

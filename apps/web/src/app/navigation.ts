@@ -25,6 +25,7 @@ export const navigationItems = [
   { key: "learning", label: "Learning Walks", icon: Activity },
   { key: "liv", label: "LIV", icon: Lightbulb },
   { key: "probation", label: "Probationary Observations", icon: ClipboardCheck },
+  { key: "uco", label: "UCO TLA Reviews", icon: ClipboardCheck },
   { key: "elevate", label: "Elevate Environments", icon: Building2 },
   { key: "practice", label: "Elevate Learning and Innovation", icon: Sparkles },
   { key: "coaching", label: "Coaching & Mentoring", icon: MessagesSquare },
@@ -40,7 +41,7 @@ export const navigationItems = [
 export type AppRoute = (typeof navigationItems)[number]["key"];
 
 const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
-  dashboard: ["reports.view_all", "reports.view_scoped"],
+  dashboard: ["reports.view_all", "reports.view_scoped", "uco_tla.manage"],
   staff: ["reports.view_all", "reports.view_scoped", "staff.manage", "users.manage"],
   team: ["my_team.view"],
   admin: [
@@ -58,6 +59,7 @@ const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
   als_learning: ["als_learning_walk.submit", "forms.manage"],
   als_liv: ["als_liv.submit", "als_liv.manage"],
   probation: ["probation.submit", "probation.manage"],
+  uco: ["uco_tla.manage", "records.manage"],
   elevate: ["elevate.submit", "elevate.manage", "forms.manage", "reports.view_all", "reports.view_scoped"],
   practice: ["elevate_practice.submit"],
   coaching: ["coaching.submit", "coaching.manage"],

@@ -20,21 +20,30 @@ public sealed partial class SqlFoundationDataStore
             )
             SELECT record_row.id, record_row.record_type, record_row.subject_staff_id
             FROM core.records record_row
+            LEFT JOIN quality.uco_tla_reviews uco_review ON uco_review.record_id = record_row.id
+            LEFT JOIN people.staff uco_lecturer ON uco_lecturer.id = uco_review.lecturer_staff_id
             WHERE record_row.id = @recordId
               AND record_row.archived_at IS NULL
               AND (
-                    @canViewAll = 1
-                    OR record_row.created_by_user_account_id = @currentUserAccountId
-                    OR record_row.owner_staff_id = @currentStaffId
-                    OR record_row.subject_staff_id = @currentStaffId
-                    OR EXISTS (
-                        SELECT 1 FROM visible_staff
-                        WHERE staff_id IN (record_row.subject_staff_id, record_row.owner_staff_id)
-                    )
-                    OR EXISTS (
-                        SELECT 1 FROM visible_org_units
-                        WHERE org_unit_id = record_row.org_unit_id
-                    )
+                    (record_row.record_type = N'uco_tla_review' AND (
+                        @canViewUco = 1
+                        OR @currentStaffId IN (uco_review.lecturer_staff_id, uco_review.observer_staff_id)
+                        OR uco_lecturer.line_manager_staff_id = @currentStaffId
+                    ))
+                    OR (record_row.record_type <> N'uco_tla_review' AND (
+                        @canViewAll = 1
+                        OR record_row.created_by_user_account_id = @currentUserAccountId
+                        OR record_row.owner_staff_id = @currentStaffId
+                        OR record_row.subject_staff_id = @currentStaffId
+                        OR EXISTS (
+                            SELECT 1 FROM visible_staff
+                            WHERE staff_id IN (record_row.subject_staff_id, record_row.owner_staff_id)
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM visible_org_units
+                            WHERE org_unit_id = record_row.org_unit_id
+                        )
+                    ))
               );
             """,
             command =>

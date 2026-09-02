@@ -132,6 +132,10 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   const extensionPanelRef = useRef<HTMLElement | null>(null);
 
   const canManageActions = user.permissions.includes("actions.manage");
+  const canManageUcoActions = user.permissions.includes("uco_tla.manage")
+    || user.permissions.includes("records.manage");
+  const canManageAction = (action: ActionSummary) => canManageActions
+    || (canManageUcoActions && action.sourceFormType === "uco_tla_review");
   const canViewTeamActions = canManageActions
     || user.permissions.includes("reports.view_scoped")
     || user.permissions.includes("reports.view_all");
@@ -381,7 +385,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
           <label className="mini-filter"><span>Source form</span><select onChange={(event) => setSourceFilter(event.target.value)} value={sourceFilter}><option value="">All sources</option>{sourceOptions.map((source) => <option key={source} value={source}>{sourceLabel(source)}</option>)}</select></label>
           <label className="mini-filter"><span>Due date</span><select onChange={(event) => setDueFilter(event.target.value as DueFilter)} value={dueFilter}><option value="all">Any date</option><option value="overdue">Overdue</option><option value="next_7">Next 7 days</option><option value="next_30">Next 30 days</option><option value="no_date">No date</option></select></label>
           <label className="mini-filter"><span>Sort by</span><select onChange={(event) => setSortMode(event.target.value as SortMode)} value={sortMode}><option value="due">Date due</option><option value="newest">Newest created</option><option value="owner">Owner</option><option value="source">Source</option><option value="title">Action</option></select></label>
-          {canManageActions ? <label className="action-deleted-toggle"><input checked={includeDeleted} onChange={(event) => setIncludeDeleted(event.target.checked)} type="checkbox" /><span>Include deleted</span></label> : null}
+          {canManageActions || canManageUcoActions ? <label className="action-deleted-toggle"><input checked={includeDeleted} onChange={(event) => setIncludeDeleted(event.target.checked)} type="checkbox" /><span>Include deleted</span></label> : null}
         </div>
 
         {visibleActions.length === 0 ? <div className="empty-row">No actions match the current filters.</div> : (
@@ -394,12 +398,12 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
             { key: "status", header: "Status", render: (row) => <span className={`action-status action-status-${actionStatus(row).toLowerCase()}`}>{actionStatus(row)}</span> },
             { key: "commands", header: "", render: (row) => <div className="action-row-commands">
               <Button icon={Eye} onClick={() => void showDetail(row)} variant="quiet">View</Button>
-              {row.isDeleted ? <Button icon={RotateCcw} onClick={() => void restoreAction(row.id)} variant="quiet">Restore</Button> : null}
-              {!row.isDeleted && canManageActions ? <Button icon={Pencil} onClick={() => void beginEdit(row)} variant="quiet">Edit</Button> : null}
-              {!row.isDeleted && row.dueDate && !row.completedDate && row.statusKey !== "cancelled" && (canManageActions || row.ownerStaffId === user.staffId) ? <Button icon={CalendarClock} onClick={() => { setStatusMessage(""); setExtendingId(row.id); setExtendedDueDate(nextDate(row.dueDate)); setExtensionReason(""); }} variant="quiet">Extend</Button> : null}
-              {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageActions || row.ownerStaffId === user.staffId) ? <Button icon={CheckCircle2} onClick={() => setCompletingId(row.id)} variant="quiet">Complete</Button> : null}
-              {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageActions || row.ownerStaffId === user.staffId) ? <Button icon={XCircle} onClick={() => setCancellingId(row.id)} variant="quiet">Cancel</Button> : null}
-              {!row.isDeleted && canManageActions && (row.completedDate || row.statusKey === "cancelled") ? <Button icon={RotateCcw} onClick={() => void reopenAction(row.id)} variant="quiet">Reopen</Button> : null}
+              {row.isDeleted && canManageAction(row) ? <Button icon={RotateCcw} onClick={() => void restoreAction(row.id)} variant="quiet">Restore</Button> : null}
+              {!row.isDeleted && canManageAction(row) ? <Button icon={Pencil} onClick={() => void beginEdit(row)} variant="quiet">Edit</Button> : null}
+              {!row.isDeleted && row.dueDate && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={CalendarClock} onClick={() => { setStatusMessage(""); setExtendingId(row.id); setExtendedDueDate(nextDate(row.dueDate)); setExtensionReason(""); }} variant="quiet">Extend</Button> : null}
+              {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={CheckCircle2} onClick={() => setCompletingId(row.id)} variant="quiet">Complete</Button> : null}
+              {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={XCircle} onClick={() => setCancellingId(row.id)} variant="quiet">Cancel</Button> : null}
+              {!row.isDeleted && canManageAction(row) && (row.completedDate || row.statusKey === "cancelled") ? <Button icon={RotateCcw} onClick={() => void reopenAction(row.id)} variant="quiet">Reopen</Button> : null}
             </div> }
           ]} />
         )}
@@ -425,7 +429,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
           </dl>
           {extensions.length ? <div className="action-history"><h3>Extension history</h3>{extensions.map((extension) => <div key={extension.id}><strong>{extension.previousDueDate} to {extension.extendedDueDate}</strong><span>{extension.reason}</span><small>{formatDateTime(extension.createdAt)} by {extension.createdByName ?? "System"}</small></div>)}</div> : null}
           {selectedAction.sourceRecordId && onOpenSource ? <div className="toolbar"><Button icon={ExternalLink} onClick={() => onOpenSource(selectedAction)} variant="secondary">Open source record</Button></div> : null}
-          {canManageActions && !selectedAction.isDeleted ? <div className="toolbar"><Button icon={Trash2} onClick={() => { setDeletingId(selectedAction.id); setDeletionReason(""); }} variant="danger">Delete action</Button></div> : null}
+          {canManageAction(selectedAction) && !selectedAction.isDeleted ? <div className="toolbar"><Button icon={Trash2} onClick={() => { setDeletingId(selectedAction.id); setDeletionReason(""); }} variant="danger">Delete action</Button></div> : null}
         </section>
       ) : null}
 

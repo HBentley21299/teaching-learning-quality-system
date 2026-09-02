@@ -367,7 +367,7 @@ public static class PlatformOperationsEndpoints
             CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
-            if (!user.HasPermission(PermissionKeys.ExportsCreate) || !CanExportModule(user, moduleKey)) return Results.Forbid();
+            if (!CanCreateExport(user, moduleKey)) return Results.Forbid();
             var filter = new ExportFilter(
                 academicYear, facultyCode, teamCode, fromDate, toDate,
                 staffId, reviewerId, status, recordType);
@@ -394,7 +394,7 @@ public static class PlatformOperationsEndpoints
             CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
-            if (!user.HasPermission(PermissionKeys.ExportsCreate) || !CanExportModule(user, moduleKey)) return Results.Forbid();
+            if (!CanCreateExport(user, moduleKey)) return Results.Forbid();
             var filter = new ExportFilter(
                 academicYear, facultyCode, teamCode, fromDate, toDate,
                 staffId, reviewerId, status, recordType);
@@ -456,7 +456,14 @@ public static class PlatformOperationsEndpoints
             "als_learning_walk" or "als-learning-walks" => user.HasPermission(PermissionKeys.AlsLearningWalkSubmit),
             "liv" => user.HasPermission(PermissionKeys.LivSubmit) || user.HasPermission(PermissionKeys.LivManage),
             "als_liv" or "als-liv" => user.HasPermission(PermissionKeys.AlsLivSubmit) || user.HasPermission(PermissionKeys.AlsLivManage),
+            "uco_tla_review" or "uco-tla-reviews" => UcoTlaReviewAccessPolicy.CanManageAll(user)
+                || user.StaffId.HasValue,
             _ => true
         };
     }
+
+    private static bool CanCreateExport(CurrentUser user, string moduleKey) =>
+        moduleKey.Trim().Equals("uco-tla-reviews", StringComparison.OrdinalIgnoreCase)
+            ? UcoTlaReviewAccessPolicy.CanManageAll(user)
+            : user.HasPermission(PermissionKeys.ExportsCreate) && CanExportModule(user, moduleKey);
 }

@@ -155,7 +155,11 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\067_qa_review_actions.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\068_qa_question_bank_reset.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\069_qa_form_questions.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\070_qa_action_workflow_and_inclusion_walks.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\070_qa_action_workflow_and_inclusion_walks.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\071_uco_tla_reviews.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\072_simplify_uco_tla_workflow.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\073_uco_tla_remove_moderation_copy.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\074_uco_tla_assignment_first.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

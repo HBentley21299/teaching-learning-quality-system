@@ -287,6 +287,7 @@ app.MapGet("/health", ReadinessAsync);
 app.MapFoundationEndpoints();
 app.MapPlatformOperationsEndpoints();
 app.MapQaReviewEndpoints();
+app.MapUcoTlaReviewEndpoints();
 if (useLocalLogins)
 {
     app.MapLocalAuthEndpoints();

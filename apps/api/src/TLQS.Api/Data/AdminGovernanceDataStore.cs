@@ -379,7 +379,7 @@ public sealed partial class SqlFoundationDataStore
             SELECT record.id, module.module_key, module.name, record.record_type, record.title,
                    subject.display_name, record.subject_staff_id, owner.display_name,
                    faculty.code, faculty.name, team.code, team.name,
-                   COALESCE(liv.status, practice.status, coaching.status, submission.status,
+                   COALESCE(uco_review.workflow_status, liv.status, practice.status, coaching.status, submission.status,
                             CASE WHEN record.archived_at IS NULL THEN N'complete' ELSE N'archived' END) AS status,
                    record.record_date, record.created_at, record.updated_at, record.archived_at,
                    deleted_staff.display_name, record.deletion_reason
@@ -391,6 +391,7 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id ELSE area.parent_org_unit_id END
             LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type = N'team' THEN area.id ELSE NULL END
             LEFT JOIN quality.liv_records liv ON liv.record_id = record.id
+            LEFT JOIN quality.uco_tla_reviews uco_review ON uco_review.record_id = record.id
             LEFT JOIN quality.elevate_practice_assessments practice ON practice.record_id = record.id
             LEFT JOIN quality.coaching_sessions coaching ON coaching.record_id = record.id
             OUTER APPLY (
@@ -464,6 +465,12 @@ public sealed partial class SqlFoundationDataStore
 
                 UPDATE forms.form_submissions
                 SET archived_at = CASE WHEN @archived = 1 THEN sysutcdatetime() ELSE NULL END,
+                    updated_at = sysutcdatetime()
+                WHERE record_id = @recordId;
+
+                UPDATE quality.uco_tla_reviews
+                SET archived_at = CASE WHEN @archived = 1 THEN sysutcdatetime() ELSE NULL END,
+                    updated_by_user_account_id = @userAccountId,
                     updated_at = sysutcdatetime()
                 WHERE record_id = @recordId;
 

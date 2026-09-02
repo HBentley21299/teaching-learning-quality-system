@@ -20,6 +20,17 @@ public static class ProbationObservationWorkflow
 
     public static bool CanSelectAnyStaff(IEnumerable<string> roleKeys) => roleKeys.Any(OrganisationWideRoles.Contains);
 
+    public static string ExistingCaseMessage(string academicYear) =>
+        $"A probationary observation cycle already exists for this staff member in {academicYear}. Open the existing cycle instead.";
+
+    public static void ValidateCaseCreation(bool hasCaseForAcademicYear, string academicYear)
+    {
+        if (hasCaseForAcademicYear)
+        {
+            throw new WorkflowValidationException(ExistingCaseMessage(academicYear));
+        }
+    }
+
     public static IReadOnlyList<string> RequiredStageTypes(int observationNumber) => observationNumber switch
     {
         1 => ["professional_discussion", "visit_rubric", "reflection_feedback", "actions", "next_observation"],
