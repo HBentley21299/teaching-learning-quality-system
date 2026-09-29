@@ -9,9 +9,20 @@ public sealed record ExportFilter(
     Guid? StaffId,
     Guid? ReviewerId,
     string? Status,
-    string? RecordType);
+    string? RecordType,
+    string? DeliveryAreaKey = null,
+    string? DimensionLabel = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<Guid>? DashboardRecordIds { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<Guid>? DashboardActionIds { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? DashboardProcessKey { get; init; }
+}
 
-public sealed record ExportSheet(string Name, IReadOnlyList<string> Columns, IReadOnlyList<IReadOnlyList<string?>> Rows, bool WasTruncated);
+public sealed record ExportSheet(string Name, IReadOnlyList<string> Columns, IReadOnlyList<IReadOnlyList<string?>> Rows, bool WasTruncated,
+    IReadOnlyList<string>? ColumnTypes = null);
 
 public sealed record ExportWorkbookData(
     string ModuleKey,
@@ -19,7 +30,14 @@ public sealed record ExportWorkbookData(
     ExportFilter Filter,
     string GeneratedBy,
     DateTimeOffset GeneratedAt,
-    IReadOnlyList<ExportSheet> Sheets);
+    IReadOnlyList<ExportSheet> Sheets,
+    DashboardReportData? Dashboard = null);
+
+public sealed record DashboardReportData(IReadOnlyList<DashboardReportMetric> Metrics, IReadOnlyList<DashboardReportSection> Sections);
+public sealed record DashboardReportMetric(string Label, string Value);
+public sealed record DashboardReportSection(string Title, string? Description, IReadOnlyList<DashboardReportItem> Items);
+public sealed record DashboardReportItem(string Title, IReadOnlyList<RecordReportField> Fields, IReadOnlyList<DashboardReportDistribution>? Distribution = null);
+public sealed record DashboardReportDistribution(string Label, decimal Value);
 
 public sealed record RecordReportData(
     Guid RecordId,

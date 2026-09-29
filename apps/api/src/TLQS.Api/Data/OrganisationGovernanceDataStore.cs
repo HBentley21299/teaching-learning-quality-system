@@ -21,6 +21,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             await ValidateOrganisationParentAsync(connection, transaction, null, normalized, cancellationToken);
             var id = Guid.NewGuid();
             await ExecuteAsync(
@@ -79,6 +81,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             var before = await ReadOrganisationUnitAsync(connection, transaction, orgUnitId, cancellationToken);
             if (before is null)
             {
@@ -86,6 +90,8 @@ public sealed partial class SqlFoundationDataStore
                 return false;
             }
 
+            if (before.OrgUnitType != normalized.OrgUnitType)
+                throw new WorkflowValidationException("An existing organisation unit cannot change its level. Edit its parent allocation instead.");
             await ValidateOrganisationParentAsync(connection, transaction, orgUnitId, normalized, cancellationToken);
             await ExecuteAsync(
                 connection,
@@ -124,6 +130,7 @@ public sealed partial class SqlFoundationDataStore
                 },
                 cancellationToken);
 
+            await RebuildUnitManagementProjectionAsync(connection, transaction, currentUser.UserAccountId, cancellationToken);
             await WriteAuditWithReasonAsync(
                 connection, transaction, currentUser.UserAccountId, null,
                 "org_unit", orgUnitId, "organisation.unit_updated",
@@ -209,6 +216,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             var changed = await ExecuteAsync(
                 connection,
                 transaction,
@@ -240,6 +249,60 @@ public sealed partial class SqlFoundationDataStore
                 request.IsActive ? "organisation.unit_activated" : "organisation.unit_deactivated",
                 $"Organisation unit status changed by {currentUser.DisplayName}.",
                 null, JsonSerializer.Serialize(new { request.IsActive, impact }), reason, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return true;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<bool> SetOrganisationUnitDashboardVisibilityAsync(
+        Guid orgUnitId,
+        SetOrganisationUnitDashboardVisibilityRequest request,
+        CurrentUser currentUser,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var before = await ReadOrganisationUnitAsync(connection, transaction, orgUnitId, cancellationToken);
+            if (before is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+
+            if (before.IncludeInDashboards != request.IncludeInDashboards)
+            {
+                await ExecuteAsync(
+                    connection, transaction,
+                    """
+                    UPDATE org.org_units
+                    SET include_in_dashboards = @includeInDashboards,
+                        updated_by_user_account_id = @updatedBy,
+                        updated_at = sysutcdatetime()
+                    WHERE id = @id AND archived_at IS NULL;
+                    """,
+                    command =>
+                    {
+                        command.Parameters.AddWithValue("@id", orgUnitId);
+                        command.Parameters.AddWithValue("@includeInDashboards", request.IncludeInDashboards);
+                        command.Parameters.AddWithValue("@updatedBy", ToDbValue(currentUser.UserAccountId));
+                    },
+                    cancellationToken);
+
+                await WriteAuditWithReasonAsync(
+                    connection, transaction, currentUser.UserAccountId, null,
+                    "org_unit", orgUnitId, "organisation.dashboard_visibility_changed",
+                    $"Dashboard inclusion for {before.Code} changed by {currentUser.DisplayName}.",
+                    JsonSerializer.Serialize(new { before.IncludeInDashboards }),
+                    JsonSerializer.Serialize(new { request.IncludeInDashboards }), null, cancellationToken);
+            }
+
             await transaction.CommitAsync(cancellationToken);
             return true;
         }
@@ -319,8 +382,8 @@ public sealed partial class SqlFoundationDataStore
     private static SaveOrganisationUnitRequest NormalizeOrganisationUnit(SaveOrganisationUnitRequest request)
     {
         var type = request.OrgUnitType.Trim().ToLowerInvariant();
-        if (type is not ("faculty" or "team"))
-            throw new WorkflowValidationException("Organisation unit type must be faculty or team.");
+        if (type is not ("directorate" or "faculty" or "team"))
+            throw new WorkflowValidationException("Organisation unit type must be directorate, faculty or team.");
         var code = request.Code.Trim().ToUpperInvariant();
         if (!OrganisationCodePattern.IsMatch(code))
             throw new WorkflowValidationException("Use 2-50 uppercase letters, numbers or hyphens for the organisation code.");
@@ -333,7 +396,7 @@ public sealed partial class SqlFoundationDataStore
             Code = code,
             Name = name,
             Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
-            ParentOrgUnitId = type == "faculty" ? null : request.ParentOrgUnitId
+            ParentOrgUnitId = type == "directorate" ? null : request.ParentOrgUnitId
         };
     }
 
@@ -344,16 +407,16 @@ public sealed partial class SqlFoundationDataStore
         SaveOrganisationUnitRequest request,
         CancellationToken cancellationToken)
     {
-        if (request.OrgUnitType == "faculty") return;
+        if (request.OrgUnitType == "directorate" || (request.OrgUnitType == "faculty" && !request.ParentOrgUnitId.HasValue)) return;
         if (!request.ParentOrgUnitId.HasValue)
             throw new WorkflowValidationException("A sub-team must belong to a faculty.");
         if (orgUnitId == request.ParentOrgUnitId)
             throw new WorkflowValidationException("An organisation unit cannot be its own parent.");
         if (!await ScalarExistsAsync(
             connection, transaction,
-            "SELECT 1 FROM org.org_units WHERE id = @id AND org_unit_type = N'faculty' AND is_active = 1 AND archived_at IS NULL;",
-            command => command.Parameters.AddWithValue("@id", request.ParentOrgUnitId.Value), cancellationToken))
-            throw new WorkflowValidationException("Select an active faculty for this sub-team.");
+            "SELECT 1 FROM org.org_units WHERE id = @id AND org_unit_type = @parentType AND is_active = 1 AND archived_at IS NULL;",
+            command => { command.Parameters.AddWithValue("@id", request.ParentOrgUnitId.Value); command.Parameters.AddWithValue("@parentType", request.OrgUnitType == "faculty" ? "directorate" : "faculty"); }, cancellationToken))
+            throw new WorkflowValidationException(request.OrgUnitType == "faculty" ? "Select an active directorate for this faculty." : "Select an active faculty for this sub-team.");
     }
 
     private static async Task<OrganisationUnitRow?> ReadOrganisationUnitAsync(
@@ -363,17 +426,17 @@ public sealed partial class SqlFoundationDataStore
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
-            "SELECT id, parent_org_unit_id, org_unit_type, code, name, description, is_active FROM org.org_units WHERE id = @id AND archived_at IS NULL;",
+            "SELECT id, parent_org_unit_id, org_unit_type, code, name, description, is_active, include_in_dashboards FROM org.org_units WHERE id = @id AND archived_at IS NULL;",
             connection, (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@id", orgUnitId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
             ? new OrganisationUnitRow(reader.GetGuid(0), GetGuidOrNull(reader, 1), reader.GetString(2), reader.GetString(3),
-                reader.GetString(4), GetStringOrNull(reader, 5), reader.GetBoolean(6))
+                reader.GetString(4), GetStringOrNull(reader, 5), reader.GetBoolean(6), reader.GetBoolean(7))
             : null;
     }
 
-    private sealed record OrganisationUnitRow(Guid Id, Guid? ParentOrgUnitId, string OrgUnitType, string Code, string Name, string? Description, bool IsActive);
+    private sealed record OrganisationUnitRow(Guid Id, Guid? ParentOrgUnitId, string OrgUnitType, string Code, string Name, string? Description, bool IsActive, bool IncludeInDashboards);
     private sealed record OrganisationImpactRow(Guid Id, int ActiveMemberships, int ActiveLeaderships, int ActivePermissionScopes, int ChildUnits, int HistoricalRecords, int DraftRecords, int OpenActions);
     private sealed record MembershipImpactRow(Guid MembershipId, Guid StaffId, string StaffName, string OrgUnitCode, bool IsPrimary, int PermissionScopes, int DirectReports, int AssignedOpenActions, int DraftRecords, int ActiveReviews);
 }

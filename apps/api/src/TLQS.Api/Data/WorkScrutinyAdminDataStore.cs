@@ -37,7 +37,7 @@ public sealed partial class SqlFoundationDataStore
             )
             LEFT JOIN people.staff owner ON owner.id = record.owner_staff_id
             LEFT JOIN org.org_units org_unit ON org_unit.id = record.org_unit_id
-            LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+            LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
             OUTER APPLY (
                 SELECT
                     SUM(CASE WHEN action.completed_date IS NULL THEN 1 ELSE 0 END) AS open_count,

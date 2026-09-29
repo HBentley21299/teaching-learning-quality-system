@@ -1,3 +1,4 @@
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { Archive, Pencil, Plus, RotateCcw, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CollapsibleSection } from "../components/CollapsibleSection";
@@ -28,7 +29,7 @@ function questionRequest(question: QaQuestionSummary, archived: boolean) {
   };
 }
 
-export function QaQuestionBankAdmin() {
+export function QaQuestionBankAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean, saving?: boolean) => void }) {
   const [activities, setActivities] = useState<QaActivityTypeSummary[]>([]);
   const [questions, setQuestions] = useState<QaQuestionSummary[]>([]);
   const [activity, setActivity] = useState("");
@@ -36,9 +37,13 @@ export function QaQuestionBankAdmin() {
   const [status, setStatus] = useState<QuestionStatusFilter>("active");
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<QuestionEditor | null>(null);
+  const [editorBaseline, setEditorBaseline] = useState("");
   const [workingQuestionId, setWorkingQuestionId] = useState("");
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [loadError, setLoadError] = useState("");
+  const dirty = Boolean(editor && JSON.stringify(editor) !== editorBaseline);
+  const clearGuard = useUnsavedChanges({ label: "QA question wording", dirty, saving: Boolean(workingQuestionId), onSave: saveQuestion, onDiscard: () => { setEditor(null); clearGuard(); } });
+  useEffect(() => { onDirtyChange?.(dirty, Boolean(workingQuestionId)); }, [dirty, workingQuestionId, onDirtyChange]);
   const editorRef = useRef<HTMLElement | null>(null);
 
   const loadQuestions = useCallback(async () => {
@@ -83,14 +88,15 @@ export function QaQuestionBankAdmin() {
     .filter((group) => group.questions.length > 0
       || (!query.trim() && !tag && (!activity || activity === group.activity.id))), [activities, activity, filtered, query, tag]);
 
-  function showEditor(nextEditor: QuestionEditor) {
-    setEditor(nextEditor);
+  async function showEditor(nextEditor: QuestionEditor) {
+    if (!await confirmUnsavedNavigation()) return;
+    setEditor(nextEditor); setEditorBaseline(JSON.stringify(nextEditor));
     setMessage(null);
     window.requestAnimationFrame(() => editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
   function startNew(activityTypeId = activity || activities[0]?.id || "") {
-    setEditor({
+    const nextEditor: QuestionEditor = {
       id: "",
       activityTypeId,
       themeOrWeek: "",
@@ -103,7 +109,8 @@ export function QaQuestionBankAdmin() {
       isActive: true,
       sourceStatus: "active",
       questionTag: tag || "general"
-    });
+    };
+    setEditor(nextEditor); setEditorBaseline(JSON.stringify(nextEditor));
     setMessage(null);
     window.requestAnimationFrame(() => editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
@@ -113,18 +120,19 @@ export function QaQuestionBankAdmin() {
   }
 
   async function saveQuestion() {
-    if (!editor) return;
+    if (!editor) return false;
     setWorkingQuestionId(editor.id || "new");
     const { id, ...request } = editor;
     const result = await api.saveQaQuestion(id || undefined, request);
     setWorkingQuestionId("");
     if (!result.ok) {
       setMessage({ kind: "error", text: result.message ?? "The question could not be saved." });
-      return;
+      return false;
     }
     setEditor(null);
     setMessage({ kind: "success", text: id ? "Question updated as a new version. Existing reviews remain unchanged." : "Question added to the bank." });
     await loadQuestions();
+    clearGuard(); return true;
   }
 
   async function setQuestionArchived(question: QaQuestionSummary, archived: boolean) {
@@ -146,10 +154,10 @@ export function QaQuestionBankAdmin() {
       <section className="section-heading qa-admin-heading">
         <div>
           <p className="eyebrow">QA Reviews configuration</p>
-          <h1>Question bank</h1>
+          <h2>Questions & guidance</h2>
           <p>Add and maintain criteria within the fixed QA activities. Every change is versioned and only affects future reviews.</p>
         </div>
-        <Button disabled={activities.length === 0} icon={Plus} onClick={() => startNew()} variant="primary">Add question</Button>
+        <Button disabled={activities.length === 0 || Boolean(editor)} icon={Plus} onClick={() => startNew()} variant="primary">Add question</Button>
       </section>
 
       {message ? <div className={message.kind === "success" ? "success-banner" : "notice-row"} role={message.kind === "success" ? "status" : "alert"}>{message.text}</div> : null}
@@ -158,7 +166,7 @@ export function QaQuestionBankAdmin() {
       {editor ? (
         <section className="panel qa-question-editor" ref={editorRef}>
           <div className="panel-heading"><div><h2>{editor.id ? "Edit question" : "Add question"}</h2><span>{editor.id ? "Saving creates a new version" : "Choose one of the fixed activities for this criterion"}</span></div></div>
-          <div className="form-grid">
+          <fieldset disabled={Boolean(workingQuestionId)} className="form-grid qa-question-fields">
             <label><span>Activity <strong>Required</strong></span><select disabled={Boolean(editor.id)} onChange={(event) => setEditor({ ...editor, activityTypeId: event.target.value })} value={editor.activityTypeId}>{activities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small>The activity is fixed after the question is created.</small></label>
             <label><span>Question tag</span><input list="qa-question-tag-options" onChange={(event) => setEditor({ ...editor, questionTag: event.target.value.trim().toLowerCase() })} placeholder="general" value={editor.questionTag} /><datalist id="qa-question-tag-options">{questionTags.map((questionTag) => <option key={questionTag} value={questionTag} />)}</datalist></label>
             <label><span>Theme or week</span><input onChange={(event) => setEditor({ ...editor, themeOrWeek: event.target.value })} value={editor.themeOrWeek ?? ""} /></label>
@@ -168,8 +176,8 @@ export function QaQuestionBankAdmin() {
             <label><span>Display order</span><input min={0} onChange={(event) => setEditor({ ...editor, displayOrder: Number(event.target.value) })} type="number" value={editor.displayOrder} /></label>
             <label className="inline-check"><input checked={editor.isRequired} onChange={(event) => setEditor({ ...editor, isRequired: event.target.checked })} type="checkbox" />Required</label>
             <label className="inline-check"><input checked={editor.allowsNotApplicable} onChange={(event) => setEditor({ ...editor, allowsNotApplicable: event.target.checked })} type="checkbox" />Allow N/A</label>
-            <div className="toolbar toolbar-end field-wide"><Button onClick={() => setEditor(null)}>Cancel</Button><Button disabled={!editor.questionText.trim() || Boolean(workingQuestionId)} onClick={() => void saveQuestion()} variant="primary">{workingQuestionId ? "Saving…" : editor.id ? "Save new version" : "Add question"}</Button></div>
-          </div>
+            <div className="toolbar toolbar-end field-wide"><Button disabled={Boolean(workingQuestionId)} onClick={() => setEditor(null)}>Cancel</Button><Button disabled={!editor.questionText.trim() || Boolean(workingQuestionId)} onClick={() => void saveQuestion()} variant="primary">{workingQuestionId ? "Saving…" : editor.id ? "Save new version" : "Add question"}</Button></div>
+          </fieldset>
         </section>
       ) : null}
 
@@ -189,14 +197,14 @@ export function QaQuestionBankAdmin() {
               className="qa-question-group"
               count={group.questions.length}
               defaultExpanded={index === 0 || Boolean(query || activity)}
-              actions={<Button icon={Plus} onClick={() => startNew(group.activity.id)} variant="quiet">Add question</Button>}
+              actions={<Button disabled={Boolean(editor)} icon={Plus} onClick={() => startNew(group.activity.id)} variant="quiet">Add question</Button>}
               key={group.activity.id}
               persistState={!query && !activity}
               statusSummary={group.activity.description}
               storageKey={`admin-qa-questions-${group.activity.id}`}
               title={group.activity.name}
             >
-              {group.questions.length === 0 ? <div className="qa-question-group-empty"><strong>No {status === "all" ? "" : `${status} `}questions</strong><span>Add a question to this fixed activity or change the filters.</span><Button icon={Plus} onClick={() => startNew(group.activity.id)} variant="primary">Add question</Button></div> : (
+              {group.questions.length === 0 ? <div className="qa-question-group-empty"><strong>No {status === "all" ? "" : `${status} `}questions</strong><span>Add a question to this fixed activity or change the filters.</span><Button disabled={Boolean(editor)} icon={Plus} onClick={() => startNew(group.activity.id)} variant="primary">Add question</Button></div> : (
                 <div className="qa-question-bank">
                   {group.questions.map((question) => {
                     const archived = isArchived(question);
@@ -206,8 +214,8 @@ export function QaQuestionBankAdmin() {
                         <div className="qa-question-card-top">
                           <div className="qa-question-meta"><span className={`status-pill status-${archived ? "archived" : question.sourceStatus}`}>{archived ? "Archived" : question.sourceStatus}</span><span className="qa-question-tag">{question.questionTag === "general" ? "General" : question.questionTag}</span><small>{question.themeOrWeek ?? "General"} · v{question.versionNumber}</small></div>
                           <div className="qa-question-actions">
-                            {!archived ? <Button disabled={busy} icon={Pencil} onClick={() => startEdit(question)} variant="quiet">Edit</Button> : null}
-                            <Button disabled={busy} icon={archived ? RotateCcw : Archive} onClick={() => void setQuestionArchived(question, !archived)} variant={archived ? "secondary" : "danger"}>{busy ? "Saving…" : archived ? "Restore" : "Archive"}</Button>
+                            {!archived ? <Button disabled={busy || Boolean(editor)} icon={Pencil} onClick={() => startEdit(question)} variant="quiet">Edit</Button> : null}
+                            <Button disabled={busy || Boolean(editor)} icon={archived ? RotateCcw : Archive} onClick={() => void setQuestionArchived(question, !archived)} variant={archived ? "secondary" : "danger"}>{busy ? "Saving…" : archived ? "Restore" : "Archive"}</Button>
                           </div>
                         </div>
                         <strong>{question.questionText}</strong>

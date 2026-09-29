@@ -81,9 +81,11 @@ public sealed class PermissionService(TlqsDbContext dbContext) : IPermissionServ
 
         var permissions = await (
             from userRole in dbContext.UserRoles.AsNoTracking()
+            join role in dbContext.Roles.AsNoTracking() on userRole.RoleId equals role.Id
             join rolePermission in dbContext.RolePermissions.AsNoTracking() on userRole.RoleId equals rolePermission.RoleId
             join permission in dbContext.Permissions.AsNoTracking() on rolePermission.PermissionId equals permission.Id
-            where userRole.UserAccountId == profile.UserAccountId && userRole.ActiveTo == null
+            where userRole.UserAccountId == profile.UserAccountId && role.IsActive && role.ArchivedAt == null
+                && userRole.ActiveFrom <= DateTimeOffset.UtcNow && (userRole.ActiveTo == null || userRole.ActiveTo > DateTimeOffset.UtcNow)
             select permission.PermissionKey)
             .Distinct()
             .ToArrayAsync(cancellationToken);

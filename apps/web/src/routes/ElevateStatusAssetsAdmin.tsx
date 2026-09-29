@@ -2,6 +2,7 @@ import { Image as ImageIcon, RotateCcw, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ElevateStatusBadgeImage, invalidateElevateStatusBadgeCache } from "../components/ElevateStatusBadgeImage";
 import { Button } from "../design-system/Button";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { api } from "../services/api";
 import type { AcademicYearSummary, ElevateStatusBadgeAssetSummary } from "../services/types";
 
@@ -15,6 +16,11 @@ export function ElevateStatusAssetsAdmin() {
   const [selectedFiles, setSelectedFiles] = useState<Record<number, File | undefined>>({});
   const [busyLevel, setBusyLevel] = useState<number>();
   const [status, setStatus] = useState("");
+  const clearUnsaved = useUnsavedChanges({ label: "Badge artwork", dirty: Object.values(selectedFiles).some(Boolean), saving: busyLevel !== undefined,
+    onDiscard: () => setSelectedFiles({}), onSave: async () => {
+      for (const level of Object.keys(selectedFiles).map(Number)) if (selectedFiles[level] && !await upload(level)) return false;
+      clearUnsaved(); return true;
+    } });
 
   useEffect(() => {
     let cancelled = false;
@@ -67,19 +73,20 @@ export function ElevateStatusAssetsAdmin() {
 
   async function upload(levelNumber: number) {
     const file = selectedFiles[levelNumber];
-    if (!file) return;
+    if (!file) return false;
     setBusyLevel(levelNumber);
     setStatus("");
     const result = await api.uploadElevateStatusBadge(academicYear, levelNumber, file);
     setBusyLevel(undefined);
     if (!result.ok || !result.data) {
       setStatus(result.message ?? "The badge image could not be uploaded.");
-      return;
+      return false;
     }
     invalidateElevateStatusBadgeCache(academicYear, levelNumber);
     setAssets(result.data);
     setSelectedFiles((current) => ({ ...current, [levelNumber]: undefined }));
     setStatus(`Level ${levelNumber} artwork updated for ${academicYear}.`);
+    return true;
   }
 
   async function reset(levelNumber: number) {
@@ -107,7 +114,7 @@ export function ElevateStatusAssetsAdmin() {
         </div>
         <label className="entry-field elevate-status-year-select">
           <span>Academic year</span>
-          <select onChange={(event) => setAcademicYear(event.target.value)} value={academicYear}>
+          <select disabled={busyLevel !== undefined} onChange={async (event) => { const next = event.target.value; if (await confirmUnsavedNavigation()) setAcademicYear(next); }} value={academicYear}>
             {academicYears.map((year) => <option key={year.academicYear} value={year.academicYear}>{year.academicYear}{year.isCurrent ? " (current)" : ""}</option>)}
           </select>
         </label>

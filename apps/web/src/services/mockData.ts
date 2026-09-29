@@ -195,7 +195,8 @@ export const mockOrgUnits: OrgUnitSummary[] = [
     orgUnitType: "faculty",
     code: "CUCP",
     name: "Health, Social Care, Early Years & Science",
-    isActive: true
+    isActive: true,
+    includeInDashboards: true
   },
   {
     id: "20000000-0000-0000-0000-000000000021",
@@ -203,7 +204,8 @@ export const mockOrgUnits: OrgUnitSummary[] = [
     orgUnitType: "faculty_child_code",
     code: "CUCPHS",
     name: "Health & Social Care",
-    isActive: true
+    isActive: true,
+    includeInDashboards: true
   },
   {
     id: "20000000-0000-0000-0000-000000000022",
@@ -211,7 +213,8 @@ export const mockOrgUnits: OrgUnitSummary[] = [
     orgUnitType: "faculty_child_code",
     code: "CUCPEY",
     name: "Early Years",
-    isActive: true
+    isActive: true,
+    includeInDashboards: true
   },
   {
     id: "20000000-0000-0000-0000-000000000023",
@@ -219,14 +222,16 @@ export const mockOrgUnits: OrgUnitSummary[] = [
     orgUnitType: "faculty_child_code",
     code: "CUCPSC",
     name: "Science",
-    isActive: true
+    isActive: true,
+    includeInDashboards: true
   },
   {
     id: "20000000-0000-0000-0000-000000000003",
     orgUnitType: "faculty",
     code: "CUDCPA",
     name: "Digital, Creative & Performing Arts",
-    isActive: true
+    isActive: true,
+    includeInDashboards: true
   }
 ];
 

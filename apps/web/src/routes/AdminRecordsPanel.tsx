@@ -1,5 +1,7 @@
 import { Archive, ArchiveRestore, Eye, History, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
+import { ModalDialog } from "../components/ModalDialog";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type { AdminRecord, RecordAudit } from "../services/types";
@@ -20,6 +22,9 @@ export function AdminRecordsPanel({ onOpenRecord }: { onOpenRecord: (record: Adm
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  useUnsavedChanges({ label: "Record archive reason", dirty: archiveRequest !== null && reason.length > 0, saving: isSaving,
+    onDiscard: () => { setArchiveRequest(null); setReason(""); } });
+  async function closeArchive() { if (await confirmUnsavedNavigation()) { setArchiveRequest(null); setReason(""); } }
 
   useEffect(() => {
     void refresh();
@@ -146,14 +151,14 @@ export function AdminRecordsPanel({ onOpenRecord }: { onOpenRecord: (record: Adm
       ) : null}
 
       {archiveRequest ? (
-        <div className="admin-reason-dialog" role="dialog" aria-modal="true" aria-label={archiveRequest.restore ? "Restore record" : "Archive record"}>
+        <ModalDialog className="admin-reason-dialog" busy={isSaving} onClose={() => void closeArchive()} label={archiveRequest.restore ? "Restore record" : "Archive record"}>
           <div>
-            <div className="panel-heading"><h2>{archiveRequest.restore ? "Restore" : "Archive"} record</h2><button className="icon-button" onClick={() => setArchiveRequest(null)} title="Close" type="button"><X size={16} /></button></div>
+            <div className="panel-heading"><h2>{archiveRequest.restore ? "Restore" : "Archive"} record</h2><button disabled={isSaving} className="icon-button" onClick={() => void closeArchive()} title="Close" type="button"><X size={16} /></button></div>
             <p><strong>{archiveRequest.record.title}</strong></p>
             <label className="entry-field"><span>Reason <strong>Required</strong></span><textarea autoFocus onChange={(event) => setReason(event.target.value)} rows={4} value={reason} /></label>
-            <div className="toolbar"><Button icon={X} onClick={() => setArchiveRequest(null)}>Cancel</Button><Button disabled={isSaving || !reason.trim()} icon={archiveRequest.restore ? ArchiveRestore : Archive} onClick={() => void changeArchiveState()} variant="primary">{archiveRequest.restore ? "Restore" : "Archive"}</Button></div>
+            <div className="toolbar"><Button disabled={isSaving} icon={X} onClick={() => void closeArchive()}>Cancel</Button><Button disabled={isSaving || !reason.trim()} icon={archiveRequest.restore ? ArchiveRestore : Archive} onClick={() => void changeArchiveState()} variant="primary">{archiveRequest.restore ? "Restore" : "Archive"}</Button></div>
           </div>
-        </div>
+        </ModalDialog>
       ) : null}
     </section>
   );

@@ -159,7 +159,23 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\071_uco_tla_reviews.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\072_simplify_uco_tla_workflow.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\073_uco_tla_remove_moderation_copy.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\074_uco_tla_assignment_first.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\074_uco_tla_assignment_first.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\075_qa_outcome_labels.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\076_learning_walk_delivery_area.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\077_qa_concurrent_reviews.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\078_work_scrutiny_quality_review.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\079_qa_not_seen.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\080_qa_form_access.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\081_elevate_validation.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\082_course_qa_delivery_areas.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\083_retire_agreed_learning_walk_theme.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\084_org_dashboard_visibility.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\085_org_dashboard_ancestor_visibility.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\086_directorate_hierarchy.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\087_mandatory_cpd.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\088_dashboard_faculty_selection.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\089_account_administration_guards.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\090_form_draft_actions.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

@@ -2,6 +2,7 @@ using System.Data;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using TLQS.Api.V1;
+using TLQS.Api.Exports;
 using TLQS.Application.Security;
 using TLQS.Application.Workflows;
 
@@ -66,6 +67,7 @@ public sealed partial class SqlFoundationDataStore
         var reviews = await ReadExportSheetAsync(connection, "UCO TLA Reviews", """
             SELECT TOP (@exportTake)
                    CONVERT(nvarchar(36), review.record_id) AS [Record ID],
+                   record.title AS [Record title], template.template_key AS [Form template], version.version_label AS [Form version],
                    record.academic_year_key AS [Academic year], review.workflow_status AS [Workflow status],
                    lecturer.display_name AS [Lecturer], observer.display_name AS [Observer],
                    review.observation_at AS [Observation date and time], review.session_type AS [Session type],
@@ -79,8 +81,11 @@ public sealed partial class SqlFoundationDataStore
             JOIN core.records record ON record.id = review.record_id
             JOIN people.staff lecturer ON lecturer.id = review.lecturer_staff_id
             JOIN people.staff observer ON observer.id = review.observer_staff_id
+            LEFT JOIN forms.form_submissions submission ON submission.id = review.form_submission_id
+            LEFT JOIN forms.form_template_versions version ON version.id = submission.form_template_version_id
+            LEFT JOIN forms.form_templates template ON template.id = version.form_template_id
             LEFT JOIN quality.uco_tla_follow_ups follow_up ON follow_up.review_record_id = review.record_id
-            WHERE review.archived_at IS NULL AND record.archived_at IS NULL
+            WHERE review.archived_at IS NULL AND record.archived_at IS NULL AND review.workflow_status <> N'observer_draft' AND org.fn_dashboard_process_unit_visible(record.org_unit_id,N'uco_tla_review')=1 AND org.fn_dashboard_process_unit_visible(lecturer.primary_org_unit_id,N'uco_tla_review')=1
               AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
               AND (@fromDate IS NULL OR CONVERT(date, review.observation_at) >= @fromDate)
               AND (@toDate IS NULL OR CONVERT(date, review.observation_at) <= @toDate)
@@ -90,18 +95,25 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY review.observation_at DESC
             """, command => AddUcoExportParameters(command, filter), cancellationToken);
 
-        var responses = await ReadExportSheetAsync(connection, "Narrative Evidence", """
+        var responses = await ReadExportSheetAsync(connection, "Form Answers", """
             SELECT TOP (@exportTake)
                    CONVERT(nvarchar(36), review.record_id) AS [Record ID], lecturer.display_name AS [Lecturer],
-                   section.title AS [Section], field.label AS [Criterion], response.response_text AS [Narrative evidence]
+                   template.template_key AS [Form template], version.version_label AS [Form version], section.title AS [Section],
+                   CONCAT(template.template_key, N'/', section.section_key, N'/', field.field_key) AS [Question key],
+                   field.label AS [Question], field.field_type AS [Response type],
+                   COALESCE(response.response_text, CONVERT(nvarchar(100), response.response_number),
+                       CONVERT(nvarchar(30), response.response_date, 23), lookup_value.display_name, response.response_json) AS [Response]
             FROM quality.uco_tla_reviews review
             JOIN core.records record ON record.id = review.record_id
             JOIN people.staff lecturer ON lecturer.id = review.lecturer_staff_id
             JOIN forms.form_submissions submission ON submission.id = review.form_submission_id
-            JOIN forms.form_responses response ON response.form_submission_id = submission.id AND response.archived_at IS NULL
-            JOIN forms.form_fields field ON field.id = response.form_field_id
-            JOIN forms.form_sections section ON section.id = field.form_section_id
-            WHERE review.archived_at IS NULL AND record.archived_at IS NULL
+            JOIN forms.form_template_versions version ON version.id = submission.form_template_version_id
+            JOIN forms.form_templates template ON template.id = version.form_template_id
+            JOIN forms.form_sections section ON section.form_template_version_id = version.id
+            JOIN forms.form_fields field ON field.form_section_id = section.id
+            LEFT JOIN forms.form_responses response ON response.form_submission_id = submission.id AND response.form_field_id = field.id AND response.archived_at IS NULL
+            LEFT JOIN core.lookup_values lookup_value ON lookup_value.id = response.response_lookup_value_id
+            WHERE review.archived_at IS NULL AND record.archived_at IS NULL AND review.workflow_status <> N'observer_draft' AND org.fn_dashboard_process_unit_visible(record.org_unit_id,N'uco_tla_review')=1 AND org.fn_dashboard_process_unit_visible(lecturer.primary_org_unit_id,N'uco_tla_review')=1
               AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
               AND (@fromDate IS NULL OR CONVERT(date, review.observation_at) >= @fromDate)
               AND (@toDate IS NULL OR CONVERT(date, review.observation_at) <= @toDate)
@@ -109,7 +121,7 @@ public sealed partial class SqlFoundationDataStore
               AND (@reviewerId IS NULL OR review.observer_staff_id = @reviewerId)
               AND (@status IS NULL OR review.workflow_status = @status)
             ORDER BY review.observation_at DESC, section.display_order, field.display_order
-            """, command => AddUcoExportParameters(command, filter), cancellationToken);
+            """, command => AddUcoExportParameters(command, filter), cancellationToken, 500_000);
 
         var actions = await ReadExportSheetAsync(connection, "Development Actions", """
             SELECT TOP (@exportTake)
@@ -122,7 +134,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN core.records record ON record.id = review.record_id
             JOIN people.staff lecturer ON lecturer.id = review.lecturer_staff_id
             JOIN people.staff owner ON owner.id = action_plan.owner_staff_id
-            WHERE review.archived_at IS NULL AND record.archived_at IS NULL
+            WHERE review.archived_at IS NULL AND record.archived_at IS NULL AND review.workflow_status <> N'observer_draft' AND org.fn_dashboard_process_unit_visible(record.org_unit_id,N'uco_tla_review')=1 AND org.fn_dashboard_process_unit_visible(lecturer.primary_org_unit_id,N'uco_tla_review')=1
               AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
               AND (@fromDate IS NULL OR CONVERT(date, review.observation_at) >= @fromDate)
               AND (@toDate IS NULL OR CONVERT(date, review.observation_at) <= @toDate)
@@ -132,7 +144,8 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY review.observation_at DESC, action_plan.display_order
             """, command => AddUcoExportParameters(command, filter), cancellationToken);
 
-        return [reviews, responses, actions];
+        responses = FormEntryExportBuilder.ExpandAnswers(responses);
+        return [FormEntryExportBuilder.Flatten("Form entries", reviews, "Record ID", responses, actions), reviews, responses, actions];
     }
 
     private static void AddUcoExportParameters(SqlCommand command, ExportFilter filter)
@@ -179,14 +192,16 @@ public sealed partial class SqlFoundationDataStore
             reader => new RecordReportResponse(reader.GetString(0), reader.GetString(1), GetStringOrNull(reader, 2)),
             cancellationToken);
 
-    private Task<IReadOnlyList<UcoTlaStaffOption>> GetUcoTlaStaffOptionsAsync(CancellationToken cancellationToken) =>
+    private Task<IReadOnlyList<UcoTlaStaffOption>> GetUcoTlaStaffOptionsAsync(CancellationToken cancellationToken, bool dashboardOnly = false) =>
         QueryAsync(
             """
             WITH uco_units AS (
                 SELECT id FROM org.org_units WHERE code = N'UCO' AND archived_at IS NULL
+                  AND (@dashboardOnly = 0 OR org.fn_dashboard_process_unit_visible(id, N'uco_tla_review') = 1)
                 UNION ALL
                 SELECT child.id FROM org.org_units child JOIN uco_units parent ON parent.id = child.parent_org_unit_id
                 WHERE child.archived_at IS NULL
+                  AND (@dashboardOnly = 0 OR org.fn_dashboard_process_unit_visible(child.id, N'uco_tla_review') = 1)
             )
             SELECT staff.id, staff.display_name, staff.email, staff.job_title,
                    CAST(1 AS bit),
@@ -203,6 +218,7 @@ public sealed partial class SqlFoundationDataStore
                    ) THEN 1 ELSE 0 END AS bit)
             FROM people.staff staff
             WHERE staff.archived_at IS NULL AND staff.account_status = N'active'
+              AND (@dashboardOnly = 0 OR org.fn_dashboard_process_unit_visible(staff.primary_org_unit_id, N'uco_tla_review') = 1)
               AND (
                   staff.primary_org_unit_id IN (SELECT id FROM uco_units)
                   OR EXISTS (
@@ -216,6 +232,7 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY staff.display_name
             OPTION (MAXRECURSION 20);
             """,
+            command => command.Parameters.AddWithValue("@dashboardOnly", dashboardOnly),
             reader => new UcoTlaStaffOption(
                 reader.GetGuid(0), reader.GetString(1), reader.GetString(2), GetStringOrNull(reader, 3),
                 reader.GetBoolean(4), reader.GetBoolean(5)),
@@ -241,9 +258,21 @@ public sealed partial class SqlFoundationDataStore
     {
         var reviews = await GetUcoTlaReviewsAsync(user, cancellationToken);
         var selectedYear = string.IsNullOrWhiteSpace(academicYear) ? GetCurrentAcademicYear() : academicYear.Trim();
-        var currentReviews = reviews.Where(review => review.AcademicYear == selectedYear).ToArray();
+        var dashboardRecordIds = (await QueryAsync(
+            """
+            SELECT review.record_id
+            FROM quality.uco_tla_reviews review
+            JOIN core.records record ON record.id = review.record_id
+            JOIN people.staff lecturer ON lecturer.id = review.lecturer_staff_id
+            WHERE record.academic_year_key = @academicYear
+              AND org.fn_dashboard_process_unit_visible(record.org_unit_id, N'uco_tla_review') = 1
+              AND org.fn_dashboard_process_unit_visible(lecturer.primary_org_unit_id, N'uco_tla_review') = 1;
+            """,
+            command => command.Parameters.AddWithValue("@academicYear", selectedYear),
+            reader => reader.GetGuid(0), cancellationToken)).ToHashSet();
+        var currentReviews = reviews.Where(review => review.AcademicYear == selectedYear && dashboardRecordIds.Contains(review.RecordId)).ToArray();
         var activeUcoStaff = UcoTlaReviewAccessPolicy.CanManageAll(user)
-            ? (await GetUcoTlaStaffOptionsAsync(cancellationToken)).Count
+            ? (await GetUcoTlaStaffOptionsAsync(cancellationToken, dashboardOnly: true)).Count
             : 0;
         var coveredUcoStaff = UcoTlaReviewAccessPolicy.CanManageAll(user)
             ? currentReviews.Where(review => review.WorkflowStatus == UcoTlaReviewWorkflow.Completed)
@@ -279,6 +308,8 @@ public sealed partial class SqlFoundationDataStore
             JOIN forms.form_responses response ON response.form_submission_id = review.form_submission_id
             JOIN forms.form_fields field ON field.id = response.form_field_id
             WHERE review.archived_at IS NULL AND record.archived_at IS NULL AND response.archived_at IS NULL
+              AND org.fn_dashboard_process_unit_visible(record.org_unit_id, N'uco_tla_review') = 1
+              AND org.fn_dashboard_process_unit_visible(lecturer.primary_org_unit_id, N'uco_tla_review') = 1
               AND record.academic_year_key = @academicYear
               AND review.workflow_status IN (N'awaiting_lecturer', N'awaiting_finalisation', N'completed')
               AND field.field_key IN (N'good_practice', N'excellent_practice')

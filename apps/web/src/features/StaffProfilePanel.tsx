@@ -1,3 +1,4 @@
+import { useUnsavedChanges, confirmUnsavedNavigation } from "../components/UnsavedChangesGuard";
 import { useEffect, useRef, useState } from "react";
 import { Award, ChevronDown, ExternalLink, Eye, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
@@ -8,7 +9,6 @@ import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
 import type {
   CurrentUser,
   StaffProfileDetail,
-  StaffProfileSummary,
   ElevateStatusLevelSummary,
   StaffProfileLivSummary,
   StaffProfileProbationSummary,
@@ -26,7 +26,6 @@ export function StaffProfilePanel({
   academicYear,
   staffId,
   user,
-  profiles = [],
   openElevateResult = false,
   elevateRecordId = "",
   onOpenRecord,
@@ -35,7 +34,6 @@ export function StaffProfilePanel({
   academicYear: string;
   staffId: string;
   user: CurrentUser;
-  profiles?: StaffProfileSummary[];
   openElevateResult?: boolean;
   elevateRecordId?: string;
   onOpenRecord?: StaffProfileRecordLinkHandler;
@@ -50,6 +48,9 @@ export function StaffProfilePanel({
   const [elevateEvidenceEventId, setElevateEvidenceEventId] = useState("");
   const [elevateImplementationImpact, setElevateImplementationImpact] = useState("");
   const [controlledLevelDrafts, setControlledLevelDrafts] = useState<Record<number, boolean>>({});
+  const [evidenceBaseline, setEvidenceBaseline] = useState({ eventId: "", impact: "" });
+  const [controlledBaseline, setControlledBaseline] = useState<Record<number, boolean>>({});
+  const [savingProfile, setSavingProfile] = useState(false);
   const [savingElevateLevel, setSavingElevateLevel] = useState<number | null>(null);
   const [sectionSummary, setSectionSummary] = useState<StaffProfileSectionSummary | null>(null);
   const [loadedSections, setLoadedSections] = useState<Record<string, boolean>>({});
@@ -59,6 +60,16 @@ export function StaffProfilePanel({
   const [livRecords, setLivRecords] = useState<StaffProfileLivSummary[]>([]);
   const [probationRecords, setProbationRecords] = useState<StaffProfileProbationSummary[]>([]);
   const sectionRequests = useRef<Record<string, AbortController>>({});
+  const evidenceDirty = Boolean(detail?.elevateStatus.canSubmitExplorerEvidence) &&
+    (elevateEvidenceEventId !== evidenceBaseline.eventId || elevateImplementationImpact !== evidenceBaseline.impact);
+  const changedControlledLevels = detail?.elevateStatus.canManageControlledLevels
+    ? detail.elevateStatus.levels.filter(level => level.levelNumber > 1 && Boolean(controlledLevelDrafts[level.levelNumber]) !== Boolean(controlledBaseline[level.levelNumber])) : [];
+  const profileDirty = evidenceDirty || changedControlledLevels.length > 0;
+  const profileSaving = savingProfile || savingElevateLevel !== null;
+  const clearNavigation = useUnsavedChanges({ dirty: profileDirty, saving: profileSaving, label: "Staff profile evidence and confirmations", onSave: saveProfileChanges,
+    onDiscard: () => { setElevateEvidenceEventId(evidenceBaseline.eventId); setElevateImplementationImpact(evidenceBaseline.impact); setControlledLevelDrafts(controlledBaseline); } });
+  async function guardedProfileView(change: () => void) { if (await confirmUnsavedNavigation()) change(); }
+
 
   useEffect(() => {
     setShowElevateResult(openElevateResult);
@@ -123,14 +134,13 @@ export function StaffProfilePanel({
       ]);
       setDetail(nextDetail);
       setSectionSummary(nextSummary);
-      syncElevateStatusDrafts(nextDetail);
       if (loadedSections.cpd) await loadProfileSection("cpd", sectionPages.cpd?.page ?? 1, nextDetail);
       if (loadedSections.coaching) await loadProfileSection("coaching", sectionPages.coaching?.page ?? 1, nextDetail);
       if (loadedSections.liv) await loadProfileSection("liv", sectionPages.liv?.page ?? 1, nextDetail);
       if (loadedSections.probation) await loadProfileSection("probation", sectionPages.probation?.page ?? 1, nextDetail);
       if (loadedSections.actions) await loadProfileSection("actions", sectionPages.actions?.page ?? 1, nextDetail);
     } catch {
-      setStatusMessage("The Staff Profile could not be reloaded from the API.");
+      setStatusMessage(current => `${current ? current + " " : ""}The profile refresh failed. Saved changes are retained; reload the profile to refresh its totals.`);
     }
   }
 
@@ -188,6 +198,8 @@ export function StaffProfilePanel({
     const explorer = nextDetail.elevateStatus.levels.find((level) => level.levelNumber === 1);
     setElevateEvidenceEventId(explorer?.evidenceCpdEventId ?? "");
     setElevateImplementationImpact(explorer?.implementationImpact ?? "");
+    setEvidenceBaseline({ eventId: explorer?.evidenceCpdEventId ?? "", impact: explorer?.implementationImpact ?? "" });
+    setControlledBaseline(Object.fromEntries(nextDetail.elevateStatus.levels.filter(level => level.levelNumber > 1).map(level => [level.levelNumber, level.isConfirmed])));
     setControlledLevelDrafts(Object.fromEntries(
       nextDetail.elevateStatus.levels
         .filter((level) => level.levelNumber > 1)
@@ -195,28 +207,43 @@ export function StaffProfilePanel({
     ));
   }
 
-  async function saveElevateLevel(level: ElevateStatusLevelSummary) {
-    if (!detail) return;
-
+  async function saveElevateLevel(level: ElevateStatusLevelSummary, reload = true): Promise<boolean> {
+    if (!detail) return false;
+    if (level.levelNumber === 1 && (!elevateEvidenceEventId || !elevateImplementationImpact.trim())) {
+      setStatusMessage("Select an attended CPD session and describe its implementation and impact before saving."); return false;
+    }
     setSavingElevateLevel(level.levelNumber);
     setStatusMessage("");
-    const result = await api.saveElevateStatusLevel(detail.staffId, level.levelNumber, {
-      academicYear: detail.academicYear,
-      confirmed: level.levelNumber === 1 ? true : Boolean(controlledLevelDrafts[level.levelNumber]),
-      evidenceCpdEventId: level.levelNumber === 1 ? elevateEvidenceEventId : undefined,
-      implementationImpact: level.levelNumber === 1 ? elevateImplementationImpact : undefined
-    });
-    setSavingElevateLevel(null);
-    if (!result.ok) {
-      setStatusMessage(result.message ?? "The Elevate Status level could not be saved.");
-      return;
-    }
-
-    setStatusMessage(`${level.name} ${level.levelNumber === 1 || controlledLevelDrafts[level.levelNumber] ? "saved" : "revoked"}.`);
-    await reloadDetail();
+    try {
+      const result = await api.saveElevateStatusLevel(detail.staffId, level.levelNumber, {
+        academicYear: detail.academicYear,
+        confirmed: level.levelNumber === 1 ? true : Boolean(controlledLevelDrafts[level.levelNumber]),
+        evidenceCpdEventId: level.levelNumber === 1 ? elevateEvidenceEventId : undefined,
+        implementationImpact: level.levelNumber === 1 ? elevateImplementationImpact : undefined
+      });
+      if (!result.ok) { setStatusMessage(result.message ?? "The Elevate Status level could not be saved. Your changes are still here."); return false; }
+      if (level.levelNumber === 1) setEvidenceBaseline({ eventId: elevateEvidenceEventId, impact: elevateImplementationImpact });
+      else setControlledBaseline(current => ({ ...current, [level.levelNumber]: Boolean(controlledLevelDrafts[level.levelNumber]) }));
+      setStatusMessage(`${level.name} ${level.levelNumber === 1 || controlledLevelDrafts[level.levelNumber] ? "saved" : "revoked"}.`);
+      if (reload) await reloadDetail();
+      return true;
+    } catch {
+      setStatusMessage("The Elevate Status level could not be saved. Your changes are still here; try again."); return false;
+    } finally { setSavingElevateLevel(null); }
   }
 
-  if (isLoading && !detail) {
+  async function saveProfileChanges(): Promise<boolean> {
+    if (!detail || profileSaving) return false;
+    const levels = [...(evidenceDirty ? detail.elevateStatus.levels.filter(level => level.levelNumber === 1) : []), ...changedControlledLevels];
+    setSavingProfile(true);
+    try {
+      for (const level of levels) if (!await saveElevateLevel(level, false)) return false;
+      setStatusMessage("Profile evidence and confirmations saved.");
+      await reloadDetail(); clearNavigation(); return true;
+    } finally { setSavingProfile(false); }
+  }
+
+  if (isLoading) {
     return (
       <section className="panel">
         <p className="muted-copy">Loading the Staff Profile...</p>
@@ -238,7 +265,7 @@ export function StaffProfilePanel({
 
   return (
     <>
-      {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
+      {statusMessage ? <div className="notice-row" role="status">{statusMessage}</div> : null}
 
       <div className="segmented-control" aria-label="Staff Profile section" role="tablist">
         <button
@@ -329,7 +356,7 @@ export function StaffProfilePanel({
                 <label className="entry-field">
                   <span>Internal CPD session</span>
                   <select
-                    disabled={!detail.elevateStatus.canSubmitExplorerEvidence || (!level.isEligible && !level.isAwarded)}
+                    disabled={profileSaving || !detail.elevateStatus.canSubmitExplorerEvidence || (!level.isEligible && !level.isAwarded)}
                     onChange={(event) => setElevateEvidenceEventId(event.target.value)}
                     value={elevateEvidenceEventId}
                   >
@@ -344,7 +371,7 @@ export function StaffProfilePanel({
                 <label className="entry-field">
                   <span>Implementation and impact</span>
                   <textarea
-                    disabled={!detail.elevateStatus.canSubmitExplorerEvidence || (!level.isEligible && !level.isAwarded)}
+                    disabled={profileSaving || !detail.elevateStatus.canSubmitExplorerEvidence || (!level.isEligible && !level.isAwarded)}
                     onChange={(event) => setElevateImplementationImpact(event.target.value)}
                     placeholder="Describe what you implemented and the impact it had."
                     rows={4}
@@ -355,7 +382,7 @@ export function StaffProfilePanel({
               {detail.elevateStatus.canSubmitExplorerEvidence ? (
                 <div className="elevate-level-editor-footer">
                   <Button
-                    disabled={savingElevateLevel !== null || (!level.isEligible && !level.isAwarded) || !elevateEvidenceEventId || !elevateImplementationImpact.trim()}
+                    disabled={profileSaving || (!level.isEligible && !level.isAwarded) || !elevateEvidenceEventId || !elevateImplementationImpact.trim()}
                     icon={Save}
                     onClick={() => void saveElevateLevel(level)}
                     variant="primary"
@@ -383,15 +410,15 @@ export function StaffProfilePanel({
                   <label className="elevate-confirmation-check">
                     <input
                       checked={Boolean(controlledLevelDrafts[level.levelNumber])}
-                      disabled={savingElevateLevel !== null}
+                      disabled={profileSaving}
                       onChange={(event) => setControlledLevelDrafts((current) => ({ ...current, [level.levelNumber]: event.target.checked }))}
                       type="checkbox"
                     />
                     <span>Confirmed</span>
                   </label>
                   <Button
-                    disabled={savingElevateLevel !== null
-                      || Boolean(controlledLevelDrafts[level.levelNumber]) === level.isConfirmed}
+                    disabled={profileSaving
+                      || Boolean(controlledLevelDrafts[level.levelNumber]) === Boolean(controlledBaseline[level.levelNumber])}
                     icon={Save}
                     onClick={() => void saveElevateLevel(level)}
                   >
@@ -404,14 +431,10 @@ export function StaffProfilePanel({
         </div>
       </details>
 
-      <section className="kpi-strip" aria-label="Staff Profile summary" hidden={activeProfileTab !== "overview"}>
+      <section className="kpi-strip staff-profile-summary" aria-label="Staff Profile summary" hidden={activeProfileTab !== "overview"}>
         <div className="kpi kpi-blue">
           <span>CPD sessions</span>
           <strong>{sectionSummary?.cpdCount ?? 0}</strong>
-        </div>
-        <div className="kpi kpi-green">
-          <span>Evidence submitted</span>
-          <strong>{detail.evidenceSubmitted}</strong>
         </div>
         <div className="kpi kpi-red">
           <span>Open actions</span>
@@ -423,7 +446,6 @@ export function StaffProfilePanel({
         <section className="panel">
           <div className="panel-heading">
             <h2>{detail.displayName}</h2>
-            <span>{detail.externalId}</span>
           </div>
           <dl className="definition-list">
             <dt>Email</dt>
@@ -453,10 +475,10 @@ export function StaffProfilePanel({
               <span>Current Elevate Learning and Innovation outcome</span>
             </div>
             {detail.elevatePractice?.status === "submitted" ? (
-              <Button icon={ExternalLink} onClick={() => {
+              <Button icon={ExternalLink} onClick={() => void guardedProfileView(() => {
                 setActiveElevateRecordId("");
                 setShowElevateResult(true);
-              }} variant="primary">View report</Button>
+              })} variant="primary">View report</Button>
             ) : null}
           </div>
           <p className="muted-copy">
@@ -499,6 +521,10 @@ export function StaffProfilePanel({
             <strong>{internalCpdCount}</strong>
           </div>
           <div>
+            <span>Mandatory CPD</span>
+            <strong>{sectionSummary?.mandatoryCpdCount ?? 0}</strong>
+          </div>
+          <div>
             <span>External CPD</span>
             <strong>{externalCpdCount}</strong>
           </div>
@@ -528,7 +554,7 @@ export function StaffProfilePanel({
                     <td>{record.title}</td>
                     <td>{record.eventDate}</td>
                     <td>{formatThemes(record.themes)}</td>
-                    <td>{record.isInternal ? "Internal" : "External"}</td>
+                    <td>{record.isMandatory ? "Mandatory" : record.isInternal ? "Internal" : "External"}</td>
                     <td>{record.durationMinutes ? formatDuration(record.durationMinutes) : "Not recorded"}</td>
                     <td>
                       {onOpenRecord ? (

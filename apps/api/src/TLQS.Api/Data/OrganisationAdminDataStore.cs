@@ -169,6 +169,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             var staffExists = await ScalarExistsAsync(
                 connection,
                 transaction,
@@ -331,6 +333,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             Guid? orgUnitId = null;
             await using (var select = new SqlCommand(
                 """
@@ -407,6 +411,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             var exists = await ScalarExistsAsync(
                 connection,
                 transaction,
@@ -502,6 +508,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             var staffAndManagerExist = await ScalarExistsAsync(
                 connection,
                 transaction,
@@ -623,6 +631,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             var exists = await ScalarExistsAsync(
                 connection,
                 transaction,

@@ -85,9 +85,10 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            var frameworkId = await ReadActiveElevateFrameworkIdAsync(connection, transaction, cancellationToken);
-            var (assessmentId, recordId, isNew) = await GetOrCreateElevateAssessmentIdentityAsync(
-                connection, transaction, staffId, academicYear, cancellationToken);
+            var (assessmentId, recordId, savedFrameworkId, isNew) = await GetOrCreateElevateAssessmentIdentityAsync(
+                connection, transaction, staffId, academicYear, request.RowVersion, current.Validation?.RowVersion, cancellationToken);
+            var frameworkId = savedFrameworkId
+                ?? await ReadActiveElevateFrameworkIdAsync(connection, transaction, cancellationToken);
 
             if (isNew)
             {
@@ -143,7 +144,10 @@ public sealed partial class SqlFoundationDataStore
                 request.Submit
                     ? $"Elevate Learning and Innovation {academicYear} submitted by {currentUser.DisplayName}."
                     : $"Elevate Learning and Innovation {academicYear} draft saved by {currentUser.DisplayName}.",
-                null, JsonSerializer.Serialize(request), cancellationToken);
+                isNew ? null : JsonSerializer.Serialize(current), JsonSerializer.Serialize(request), cancellationToken);
+
+            await RecordElevateContentChangeAsync(
+                connection, (SqlTransaction)transaction, assessmentId, currentUser, status, null, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
         }
@@ -169,16 +173,18 @@ public sealed partial class SqlFoundationDataStore
             ?? throw new WorkflowValidationException("The Elevate Learning and Innovation framework has not been configured."));
     }
 
-    private static async Task<(Guid AssessmentId, Guid RecordId, bool IsNew)> GetOrCreateElevateAssessmentIdentityAsync(
+    private static async Task<(Guid AssessmentId, Guid RecordId, Guid? FrameworkId, bool IsNew)> GetOrCreateElevateAssessmentIdentityAsync(
         SqlConnection connection,
         System.Data.Common.DbTransaction transaction,
         Guid staffId,
         string academicYear,
+        byte[]? expectedRowVersion,
+        byte[]? loadedRowVersion,
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
             """
-            SELECT id, record_id, status
+            SELECT id, record_id, status, framework_id, row_version
             FROM quality.elevate_practice_assessments WITH (UPDLOCK, HOLDLOCK)
             WHERE staff_id = @staffId AND academic_year = @academicYear AND archived_at IS NULL;
             """,
@@ -189,13 +195,26 @@ public sealed partial class SqlFoundationDataStore
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
-            return (Guid.NewGuid(), Guid.NewGuid(), true);
+            if (expectedRowVersion is not null || loadedRowVersion is not null)
+            {
+                throw new System.Data.DBConcurrencyException("This assessment is no longer available. Refresh before saving again.");
+            }
+            return (Guid.NewGuid(), Guid.NewGuid(), null, true);
         }
+        EnsureElevateAssessmentVersion(expectedRowVersion, loadedRowVersion, reader.GetFieldValue<byte[]>(4));
         if (reader.GetString(2) == "submitted")
         {
             throw new WorkflowValidationException("This academic year's assessment has been submitted and is locked.");
         }
-        return (reader.GetGuid(0), reader.GetGuid(1), false);
+        return (reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(3), false);
+    }
+
+    private static void EnsureElevateAssessmentVersion(byte[]? expected, byte[]? loaded, byte[] actual)
+    {
+        if (expected is null || loaded is null || !expected.SequenceEqual(actual) || !loaded.SequenceEqual(actual))
+        {
+            throw new System.Data.DBConcurrencyException("This assessment has changed since it was opened. Refresh and review the latest responses before saving.");
+        }
     }
 
     private static async Task InsertElevateAssessmentAsync(

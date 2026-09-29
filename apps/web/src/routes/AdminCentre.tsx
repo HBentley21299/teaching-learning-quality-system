@@ -1,6 +1,11 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, UserMinus, UserPlus, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { CollapsibleSection } from "../components/CollapsibleSection";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
+import { DashboardFacultyAdmin } from "./DashboardFacultyAdmin";
+import { PermissionAdminPanel } from "./PermissionsAdmin";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { accessibleAdminSections, resolveAdminSectionKey, type AdminSectionKey } from "../app/adminNavigation";
+import { AdminRooms } from "./AdminRooms";
+import { AdminStaffDetails } from "./AdminStaffDetails";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -17,324 +22,137 @@ import type {
   StaffProfileSummary,
   StaffSummary
 } from "../services/types";
-import { FormBuilder } from "./FormBuilder";
+import { FormEditor } from "./FormEditor";
 import { AdminElevatePractice } from "./AdminElevatePractice";
 import { ElevateStatusAssetsAdmin } from "./ElevateStatusAssetsAdmin";
 import { AdminWorkScrutiny } from "./AdminWorkScrutiny";
-import { AdminManagedLists } from "./AdminManagedLists";
 import { AdminRecordsPanel } from "./AdminRecordsPanel";
 import { OrganisationStructureAdmin } from "./OrganisationStructureAdmin";
 import { MessagingAdminPanel } from "./MessagingAdminPanel";
-import { QaQuestionBankAdmin } from "./QaQuestionBankAdmin";
 
-export function AdminCentre({
-  user,
-  modules,
-  profiles,
-  staff,
-  onOpenRecord,
-  initialTab = "overview",
-  onTabChange
-}: {
+export function AdminCentre({ user, modules, onOpenRecord, initialTab = "overview", onTabChange }: {
   user: CurrentUser;
   modules: ModuleSummary[];
-  profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   onOpenRecord: (record: AdminRecord) => void;
   initialTab?: string;
   onTabChange?: (tab: string) => void;
 }) {
-  const requestedTab = adminTabs.some((tab) => tab.key === initialTab) ? initialTab as AdminTabKey : "overview";
-  const [activeTab, setActiveTab] = useState<AdminTabKey>(requestedTab);
-  const permissionRows = [
-    ["Admin", "System maintenance, users, records and labels", "Global"],
-    ["Teaching and Learning", "Forms, CPD, LIV, reports and actions", "Global"],
-    ["Director", "Scoped reports and review activity", "Assigned org units"],
-    ["Head of Faculty", "Faculty records, actions and dashboards", "Assigned faculty"],
-    ["Programme Leader", "Team records, actions and dashboards", "Assigned team"],
-    ["QA Staff", "QA Review access and evidence submission", "Permission driven"],
-    ["Tutor", "Own profile, records and actions", "Self"]
-  ];
-  const canManagePeople = user.permissions.includes("users.manage") || user.permissions.includes("permissions.manage");
-  const canManageOrganisation = user.permissions.includes("organisation.manage");
-  const canManageLists = user.permissions.includes("lists.manage");
-  const canManageForms = user.permissions.includes("forms.manage");
-  const canManageRecords = user.permissions.includes("records.manage");
-  const canManageMessaging = user.permissions.includes("messaging.manage");
-  const canManageQa = user.permissions.includes("qa_reviews.manage");
-  const canUseAdmin = canManagePeople || canManageOrganisation || canManageLists || canManageForms || canManageRecords || canManageMessaging || canManageQa;
-  const tabAccess: Record<AdminTabKey, boolean> = {
-    overview: canUseAdmin,
-    "staff-access": canManagePeople,
-    organisation: canManageOrganisation,
-    lists: canManageLists,
-    forms: canManageForms,
-    elevate: canManageRecords || user.permissions.includes("users.manage"),
-    records: canManageRecords,
-    messaging: canManageMessaging,
-    dashboards: canManageRecords,
-    "qa-reviews": canManageQa
-  };
-  const visibleTabs = adminTabs.filter((tab) => tabAccess[tab.key]);
-  const visibleAreas = adminAreas
-    .map((area) => ({ ...area, tabs: area.tabs.filter((tab) => tabAccess[tab.key]) }))
-    .filter((area) => area.tabs.length > 0);
-  const activeArea = visibleAreas.find((area) => area.tabs.some((tab) => tab.key === activeTab)) ?? visibleAreas[0];
-
-  function selectTab(tab: AdminTabKey) {
-    setActiveTab(tab);
-    onTabChange?.(tab);
+  const sections = accessibleAdminSections(user.permissions);
+  const resolveSection = (key: string) => sections.find((section) => section.key === resolveAdminSectionKey(key))?.key ?? "overview";
+  const [activeTab, setActiveTab] = useState<AdminSectionKey>(() => resolveSection(initialTab));
+  const [search, setSearch] = useState("");
+  const [staffDetailsFocusId, setStaffDetailsFocusId] = useState("");
+  const [, setEditorDirty] = useState(false);
+  const [editorBusy, setEditorBusy] = useState(false);
+  function handleFormDirty(dirty: boolean, saving = false) { setEditorDirty(dirty); setEditorBusy(saving); }
+  useEffect(() => { setActiveTab(resolveSection(initialTab)); }, [initialTab, user.permissions]);
+  const activeSection = sections.find((section) => section.key === activeTab) ?? sections[0];
+  const query = search.trim().toLocaleLowerCase();
+  const matchingSections = sections.filter((section) => !query || `${section.label} ${section.group} ${section.description}`.toLocaleLowerCase().includes(query));
+  const groups = [...new Set(matchingSections.map((section) => section.group))];
+  async function selectTab(key: AdminSectionKey) {
+    if (editorBusy || key === activeTab || !await confirmUnsavedNavigation()) return;
+    openSection(key);
   }
-
-  function selectArea(area: AdminArea) {
-    const accessibleTabs = area.tabs.filter((tab) => tabAccess[tab.key]);
-    const nextTab = accessibleTabs.find((tab) => tab.key === activeTab) ?? accessibleTabs[0];
-    if (nextTab) selectTab(nextTab.key);
+  function openSection(key: AdminSectionKey) {
+    setEditorDirty(false);
+    setEditorBusy(false);
+    setActiveTab(key);
+    setSearch("");
+    onTabChange?.(key);
   }
-
-  useEffect(() => {
-    if (tabAccess[requestedTab]) setActiveTab(requestedTab);
-  }, [requestedTab]);
-
-  useEffect(() => {
-    if (!tabAccess[activeTab]) {
-      selectTab(visibleTabs[0]?.key ?? "overview");
-    }
-  }, [activeTab, tabAccess, visibleTabs]);
-
-  if (!canUseAdmin) {
-    return (
-      <div className="route-stack">
-        <div className="route-header">
-          <div>
-            <p className="eyebrow">Configuration</p>
-            <h1>Admin centre</h1>
-          </div>
-        </div>
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Access restricted</h2>
-            <span>Admin only</span>
-          </div>
-          <p className="muted-copy">You do not have permission to manage system administration.</p>
-        </section>
-      </div>
-    );
-  }
-
+  if (!activeSection) return <section className="panel"><h1>Admin centre</h1><p>You do not have permission to manage system administration.</p></section>;
+  const current = activeSection.key;
   return (
-    <div className="route-stack">
-      <div className="route-header">
-        <div>
-          <p className="eyebrow">Configuration</p>
-          <h1>Admin centre</h1>
-          <p>Manage people, workflows, system data and QA configuration from focused workspaces.</p>
+    <div className="route-stack admin-centre">
+      <div className="route-header"><div><p className="eyebrow">Administration</p><h1>Admin centre</h1><p>Find the right setting, make a change and get back to your work.</p></div></div>
+      <div className="admin-workbench">
+        <aside className="admin-directory" aria-label="Admin navigation">
+          <label className="admin-setting-search"><span>Find a setting</span><input type="search" placeholder="Try rooms, staff or forms" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+          <nav aria-label="Admin sections">
+            {groups.map((group) => <div className="admin-directory-group" key={group}><h2>{group}</h2>{matchingSections.filter((section) => section.group === group).map((section) => <button disabled={editorBusy} type="button" key={section.key} aria-current={current === section.key ? "page" : undefined} onClick={() => selectTab(section.key)}>{section.label}</button>)}</div>)}
+            {matchingSections.length === 0 ? <p className="muted-copy" role="status">No settings found. Try another word.</p> : null}
+          </nav>
+        </aside>
+        <div className="admin-workspace">
+          <div className="admin-section-heading"><p>{activeSection.group}</p><h2>{activeSection.label}</h2><span>{activeSection.description}</span></div>
+          {current === "overview" ? <>
+            <div className="admin-task-directory">{matchingSections.filter((section) => section.key !== "overview").map((section) => <button disabled={editorBusy} type="button" key={section.key} onClick={() => selectTab(section.key)}><span>{section.group}</span><strong>{section.label}</strong><p>{section.description}</p><span className="admin-task-open">Open section →</span></button>)}</div>
+          </> : null}
+          {current === "staff-access" ? <StaffAdminPanel user={user} onOpenDetails={(id) => { setStaffDetailsFocusId(id); selectTab("staff-details"); }} /> : null}
+          {current === "staff-details" ? <AdminStaffDetails isAdministrator={user.isAdministrator} initialUserAccountId={staffDetailsFocusId} onDirtyChange={setEditorDirty} /> : null}
+          {current === "roles" ? <PermissionAdminPanel user={user} onDirtyChange={handleFormDirty} /> : null}
+          {current === "organisation" ? <OrganisationStructureAdmin isAdministrator={user.isAdministrator} /> : null}
+          {current === "forms" ? <FormEditor user={user} initialLocation={initialTab} onDirtyChange={handleFormDirty} renderSettings={(family, onDirtyChange) => {
+            if (family === "coaching") return <CoachingConfigurationAdmin onDirtyChange={onDirtyChange} />;
+            if (family === "als_learning_walk") return <LearningWalkThemeAdminPanel onDirtyChange={onDirtyChange} key="als-learning" processKey="als_learning_walk" title="ALS Learning Walk themes and focus areas" subtitle="Used by ALS Learning Walks and ALS reporting" />;
+            if (family === "als_liv") return <LearningWalkThemeAdminPanel onDirtyChange={onDirtyChange} key="als-liv" processKey="als_liv_practitioner" title="ALS LIV practitioner areas" subtitle="Standalone configurable areas used only by ALS LIV" />;
+            return <LearningWalkThemeAdminPanel onDirtyChange={onDirtyChange} />;
+          }} /> : null}
+          {current === "rooms" ? <AdminRooms onDirtyChange={setEditorDirty} /> : null}
+          {current === "elevate" ? <AdminElevatePractice /> : null}
+          {current === "badges" ? <ElevateStatusAssetsAdmin /> : null}
+          {current === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
+          {current === "work-scrutiny" ? <AdminWorkScrutiny /> : null}
+          {current === "messaging" ? <MessagingAdminPanel /> : null}
+          {current === "dashboards" ? <DashboardAdminPanel onDirtyChange={handleFormDirty} /> : null}
+          {current === "system" ? <div className="route-stack">
+            <section className="panel"><h3>Module availability</h3><p className="muted-copy">Configured by the application release. Access to each module also depends on staff permissions.</p><ul className="admin-module-list">{modules.map((module) => <li key={module.id}><span>{module.name}</span><strong>{module.isEnabled ? "Enabled" : "Disabled"}</strong></li>)}</ul></section>
+            <section className="panel"><h3>Managed with college IT</h3><p>SQL Server connections, Microsoft sign-in, file storage, backups and deployment are managed in the hosting configuration. Ask college IT to change these settings.</p><p>Academic-year rules and controlled workflow stages currently require a reviewed application or database update. The form editor changes form definitions; it does not change workflow rules or rewrite submitted records.</p></section>
+          </div> : null}
         </div>
       </div>
-
-      <div className="admin-primary-nav" role="tablist" aria-label="Admin centre areas">
-        {visibleAreas.map((area) => {
-          const Icon = area.icon;
-          const isActive = activeArea?.key === area.key;
-          return (
-            <button
-              aria-selected={isActive}
-              className={isActive ? "admin-primary-tab is-active" : "admin-primary-tab"}
-              key={area.key}
-              onClick={() => selectArea(area)}
-              role="tab"
-              type="button"
-            >
-              <Icon size={18} aria-hidden="true" />
-              <span><strong>{area.label}</strong><small>{area.description}</small></span>
-            </button>
-          );
-        })}
-      </div>
-
-      {activeArea && activeArea.tabs.length > 1 ? (
-        <div className="admin-subnav" role="tablist" aria-label={`${activeArea.label} sections`}>
-          <span>In this area</span>
-          <div>
-            {activeArea.tabs.map((tab) => {
-              const Icon = tab.icon;
-              return <button aria-selected={activeTab === tab.key} className={activeTab === tab.key ? "is-active" : ""} key={tab.key} onClick={() => selectTab(tab.key)} role="tab" type="button"><Icon size={15} aria-hidden="true" />{tab.label}</button>;
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {activeTab === "overview" ? (
-        <AdminOverview
-          modules={modules}
-          onOpenLookups={() => selectTab("lists")}
-          permissionRows={permissionRows}
-          user={user}
-        />
-      ) : null}
-      {activeTab === "staff-access" ? <div className="route-stack admin-collapsible-stack">
-        <CollapsibleSection defaultExpanded storageKey="admin-staff-accounts" statusSummary="Create, search and maintain staff accounts" title="Staff accounts"><StaffAdminPanel user={user} /></CollapsibleSection>
-        <CollapsibleSection storageKey="admin-role-allocations" statusSummary="Allocate permission levels and review effective access" title="Roles and permissions"><PermissionAdminPanel user={user} /></CollapsibleSection>
-      </div> : null}
-      {activeTab === "organisation" ? <OrganisationStructureAdmin /> : null}
-      {activeTab === "lists" ? <div className="route-stack admin-collapsible-stack">
-        <CollapsibleSection defaultExpanded storageKey="admin-configurable-lists" statusSummary="Govern dropdown and checklist values used across i-Elevate" title="Configurable lists"><AdminManagedLists /></CollapsibleSection>
-        <CollapsibleSection storageKey="admin-coaching-workflow" statusSummary="Set the maximum number of actions created per coaching session" title="Coaching workflow"><CoachingConfigurationAdmin /></CollapsibleSection>
-        <CollapsibleSection storageKey="admin-learning-walk-themes" statusSummary="Shared by Learning Walks, LIV and teaching and learning reporting" title="Teaching and Learning themes"><LearningWalkThemeAdminPanel /></CollapsibleSection>
-        <CollapsibleSection storageKey="admin-als-learning-walk-themes" statusSummary="Used by ALS Learning Walks and ALS reporting" title="ALS Learning Walk themes"><LearningWalkThemeAdminPanel processKey="als_learning_walk" title="ALS Learning Walk themes and focus areas" subtitle="Used by ALS Learning Walks and ALS reporting" /></CollapsibleSection>
-        <CollapsibleSection storageKey="admin-als-liv-areas" statusSummary="Standalone areas used only by ALS LIV" title="ALS LIV practitioner areas"><LearningWalkThemeAdminPanel processKey="als_liv_practitioner" title="ALS LIV Elevate practitioner areas" subtitle="Standalone configurable areas used only by ALS LIV" /></CollapsibleSection>
-      </div> : null}
-      {activeTab === "forms" ? <FormBuilder embedded user={user} /> : null}
-      {activeTab === "elevate" ? <div className="route-stack admin-collapsible-stack">
-        {user.permissions.includes("elevate_status.manage") ? <CollapsibleSection defaultExpanded storageKey="admin-elevate-status-assets" statusSummary="Manage the visual assets used for Elevate status" title="Elevate status assets"><ElevateStatusAssetsAdmin /></CollapsibleSection> : null}
-        <CollapsibleSection storageKey="admin-elevate-practice" statusSummary="Configure Learning and Innovation practice records" title="Elevate practice"><AdminElevatePractice /></CollapsibleSection>
-      </div> : null}
-      {activeTab === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
-      {activeTab === "messaging" ? <MessagingAdminPanel /> : null}
-      {activeTab === "dashboards" ? <DashboardAdminPanel /> : null}
-      {activeTab === "qa-reviews" ? <QaQuestionBankAdmin /> : null}
     </div>
   );
 }
 
-type AdminTabKey = "overview" | "staff-access" | "organisation" | "lists" | "forms" | "elevate" | "records" | "messaging" | "dashboards" | "qa-reviews";
-type AdminAreaKey = "overview" | "people" | "configuration" | "operations" | "qa";
-type AdminTab = { key: AdminTabKey; label: string; icon: typeof SlidersHorizontal };
-type AdminArea = { key: AdminAreaKey; label: string; description: string; icon: typeof SlidersHorizontal; tabs: AdminTab[] };
-
-const adminTabs: AdminTab[] = [
-  { key: "overview", label: "Overview", icon: SlidersHorizontal },
-  { key: "staff-access", label: "Staff & Access", icon: UserCog },
-  { key: "organisation", label: "Organisation", icon: Building2 },
-  { key: "lists", label: "Lists & Lookups", icon: ListChecks },
-  { key: "forms", label: "Forms", icon: FileText },
-  { key: "elevate", label: "Elevate Records", icon: Sparkles },
-  { key: "records", label: "Records", icon: Database },
-  { key: "messaging", label: "Messaging", icon: Mail },
-  { key: "dashboards", label: "Dashboards", icon: LayoutDashboard },
-  { key: "qa-reviews", label: "Question Bank", icon: ShieldCheck }
-];
-
-const tabsByKey = new Map(adminTabs.map((tab) => [tab.key, tab]));
-const adminTab = (key: AdminTabKey) => tabsByKey.get(key)!;
-const adminAreas: AdminArea[] = [
-  { key: "overview", label: "Overview", description: "System summary", icon: LayoutDashboard, tabs: [adminTab("overview")] },
-  { key: "people", label: "People & structure", description: "Accounts, access and teams", icon: UserCog, tabs: [adminTab("staff-access"), adminTab("organisation")] },
-  { key: "configuration", label: "Configuration", description: "Lists, forms and workflows", icon: SlidersHorizontal, tabs: [adminTab("lists"), adminTab("forms"), adminTab("elevate"), adminTab("dashboards")] },
-  { key: "operations", label: "Operations", description: "Records and messaging", icon: Database, tabs: [adminTab("records"), adminTab("messaging")] },
-  { key: "qa", label: "QA Reviews", description: "Questions and templates", icon: ShieldCheck, tabs: [adminTab("qa-reviews")] }
-];
-
-function AdminOverview({
-  modules,
-  onOpenLookups,
-  permissionRows,
-  user
-}: {
-  modules: ModuleSummary[];
-  onOpenLookups: () => void;
-  permissionRows: string[][];
-  user: CurrentUser;
-}) {
-  return (
-    <>
-      <div className="three-column">
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Current access</h2>
-            <span>{user.scopes[0]?.scopeType ?? "none"}</span>
-          </div>
-          <dl className="definition-list">
-            <dt>User</dt>
-            <dd>{user.displayName}</dd>
-            <dt>Email</dt>
-            <dd>{user.email}</dd>
-            <dt>Permissions</dt>
-            <dd>{user.permissions.length}</dd>
-          </dl>
-        </section>
-
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Enabled modules</h2>
-            <span>{modules.filter((module) => module.isEnabled).length}</span>
-          </div>
-          <div className="toggle-list">
-            {modules.map((module) => (
-              <label key={module.id} className="toggle-row">
-                <span>{module.name}</span>
-                <input type="checkbox" defaultChecked={module.isEnabled} disabled />
-              </label>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Lookup control</h2>
-            <span>Admin editable</span>
-          </div>
-          <div className="lookup-list">
-            <button className="lookup-row" onClick={onOpenLookups} type="button">CPD themes</button>
-            <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching qualification statuses</button>
-            <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching focus areas</button>
-            <button className="lookup-row" onClick={onOpenLookups} type="button">Coaching support types</button>
-            <button className="lookup-row" onClick={onOpenLookups} type="button">Action themes by process</button>
-          </div>
-        </section>
-      </div>
-
-      <CollapsibleSection defaultExpanded={false} statusSummary="Reference guide for role-based access and organisation scope" storageKey="admin-overview-role-model" title="Role model">
-        <div className="permission-grid">
-          {permissionRows.map(([role, permissions, scope]) => (
-            <div className="permission-row" key={role}>
-              <strong>{role}</strong>
-              <span>{permissions}</span>
-              <span>{scope}</span>
-            </div>
-          ))}
-        </div>
-      </CollapsibleSection>
-    </>
-  );
-}
-
-function CoachingConfigurationAdmin() {
-  const [maxActions, setMaxActions] = useState("3");
+function CoachingConfigurationAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean, saving?: boolean) => void }) {
+  const [maxActions, setMaxActions] = useState("");
+  const [savedMaxActions, setSavedMaxActions] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const dirty = loaded && maxActions !== savedMaxActions;
+  const clearGuard = useUnsavedChanges({ label: "Coaching workflow setting", dirty, saving: isSaving, onSave: saveConfiguration, onDiscard: () => { setMaxActions(savedMaxActions); clearGuard(); } });
+  useEffect(() => { onDirtyChange?.(dirty || isSaving, isSaving); }, [dirty, isSaving, onDirtyChange]);
 
   useEffect(() => {
     void api.coachingConfiguration()
-      .then((configuration) => setMaxActions(String(configuration.maxActionsPerSession)))
+      .then((configuration) => { const value = String(configuration.maxActionsPerSession); setMaxActions(value); setSavedMaxActions(value); setLoaded(true); })
       .catch(() => setMessage("Coaching configuration could not be loaded."));
   }, []);
 
   async function saveConfiguration() {
+    if (isSaving) return false;
     const value = Number(maxActions);
     if (!Number.isInteger(value) || value < 1 || value > 10) {
       setMessage("Enter a maximum between 1 and 10 actions.");
-      return;
+      return false;
     }
-
     setIsSaving(true);
-    const result = await api.updateCoachingConfiguration(value);
-    setIsSaving(false);
-    setMessage(result.ok ? "Coaching action limit updated." : result.message ?? "The coaching configuration could not be saved.");
+    try {
+      const result = await api.updateCoachingConfiguration(value);
+      if (result.ok) { setMaxActions(String(value)); setSavedMaxActions(String(value)); clearGuard(); }
+      setMessage(result.ok ? "Coaching action limit updated." : result.message ?? "The coaching configuration could not be saved.");
+      return result.ok;
+    } catch {
+      setMessage("The coaching configuration could not be saved. Try again."); return false;
+    } finally { setIsSaving(false); }
   }
 
   return (
     <section className="panel">
       <div className="panel-heading"><div><h2>Coaching workflow</h2><span>Session-level configuration</span></div></div>
       <div className="lookup-admin-toolbar">
-        <label className="entry-field"><span>Maximum new actions per session</span><input max={10} min={1} onChange={(event) => setMaxActions(event.target.value)} type="number" value={maxActions} /></label>
-        <Button disabled={isSaving} icon={Save} onClick={() => void saveConfiguration()} variant="primary">Save setting</Button>
+        <label className="entry-field"><span>Maximum new actions per session</span><input disabled={!loaded || isSaving} max={10} min={1} onChange={(event) => setMaxActions(event.target.value)} type="number" value={maxActions} /></label>
+        <Button disabled={!loaded || isSaving || !dirty} icon={Save} onClick={() => void saveConfiguration()} variant="primary">Save setting</Button>
+        {dirty ? <Button disabled={isSaving} onClick={() => { setMaxActions(savedMaxActions); setMessage(""); }}>Cancel changes</Button> : null}
       </div>
       {message ? <div className="notice-row" role="status">{message}</div> : null}
     </section>
   );
 }
-
 function LookupAdminPanel() {
   return (
     <div className="route-stack">
@@ -399,6 +217,7 @@ function LookupValueAdminSection({
   const [newValue, setNewValue] = useState("");
   const [status, setStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const clearGuard = useUnsavedChanges({ label: title, dirty: Boolean(newValue), saving: isSaving, onSave: addValue, onDiscard: () => { setNewValue(""); clearGuard(); } });
 
   useEffect(() => {
     void refreshValues();
@@ -417,7 +236,7 @@ function LookupValueAdminSection({
   async function addValue() {
     if (!newValue.trim()) {
       setStatus(emptyPrompt);
-      return;
+      return false;
     }
 
     setIsSaving(true);
@@ -425,11 +244,12 @@ function LookupValueAdminSection({
     setIsSaving(false);
     if (!result.ok) {
       setStatus(result.message ?? `The ${valueLabel} could not be added.`);
-      return;
+      return false;
     }
 
-    setNewValue("");
+    setNewValue(""); clearGuard();
     await refreshValues(`${capitalize(valueLabel)} added.`);
+    return true;
   }
 
   async function removeValue(id: string) {
@@ -515,7 +335,7 @@ const emptyAccountForm: NewAccountForm = {
   accountStatus: "active"
 };
 
-function StaffAdminPanel({ user }: { user: CurrentUser }) {
+function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDetails: (id: string) => void }) {
   const [accounts, setAccounts] = useState<AdminUserSummary[]>([]);
   const [roles, setRoles] = useState<AdminRoleSummary[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
@@ -524,13 +344,18 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
   const [accountSearch, setAccountSearch] = useState("");
   const [panelStatus, setPanelStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const formDirty = JSON.stringify(form) !== JSON.stringify(emptyAccountForm);
+  const editedAccounts = accounts.filter(account => rowEdits[account.userAccountId] && rowEdits[account.userAccountId].accountStatus !== account.accountStatus);
+  const clearGuard = useUnsavedChanges({ label: "Staff account changes", dirty: formDirty || editedAccounts.length > 0, saving: isSaving,
+    onSave: async () => { if (formDirty && !await createAccount()) return false; for (const account of editedAccounts) { if (!await saveAccount(account)) return false; } clearGuard(); return true; },
+    onDiscard: () => { setForm(emptyAccountForm); setRowEdits({}); clearGuard(); } });
 
   useEffect(() => {
     void refreshData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refreshData() {
+  async function refreshData(resetEdits = true) {
     try {
       const [nextAccounts, nextRoles, nextOrgUnits] = await Promise.all([
         api.adminUsers(),
@@ -540,7 +365,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
       setAccounts(nextAccounts);
       setRoles(nextRoles);
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
-      setRowEdits({});
+      if (resetEdits) setRowEdits({});
     } catch {
       setPanelStatus("User accounts could not be loaded from the API.");
     }
@@ -549,12 +374,12 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
   async function createAccount() {
     if (!form.displayName.trim() || !form.email.trim() || !form.externalId.trim()) {
       setPanelStatus("A staff name, email address and staff ID are required.");
-      return;
+      return false;
     }
 
     if (!form.roleKey) {
       setPanelStatus("Select a role for the new account.");
-      return;
+      return false;
     }
 
     setIsSaving(true);
@@ -573,40 +398,44 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
     if (result.ok) {
       setPanelStatus(`Account created for ${form.displayName.trim()}.`);
       setForm(emptyAccountForm);
-      await refreshData();
+      await refreshData(false);
+      return true;
     } else {
-      setPanelStatus(result.message ?? "The account could not be created.");
+      setPanelStatus(result.message ?? "The account could not be created."); return false;
     }
   }
 
   async function saveAccount(account: AdminUserSummary) {
     const edit = rowEdits[account.userAccountId];
     if (!edit) {
-      return;
+      return false;
     }
 
     setIsSaving(true);
     const result = await api.updateAdminUser(account.userAccountId, {
-      accountStatus: edit.accountStatus !== account.accountStatus ? edit.accountStatus : undefined
+      accountStatus: edit.accountStatus !== account.accountStatus ? edit.accountStatus : undefined,
+      rowVersion: account.rowVersion, staffRowVersion: account.staffRowVersion
     });
     setIsSaving(false);
 
     if (result.ok) {
       setPanelStatus(`Account for ${account.displayName} updated.`);
-      await refreshData();
+      setRowEdits(current => { const next = { ...current }; delete next[account.userAccountId]; return next; });
+      await refreshData(false);
+      return true;
     } else {
-      setPanelStatus(result.message ?? "The account could not be updated.");
+      setPanelStatus(result.message ?? "The account could not be updated."); return false;
     }
   }
 
   async function toggleDisabled(account: AdminUserSummary) {
     setIsSaving(true);
-    const result = await api.updateAdminUser(account.userAccountId, { isDisabled: !account.isDisabled });
+    const result = await api.updateAdminUser(account.userAccountId, { isDisabled: !account.isDisabled, rowVersion: account.rowVersion, staffRowVersion: account.staffRowVersion });
     setIsSaving(false);
 
     if (result.ok) {
       setPanelStatus(`Account for ${account.displayName} ${account.isDisabled ? "enabled" : "disabled"}.`);
-      await refreshData();
+      await refreshData(false);
     } else {
       setPanelStatus(result.message ?? "The account could not be updated.");
     }
@@ -639,9 +468,10 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
 
   return (
     <>
-      <section className="panel">
+      <details className="panel admin-create-account">
+        <summary>Create a staff account</summary>
         <div className="panel-heading">
-          <h2>Create staff account</h2>
+          <h2>New staff details</h2>
           <span>Linked to Entra by email</span>
         </div>
         <div className="admin-field-grid">
@@ -734,11 +564,12 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
         </div>
         {panelStatus ? <div className="notice-row">{panelStatus}</div> : null}
         <div className="toolbar admin-panel-actions">
-          <Button disabled={isSaving} icon={UserCog} onClick={() => void createAccount()} variant="primary">
+          <Button disabled={isSaving || !user.isAdministrator} icon={UserCog} onClick={() => void createAccount()} variant="primary">
             Create account
           </Button>
+          {!user.isAdministrator ? <p>Only Administrators can create accounts and allocate their access.</p> : null}
         </div>
-      </section>
+      </details>
 
       <section className="panel">
         <div className="panel-heading">
@@ -758,7 +589,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
               value={accountSearch}
             />
           </label>
-          <span className="muted-copy">Manage role membership in the Permissions tab.</span>
+          <span className="muted-copy">Open details to correct staff category or archive an account. Manage role membership in Roles & permissions.</span>
         </div>
         <div className="table-shell">
           <table>
@@ -770,7 +601,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
                 <th>Scope</th>
                 <th>Status</th>
                 <th>Enabled</th>
-                <th>Save</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -812,6 +643,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
                       <td>
                         <select
                           aria-label={`Account status for ${account.displayName}`}
+                          disabled={isSaving || isSelf}
                           onChange={(event) =>
                             setRowEdits((current) => ({
                               ...current,
@@ -820,7 +652,7 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
                           }
                           value={edit.accountStatus}
                         >
-                          <option value="active">Active</option>
+                          <option value="active" disabled={!user.isAdministrator && account.accountStatus !== "active"}>Active</option>
                           <option value="inactive">Inactive</option>
                           <option value="leaver">Leaver</option>
                         </select>
@@ -829,12 +661,13 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
                         <input
                           aria-label={`Enable or disable ${account.displayName}`}
                           checked={!account.isDisabled}
-                          disabled={isSaving || isSelf}
+                          disabled={isSaving || isSelf || (!user.isAdministrator && account.isDisabled)}
                           onChange={() => void toggleDisabled(account)}
                           type="checkbox"
                         />
                       </td>
                       <td>
+                        <Button disabled={isSaving} icon={UserCog} onClick={() => onOpenDetails(account.userAccountId)} variant="quiet">Details</Button>
                         <button
                           className="icon-button"
                           disabled={isSaving}
@@ -857,240 +690,8 @@ function StaffAdminPanel({ user }: { user: CurrentUser }) {
   );
 }
 
-function PermissionAdminPanel({ user }: { user: CurrentUser }) {
-  const [roles, setRoles] = useState<AdminRoleSummary[]>([]);
-  const [accounts, setAccounts] = useState<AdminUserSummary[]>([]);
-  const [selectedRoleKey, setSelectedRoleKey] = useState("");
-  const [memberSearch, setMemberSearch] = useState("");
-  const [candidateSearch, setCandidateSearch] = useState("");
-  const [status, setStatus] = useState("");
-  const [isSaving, setIsSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
-
-  useEffect(() => {
-    void refreshData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function refreshData(preferredRoleKey?: string) {
-    try {
-      const [nextRoles, nextAccounts] = await Promise.all([api.adminRoles(), api.adminUsers()]);
-      setRoles(nextRoles);
-      setAccounts(nextAccounts);
-      setSelectedRoleKey((current) => preferredRoleKey || current || nextRoles[0]?.roleKey || "");
-      setLoadError("");
-    } catch {
-      setLoadError("Roles and account allocations could not be loaded from the API.");
-    }
-  }
-
-  const selectedRole = roles.find((role) => role.roleKey === selectedRoleKey);
-  const members = useMemo(() => {
-    const query = memberSearch.trim().toLowerCase();
-    return accounts
-      .filter((account) => account.roles.some((role) => role.roleKey === selectedRoleKey))
-      .filter((account) => !query || [account.displayName, account.email, account.externalId]
-        .some((value) => value.toLowerCase().includes(query)))
-      .sort((left, right) => left.displayName.localeCompare(right.displayName));
-  }, [accounts, memberSearch, selectedRoleKey]);
-
-  const candidates = useMemo(() => {
-    const query = candidateSearch.trim().toLowerCase();
-    if (!query) {
-      return [];
-    }
-
-    return accounts
-      .filter((account) => !account.roles.some((role) => role.roleKey === selectedRoleKey))
-      .filter((account) => [account.displayName, account.email, account.externalId]
-        .some((value) => value.toLowerCase().includes(query)))
-      .sort((left, right) => left.displayName.localeCompare(right.displayName))
-      .slice(0, 8);
-  }, [accounts, candidateSearch, selectedRoleKey]);
-
-  async function changeRole(account: AdminUserSummary, action: "add" | "remove") {
-    if (!selectedRole) {
-      return;
-    }
-
-    const nextRoleKeys = new Set(account.roles.map((role) => role.roleKey));
-    if (action === "add") {
-      nextRoleKeys.add(selectedRole.roleKey);
-    } else {
-      nextRoleKeys.delete(selectedRole.roleKey);
-    }
-
-    setIsSaving(true);
-    const result = await api.updateAdminUser(account.userAccountId, { roleKeys: [...nextRoleKeys] });
-    setIsSaving(false);
-    if (!result.ok) {
-      setStatus(result.message ?? "The role allocation could not be updated.");
-      return;
-    }
-
-    setStatus(`${selectedRole.name} ${action === "add" ? "added to" : "removed from"} ${account.displayName}.`);
-    setCandidateSearch("");
-    await refreshData(selectedRole.roleKey);
-  }
-
-  return (
-    <section className="panel permission-admin-panel">
-      <div className="panel-heading permission-admin-heading">
-        <div>
-          <h2>Role allocations</h2>
-          <p className="muted-copy">Staff can hold multiple roles. The highest level is shown as their effective role.</p>
-        </div>
-        <div className="toolbar">
-          <span>{accounts.length} accounts</span>
-          <Button icon={RefreshCw} onClick={() => void refreshData()} variant="secondary">Refresh</Button>
-        </div>
-      </div>
-      {loadError ? <div className="notice-row">{loadError}</div> : null}
-      <div className="role-admin-layout">
-        <div className="role-level-list" aria-label="Permission levels">
-          {roles.map((role) => {
-            const allocationCount = accounts.filter((account) =>
-              account.roles.some((assignedRole) => assignedRole.roleKey === role.roleKey)
-            ).length;
-            return (
-              <button
-                aria-pressed={selectedRoleKey === role.roleKey}
-                className={selectedRoleKey === role.roleKey ? "role-level-button role-level-button-active" : "role-level-button"}
-                key={role.roleKey}
-                onClick={() => {
-                  setSelectedRoleKey(role.roleKey);
-                  setMemberSearch("");
-                  setCandidateSearch("");
-                  setStatus("");
-                }}
-                type="button"
-              >
-                <span>
-                  <strong>{role.name}</strong>
-                  <small>Level {role.precedence}</small>
-                </span>
-                <b>{allocationCount}</b>
-              </button>
-            );
-          })}
-        </div>
-
-        {selectedRole ? (
-          <div className="role-member-panel">
-            <div className="role-member-header">
-              <div>
-                <p className="eyebrow">Permission level</p>
-                <h3>{selectedRole.name}</h3>
-                <p>{selectedRole.description ?? "No description recorded."}</p>
-              </div>
-              <span className="role-rank-badge">Level {selectedRole.precedence}</span>
-            </div>
-
-            <div className="role-permission-summary">
-              {selectedRole.permissions.map((permission) => (
-                <span key={permission.permissionKey}>{permission.name}</span>
-              ))}
-            </div>
-
-            <div className="role-add-control">
-              <label className="entry-field">
-                <span>Add staff member</span>
-                <div className="role-candidate-input">
-                  <UserPlus size={17} aria-hidden="true" />
-                  <input
-                    aria-autocomplete="list"
-                    aria-controls="role-candidates"
-                    aria-expanded={candidates.length > 0}
-                    onChange={(event) => setCandidateSearch(event.target.value)}
-                    placeholder="Type a name, AD number or email"
-                    role="combobox"
-                    value={candidateSearch}
-                  />
-                </div>
-              </label>
-              {candidates.length > 0 ? (
-                <div className="role-candidate-list" id="role-candidates" role="listbox">
-                  {candidates.map((account) => (
-                    <button
-                      disabled={isSaving}
-                      key={account.userAccountId}
-                      onClick={() => void changeRole(account, "add")}
-                      role="option"
-                      type="button"
-                    >
-                      <span><strong>{account.displayName}</strong><small>{account.externalId} · {account.email}</small></span>
-                      <UserPlus size={16} aria-hidden="true" />
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-
-            {status ? <div className="notice-row">{status}</div> : null}
-
-            <div className="role-member-toolbar">
-              <h3>Allocated staff</h3>
-              <label className="admin-search-field">
-                <Search size={16} aria-hidden="true" />
-                <input
-                  aria-label={`Search ${selectedRole.name} allocations`}
-                  onChange={(event) => setMemberSearch(event.target.value)}
-                  placeholder="Filter allocated staff"
-                  value={memberSearch}
-                />
-              </label>
-            </div>
-
-            <div className="role-member-list">
-              {members.length === 0 ? <p className="muted-copy">No staff are allocated to this role.</p> : null}
-              {members.map((account) => {
-                const effectiveRole = getEffectiveRole(account, roles);
-                const selectedAssignment = account.roles.find((role) => role.roleKey === selectedRole.roleKey);
-                const isOrganisationManaged = selectedAssignment?.isOrganisationManaged === true;
-                const isProtectedAdmin = selectedRole.roleKey === "super_admin"
-                  && account.userAccountId === user.userAccountId;
-                return (
-                  <div className="role-member-row" key={account.userAccountId}>
-                    <div>
-                      <strong>{account.displayName}</strong>
-                      <span>{account.externalId} · {account.email}</span>
-                    </div>
-                    <span className="effective-role-label">
-                      {isOrganisationManaged ? "Organisation managed" : `Effective: ${effectiveRole?.name ?? "None"}`}
-                    </span>
-                    <button
-                      className="icon-button"
-                      disabled={isSaving || isProtectedAdmin || isOrganisationManaged || account.roles.length === 1}
-                      onClick={() => void changeRole(account, "remove")}
-                      title={isProtectedAdmin
-                        ? "Your own Admin role is protected"
-                        : isOrganisationManaged
-                          ? "Change this role from Organisation Structure"
-                          : `Remove ${selectedRole.name}`}
-                      type="button"
-                    >
-                      <UserMinus size={16} aria-hidden="true" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
 function rolePrecedence(roleKey: string, roles: AdminRoleSummary[]) {
   return roles.find((role) => role.roleKey === roleKey)?.precedence ?? 0;
-}
-
-function getEffectiveRole(account: AdminUserSummary, roles: AdminRoleSummary[]) {
-  return [...account.roles]
-    .map((assignedRole) => roles.find((role) => role.roleKey === assignedRole.roleKey))
-    .filter((role): role is AdminRoleSummary => Boolean(role))
-    .sort((left, right) => right.precedence - left.precedence)[0];
 }
 
 function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSummary[]; staff: StaffSummary[] }) {
@@ -1210,7 +811,7 @@ function formatReflectionSummary(record: StaffProfileRecordSummary) {
   return `${record.submittedReflections} submitted, ${record.draftReflections} draft`;
 }
 
-function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Teaching and Learning themes", subtitle = "Shared by Learning Walks, LIV and teaching and learning reporting" }: { processKey?: "learning_walk" | "als_learning_walk" | "als_liv_practitioner"; title?: string; subtitle?: string }) {
+function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Teaching and Learning themes", subtitle = "Shared by Learning Walks, LIV and teaching and learning reporting", onDirtyChange }: { processKey?: "learning_walk" | "als_learning_walk" | "als_liv_practitioner"; title?: string; subtitle?: string; onDirtyChange?: (dirty: boolean, saving?: boolean) => void }) {
   const [groups, setGroups] = useState<LearningWalkThemeGroup[]>([]);
   const [newGroupName, setNewGroupName] = useState("");
   const [newThemeName, setNewThemeName] = useState("");
@@ -1222,6 +823,26 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
   const [editingThemeGroupId, setEditingThemeGroupId] = useState("");
   const [status, setStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [, setNewThemeAreaChanged] = useState(false);
+  const originalArea = groups.find(group => group.id === editingAreaId);
+  const originalTheme = groups.flatMap(group => group.themes).find(theme => theme.id === editingId);
+  const areaDirty = Boolean(editingAreaId && editingAreaName !== originalArea?.name);
+  const themeDirty = Boolean(editingId && (editingName !== originalTheme?.name || editingThemeGroupId !== originalTheme?.themeGroupId));
+  const dirty = Boolean(newGroupName || newThemeName || areaDirty || themeDirty);
+  const clearGuard = useUnsavedChanges({ label: title, dirty, saving: isSaving, onSave: async () => {
+    if (areaDirty && !await saveAreaEdit()) return false;
+    if (themeDirty && !await saveEdit()) return false;
+    if (newGroupName && !await addThemeArea()) return false;
+    if (newThemeName && !await addTheme()) return false;
+    clearGuard(); return true;
+  }, onDiscard: () => { cancelChanges(); clearGuard(); } });
+  useEffect(() => { onDirtyChange?.(dirty || isSaving, isSaving); }, [dirty, isSaving, onDirtyChange]);
+  function cancelChanges() {
+    if (isSaving) return;
+    setNewGroupName(""); setNewThemeName(""); setNewThemeAreaChanged(false);
+    setNewThemeGroupId(groups.find((group) => group.isActive)?.id ?? "");
+    setEditingAreaId(""); setEditingAreaName(""); setEditingId(""); setEditingName(""); setEditingThemeGroupId(""); setStatus("");
+  }
 
   useEffect(() => {
     void refreshThemes();
@@ -1240,142 +861,59 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
     }
   }
 
+  async function changeTheme(operation: () => Promise<{ ok: boolean; message?: string }>, success: string, afterSuccess?: () => void) {
+    if (isSaving) return false;
+    setIsSaving(true);
+    try {
+      const result = await operation();
+      if (!result.ok) { setStatus(result.message ?? "The theme change could not be saved."); return false; }
+      afterSuccess?.();
+      await refreshThemes(success);
+      return true;
+    } catch { setStatus("The theme change could not be saved. Try again."); return false; }
+    finally { setIsSaving(false); }
+  }
+
   async function addThemeArea() {
-    if (!newGroupName.trim()) {
-      setStatus("Enter a theme area name.");
-      return;
-    }
-
-    setIsSaving(true);
-    const result = await api.createLearningWalkThemeGroup({ name: newGroupName.trim() }, processKey);
-    setIsSaving(false);
-    if (!result.ok) {
-      setStatus(result.message ?? "The theme area could not be added.");
-      return;
-    }
-
-    setNewGroupName("");
-    await refreshThemes("Theme area added.");
+    if (!newGroupName.trim()) { setStatus("Enter a theme area name."); return false; }
+    return await changeTheme(() => api.createLearningWalkThemeGroup({ name: newGroupName.trim() }, processKey), "Theme area added.", () => setNewGroupName(""));
   }
-
   function startAreaEdit(group: LearningWalkThemeGroup) {
-    setEditingAreaId(group.id);
-    setEditingAreaName(group.name);
-    setStatus("");
+    if (dirty || isSaving) return;
+    setEditingAreaId(group.id); setEditingAreaName(group.name); setStatus("");
   }
-
   async function saveAreaEdit() {
-    if (!editingAreaId || !editingAreaName.trim()) {
-      setStatus("A theme area name is required.");
-      return;
-    }
-
-    setIsSaving(true);
-    const result = await api.updateLearningWalkThemeGroup(editingAreaId, { name: editingAreaName.trim() });
-    setIsSaving(false);
-    if (!result.ok) {
-      setStatus(result.message ?? "The theme area could not be renamed.");
-      return;
-    }
-
-    setEditingAreaId("");
-    await refreshThemes("Theme area renamed. Historical records retain their saved labels.");
+    if (!editingAreaId || !editingAreaName.trim()) { setStatus("A theme area name is required."); return false; }
+    return await changeTheme(() => api.updateLearningWalkThemeGroup(editingAreaId, { name: editingAreaName.trim() }),
+      "Theme area renamed. Historical records retain their saved labels.", () => setEditingAreaId(""));
   }
-
   async function setAreaStatus(group: LearningWalkThemeGroup, isActive: boolean) {
-    setIsSaving(true);
-    const result = await api.setLearningWalkThemeGroupStatus(group.id, isActive);
-    setIsSaving(false);
-    if (!result.ok) {
-      setStatus(result.message ?? "The theme area status could not be changed.");
-      return;
-    }
-
-    await refreshThemes(isActive
-      ? "Theme area reactivated."
-      : "Theme area deactivated. Its themes and historical reporting data have been preserved.");
+    await changeTheme(() => api.setLearningWalkThemeGroupStatus(group.id, isActive), isActive ? "Theme area reactivated." : "Theme area deactivated. Its themes and historical reporting data have been preserved.");
   }
-
   async function addTheme() {
-    if (!newThemeName.trim() || !newThemeGroupId) {
-      setStatus("Enter a theme and select its area.");
-      return;
-    }
-
-    setIsSaving(true);
-    const result = await api.createLearningWalkTheme({
-      themeGroupId: newThemeGroupId,
-      name: newThemeName.trim()
-    }, processKey);
-    setIsSaving(false);
-    if (!result.ok) {
-      setStatus(result.message ?? "The theme could not be added.");
-      return;
-    }
-
-    setNewThemeName("");
-    await refreshThemes("Theme added.");
+    if (!newThemeName.trim() || !newThemeGroupId) { setStatus("Enter a theme and select its area."); return false; }
+    return await changeTheme(() => api.createLearningWalkTheme({ themeGroupId: newThemeGroupId, name: newThemeName.trim() }, processKey),
+      "Theme added.", () => { setNewThemeName(""); setNewThemeAreaChanged(false); });
   }
-
   function startEdit(theme: LearningWalkTheme) {
-    setEditingId(theme.id);
-    setEditingName(theme.name);
-    setEditingThemeGroupId(theme.themeGroupId);
-    setStatus("");
+    if (dirty || isSaving) return;
+    setEditingId(theme.id); setEditingName(theme.name); setEditingThemeGroupId(theme.themeGroupId); setStatus("");
   }
-
   async function saveEdit() {
-    if (!editingId || !editingName.trim() || !editingThemeGroupId) {
-      setStatus("A theme name and area are required.");
-      return;
-    }
-
-    setIsSaving(true);
-    const result = await api.updateLearningWalkTheme(editingId, {
-      themeGroupId: editingThemeGroupId,
-      name: editingName.trim()
-    });
-    setIsSaving(false);
-    if (!result.ok) {
-      setStatus(result.message ?? "The theme could not be updated.");
-      return;
-    }
-
-    setEditingId("");
-    await refreshThemes("Theme updated.");
+    if (!editingId || !editingName.trim() || !editingThemeGroupId) { setStatus("A theme name and area are required."); return false; }
+    return await changeTheme(() => api.updateLearningWalkTheme(editingId, { themeGroupId: editingThemeGroupId, name: editingName.trim() }),
+      "Theme updated.", () => setEditingId(""));
   }
-
   async function setThemeStatus(theme: LearningWalkTheme, isActive: boolean) {
-    setIsSaving(true);
-    const result = await api.setLearningWalkThemeStatus(theme.id, isActive);
-    setIsSaving(false);
-    if (!result.ok) {
-      setStatus(result.message ?? "The theme status could not be changed.");
-      return;
-    }
-
-    await refreshThemes(isActive ? "Theme reactivated." : "Theme deactivated.");
+    await changeTheme(() => api.setLearningWalkThemeStatus(theme.id, isActive), isActive ? "Theme reactivated." : "Theme deactivated.");
   }
-
   async function moveTheme(group: LearningWalkThemeGroup, themeIndex: number, direction: -1 | 1) {
     const targetIndex = themeIndex + direction;
-    if (targetIndex < 0 || targetIndex >= group.themes.length) {
-      return;
-    }
-
+    if (targetIndex < 0 || targetIndex >= group.themes.length) return;
     const nextIds = group.themes.map((theme) => theme.id);
     [nextIds[themeIndex], nextIds[targetIndex]] = [nextIds[targetIndex], nextIds[themeIndex]];
-    setIsSaving(true);
-    const result = await api.reorderLearningWalkThemes(group.id, nextIds);
-    setIsSaving(false);
-    if (!result.ok) {
-      setStatus(result.message ?? "The themes could not be reordered.");
-      return;
-    }
-
-    await refreshThemes("Theme order updated.");
+    await changeTheme(() => api.reorderLearningWalkThemes(group.id, nextIds), "Theme order updated.");
   }
-
   const activeGroups = groups.filter((group) => group.isActive);
   const activeThemeCount = activeGroups.reduce(
     (count, group) => count + group.themes.filter((theme) => theme.isActive).length,
@@ -1394,7 +932,7 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
       <div className="learning-theme-area-add-row">
         <label className="entry-field">
           <span>New theme area <strong>Required</strong></span>
-          <input onChange={(event) => setNewGroupName(event.target.value)} placeholder="Enter area name" type="text" value={newGroupName} />
+          <input disabled={isSaving} onChange={(event) => setNewGroupName(event.target.value)} placeholder="Enter area name" type="text" value={newGroupName} />
         </label>
         <Button disabled={isSaving || !newGroupName.trim()} icon={Plus} onClick={() => void addThemeArea()} variant="secondary">Add area</Button>
       </div>
@@ -1402,14 +940,14 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
       <div className="learning-theme-add-row">
         <label className="entry-field">
           <span>Theme area <strong>Required</strong></span>
-          <select onChange={(event) => setNewThemeGroupId(event.target.value)} value={newThemeGroupId}>
+          <select disabled={isSaving} onChange={(event) => { setNewThemeGroupId(event.target.value); setNewThemeAreaChanged(true); }} value={newThemeGroupId}>
             {activeGroups.length === 0 ? <option value="">No active theme areas</option> : null}
             {activeGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
           </select>
         </label>
         <label className="entry-field">
           <span>New theme <strong>Required</strong></span>
-          <input onChange={(event) => setNewThemeName(event.target.value)} placeholder="Enter theme wording" type="text" value={newThemeName} />
+          <input disabled={isSaving} onChange={(event) => setNewThemeName(event.target.value)} placeholder="Enter theme wording" type="text" value={newThemeName} />
         </label>
         <Button disabled={isSaving || !newThemeName.trim() || !newThemeGroupId} icon={Plus} onClick={() => void addTheme()} variant="primary">Add theme</Button>
       </div>
@@ -1418,6 +956,7 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
         Area names can change safely because records use stable IDs and saved reporting labels. Deactivating an area removes it from new selections without deleting its themes or history.
       </p>
 
+      {dirty ? <div className="toolbar"><span className="muted-copy">Unsaved theme changes</span><Button disabled={isSaving} onClick={cancelChanges}>Cancel all changes</Button></div> : null}
       {status ? <div className="notice-row" role="status">{status}</div> : null}
 
       <div className="learning-theme-groups">
@@ -1426,8 +965,8 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
             <div className="learning-theme-group-heading">
               {editingAreaId === group.id ? (
                 <div className="learning-theme-area-edit">
-                  <input aria-label="Theme area name" onChange={(event) => setEditingAreaName(event.target.value)} type="text" value={editingAreaName} />
-                  <button aria-label="Cancel area editing" className="icon-button" onClick={() => setEditingAreaId("")} title="Cancel area editing" type="button"><X size={16} /></button>
+                  <input disabled={isSaving} aria-label="Theme area name" onChange={(event) => setEditingAreaName(event.target.value)} type="text" value={editingAreaName} />
+                  <button aria-label="Cancel area editing" className="icon-button" disabled={isSaving} onClick={() => setEditingAreaId("")} title="Cancel area editing" type="button"><X size={16} /></button>
                   <button aria-label="Save theme area" className="icon-button" disabled={isSaving || !editingAreaName.trim()} onClick={() => void saveAreaEdit()} title="Save theme area" type="button"><Save size={16} /></button>
                 </div>
               ) : (
@@ -1437,11 +976,11 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
                     <span>{group.isActive ? "Active" : "Inactive"} · {group.themes.length} theme{group.themes.length === 1 ? "" : "s"}</span>
                   </div>
                   <div className="learning-theme-row-actions">
-                    <button aria-label={`Rename ${group.name} area`} className="icon-button" disabled={isSaving} onClick={() => startAreaEdit(group)} title="Rename theme area" type="button"><Edit3 size={16} /></button>
+                    <button aria-label={`Rename ${group.name} area`} className="icon-button" disabled={isSaving || dirty} onClick={() => startAreaEdit(group)} title="Rename theme area" type="button"><Edit3 size={16} /></button>
                     <button
                       aria-label={`${group.isActive ? "Deactivate" : "Reactivate"} ${group.name} area`}
                       className="icon-button"
-                      disabled={isSaving}
+                      disabled={isSaving || dirty}
                       onClick={() => void setAreaStatus(group, !group.isActive)}
                       title={group.isActive ? "Deactivate theme area" : "Reactivate theme area"}
                       type="button"
@@ -1457,14 +996,14 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
               <div className={`learning-theme-admin-row${theme.isActive && group.isActive ? "" : " is-inactive"}`} key={theme.id}>
                 {editingId === theme.id ? (
                   <>
-                    <input aria-label="Theme wording" onChange={(event) => setEditingName(event.target.value)} type="text" value={editingName} />
-                    <select aria-label="Theme area" disabled={theme.isOther} onChange={(event) => setEditingThemeGroupId(event.target.value)} value={editingThemeGroupId}>
+                    <input disabled={isSaving} aria-label="Theme wording" onChange={(event) => setEditingName(event.target.value)} type="text" value={editingName} />
+                    <select aria-label="Theme area" disabled={isSaving || theme.isOther} onChange={(event) => setEditingThemeGroupId(event.target.value)} value={editingThemeGroupId}>
                       {groups.filter((candidate) => candidate.isActive || candidate.id === editingThemeGroupId).map((candidate) => (
                         <option key={candidate.id} value={candidate.id}>{candidate.name}{candidate.isActive ? "" : " (inactive)"}</option>
                       ))}
                     </select>
                     <div className="learning-theme-row-actions">
-                      <button aria-label="Cancel editing" className="icon-button" onClick={() => setEditingId("")} title="Cancel editing" type="button"><X size={16} /></button>
+                      <button aria-label="Cancel editing" className="icon-button" disabled={isSaving} onClick={() => setEditingId("")} title="Cancel editing" type="button"><X size={16} /></button>
                       <button aria-label="Save theme" className="icon-button" disabled={isSaving || !editingName.trim()} onClick={() => void saveEdit()} title="Save theme" type="button"><Save size={16} /></button>
                     </div>
                   </>
@@ -1475,15 +1014,15 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
                       <span>{!group.isActive ? "Area inactive" : theme.isActive ? "Active" : "Inactive"}</span>
                     </div>
                     <div className="learning-theme-order-actions">
-                      <button aria-label={`Move ${theme.name} up`} className="icon-button" disabled={isSaving || !group.isActive || index === 0} onClick={() => void moveTheme(group, index, -1)} title="Move up" type="button"><ArrowUp size={16} /></button>
-                      <button aria-label={`Move ${theme.name} down`} className="icon-button" disabled={isSaving || !group.isActive || index === group.themes.length - 1} onClick={() => void moveTheme(group, index, 1)} title="Move down" type="button"><ArrowDown size={16} /></button>
+                      <button aria-label={`Move ${theme.name} up`} className="icon-button" disabled={isSaving || dirty || !group.isActive || index === 0} onClick={() => void moveTheme(group, index, -1)} title="Move up" type="button"><ArrowUp size={16} /></button>
+                      <button aria-label={`Move ${theme.name} down`} className="icon-button" disabled={isSaving || dirty || !group.isActive || index === group.themes.length - 1} onClick={() => void moveTheme(group, index, 1)} title="Move down" type="button"><ArrowDown size={16} /></button>
                     </div>
                     <div className="learning-theme-row-actions">
-                      <button aria-label={`Edit ${theme.name}`} className="icon-button" disabled={isSaving || !group.isActive} onClick={() => startEdit(theme)} title="Edit theme" type="button"><Edit3 size={16} /></button>
+                      <button aria-label={`Edit ${theme.name}`} className="icon-button" disabled={isSaving || dirty || !group.isActive} onClick={() => startEdit(theme)} title="Edit theme" type="button"><Edit3 size={16} /></button>
                       <button
                         aria-label={`${theme.isActive ? "Deactivate" : "Reactivate"} ${theme.name}`}
                         className="icon-button"
-                        disabled={isSaving || !group.isActive}
+                        disabled={isSaving || dirty || !group.isActive}
                         onClick={() => void setThemeStatus(theme, !theme.isActive)}
                         title={theme.isActive ? "Deactivate theme" : "Reactivate theme"}
                         type="button"
@@ -1511,7 +1050,10 @@ function formatOrgUnitOption(orgUnit: OrgUnitSummary) {
   return `${level}: ${orgUnit.code} - ${orgUnit.name}`;
 }
 
-function DashboardAdminPanel() {
+function DashboardAdminPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean, busy: boolean) => void }) {
+  const [facultyState, setFacultyState] = useState({ dirty: false, busy: false });
+  const handleFacultyDirty = useCallback((dirty: boolean, busy: boolean) => setFacultyState({ dirty, busy }), []);
+  const [savedProcesses, setSavedProcesses] = useState("");
   const [processes, setProcesses] = useState<DashboardProcessConfiguration[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -1519,11 +1061,15 @@ function DashboardAdminPanel() {
 
   useEffect(() => {
     api.dashboardConfiguration()
-      .then((configuration) => setProcesses([...configuration.processes].sort((left, right) => left.displayOrder - right.displayOrder)))
+      .then((configuration) => { const loaded = [...configuration.processes].sort((left, right) => left.displayOrder - right.displayOrder); setProcesses(loaded); setSavedProcesses(JSON.stringify(loaded)); })
       .catch(() => setMessage("Dashboard configuration could not be loaded."))
       .finally(() => setIsLoading(false));
   }, []);
 
+  const dirty = savedProcesses !== "" && JSON.stringify(processes) !== savedProcesses;
+  const clearGuard = useUnsavedChanges({ label: "Dashboard layout", dirty, saving: isSaving, onSave: save, onDiscard: () => { if (savedProcesses) setProcesses(JSON.parse(savedProcesses)); clearGuard(); } });
+  useEffect(() => { onDirtyChange?.(dirty || facultyState.dirty, isSaving || facultyState.busy); }, [dirty, facultyState.dirty, facultyState.busy, isSaving, onDirtyChange]);
+  useEffect(() => { if (!dirty) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
   function update(processKey: string, changes: Partial<DashboardProcessConfiguration>) {
     setProcesses((current) => current.map((process) => process.processKey === processKey ? { ...process, ...changes } : process));
   }
@@ -1541,12 +1087,15 @@ function DashboardAdminPanel() {
   async function save() {
     setIsSaving(true); setMessage("");
     try {
-      await api.saveDashboardConfiguration(processes);
+      const result = await api.saveDashboardConfiguration(processes);
+      if (!result.ok) throw new Error("Save failed");
       const saved = await api.dashboardConfiguration();
-      setProcesses([...saved.processes].sort((left, right) => left.displayOrder - right.displayOrder));
+      const loaded = [...saved.processes].sort((left, right) => left.displayOrder - right.displayOrder);
+      setProcesses(loaded); setSavedProcesses(JSON.stringify(loaded));
       setMessage("Dashboard configuration saved. Leadership views will use the new layout on refresh.");
+      clearGuard(); return true;
     } catch {
-      setMessage("Dashboard configuration could not be saved.");
+      setMessage("Dashboard configuration could not be saved."); return false;
     } finally {
       setIsSaving(false);
     }
@@ -1554,16 +1103,17 @@ function DashboardAdminPanel() {
 
   return (
     <div className="admin-dashboard-config">
+      <DashboardFacultyAdmin onDirtyChange={handleFacultyDirty} />
       <section className="panel admin-dashboard-intro">
         <div><p className="eyebrow">Reporting governance</p><h2>Leadership dashboard</h2><p>Control the order, naming and analytical emphasis of approved dashboard views. Metrics and permission rules remain protected.</p></div>
-        <Button disabled={isLoading || isSaving || processes.length === 0} icon={Save} onClick={() => void save()} variant="primary">{isSaving ? "Saving" : "Save configuration"}</Button>
+        <Button disabled={isLoading || isSaving || !dirty || processes.length === 0} icon={Save} onClick={() => void save()} variant="primary">{isSaving ? "Saving" : "Save configuration"}</Button>
       </section>
       {message ? <div className="form-message">{message}</div> : null}
       {isLoading ? <section className="panel"><p className="muted-copy">Loading dashboard configuration...</p></section> : (
         <section className="panel admin-dashboard-processes">
           <div className="panel-heading"><h2>Dashboard views</h2><span>{processes.filter((process) => process.isEnabled).length} visible</span></div>
           <p className="muted-copy">Disabling a view hides it from navigation; it does not delete records or reporting data. Labels may be changed without changing stable process keys. Outcome matrices and frequency profiles are selected automatically from the type of structured data available.</p>
-          <div className="admin-dashboard-process-list">
+          <fieldset disabled={isSaving} className="admin-dashboard-process-list" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><legend className="sr-only">Dashboard presentation settings</legend>
             {processes.map((process, index) => <article className={process.isEnabled ? "" : "is-disabled"} key={process.processKey}>
               <div className="admin-dashboard-order"><Button aria-label="Move up" disabled={index === 0} icon={ArrowUp} onClick={() => move(index, -1)} variant="secondary">Up</Button><Button aria-label="Move down" disabled={index === processes.length - 1} icon={ArrowDown} onClick={() => move(index, 1)} variant="secondary">Down</Button></div>
               <div className="admin-dashboard-identity"><small>{process.processKey}</small><input aria-label={`${process.label} dashboard label`} maxLength={80} onChange={(event) => update(process.processKey, { label: event.target.value })} value={process.label}/></div>
@@ -1575,7 +1125,7 @@ function DashboardAdminPanel() {
               </div>
               <label className="admin-dashboard-enabled"><input checked={process.isEnabled} disabled={process.processKey === "overview"} onChange={(event) => update(process.processKey, { isEnabled: event.target.checked })} type="checkbox"/><span>{process.processKey === "overview" ? "Required" : process.isEnabled ? "Visible" : "Hidden"}</span></label>
             </article>)}
-          </div>
+          </fieldset>
         </section>
       )}
       <section className="panel admin-dashboard-guardrails"><ShieldCheck size={20}/><div><h3>Protected reporting guardrails</h3><p>Administrators can change presentation, but cannot expose restricted narrative responses, alter scope permissions, introduce arbitrary database queries or delete historical reporting labels.</p></div></section>

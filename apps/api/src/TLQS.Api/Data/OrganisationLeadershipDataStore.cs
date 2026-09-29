@@ -14,11 +14,12 @@ public sealed partial class SqlFoundationDataStore
     {
         var units = await QueryAsync(
             """
-            SELECT id, parent_org_unit_id, org_unit_type, code, name, description, is_active
+            SELECT id, parent_org_unit_id, org_unit_type, code, name, description, is_active,
+                   include_in_dashboards
             FROM org.org_units
-            WHERE org_unit_type IN (N'faculty', N'team')
+            WHERE org_unit_type IN (N'directorate', N'faculty', N'team')
               AND archived_at IS NULL
-            ORDER BY CASE org_unit_type WHEN N'faculty' THEN 0 ELSE 1 END, code, name;
+            ORDER BY CASE org_unit_type WHEN N'directorate' THEN 0 WHEN N'faculty' THEN 1 ELSE 2 END, code, name;
             """,
             reader => new ManagedOrgUnitRow(
                 reader.GetGuid(0),
@@ -27,7 +28,8 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(3),
                 reader.GetString(4),
                 GetStringOrNull(reader, 5),
-                reader.GetBoolean(6)),
+                reader.GetBoolean(6),
+                reader.GetBoolean(7)),
             cancellationToken);
 
         var aliases = await QueryAsync(
@@ -153,13 +155,10 @@ public sealed partial class SqlFoundationDataStore
                 .Select(membership => membership.StaffId)
                 .Distinct()
                 .Count();
-            var totalStaffCount = unit.OrgUnitType == OrganisationLeadershipRules.FacultyType
-                ? memberships
-                    .Where(membership => membership.OrgUnitId == unit.Id || membership.ParentOrgUnitId == unit.Id)
-                    .Select(membership => membership.StaffId)
-                    .Distinct()
-                    .Count()
-                : directStaffCount;
+            var descendantIds = new HashSet<Guid> { unit.Id };
+            for (var depth = 0; depth < 3; depth++)
+                descendantIds.UnionWith(units.Where(child => child.IsActive && child.ParentOrgUnitId.HasValue && descendantIds.Contains(child.ParentOrgUnitId.Value)).Select(child => child.Id).ToArray());
+            var totalStaffCount = memberships.Where(membership => descendantIds.Contains(membership.OrgUnitId)).Select(membership => membership.StaffId).Distinct().Count();
             var childTeams = teamsByFaculty.GetValueOrDefault(unit.Id, []);
 
             return new AdminOrganisationUnitSummary(
@@ -174,10 +173,11 @@ public sealed partial class SqlFoundationDataStore
                 childTeams.Length,
                 childTeams.Count(team => leadershipByUnit.ContainsKey(team.Id)),
                 unit.IsActive,
+                unit.IncludeInDashboards,
                 aliases.Where(alias => alias.OrgUnitId == unit.Id).Select(alias => alias.LegacyCode).ToArray(),
                 alignments.Where(alignment => alignment.ServiceOrgUnitId == unit.Id).Select(alignment => alignment.FacultyCode).ToArray(),
                 ManagerFor(unit.Id),
-                unit.OrgUnitType == OrganisationLeadershipRules.TeamType ? ManagerFor(unit.ParentOrgUnitId) : null);
+                ManagerFor(unit.ParentOrgUnitId));
         }).ToArray();
 
         return new AdminOrganisationStructureSummary(
@@ -202,11 +202,13 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             var unit = await GetManagedUnitAsync(connection, transaction, orgUnitId, cancellationToken)
-                ?? throw new WorkflowValidationException("Select an active faculty or team.");
+                ?? throw new WorkflowValidationException("Select an active directorate, faculty or team.");
             if (!OrganisationLeadershipRules.IsManagedUnitType(unit.OrgUnitType))
             {
-                throw new WorkflowValidationException("Only faculties and teams can have a manager.");
+                throw new WorkflowValidationException("Only directorates, faculties and teams can have a manager.");
             }
 
             var managerExists = await ScalarExistsAsync(
@@ -324,6 +326,8 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockAccountAdministrationAsync(connection, (SqlTransaction)transaction, cancellationToken);
+            await RequireAdministratorAsync(connection, (SqlTransaction)transaction, currentUser, cancellationToken);
             var unit = await GetManagedUnitAsync(connection, transaction, orgUnitId, cancellationToken);
             var current = await GetActiveUnitLeadershipAsync(connection, transaction, orgUnitId, cancellationToken);
             if (unit is null || current is null)
@@ -388,7 +392,8 @@ public sealed partial class SqlFoundationDataStore
     {
         await using var command = new SqlCommand(
             """
-            SELECT id, parent_org_unit_id, org_unit_type, code, name, description, is_active
+            SELECT id, parent_org_unit_id, org_unit_type, code, name, description, is_active,
+                   include_in_dashboards
             FROM org.org_units
             WHERE id = @id AND is_active = 1 AND archived_at IS NULL;
             """,
@@ -404,7 +409,8 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(3),
                 reader.GetString(4),
                 GetStringOrNull(reader, 5),
-                reader.GetBoolean(6))
+                reader.GetBoolean(6),
+                reader.GetBoolean(7))
             : null;
     }
 
@@ -462,7 +468,8 @@ public sealed partial class SqlFoundationDataStore
         string Code,
         string Name,
         string? Description,
-        bool IsActive);
+        bool IsActive,
+        bool IncludeInDashboards);
 
     private sealed record OrgUnitAliasRow(Guid OrgUnitId, string LegacyCode);
     private sealed record OrgUnitAlignmentRow(Guid ServiceOrgUnitId, string FacultyCode);

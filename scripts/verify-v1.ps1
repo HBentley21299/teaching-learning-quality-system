@@ -98,6 +98,13 @@ if (!$SkipInstall) {
     }
 }
 
+Invoke-Step "Run web regression tests" {
+    $testFiles = @(Get-ChildItem -LiteralPath (Join-Path $root "tests") -Filter '*.test.mjs' -File |
+        Sort-Object Name | ForEach-Object FullName)
+    if ($testFiles.Count -eq 0) { throw "No web regression tests were found." }
+    node --test @testFiles
+}
+
 if (!$SkipSecurityAudit) {
     Invoke-Step "Audit production web dependencies" {
         Push-Location $webRoot

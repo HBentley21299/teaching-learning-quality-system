@@ -40,6 +40,16 @@ export const navigationItems = [
 
 export type AppRoute = (typeof navigationItems)[number]["key"];
 
+
+export const navigationGroups: { id: string; title: string; description: string; routes: AppRoute[] }[] = [
+    { id: "forms", title: "Forms & observations", description: "Record teaching practice and review learning.", routes: ["learning", "liv", "scrutiny", "elevate", "probation"] },
+    { id: "staff", title: "Staff information", description: "Find your profile, colleagues and team.", routes: ["profile", "staff", "team"] },
+    { id: "development", title: "Professional development", description: "Plan your learning, coaching and next steps.", routes: ["practice", "cpd", "coaching"] },
+    { id: "tracking", title: "Actions", description: "Follow up on actions and see progress.", routes: ["actions"] },
+    { id: "specialist", title: "Specialist provision", description: "University Centre Oldham and Additional Learning Support.", routes: ["uco", "als_learning", "als_liv"] },
+    { id: "administration", title: "Administration", description: "Manage access, forms and system settings.", routes: ["admin"] }
+];
+
 const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
   dashboard: ["reports.view_all", "reports.view_scoped", "uco_tla.manage"],
   staff: ["reports.view_all", "reports.view_scoped", "staff.manage", "users.manage"],
@@ -52,6 +62,7 @@ const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
     "forms.manage",
     "records.manage",
     "messaging.manage",
+    "elevate_status.manage",
     "qa_reviews.manage"
   ],
   learning: ["learning_walk.submit", "forms.manage"],
@@ -64,7 +75,7 @@ const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
   practice: ["elevate_practice.submit"],
   coaching: ["coaching.submit", "coaching.manage"],
   scrutiny: ["work_scrutiny.submit", "forms.manage", "reports.view_all", "reports.view_scoped"],
-  cpd: ["cpd.self_log", "cpd.manage"],
+  cpd: ["cpd.self_log", "cpd.manage", "cpd.mandatory_log"],
   qa: ["qa_reviews.view_all", "qa_reviews.view_scoped", "qa_reviews.view_assigned"]
 };
 

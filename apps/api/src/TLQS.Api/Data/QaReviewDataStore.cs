@@ -224,6 +224,9 @@ public sealed partial class SqlFoundationDataStore
         var scope = await GetQaReviewScopeAsync(reviewId, user, cancellationToken);
         var activities = await GetQaReviewActivitiesAsync(reviewId, summary.Status != "draft", cancellationToken);
         var evidence = await GetQaEvidenceListAsync(reviewId, user, cancellationToken);
+        var formAccess = await GetQaFormSubmissionAccessAsync(reviewId, user, cancellationToken);
+        activities = activities.Select(activity => activity with { CanSubmitEvidence = summary.Capabilities.CanSubmitEvidence && formAccess.GetValueOrDefault(activity.Id) }).ToArray();
+        evidence = evidence.Select(item => item with { CanEdit = item.CanEdit && formAccess.GetValueOrDefault(item.ReviewActivityId) }).ToArray();
         var validation = summary.Capabilities.CanClose ? await GetQaCloseValidationAsync(reviewId, user, cancellationToken) : null;
         return new QaReviewDetail(summary, metadata.QuestionTag, metadata.OwnerId,
             scope, activities, evidence, validation);
@@ -236,30 +239,44 @@ public sealed partial class SqlFoundationDataStore
         CancellationToken cancellationToken)
     {
         ValidateQaReview(request);
+        if (!QaReviewPolicy.CanManage(user)) throw new WorkflowValidationException("You do not have permission to manage QA Reviews.");
         if (!user.UserAccountId.HasValue) throw new WorkflowValidationException("A linked account is required.");
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
         var id = reviewId ?? Guid.NewGuid();
         var before = (string?)null;
+        SaveQaReviewRequest? publishedConfiguration = null;
 
         if (reviewId.HasValue)
         {
             await using var statusCommand = new SqlCommand(
-                "SELECT status FROM qa.reviews WHERE record_id = @id;", connection, transaction);
+                "SELECT status FROM qa.reviews WITH (UPDLOCK, ROWLOCK) WHERE record_id = @id AND row_version = @rowVersion;", connection, transaction);
             statusCommand.Parameters.AddWithValue("@id", id);
+            statusCommand.Parameters.Add("@rowVersion", System.Data.SqlDbType.Timestamp, 8).Value = request.RowVersion
+                ?? throw new WorkflowValidationException("The review row version is required.");
             var status = await statusCommand.ExecuteScalarAsync(cancellationToken) as string
-                ?? throw new WorkflowValidationException("The QA Review was not found.");
-            if (!string.Equals(status, "draft", StringComparison.OrdinalIgnoreCase))
-                throw new WorkflowValidationException("Scope, activities and questions are frozen after a QA Review is first opened.");
+                ?? throw new WorkflowValidationException("This QA Review changed since you opened it, or is no longer available. Refresh and try again.");
+            if (!QaReviewPolicy.CanConfigure(user, status))
+                throw new WorkflowValidationException(status == "closed"
+                    ? "Reopen this QA Review before changing its details or adding teams."
+                    : "This QA Review cannot be edited.");
+
+            var existing = await ReadQaReviewConfigurationAsync(connection, transaction, id, status != "draft", cancellationToken);
+            before = JsonSerializer.Serialize(existing);
+            if (status != "draft")
+            {
+                QaReviewPolicy.ValidatePublishedStructure(ToQaPublishedStructure(existing), ToQaPublishedStructure(request));
+                publishedConfiguration = existing;
+            }
 
             await using var update = new SqlCommand(
                 """
-                UPDATE record SET title = @title, summary = NULL, owner_staff_id = @owner,
+                UPDATE record SET title = @title, owner_staff_id = @owner,
                        record_date = @closingDate, academic_year_key = @academicYear,
                        updated_by_user_account_id = @user, updated_at = sysutcdatetime()
                 FROM core.records record JOIN qa.reviews review ON review.record_id = record.id
                 WHERE record.id = @id AND review.row_version = @rowVersion;
-                UPDATE qa.reviews SET review_theme = @theme, question_tag = @questionTag, intended_purpose = NULL,
+                UPDATE qa.reviews SET review_theme = @theme, question_tag = @questionTag,
                        planned_open_date = @openDate, closing_date = @closingDate, updated_at = sysutcdatetime()
                 WHERE record_id = @id AND row_version = @rowVersion;
                 """, connection, transaction);
@@ -269,17 +286,20 @@ public sealed partial class SqlFoundationDataStore
             if (await update.ExecuteNonQueryAsync(cancellationToken) < 2)
                 throw new WorkflowValidationException("This QA Review changed since you opened it. Refresh and try again.");
 
-            await using var clear = new SqlCommand(
-                """
-                DELETE selection FROM qa.review_question_selections selection
-                JOIN qa.review_activities activity ON activity.id = selection.review_activity_id WHERE activity.review_id = @id;
-                DELETE FROM qa.review_activities WHERE review_id = @id;
-                DELETE FROM qa.review_scopes WHERE review_id = @id;
-                UPDATE qa.review_contributors SET is_active = 0, active_to = sysutcdatetime()
-                WHERE review_id = @id AND active_to IS NULL;
-                """, connection, transaction);
-            clear.Parameters.AddWithValue("@id", id);
-            await clear.ExecuteNonQueryAsync(cancellationToken);
+            if (publishedConfiguration is null)
+            {
+                await using var clear = new SqlCommand(
+                    """
+                    DELETE selection FROM qa.review_question_selections selection
+                    JOIN qa.review_activities activity ON activity.id = selection.review_activity_id WHERE activity.review_id = @id;
+                    DELETE FROM qa.review_activities WHERE review_id = @id;
+                    DELETE FROM qa.review_scopes WHERE review_id = @id;
+                    UPDATE qa.review_contributors SET is_active = 0, active_to = sysutcdatetime()
+                    WHERE review_id = @id AND active_to IS NULL;
+                    """, connection, transaction);
+                clear.Parameters.AddWithValue("@id", id);
+                await clear.ExecuteNonQueryAsync(cancellationToken);
+            }
         }
         else
         {
@@ -301,9 +321,15 @@ public sealed partial class SqlFoundationDataStore
                 throw new WorkflowValidationException("The QA Reviews module is not registered. Apply migration 063.");
         }
 
-        await InsertQaReviewConfigurationAsync(connection, transaction, id, request, user, cancellationToken);
+        if (publishedConfiguration is null)
+            await InsertQaReviewConfigurationAsync(connection, transaction, id, request, user, cancellationToken);
+        else
+            await InsertQaReviewScopesAsync(connection, transaction, id,
+                request.TeamOrgUnitIds.Except(publishedConfiguration.TeamOrgUnitIds), cancellationToken);
         await WriteAuditAsync(connection, transaction, user.UserAccountId, id, "qa_review", id,
-            reviewId.HasValue ? "updated" : "created", reviewId.HasValue ? "Updated QA Review configuration." : "Created QA Review draft.",
+            reviewId.HasValue ? "updated" : "created", publishedConfiguration is not null
+                ? "Updated published QA Review details and team scope; existing evidence and question snapshots retained."
+                : reviewId.HasValue ? "Updated QA Review configuration." : "Created QA Review draft.",
             before, JsonSerializer.Serialize(request), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return id;
@@ -334,20 +360,6 @@ public sealed partial class SqlFoundationDataStore
                 ?? throw new WorkflowValidationException("This QA Review changed since you opened it. Refresh and try again.");
         }
         var nextStatus = QaReviewPolicy.StatusAfter(currentStatus, normalizedAction);
-        if (normalizedAction is "open" or "reopen")
-        {
-            await using var activeReview = new SqlCommand(
-                """
-                SELECT TOP (1) record.title
-                FROM qa.reviews review WITH (UPDLOCK, HOLDLOCK)
-                JOIN core.records record ON record.id = review.record_id
-                WHERE review.status IN (N'open', N'reopened') AND review.record_id <> @id;
-                """, connection, transaction);
-            activeReview.Parameters.AddWithValue("@id", reviewId);
-            var activeTitle = await activeReview.ExecuteScalarAsync(cancellationToken) as string;
-            if (!string.IsNullOrWhiteSpace(activeTitle))
-                throw new WorkflowValidationException($"Close '{activeTitle}' before activating another QA Review. Only one review can be open at a time.");
-        }
         if (normalizedAction == "open")
         {
             await ValidateQaReviewReadyToOpenAsync(connection, transaction, reviewId, cancellationToken);
@@ -447,11 +459,13 @@ public sealed partial class SqlFoundationDataStore
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await using (var command = new SqlCommand(
             """
-            INSERT INTO qa.activity_templates (id, activity_type_id, template_key, name, description, created_by_user_account_id)
-            SELECT @id, source.activity_type_id, @key, @name, @description, @user
-            FROM qa.activity_templates source WHERE source.id = @source AND source.archived_at IS NULL;
+            INSERT INTO qa.activity_templates (id, activity_type_id, template_key, name, description, created_by_user_account_id, allows_not_seen, restrict_qa_staff)
+            SELECT @id, source.activity_type_id, @key, @name, @description, @user, source.allows_not_seen, source.restrict_qa_staff
+            FROM qa.activity_templates source WITH (HOLDLOCK) WHERE source.id = @source AND source.archived_at IS NULL;
             INSERT INTO qa.activity_template_questions (activity_template_id, question_id, display_order)
             SELECT @id, mapping.question_id, mapping.display_order FROM qa.activity_template_questions mapping WHERE mapping.activity_template_id = @source;
+            INSERT INTO qa.activity_template_staff (activity_template_id, staff_id)
+            SELECT @id, staff_id FROM qa.activity_template_staff WHERE activity_template_id = @source;
             """, connection, transaction))
         {
             command.Parameters.AddWithValue("@id", id);
@@ -481,9 +495,13 @@ public sealed partial class SqlFoundationDataStore
     {
         if (!user.UserAccountId.HasValue || !user.StaffId.HasValue)
             throw new WorkflowValidationException("A linked staff account is required.");
+        var outcomeLabels = (await GetQaOutcomeLabelsAsync(cancellationToken)).Labels;
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
         var teamIds = (request.TeamOrgUnitIds is { Count: > 0 } ? request.TeamOrgUnitIds : [request.TeamOrgUnitId]).Distinct().ToArray();
+        var formAccess = await ReadQaFormSubmissionAccessAsync(connection, transaction, reviewId, user, cancellationToken);
+        if (!formAccess.GetValueOrDefault(request.ReviewActivityId))
+            throw new UnauthorizedAccessException("You do not have access to complete this QA form. Ask a QA administrator to check its staff whitelist.");
         if (teamIds.Length == 0 || teamIds.Length > 250)
             throw new WorkflowValidationException("Select between 1 and 250 teams for this evidence submission.");
         QaEvidenceAccess? access = null;
@@ -495,7 +513,7 @@ public sealed partial class SqlFoundationDataStore
             access ??= teamAccess;
         }
 
-        var questions = await ReadQaEvidenceQuestionsAsync(connection, transaction, request.ReviewActivityId, cancellationToken);
+        var questions = await ReadQaEvidenceQuestionsAsync(connection, transaction, request.ReviewActivityId, evidenceId, cancellationToken);
         if (questions.Count == 0) throw new WorkflowValidationException("The selected activity has no frozen questions.");
         if (request.Responses.GroupBy(response => response.ReviewQuestionId).Any(group => group.Count() > 1)
             || request.Responses.Any(response => questions.All(question => question.Id != response.ReviewQuestionId)))
@@ -505,7 +523,8 @@ public sealed partial class SqlFoundationDataStore
         {
             requestResponses.TryGetValue(question.Id, out var response);
             var error = QaReviewPolicy.ValidateResponse(question.IsRequired, question.AllowsNotApplicable,
-                question.CommentRequiredAtExpected, response?.Outcome, response?.Comment, response?.NotApplicableReason, submit);
+                question.CommentRequiredAtExpected, response?.Outcome, response?.Comment, response?.NotApplicableReason, submit, outcomeLabels,
+                question.AllowsNotSeen, question.SavedOutcome);
             if (error is not null) throw new WorkflowValidationException($"{question.QuestionText}: {error}");
         }
 
@@ -516,7 +535,7 @@ public sealed partial class SqlFoundationDataStore
         if (evidenceId.HasValue)
         {
             await using var read = new SqlCommand(
-                "SELECT status, created_by_user_account_id, version_number FROM qa.evidence_submissions WITH (UPDLOCK, ROWLOCK) WHERE record_id = @id AND review_id = @reviewId AND removed_at IS NULL;",
+                "SELECT status, created_by_user_account_id, version_number, review_activity_id FROM qa.evidence_submissions WITH (UPDLOCK, ROWLOCK) WHERE record_id = @id AND review_id = @reviewId AND removed_at IS NULL;",
                 connection, transaction);
             read.Parameters.AddWithValue("@id", id);
             read.Parameters.AddWithValue("@reviewId", reviewId);
@@ -525,14 +544,18 @@ public sealed partial class SqlFoundationDataStore
             wasSubmitted = reader.GetString(0) == "submitted";
             ownerAccountId = reader.GetGuid(1);
             version = reader.GetInt32(2);
+            if (!formAccess.GetValueOrDefault(reader.GetGuid(3)))
+                throw new UnauthorizedAccessException("You no longer have access to edit this QA form. Ask a QA administrator to check its staff whitelist.");
             await reader.DisposeAsync();
-            if (wasSubmitted && ownerAccountId != user.UserAccountId && !QaReviewPolicy.CanCorrect(user))
-                throw new WorkflowValidationException("You cannot correct another reviewer's submitted evidence.");
+            if (ownerAccountId != user.UserAccountId && !QaReviewPolicy.CanCorrect(user))
+                throw new UnauthorizedAccessException("You cannot edit another reviewer's evidence.");
             if (wasSubmitted && string.IsNullOrWhiteSpace(request.CorrectionReason))
                 throw new WorkflowValidationException("Add an audit reason for changing submitted evidence.");
             if (request.RowVersion is null) throw new WorkflowValidationException("The evidence row version is required.");
         }
 
+        var deliveryArea = await ResolveQaEvidenceDeliveryAreaAsync(connection, transaction,
+            evidenceId, request.DeliveryAreaKey, submit && !wasSubmitted, cancellationToken);
         var nextVersion = wasSubmitted || submit ? version + (wasSubmitted ? 1 : 0) : version;
         if (!evidenceId.HasValue)
         {
@@ -550,14 +573,16 @@ public sealed partial class SqlFoundationDataStore
                 INSERT INTO qa.evidence_submissions (
                     record_id, review_id, review_activity_id, faculty_org_unit_id, team_org_unit_id,
                     faculty_code_snapshot, faculty_name_snapshot, team_code_snapshot, team_name_snapshot,
-                    course_programme, course_level, subject_staff_id, reviewer_staff_id, activity_at, sample_size,
+                    course_programme, course_level, delivery_area_key, delivery_area_name_snapshot,
+                    subject_staff_id, reviewer_staff_id, activity_at, sample_size,
                     contextual_notes, evidence_links_json, key_strengths, areas_for_improvement,
                     recommended_actions, additional_context, status, submitted_at, submitted_by_user_account_id,
                     version_number, created_by_user_account_id, updated_by_user_account_id
                 )
                 SELECT @id, @reviewId, @activity, team.parent_org_unit_id, team.id,
                        faculty.code, faculty.name, team.code, team.name,
-                       @programme, @level, @subject, @reviewer, @activityAt, @sampleSize,
+                       @programme, @level, @deliveryAreaKey, @deliveryAreaName,
+                       @subject, @reviewer, @activityAt, @sampleSize,
                        @context, @links, @strengths, @improvements, @actions, @additional,
                        @status, CASE WHEN @submit = 1 THEN sysutcdatetime() END,
                        CASE WHEN @submit = 1 THEN @user END, @version, @user, @user
@@ -565,6 +590,7 @@ public sealed partial class SqlFoundationDataStore
                 WHERE team.id = @team;
                 """, connection, transaction);
             AddQaEvidenceParameters(create, id, reviewId, request with { TeamOrgUnitId = teamIds[0] }, user, submit, nextVersion, access!.ActivityName);
+            AddQaDeliveryAreaParameters(create, deliveryArea);
             if (await create.ExecuteNonQueryAsync(cancellationToken) != 2)
                 throw new WorkflowValidationException("Select a current team with a faculty parent.");
         }
@@ -575,7 +601,9 @@ public sealed partial class SqlFoundationDataStore
                 UPDATE evidence SET review_activity_id = @activity, faculty_org_unit_id = team.parent_org_unit_id,
                     team_org_unit_id = team.id, faculty_code_snapshot = faculty.code,
                     faculty_name_snapshot = faculty.name, team_code_snapshot = team.code, team_name_snapshot = team.name,
-                    course_programme = @programme, course_level = @level, subject_staff_id = @subject,
+                    course_programme = @programme, course_level = @level,
+                    delivery_area_key = @deliveryAreaKey, delivery_area_name_snapshot = @deliveryAreaName,
+                    subject_staff_id = @subject,
                     activity_at = @activityAt, sample_size = @sampleSize, contextual_notes = @context,
                     evidence_links_json = @links, key_strengths = @strengths, areas_for_improvement = @improvements,
                     recommended_actions = @actions, additional_context = @additional,
@@ -593,6 +621,7 @@ public sealed partial class SqlFoundationDataStore
                 WHERE id = @id;
                 """, connection, transaction);
             AddQaEvidenceParameters(update, id, reviewId, request with { TeamOrgUnitId = teamIds[0] }, user, submit, nextVersion, access!.ActivityName);
+            AddQaDeliveryAreaParameters(update, deliveryArea);
             update.Parameters.Add("@rowVersion", System.Data.SqlDbType.Timestamp, 8).Value = request.RowVersion!;
             if (await update.ExecuteNonQueryAsync(cancellationToken) < 2)
                 throw new WorkflowValidationException("This evidence changed since you opened it. Refresh and try again.");
@@ -644,7 +673,7 @@ public sealed partial class SqlFoundationDataStore
             ?? throw new WorkflowValidationException("The saved evidence is no longer available.");
     }
 
-    public async Task<QaEvidenceDetail?> GetQaEvidenceAsync(Guid evidenceId, CurrentUser user, CancellationToken cancellationToken)
+    public async Task<QaEvidenceDetail?> GetQaEvidenceAsync(Guid evidenceId, CurrentUser user, CancellationToken cancellationToken, bool includeEditingMetadata = true)
     {
         var rows = await QueryAsync(
             """
@@ -657,7 +686,8 @@ public sealed partial class SqlFoundationDataStore
                    evidence.contextual_notes, evidence.evidence_links_json, evidence.key_strengths,
                    evidence.areas_for_improvement, evidence.recommended_actions, evidence.additional_context,
                    evidence.subject_staff_id, evidence.created_by_user_account_id, review.status,
-                   CAST(CASE WHEN evidence.created_by_user_account_id = @userAccountId THEN 1 ELSE 0 END AS bit)
+                   CAST(CASE WHEN evidence.created_by_user_account_id = @userAccountId THEN 1 ELSE 0 END AS bit),
+                   evidence.delivery_area_key, evidence.delivery_area_name_snapshot
             FROM qa.evidence_submissions evidence
             JOIN qa.reviews review ON review.record_id = evidence.review_id
             JOIN qa.review_activities activity ON activity.id = evidence.review_activity_id
@@ -696,12 +726,23 @@ public sealed partial class SqlFoundationDataStore
                     GetIntOrNull(reader, 14), reader.GetInt32(15), GetDateTimeOffsetOrNull(reader, 16), reader.GetInt32(17),
                     reader.GetFieldValue<byte[]>(18),
                     QaReviewPolicy.IsEvidenceWritable(reader.GetString(27)) && (reader.GetBoolean(28) || QaReviewPolicy.CanCorrect(user)),
-                    QaReviewPolicy.CanRemove(user)),
+                    QaReviewPolicy.CanRemove(user), GetStringOrNull(reader, 29), GetStringOrNull(reader, 30)),
                 GetStringOrNull(reader, 19), GetStringOrNull(reader, 20), GetStringOrNull(reader, 21), GetStringOrNull(reader, 22),
                 GetStringOrNull(reader, 23), GetStringOrNull(reader, 24), GetGuidOrNull(reader, 25)),
             cancellationToken);
         var row = rows.SingleOrDefault();
         if (row is null) return null;
+
+        // Export reads retain the permission-scoped header above, but do not need editor capabilities.
+        if (includeEditingMetadata)
+        {
+            var formAccess = await GetQaFormSubmissionAccessAsync(row.Evidence.ReviewId, user, cancellationToken);
+            row = row with { Evidence = row.Evidence with { CanEdit = row.Evidence.CanEdit && formAccess.GetValueOrDefault(row.Evidence.ReviewActivityId) } };
+        }
+        else
+        {
+            row = row with { Evidence = row.Evidence with { CanEdit = false, CanRemove = false } };
+        }
 
         var evidenceTeams = await QueryAsync(
             """
@@ -715,22 +756,31 @@ public sealed partial class SqlFoundationDataStore
 
         var responses = await QueryAsync(
             """
+            -- Resolve the single activity first. Joining the entire evidence/activity/template
+            -- graph into the ordered response query can request a disproportionate memory grant.
+            DECLARE @activityId uniqueidentifier, @allowsNotSeen bit;
+            SELECT @activityId=evidence.review_activity_id, @allowsNotSeen=template.allows_not_seen
+            FROM qa.evidence_submissions evidence
+            JOIN qa.review_activities activity ON activity.id=evidence.review_activity_id
+            JOIN qa.activity_templates template ON template.id=activity.activity_template_id
+            WHERE evidence.record_id=@id;
+
             SELECT question.id, question.theme_or_week, question.question_text, question.guidance,
                    question.display_order, question.is_required, question.allows_not_applicable,
-                   question.comment_required_at_expected, response.outcome, response.comment, response.not_applicable_reason
+                   question.comment_required_at_expected, response.outcome, response.comment, response.not_applicable_reason, @allowsNotSeen AS allows_not_seen
             FROM qa.review_questions question
-            JOIN qa.review_activities activity ON activity.id = question.review_activity_id
-            JOIN qa.evidence_submissions evidence ON evidence.review_activity_id = activity.id AND evidence.record_id = @id
-            LEFT JOIN qa.evidence_responses response ON response.review_question_id = question.id AND response.evidence_record_id = evidence.record_id
+            LEFT JOIN qa.evidence_responses response ON response.review_question_id = question.id AND response.evidence_record_id = @id
+            WHERE question.review_activity_id = @activityId
             ORDER BY question.display_order;
             """,
             command => command.Parameters.AddWithValue("@id", evidenceId),
             reader => new QaEvidenceResponseSummary(
                 reader.GetGuid(0), GetStringOrNull(reader, 1), reader.GetString(2), GetStringOrNull(reader, 3),
                 reader.GetInt32(4), reader.GetBoolean(5), reader.GetBoolean(6), reader.GetBoolean(7),
-                GetStringOrNull(reader, 8), GetStringOrNull(reader, 9), GetStringOrNull(reader, 10)),
+                GetStringOrNull(reader, 8), GetStringOrNull(reader, 9), GetStringOrNull(reader, 10), reader.GetBoolean(11)),
             cancellationToken);
-        var revisions = await QueryAsync(
+        IReadOnlyList<QaEvidenceRevisionSummary> revisions = [];
+        if (includeEditingMetadata) revisions = await QueryAsync(
             """
             SELECT revision.version_number, revision.reason, staff.display_name, revision.created_at
             FROM qa.evidence_revisions revision
@@ -843,9 +893,25 @@ public sealed partial class SqlFoundationDataStore
         var facultyName = facultyOrgUnitId.HasValue
             ? review.Scope.FirstOrDefault(scope => scope.ScopeType == "team" && scope.ParentOrgUnitId == facultyOrgUnitId.Value)?.ParentName
             : selectedTeam?.ParentName;
+        var includedDashboardUnitIds = (await QueryAsync(
+            "SELECT id FROM org.org_units WHERE org.fn_dashboard_process_unit_visible(id, N'qa_review') = 1;",
+            reader => reader.GetGuid(0), cancellationToken)).ToHashSet();
+        bool IsDashboardVisible(Guid? orgUnitId) => !orgUnitId.HasValue || includedDashboardUnitIds.Contains(orgUnitId.Value);
         var actions = (await GetQaReviewActionGroupsAsync(reviewId, user, cancellationToken) ?? [])
             .Where(action => (!facultyOrgUnitId.HasValue || action.FacultyOrgUnitId == facultyOrgUnitId.Value)
-                && (!teamOrgUnitId.HasValue || action.TeamOrgUnitIds.Contains(teamOrgUnitId.Value)))
+                && (!teamOrgUnitId.HasValue || action.TeamOrgUnitIds.Contains(teamOrgUnitId.Value))
+                && IsDashboardVisible(action.FacultyOrgUnitId)
+                && (action.TeamOrgUnitIds.Count == 0 || action.TeamOrgUnitIds.Any(teamId => IsDashboardVisible(teamId))))
+            .Select(action =>
+            {
+                var visibleTeams = action.TeamOrgUnitIds.Zip(action.TeamNames, (id, name) => (id, name))
+                    .Where(team => IsDashboardVisible(team.id)).ToArray();
+                return action with
+                {
+                    TeamOrgUnitIds = visibleTeams.Select(team => team.id).ToArray(),
+                    TeamNames = visibleTeams.Select(team => team.name).ToArray()
+                };
+            })
             .ToArray();
 
         return new QaReviewReportData(
@@ -857,7 +923,8 @@ public sealed partial class SqlFoundationDataStore
             facultyOrgUnitId,
             facultyName,
             teamOrgUnitId,
-            selectedTeam?.Name);
+            selectedTeam?.Name,
+            (await GetQaOutcomeLabelsAsync(cancellationToken)).Labels);
     }
 
     public async Task<ExportWorkbookData?> GetQaExportAsync(
@@ -869,25 +936,51 @@ public sealed partial class SqlFoundationDataStore
     {
         var report = await GetQaReportAsync(reviewId, user, cancellationToken, facultyOrgUnitId, teamOrgUnitId);
         if (report is null) return null;
+        var included = (await QueryAsync("""
+            SELECT evidence.record_id FROM qa.evidence_submissions evidence
+            WHERE evidence.review_id=@id AND evidence.removed_at IS NULL AND evidence.status=N'submitted'
+              AND EXISTS (SELECT 1 FROM qa.evidence_team_scopes scope
+                  WHERE scope.evidence_record_id=evidence.record_id
+                    AND org.fn_dashboard_process_unit_visible(scope.team_org_unit_id,N'qa_review')=1
+                    AND (@facultyId IS NULL OR scope.faculty_org_unit_id=@facultyId)
+                    AND (@teamId IS NULL OR scope.team_org_unit_id=@teamId));
+            """, command => {
+                command.Parameters.AddWithValue("@id", reviewId);
+                command.Parameters.AddWithValue("@facultyId", ToDbValue(facultyOrgUnitId));
+                command.Parameters.AddWithValue("@teamId", ToDbValue(teamOrgUnitId));
+            }, reader => reader.GetGuid(0), cancellationToken)).ToHashSet();
+        var entries = new List<QaEvidenceDetail>();
+        foreach (var evidence in report.Review.Evidence.Where(item => included.Contains(item.Id)))
+        {
+            var detail = await GetQaEvidenceAsync(evidence.Id, user, cancellationToken, includeEditingMetadata: false);
+            if (detail is not null) entries.Add(detail);
+        }
+        var workbook = BuildQaReviewExport(report);
+        return workbook with { Sheets = TLQS.Api.Exports.QaFormEntryExportBuilder.Build(entries, report.OutcomeLabels ?? QaOutcomeLabels.Default).Concat(workbook.Sheets).ToArray() };
+    }
+
+    public static ExportWorkbookData BuildQaReviewExport(QaReviewReportData report)
+    {
         var review = report.Review;
         var dashboard = report.Dashboard;
-        static string Percentage(int value, int denominator) => denominator == 0 ? "0.0%" : $"{Math.Round(value * 100m / denominator, 1):0.0}%";
+        var labels = report.OutcomeLabels ?? QaOutcomeLabels.Default;
+        static string? Percentage(int value, int denominator) => denominator == 0 ? null : $"{Math.Round(value * 100m / denominator, 1):0.0}%";
         static IReadOnlyList<string?> BreakdownRow(QaDashboardBreakdown item) =>
         [
             item.Label,
             item.Below.ToString(), Percentage(item.Below, item.Rated),
             item.At.ToString(), Percentage(item.At, item.Rated),
             item.Above.ToString(), Percentage(item.Above, item.Rated),
-            item.NotApplicable.ToString(), item.Rated.ToString(), $"{item.AtOrAbovePercentage:0.0}%"
+            item.NotApplicable.ToString(), item.NotSeen.ToString(), item.Rated.ToString(), Percentage(item.At + item.Above, item.Rated)
         ];
 
         var criteria = dashboard.Questions.Select(question => (IReadOnlyList<string?>)new string?[]
         {
             question.ActivityLabel, question.ThemeOrWeek, question.QuestionText,
-            question.Below.ToString(), $"{question.BelowPercentage:0.0}%",
-            question.At.ToString(), $"{question.AtPercentage:0.0}%",
-            question.Above.ToString(), $"{question.AbovePercentage:0.0}%",
-            question.NotApplicable.ToString(), question.Rated.ToString()
+            question.Below.ToString(), Percentage(question.Below, question.Rated),
+            question.At.ToString(), Percentage(question.At, question.Rated),
+            question.Above.ToString(), Percentage(question.Above, question.Rated),
+            question.NotApplicable.ToString(), question.NotSeen.ToString(), question.Rated.ToString()
         }).ToArray();
         var actionRows = report.Actions.Select(action => (IReadOnlyList<string?>)new string?[]
         {
@@ -897,12 +990,13 @@ public sealed partial class SqlFoundationDataStore
         }).ToArray();
         var outcomeRows = new IReadOnlyList<string?>[]
         {
-            new string?[] { "Below standard", dashboard.BelowCount.ToString(), Percentage(dashboard.BelowCount, dashboard.RatedCount) },
-            new string?[] { "At standard", dashboard.AtCount.ToString(), Percentage(dashboard.AtCount, dashboard.RatedCount) },
-            new string?[] { "Above standard", dashboard.AboveCount.ToString(), Percentage(dashboard.AboveCount, dashboard.RatedCount) },
-            new string?[] { "Not applicable", dashboard.NotApplicableCount.ToString(), null }
+            new string?[] { labels.Below, dashboard.BelowCount.ToString(), Percentage(dashboard.BelowCount, dashboard.RatedCount) },
+            new string?[] { labels.At, dashboard.AtCount.ToString(), Percentage(dashboard.AtCount, dashboard.RatedCount) },
+            new string?[] { labels.Above, dashboard.AboveCount.ToString(), Percentage(dashboard.AboveCount, dashboard.RatedCount) },
+            new string?[] { labels.NotApplicable, dashboard.NotApplicableCount.ToString(), null },
+            new string?[] { "Not seen", dashboard.NotSeenCount.ToString(), null }
         };
-        var breakdownColumns = new[] { "Process", "Below", "Below %", "At", "At %", "Above", "Above %", "N/A", "Rated", "At or above %" };
+        var breakdownColumns = new[] { "Process", labels.Below, $"{labels.Below} %", labels.At, $"{labels.At} %", labels.Above, $"{labels.Above} %", labels.NotApplicable, "Not seen", "Rated", $"{labels.AtOrAbove} %" };
 
         return new ExportWorkbookData(
             "qa-review-report",
@@ -914,6 +1008,8 @@ public sealed partial class SqlFoundationDataStore
                 new ExportSheet("Review Summary", ["Property", "Value"],
                     [
                         new string?[] { "Title", review.Review.Title },
+                        new string?[] { "Outcome wording", "Current shared labels; saved keys, snapshots and calculations unchanged." },
+                        new string?[] { "Neutral responses", "Not seen and not applicable are counted separately and excluded from rated percentages. Percentages are blank when there are no rated responses." },
                         new string?[] { "Theme", review.Review.Theme },
                         new string?[] { "Academic year", review.Review.AcademicYear },
                         new string?[] { "Status", review.Review.Status },
@@ -926,14 +1022,16 @@ public sealed partial class SqlFoundationDataStore
                     [
                         new string?[] { "Submissions", dashboard.EvidenceCount.ToString() },
                         new string?[] { "Rated responses", dashboard.RatedCount.ToString() },
+                        new string?[] { "Not seen", dashboard.NotSeenCount.ToString() },
+                        new string?[] { "Total responses", (dashboard.RatedCount + dashboard.NotApplicableCount + dashboard.NotSeenCount).ToString() },
                         new string?[] { "Teams with evidence", dashboard.TeamCount.ToString() },
-                        new string?[] { "At or above standard", $"{dashboard.AtOrAbovePercentage:0.0}%" },
+                        new string?[] { labels.AtOrAbove, Percentage(dashboard.AtCount + dashboard.AboveCount, dashboard.RatedCount) ?? "No rated responses" },
                         new string?[] { "Linked actions", dashboard.LinkedActionCount.ToString() },
                         new string?[] { "Open actions", dashboard.OpenActionCount.ToString() }
                     ], false),
                 new ExportSheet("Outcome Distribution", ["Outcome", "Count", "% of rated responses"], outcomeRows, false),
                 new ExportSheet("Processes", breakdownColumns, dashboard.ByActivity.Select(BreakdownRow).ToArray(), false),
-                new ExportSheet("Expanded Criteria", ["Process", "Theme/Week", "Criterion", "Below", "Below %", "At", "At %", "Above", "Above %", "N/A", "Rated"], criteria, false),
+                new ExportSheet("Expanded Criteria", ["Process", "Theme/Week", "Criterion", labels.Below, $"{labels.Below} %", labels.At, $"{labels.At} %", labels.Above, $"{labels.Above} %", labels.NotApplicable, "Not seen", "Rated"], criteria, false),
                 new ExportSheet("Team Coverage", breakdownColumns, dashboard.ByTeam.Select(BreakdownRow).ToArray(), false),
                 new ExportSheet("Themes", breakdownColumns, dashboard.ByTheme.Select(BreakdownRow).ToArray(), false),
                 new ExportSheet("Zero Coverage", ["Team without submitted evidence"], dashboard.TeamsWithoutEvidence.Select(team => (IReadOnlyList<string?>)new string?[] { team }).ToArray(), false),
@@ -989,9 +1087,10 @@ public sealed partial class SqlFoundationDataStore
                     SELECT frozen.id, type.id, type.activity_key, type.name,
                            frozen.source_version_number, frozen.theme_or_week, frozen.question_text, frozen.guidance,
                            frozen.display_order, frozen.is_required, frozen.allows_not_applicable,
-                           frozen.comment_required_at_expected, CAST(1 AS bit), N'frozen', frozen.question_tag, frozen.frozen_at
+                           frozen.comment_required_at_expected, CAST(1 AS bit), N'frozen', frozen.question_tag, frozen.frozen_at, template.allows_not_seen
                     FROM qa.review_questions frozen
                     JOIN qa.review_activities activity ON activity.id = frozen.review_activity_id
+                    JOIN qa.activity_templates template ON template.id = activity.activity_template_id
                     JOIN qa.activity_types type ON type.id = activity.activity_type_id
                     WHERE frozen.review_activity_id = @id ORDER BY frozen.display_order;
                     """,
@@ -1009,8 +1108,10 @@ public sealed partial class SqlFoundationDataStore
                            version.version_number, version.theme_or_week, version.question_text, version.guidance,
                            selection.display_order, version.is_required, version.allows_not_applicable,
                            version.comment_required_at_expected, version.is_active, version.source_status,
-                           version.question_tag, version.created_at
+                           version.question_tag, version.created_at, template.allows_not_seen
                     FROM qa.review_question_selections selection
+                    JOIN qa.review_activities activity ON activity.id = selection.review_activity_id
+                    JOIN qa.activity_templates template ON template.id = activity.activity_template_id
                     JOIN qa.questions question ON question.id = selection.question_id
                     JOIN latest version ON version.question_id = question.id AND version.ordinal = 1
                     JOIN qa.activity_types type ON type.id = question.activity_type_id
@@ -1034,7 +1135,8 @@ public sealed partial class SqlFoundationDataStore
                    evidence.reviewer_staff_id, reviewer.display_name, evidence.activity_at, evidence.sample_size,
                    (SELECT COUNT(*) FROM qa.evidence_responses response WHERE response.evidence_record_id = evidence.record_id),
                    evidence.submitted_at, evidence.version_number, evidence.row_version,
-                   CAST(CASE WHEN evidence.created_by_user_account_id = @userAccountId THEN 1 ELSE 0 END AS bit), review.status
+                   CAST(CASE WHEN evidence.created_by_user_account_id = @userAccountId THEN 1 ELSE 0 END AS bit), review.status,
+                   evidence.delivery_area_key, evidence.delivery_area_name_snapshot
             FROM qa.evidence_submissions evidence
             JOIN qa.reviews review ON review.record_id = evidence.review_id
             JOIN qa.review_activities activity ON activity.id = evidence.review_activity_id
@@ -1071,7 +1173,7 @@ public sealed partial class SqlFoundationDataStore
                 GetIntOrNull(reader, 14), reader.GetInt32(15), GetDateTimeOffsetOrNull(reader, 16), reader.GetInt32(17),
                 reader.GetFieldValue<byte[]>(18),
                 QaReviewPolicy.IsEvidenceWritable(reader.GetString(20)) && (reader.GetBoolean(19) || QaReviewPolicy.CanCorrect(user)),
-                QaReviewPolicy.CanRemove(user)), cancellationToken);
+                QaReviewPolicy.CanRemove(user), GetStringOrNull(reader, 21), GetStringOrNull(reader, 22)), cancellationToken);
 
     private async Task<QaCloseValidationSummary> GetQaCloseValidationAsync(Guid reviewId, CurrentUser user, CancellationToken cancellationToken)
     {
@@ -1092,8 +1194,10 @@ public sealed partial class SqlFoundationDataStore
             """, command => command.Parameters.AddWithValue("@id", reviewId), reader => reader.GetString(0), cancellationToken);
         var counts = (await QueryAsync(
             """
-            SELECT SUM(CASE WHEN status = N'draft' THEN 1 ELSE 0 END), COUNT(*), ISNULL(SUM(sample_size), 0),
-                   (SELECT COUNT(*) FROM qa.evidence_responses response JOIN qa.evidence_submissions item ON item.record_id = response.evidence_record_id WHERE item.review_id = @id AND item.removed_at IS NULL AND response.outcome IS NOT NULL)
+            SELECT SUM(CASE WHEN status = N'draft' THEN 1 ELSE 0 END),
+                   COUNT(CASE WHEN status = N'submitted' THEN 1 END),
+                   ISNULL(SUM(CASE WHEN status = N'submitted' THEN sample_size ELSE 0 END), 0),
+                   (SELECT COUNT(*) FROM qa.evidence_responses response JOIN qa.evidence_submissions item ON item.record_id = response.evidence_record_id WHERE item.review_id = @id AND item.removed_at IS NULL AND item.status = N'submitted' AND response.outcome IS NOT NULL)
             FROM qa.evidence_submissions WHERE review_id = @id AND removed_at IS NULL;
             """, command => command.Parameters.AddWithValue("@id", reviewId),
             reader => new { Drafts = reader.IsDBNull(0) ? 0 : reader.GetInt32(0), Evidence = reader.GetInt32(1), Samples = reader.GetInt32(2), Responses = reader.GetInt32(3) }, cancellationToken)).Single();
@@ -1136,6 +1240,7 @@ public sealed partial class SqlFoundationDataStore
             AND EXISTS (
                 SELECT 1 FROM qa.evidence_team_scopes selected_filter_scope
                 WHERE selected_filter_scope.evidence_record_id = {evidenceAlias}.record_id
+                  AND org.fn_dashboard_process_unit_visible(selected_filter_scope.team_org_unit_id, N'qa_review') = 1
                   AND (@facultyId IS NULL OR selected_filter_scope.faculty_org_unit_id = @facultyId)
                   AND (@teamId IS NULL OR selected_filter_scope.team_org_unit_id = @teamId)
             )
@@ -1163,27 +1268,31 @@ public sealed partial class SqlFoundationDataStore
                     FROM qa.evidence_submissions covered_evidence
                     JOIN qa.evidence_team_scopes coverage ON coverage.evidence_record_id = covered_evidence.record_id
                     WHERE {coveredAccessFilter}
+                      AND org.fn_dashboard_process_unit_visible(coverage.team_org_unit_id, N'qa_review') = 1
                       AND (@facultyId IS NULL OR coverage.faculty_org_unit_id = @facultyId)
                       AND (@teamId IS NULL OR coverage.team_org_unit_id = @teamId)),
                    (SELECT COUNT(DISTINCT coverage.team_org_unit_id)
                     FROM qa.evidence_submissions covered_evidence
                     JOIN qa.evidence_team_scopes coverage ON coverage.evidence_record_id = covered_evidence.record_id
                     WHERE {coveredAccessFilter}
+                      AND org.fn_dashboard_process_unit_visible(coverage.team_org_unit_id, N'qa_review') = 1
                       AND (@facultyId IS NULL OR coverage.faculty_org_unit_id = @facultyId)
                       AND (@teamId IS NULL OR coverage.team_org_unit_id = @teamId)),
                    COUNT(DISTINCT evidence.course_programme),
                    (SELECT ISNULL(SUM(sample.sample_size), 0) FROM qa.evidence_submissions sample WHERE {sampleAccessFilter}),
                    SUM(CASE WHEN response.outcome = N'below' THEN 1 ELSE 0 END), SUM(CASE WHEN response.outcome = N'at' THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN response.outcome = N'above' THEN 1 ELSE 0 END), SUM(CASE WHEN response.outcome = N'not_applicable' THEN 1 ELSE 0 END)
+                   SUM(CASE WHEN response.outcome = N'above' THEN 1 ELSE 0 END), SUM(CASE WHEN response.outcome = N'not_applicable' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN response.outcome = N'not_seen' THEN 1 ELSE 0 END)
             FROM qa.evidence_submissions evidence LEFT JOIN qa.evidence_responses response ON response.evidence_record_id = evidence.record_id
             WHERE {accessFilter};
-            """, reader => Enumerable.Range(0, 9).Select(index => reader.IsDBNull(index) ? 0 : reader.GetInt32(index)).ToArray())).Single();
+            """, reader => Enumerable.Range(0, 10).Select(index => reader.IsDBNull(index) ? 0 : reader.GetInt32(index)).ToArray())).Single();
         async Task<IReadOnlyList<QaDashboardBreakdown>> Breakdown(string keyExpression, string labelExpression, string joins = "") =>
             await Read(
                 $"""
                 SELECT {keyExpression}, {labelExpression},
                        SUM(CASE WHEN response.outcome = N'below' THEN 1 ELSE 0 END), SUM(CASE WHEN response.outcome = N'at' THEN 1 ELSE 0 END),
-                       SUM(CASE WHEN response.outcome = N'above' THEN 1 ELSE 0 END), SUM(CASE WHEN response.outcome = N'not_applicable' THEN 1 ELSE 0 END)
+                       SUM(CASE WHEN response.outcome = N'above' THEN 1 ELSE 0 END), SUM(CASE WHEN response.outcome = N'not_applicable' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN response.outcome = N'not_seen' THEN 1 ELSE 0 END)
                 FROM qa.evidence_submissions evidence
                 JOIN qa.evidence_responses response ON response.evidence_record_id = evidence.record_id {joins}
                 WHERE {accessFilter}
@@ -1192,9 +1301,10 @@ public sealed partial class SqlFoundationDataStore
                 {
                     var distribution = QaReviewPolicy.CalculateDistribution(
                         Enumerable.Repeat("below", reader.GetInt32(2)).Concat(Enumerable.Repeat("at", reader.GetInt32(3)))
-                            .Concat(Enumerable.Repeat("above", reader.GetInt32(4))).Concat(Enumerable.Repeat("not_applicable", reader.GetInt32(5))));
+                            .Concat(Enumerable.Repeat("above", reader.GetInt32(4))).Concat(Enumerable.Repeat("not_applicable", reader.GetInt32(5)))
+                            .Concat(Enumerable.Repeat("not_seen", reader.GetInt32(6))));
                     return new QaDashboardBreakdown(reader.GetString(0), reader.GetString(1), distribution.Below, distribution.At,
-                        distribution.Above, distribution.NotApplicable, distribution.Rated, distribution.AtOrAbovePercentage);
+                        distribution.Above, distribution.NotApplicable, distribution.Rated, distribution.AtOrAbovePercentage, distribution.NotSeen);
                 });
         var byActivity = await Read(
             $"""
@@ -1202,7 +1312,8 @@ public sealed partial class SqlFoundationDataStore
                    SUM(CASE WHEN response.outcome = N'below' THEN 1 ELSE 0 END),
                    SUM(CASE WHEN response.outcome = N'at' THEN 1 ELSE 0 END),
                    SUM(CASE WHEN response.outcome = N'above' THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN response.outcome = N'not_applicable' THEN 1 ELSE 0 END)
+                   SUM(CASE WHEN response.outcome = N'not_applicable' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN response.outcome = N'not_seen' THEN 1 ELSE 0 END)
             FROM qa.review_activities activity
             JOIN qa.activity_types activity_type ON activity_type.id = activity.activity_type_id
             LEFT JOIN qa.evidence_submissions evidence ON evidence.review_activity_id = activity.id AND {accessFilter}
@@ -1218,7 +1329,8 @@ public sealed partial class SqlFoundationDataStore
                    SUM(CASE WHEN response.outcome = N'below' THEN 1 ELSE 0 END),
                    SUM(CASE WHEN response.outcome = N'at' THEN 1 ELSE 0 END),
                    SUM(CASE WHEN response.outcome = N'above' THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN response.outcome = N'not_applicable' THEN 1 ELSE 0 END)
+                   SUM(CASE WHEN response.outcome = N'not_applicable' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN response.outcome = N'not_seen' THEN 1 ELSE 0 END)
             FROM qa.review_activities activity
             JOIN qa.activity_types activity_type ON activity_type.id = activity.activity_type_id
             JOIN qa.review_questions question ON question.review_activity_id = activity.id
@@ -1239,10 +1351,10 @@ public sealed partial class SqlFoundationDataStore
                 decimal Percentage(int value) => ratedCount == 0 ? 0 : Math.Round(value * 100m / ratedCount, 1);
                 return new QaDashboardQuestionBreakdown(reader.GetString(0), reader.GetString(1), reader.GetGuid(2),
                     GetStringOrNull(reader, 3), reader.GetString(4), below, at, above, notApplicable, ratedCount,
-                    Percentage(below), Percentage(at), Percentage(above));
+                    Percentage(below), Percentage(at), Percentage(above), reader.GetInt32(9));
             });
         var byTeam = await Breakdown("CONVERT(nvarchar(36), team_scope.team_org_unit_id)", "team_scope.team_name_snapshot",
-            "JOIN qa.evidence_team_scopes team_scope ON team_scope.evidence_record_id = evidence.record_id AND (@facultyId IS NULL OR team_scope.faculty_org_unit_id = @facultyId) AND (@teamId IS NULL OR team_scope.team_org_unit_id = @teamId)");
+            "JOIN qa.evidence_team_scopes team_scope ON team_scope.evidence_record_id = evidence.record_id AND org.fn_dashboard_process_unit_visible(team_scope.team_org_unit_id, N'qa_review') = 1 AND (@facultyId IS NULL OR team_scope.faculty_org_unit_id = @facultyId) AND (@teamId IS NULL OR team_scope.team_org_unit_id = @teamId)");
         var byTheme = await Breakdown("COALESCE(question.theme_or_week, N'Other')", "COALESCE(question.theme_or_week, N'Other')",
             "JOIN qa.review_questions question ON question.id = response.review_question_id");
         var timeline = await Read(
@@ -1254,6 +1366,7 @@ public sealed partial class SqlFoundationDataStore
         var emptyTeams = await Read(
             """
             SELECT scope.org_unit_name_snapshot FROM qa.review_scopes scope WHERE scope.review_id = @id AND scope.scope_type = N'team'
+              AND org.fn_dashboard_process_unit_visible(scope.org_unit_id, N'qa_review') = 1
               AND (@facultyId IS NULL OR scope.parent_org_unit_id = @facultyId)
               AND (@teamId IS NULL OR scope.org_unit_id = @teamId)
               AND (@viewAll = 1
@@ -1281,6 +1394,11 @@ public sealed partial class SqlFoundationDataStore
                   AND COALESCE(status.value_key, N'open') NOT IN (N'complete', N'cancelled')
             ) open_assignment
             WHERE action_group.review_id = @id
+              AND org.fn_dashboard_process_unit_visible(action_group.faculty_org_unit_id, N'qa_review') = 1
+              AND (NOT EXISTS (SELECT 1 FROM qa.action_group_teams any_team WHERE any_team.action_group_id = action_group.id)
+                   OR EXISTS (SELECT 1 FROM qa.action_group_teams visible_team
+                              WHERE visible_team.action_group_id = action_group.id
+                                AND org.fn_dashboard_process_unit_visible(visible_team.team_org_unit_id, N'qa_review') = 1))
               AND (@facultyId IS NULL OR action_group.faculty_org_unit_id = @facultyId)
               AND (@teamId IS NULL OR EXISTS (
                     SELECT 1 FROM qa.action_group_teams selected_team
@@ -1299,18 +1417,75 @@ public sealed partial class SqlFoundationDataStore
         return new QaDashboardSummary(reviewId, headline[0], headline[1], headline[2], headline[3], headline[4],
             headline[5], headline[6], headline[7], headline[8], rated,
             rated == 0 ? 0 : Math.Round((decimal)(headline[6] + headline[7]) * 100m / rated, 1),
-            byActivity, questions, byTeam, byTheme, timeline, emptyTeams, actionCounts[0], actionCounts[1], snapshot);
+            byActivity, questions, byTeam, byTheme, timeline, emptyTeams, actionCounts[0], actionCounts[1], snapshot, headline[9]);
     }
 
-    private async Task InsertQaReviewConfigurationAsync(
-        SqlConnection connection,
-        SqlTransaction transaction,
-        Guid reviewId,
-        SaveQaReviewRequest request,
-        CurrentUser user,
-        CancellationToken cancellationToken)
+    private static QaPublishedReviewStructure ToQaPublishedStructure(SaveQaReviewRequest request) => new(
+        request.AcademicYear.Trim(), NormalizeQaTag(request.QuestionTag), request.PlannedOpenDate,
+        request.TeamOrgUnitIds, request.Activities.Select(activity => new QaPublishedReviewActivity(
+            activity.ActivityTypeId, activity.TemplateId, activity.QuestionIds)).ToArray());
+
+    private static async Task<SaveQaReviewRequest> ReadQaReviewConfigurationAsync(
+        SqlConnection connection, SqlTransaction transaction, Guid reviewId, bool frozen, CancellationToken cancellationToken)
     {
-        foreach (var teamId in request.TeamOrgUnitIds.Distinct())
+        SaveQaReviewRequest configuration;
+        await using (var command = new SqlCommand(
+            """
+            SELECT record.title, record.academic_year_key, review.review_theme, review.question_tag,
+                   record.owner_staff_id, review.planned_open_date, review.closing_date, review.row_version
+            FROM qa.reviews review JOIN core.records record ON record.id = review.record_id
+            WHERE review.record_id = @id;
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("@id", reviewId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new WorkflowValidationException("The QA Review was not found.");
+            configuration = new SaveQaReviewRequest(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                reader.GetString(3), reader.GetGuid(4), GetDateOnlyOrNull(reader, 5),
+                DateOnly.FromDateTime(reader.GetDateTime(6)), [], [], reader.GetFieldValue<byte[]>(7));
+        }
+
+        var teams = new List<Guid>();
+        await using (var command = new SqlCommand(
+            "SELECT org_unit_id FROM qa.review_scopes WHERE review_id = @id AND scope_type = N'team';", connection, transaction))
+        {
+            command.Parameters.AddWithValue("@id", reviewId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) teams.Add(reader.GetGuid(0));
+        }
+
+        var activities = new List<SaveQaReviewActivityRequest>();
+        await using (var command = new SqlCommand(
+            """
+            SELECT activity.activity_type_id, activity.activity_template_id,
+                   CASE WHEN @frozen = 1 THEN snapshot.id ELSE selection.question_id END
+            FROM qa.review_activities activity
+            LEFT JOIN qa.review_questions snapshot ON snapshot.review_activity_id = activity.id AND @frozen = 1
+            LEFT JOIN qa.review_question_selections selection ON selection.review_activity_id = activity.id AND @frozen = 0
+            WHERE activity.review_id = @id
+            ORDER BY activity.display_order, activity.id, snapshot.display_order, selection.display_order;
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("@id", reviewId);
+            command.Parameters.AddWithValue("@frozen", frozen);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var typeId = reader.GetGuid(0);
+                if (activities.Count == 0 || activities[^1].ActivityTypeId != typeId)
+                    activities.Add(new SaveQaReviewActivityRequest(typeId, reader.GetGuid(1), new List<Guid>()));
+                if (!reader.IsDBNull(2)) ((List<Guid>)activities[^1].QuestionIds).Add(reader.GetGuid(2));
+            }
+        }
+        return configuration with { TeamOrgUnitIds = teams, Activities = activities };
+    }
+
+    private static async Task InsertQaReviewScopesAsync(
+        SqlConnection connection, SqlTransaction transaction, Guid reviewId,
+        IEnumerable<Guid> teamIds, CancellationToken cancellationToken)
+    {
+        foreach (var teamId in teamIds.Distinct())
         {
             await using var scope = new SqlCommand(
                 """
@@ -1321,13 +1496,26 @@ public sealed partial class SqlFoundationDataStore
                 SELECT @review, team.id, N'team', team.code, team.name,
                        faculty.id, faculty.code, faculty.name
                 FROM org.org_units team JOIN org.org_units faculty ON faculty.id = team.parent_org_unit_id
-                WHERE team.id = @team AND team.archived_at IS NULL;
+                WHERE team.id = @team AND team.archived_at IS NULL AND team.is_active = 1
+                  AND team.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code')
+                  AND faculty.archived_at IS NULL AND faculty.is_active = 1 AND faculty.org_unit_type = N'faculty';
                 """, connection, transaction);
             scope.Parameters.AddWithValue("@review", reviewId);
             scope.Parameters.AddWithValue("@team", teamId);
             if (await scope.ExecuteNonQueryAsync(cancellationToken) != 1)
-                throw new WorkflowValidationException("A selected team is unavailable or does not have a faculty parent.");
+                throw new WorkflowValidationException("A selected team is unavailable or does not have an active faculty parent.");
         }
+    }
+
+    private async Task InsertQaReviewConfigurationAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        Guid reviewId,
+        SaveQaReviewRequest request,
+        CurrentUser user,
+        CancellationToken cancellationToken)
+    {
+        await InsertQaReviewScopesAsync(connection, transaction, reviewId, request.TeamOrgUnitIds, cancellationToken);
 
         var order = 0;
         foreach (var activityRequest in request.Activities)
@@ -1451,18 +1639,24 @@ public sealed partial class SqlFoundationDataStore
     }
 
     private static async Task<IReadOnlyList<QaEvidenceQuestion>> ReadQaEvidenceQuestionsAsync(
-        SqlConnection connection, SqlTransaction transaction, Guid reviewActivityId, CancellationToken cancellationToken)
+        SqlConnection connection, SqlTransaction transaction, Guid reviewActivityId, Guid? evidenceId, CancellationToken cancellationToken)
     {
         var result = new List<QaEvidenceQuestion>();
         await using var command = new SqlCommand(
             """
-            SELECT id, question_text, is_required, allows_not_applicable, comment_required_at_expected
-            FROM qa.review_questions WHERE review_activity_id = @id ORDER BY display_order;
+            SELECT question.id, question.question_text, question.is_required, question.allows_not_applicable, question.comment_required_at_expected,
+                   template.allows_not_seen, response.outcome
+            FROM qa.review_questions question
+            JOIN qa.review_activities activity ON activity.id = question.review_activity_id
+            JOIN qa.activity_templates template WITH (HOLDLOCK) ON template.id = activity.activity_template_id
+            LEFT JOIN qa.evidence_responses response ON response.review_question_id = question.id AND response.evidence_record_id = @evidenceId
+            WHERE question.review_activity_id = @id ORDER BY question.display_order;
             """, connection, transaction);
         command.Parameters.AddWithValue("@id", reviewActivityId);
+        command.Parameters.AddWithValue("@evidenceId", ToDbValue(evidenceId));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
-            result.Add(new QaEvidenceQuestion(reader.GetGuid(0), reader.GetString(1), reader.GetBoolean(2), reader.GetBoolean(3), reader.GetBoolean(4)));
+            result.Add(new QaEvidenceQuestion(reader.GetGuid(0), reader.GetString(1), reader.GetBoolean(2), reader.GetBoolean(3), reader.GetBoolean(4), reader.GetBoolean(5), GetStringOrNull(reader, 6)));
         return result;
     }
 
@@ -1504,7 +1698,7 @@ public sealed partial class SqlFoundationDataStore
         return new QaReviewSummary(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), status,
             GetDateOnlyOrNull(reader, 5), DateOnly.FromDateTime(reader.GetDateTime(6)), reader.GetString(7),
             reader.GetInt32(8), reader.GetInt32(9), reader.GetInt32(10), reader.GetFieldValue<byte[]>(11),
-            new QaCapabilities(canManage && status == "draft", canSubmit, QaReviewPolicy.CanCorrect(user),
+            new QaCapabilities(QaReviewPolicy.CanConfigure(user, status), canSubmit, QaReviewPolicy.CanCorrect(user),
                 QaReviewPolicy.CanRemove(user), canManage && status is "open" or "reopened",
                 canManage && status == "closed", canManage && status is "draft" or "closed", true,
                 status == "closed" && QaReviewPolicy.CanUseEmbeddedActions(user, reader.GetGuid(16))));
@@ -1514,16 +1708,17 @@ public sealed partial class SqlFoundationDataStore
         reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4),
         GetStringOrNull(reader, 5), reader.GetString(6), GetStringOrNull(reader, 7), reader.GetInt32(8),
         reader.GetBoolean(9), reader.GetBoolean(10), reader.GetBoolean(11), reader.GetBoolean(12), reader.GetString(13),
-        reader.GetString(14), reader.GetFieldValue<DateTimeOffset>(15));
+        reader.GetString(14), reader.GetFieldValue<DateTimeOffset>(15), reader.FieldCount > 16 && reader.GetBoolean(16));
 
     private static QaDashboardBreakdown MapQaDashboardBreakdown(SqlDataReader reader)
     {
         var distribution = QaReviewPolicy.CalculateDistribution(
             Enumerable.Repeat("below", reader.GetInt32(2)).Concat(Enumerable.Repeat("at", reader.GetInt32(3)))
                 .Concat(Enumerable.Repeat("above", reader.GetInt32(4)))
-                .Concat(Enumerable.Repeat("not_applicable", reader.GetInt32(5))));
+                .Concat(Enumerable.Repeat("not_applicable", reader.GetInt32(5)))
+                .Concat(Enumerable.Repeat("not_seen", reader.GetInt32(6))));
         return new QaDashboardBreakdown(reader.GetString(0), reader.GetString(1), distribution.Below, distribution.At,
-            distribution.Above, distribution.NotApplicable, distribution.Rated, distribution.AtOrAbovePercentage);
+            distribution.Above, distribution.NotApplicable, distribution.Rated, distribution.AtOrAbovePercentage, distribution.NotSeen);
     }
 
     private static void AddQaReviewParameters(SqlCommand command, Guid id, SaveQaReviewRequest request, Guid userAccountId)
@@ -1577,6 +1772,63 @@ public sealed partial class SqlFoundationDataStore
         insert.Parameters.AddWithValue("@teamIds", JsonSerializer.Serialize(teamIds));
         if (await insert.ExecuteNonQueryAsync(cancellationToken) != teamIds.Count)
             throw new WorkflowValidationException("Every evidence team must be part of the selected QA review scope.");
+    }
+
+    private static async Task<(string? Key, string? Name)> ResolveQaEvidenceDeliveryAreaAsync(
+        SqlConnection connection, SqlTransaction transaction, Guid? evidenceId, string? requestedKey,
+        bool required, CancellationToken cancellationToken)
+    {
+        string? previousKey = null;
+        string? previousName = null;
+        if (evidenceId.HasValue)
+        {
+            await using var previous = new SqlCommand(
+                "SELECT delivery_area_key, delivery_area_name_snapshot FROM qa.evidence_submissions WITH (UPDLOCK, HOLDLOCK) WHERE record_id = @id;",
+                connection, transaction);
+            previous.Parameters.AddWithValue("@id", evidenceId.Value);
+            await using var reader = await previous.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                previousKey = GetStringOrNull(reader, 0);
+                previousName = GetStringOrNull(reader, 1);
+            }
+        }
+
+        var key = requestedKey?.Trim();
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            if (required || !string.IsNullOrWhiteSpace(previousKey))
+                throw new WorkflowValidationException("Select a delivery area before submitting QA evidence.");
+            return (null, null);
+        }
+        if (key.Length > 100) throw new WorkflowValidationException("Choose a delivery area from the list.");
+
+        await using var lookup = new SqlCommand(
+            """
+            SELECT value.display_name, CONVERT(bit, CASE WHEN value.is_active = 1 AND value.archived_at IS NULL
+                AND type.is_active = 1 AND type.archived_at IS NULL THEN 1 ELSE 0 END)
+            FROM core.lookup_values value
+            JOIN core.lookup_types type ON type.id = value.lookup_type_id
+            WHERE type.lookup_key = N'liv_delivery_area' AND value.value_key = @key;
+            """, connection, transaction);
+        lookup.Parameters.AddWithValue("@key", key);
+        await using var lookupReader = await lookup.ExecuteReaderAsync(cancellationToken);
+        if (!await lookupReader.ReadAsync(cancellationToken))
+        {
+            if (key == previousKey) return (previousKey, previousName ?? previousKey);
+            throw new WorkflowValidationException("Choose a delivery area from the list.");
+        }
+        var name = lookupReader.GetString(0);
+        var isActive = lookupReader.GetBoolean(1);
+        if (!isActive && key != previousKey)
+            throw new WorkflowValidationException("Choose an active delivery area from the list.");
+        return (key, key == previousKey && !string.IsNullOrWhiteSpace(previousName) ? previousName : name);
+    }
+
+    private static void AddQaDeliveryAreaParameters(SqlCommand command, (string? Key, string? Name) area)
+    {
+        command.Parameters.AddWithValue("@deliveryAreaKey", ToDbValue(area.Key));
+        command.Parameters.AddWithValue("@deliveryAreaName", ToDbValue(area.Name));
     }
 
     private static void AddQaEvidenceParameters(
@@ -1646,6 +1898,7 @@ public sealed partial class SqlFoundationDataStore
                (SELECT COUNT(*) FROM qa.review_activities activity_count WHERE activity_count.review_id = review.record_id),
                (SELECT COUNT(*) FROM qa.evidence_submissions evidence_count
                 WHERE evidence_count.review_id = review.record_id AND evidence_count.removed_at IS NULL
+                  AND evidence_count.status = N'submitted'
                   AND (@viewAll = 1
                        OR @viewScoped = 1 AND EXISTS (SELECT 1 FROM org.fn_visible_org_units(@userAccountId) evidence_visible WHERE evidence_visible.org_unit_id IN (evidence_count.team_org_unit_id, evidence_count.faculty_org_unit_id))
                        OR @viewAssigned = 1 AND EXISTS (SELECT 1 FROM qa.review_contributors evidence_contributor WHERE evidence_contributor.review_id = review.record_id
@@ -1672,6 +1925,6 @@ public sealed partial class SqlFoundationDataStore
     private sealed record QaReviewActivityRow(Guid Id, Guid ActivityTypeId, string ActivityKey, string Name, Guid TemplateId, string TemplateName, int DisplayOrder);
     private sealed record QaEvidenceDetailRow(QaEvidenceSummary Evidence, string? ContextualNotes, string? EvidenceLinksJson,
         string? KeyStrengths, string? AreasForImprovement, string? RecommendedActions, string? AdditionalContext, Guid? SubjectStaffId);
-    private sealed record QaEvidenceQuestion(Guid Id, string QuestionText, bool IsRequired, bool AllowsNotApplicable, bool CommentRequiredAtExpected);
+    private sealed record QaEvidenceQuestion(Guid Id, string QuestionText, bool IsRequired, bool AllowsNotApplicable, bool CommentRequiredAtExpected, bool AllowsNotSeen, string? SavedOutcome);
     private sealed record QaEvidenceAccess(string ReviewStatus, string ActivityName, bool CanSubmit);
 }

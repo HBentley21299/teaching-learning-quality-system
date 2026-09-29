@@ -57,7 +57,7 @@ public sealed partial class SqlFoundationDataStore
         var frameworkId = frameworkRows[0];
         var assessmentRows = await QueryAsync(
             """
-            SELECT id, record_id, framework_id, status, submitted_at
+            SELECT id, record_id, framework_id, status, submitted_at, row_version
             FROM quality.elevate_practice_assessments
             WHERE staff_id = @staffId
               AND academic_year = @academicYear
@@ -73,7 +73,8 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetGuid(1),
                 reader.GetGuid(2),
                 reader.GetString(3),
-                GetDateTimeOffsetOrNull(reader, 4)),
+                GetDateTimeOffsetOrNull(reader, 4),
+                reader.GetFieldValue<byte[]>(5)),
             cancellationToken);
         var assessment = assessmentRows.FirstOrDefault();
         frameworkId = assessment?.FrameworkId ?? frameworkId;
@@ -285,6 +286,12 @@ public sealed partial class SqlFoundationDataStore
             rubricDescriptors,
             allScores.Length == 0 ? null : Math.Round(allScores.Average(), 2));
         var staff = staffRows[0];
+        var validation = await GetElevateValidationSummaryAsync(assessment?.Id, cancellationToken);
+        if (assessment is not null
+            && (validation is null || !assessment.RowVersion.SequenceEqual(validation.RowVersion)))
+        {
+            throw new System.Data.DBConcurrencyException("This assessment changed while it was being loaded. Refresh to see the latest responses.");
+        }
 
         return new ElevatePracticeWorkspaceSummary(
             academicYear,
@@ -306,7 +313,8 @@ public sealed partial class SqlFoundationDataStore
             suggestedStrengths,
             suggestedDevelopments,
             plans,
-            livInformation);
+            livInformation,
+            validation);
     }
 
     public async Task<ElevatePracticeWorkspaceSummary?> GetLatestElevatePracticeWorkspaceAsync(
@@ -946,7 +954,7 @@ public sealed partial class SqlFoundationDataStore
         string? ColourClassification,
         string? ColorHex,
         bool IsActive);
-    private sealed record ElevatePracticeAssessmentRow(Guid Id, Guid RecordId, Guid FrameworkId, string Status, DateTimeOffset? SubmittedAt);
+    private sealed record ElevatePracticeAssessmentRow(Guid Id, Guid RecordId, Guid FrameworkId, string Status, DateTimeOffset? SubmittedAt, byte[] RowVersion);
     private sealed record ElevatePracticeProfileRow(
         Guid Id,
         Guid RecordId,

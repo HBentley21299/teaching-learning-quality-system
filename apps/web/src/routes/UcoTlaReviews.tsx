@@ -1,7 +1,8 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, ClipboardCheck, Eye, FilePlus2, MessageSquareText, Plus, RotateCcw, Save, Search, Send, ShieldCheck, X } from "lucide-react";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { Button } from "../design-system/Button";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { api } from "../services/api";
 import type {
   CreateUcoTlaReviewRequest,
@@ -138,20 +139,22 @@ export function UcoTlaReviews({
 
   async function createReview() {
     setIsSaving(true);
-    setMessage("");
-    const result = await api.createUcoTlaReview({
-      ...create,
-      academicYear
-    });
-    setIsSaving(false);
-    if (!result.ok || !result.data) {
-      setMessage(result.message ?? "The review could not be created.");
-      return;
-    }
-    setCreate({ ...emptyCreate, academicYear });
-    setIsCreating(false);
-    await refresh(result.data.recordId);
-    onRecordOpened?.(result.data.recordId);
+    try {
+      setMessage("");
+      const result = await api.createUcoTlaReview({
+        ...create,
+        academicYear
+      });
+
+      if (!result.ok || !result.data) {
+        setMessage(result.message ?? "The review could not be created.");
+        return;
+      }
+      setCreate({ ...emptyCreate, academicYear });
+      setIsCreating(false);
+      await refresh(result.data.recordId);
+      onRecordOpened?.(result.data.recordId);
+    } finally { setIsSaving(false); }
   }
 
   if (!access) return <div className="route-stack"><p className="muted-copy">Checking UCO review access...</p></div>;
@@ -182,7 +185,7 @@ export function UcoTlaReviews({
     && (!query || `${review.lecturerName} ${review.observerName} ${review.courseTitle} ${review.moduleTitle}`.toLowerCase().includes(query))
   );
   return (
-    <div className="route-stack uco-tla-route">
+    <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="route-stack uco-tla-route">
       <section className="route-hero">
         <div><p className="eyebrow">University Centre Oldham</p><h1>Teaching, Learning and Assessment Reviews</h1><p>Narrative reviews with authenticated lecturer and observer sign-off.</p></div>
         <div className="toolbar">
@@ -213,7 +216,7 @@ export function UcoTlaReviews({
           {filteredReviews.length === 0 ? <p className="muted-copy">No UCO TLA Reviews match these filters.</p> : filteredReviews.map((review) => <ReviewRow key={review.recordId} review={review} onOpen={() => void openReview(review.recordId)} />)}
         </div>
       </section>
-    </div>
+    </div></fieldset>
   );
 }
 
@@ -248,46 +251,65 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
     courseLevel: detail.courseLevel ?? ""
   });
 
+  const baseline = useRef({ form: JSON.stringify(form), reflection, discussionAt, followUp: JSON.stringify(managedFollowUp), linkedReview: JSON.stringify(linkedReview) });
+  const dirty = JSON.stringify(form) !== baseline.current.form || reflection !== baseline.current.reflection
+    || discussionAt !== baseline.current.discussionAt || JSON.stringify(managedFollowUp) !== baseline.current.followUp
+    || JSON.stringify(linkedReview) !== baseline.current.linkedReview || Boolean(reopenReason);
+  const hasOtherChanges = reflection !== baseline.current.reflection || discussionAt !== baseline.current.discussionAt
+    || JSON.stringify(managedFollowUp) !== baseline.current.followUp || JSON.stringify(linkedReview) !== baseline.current.linkedReview || Boolean(reopenReason);
+  const clearNavigation = useUnsavedChanges({ label: "UCO review", dirty, saving: isSaving,
+    onSave: detail.review.capabilities.canEditObserverSection && !hasOtherChanges ? () => saveObserver() : undefined,
+    onDiscard: () => { setForm(formFromDetail(detail)); setReflection(detail.responses.lecturer_reflection ?? ""); setDiscussionAt(toLocalInput(detail.review.professionalDiscussionAt)); setManagedFollowUp(followUpFromDetail(detail)); setLinkedReview(JSON.parse(baseline.current.linkedReview)); setReopenReason(""); } });
   useEffect(() => {
-    setForm(formFromDetail(detail));
-    setReflection(detail.responses.lecturer_reflection ?? "");
-    setDiscussionAt(toLocalInput(detail.review.professionalDiscussionAt));
-    setManagedFollowUp(followUpFromDetail(detail));
+    const nextForm = formFromDetail(detail), nextReflection = detail.responses.lecturer_reflection ?? "",
+      nextDiscussion = toLocalInput(detail.review.professionalDiscussionAt), nextFollowUp = followUpFromDetail(detail);
+    if (JSON.stringify(form) === baseline.current.form) setForm(nextForm);
+    if (reflection === baseline.current.reflection) setReflection(nextReflection);
+    if (discussionAt === baseline.current.discussionAt) setDiscussionAt(nextDiscussion);
+    if (JSON.stringify(managedFollowUp) === baseline.current.followUp) setManagedFollowUp(nextFollowUp);
+    baseline.current = { ...baseline.current, form: JSON.stringify(nextForm), reflection: nextReflection, discussionAt: nextDiscussion, followUp: JSON.stringify(nextFollowUp) };
   }, [detail.review.rowVersion]);
 
   async function run(request: () => ReturnType<typeof api.submitUcoTlaReview>, success: string) {
     setIsSaving(true);
-    setMessage("");
-    const result = await request();
-    setIsSaving(false);
-    if (!result.ok || !result.data) {
-      setMessage(result.message ?? "The review could not be updated.");
-      return;
-    }
-    await onChanged(result.data, success);
+    try {
+      setMessage("");
+      const result = await request();
+
+      if (!result.ok || !result.data) {
+        setMessage(result.message ?? "The review could not be updated.");
+        return false;
+      }
+      await onChanged(result.data, success);
+      return true;
+    } finally { setIsSaving(false); }
   }
 
   async function saveObserver(sectionKey?: string, isSectionComplete?: boolean) {
-    await run(() => api.updateUcoTlaReview(detail.review.recordId, {
+    const saved = await run(() => api.updateUcoTlaReview(detail.review.recordId, {
       ...form,
       sectionKey,
       isSectionComplete
     }), sectionKey ? `${sectionTitle(sectionKey)} saved.` : "Review changes saved.");
+    if (saved) { baseline.current.form = JSON.stringify(form); if (!hasOtherChanges) clearNavigation(); }
+    return saved;
   }
 
   async function createLinkedReview() {
     setIsSaving(true);
-    setMessage("");
-    const result = await api.createLinkedUcoTlaReview(detail.review.recordId, {
-      ...linkedReview,
-      observationAt: fromLocalInput(linkedReview.observationAt)
-    });
-    setIsSaving(false);
-    if (!result.ok || !result.data) {
-      setMessage(result.message ?? "The linked review could not be created.");
-      return;
-    }
-    await onOpenReview(result.data.recordId);
+    try {
+      setMessage("");
+      const result = await api.createLinkedUcoTlaReview(detail.review.recordId, {
+        ...linkedReview,
+        observationAt: fromLocalInput(linkedReview.observationAt)
+      });
+
+      if (!result.ok || !result.data) {
+        setMessage(result.message ?? "The linked review could not be created.");
+        return;
+      }
+      await onOpenReview(result.data.recordId);
+    } finally { setIsSaving(false); }
   }
 
   const caps = detail.review.capabilities;
@@ -306,9 +328,9 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
     />
   ) : null;
   return (
-    <div className="route-stack uco-tla-route">
+    <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="route-stack uco-tla-route">
       <section className="route-hero">
-        <div><button className="quiet-link" onClick={onBack} type="button"><ArrowLeft size={16} />Back to reviews</button><p className="eyebrow">{detail.review.academicYear} / {humanStatus(detail.review.workflowStatus)}</p><h1>{detail.review.lecturerName}</h1><p>{sessionLabel(detail.review.courseTitle, detail.review.moduleTitle)}</p></div>
+        <div><button className="quiet-link" onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })} type="button"><ArrowLeft size={16} />Back to reviews</button><p className="eyebrow">{detail.review.academicYear} / {humanStatus(detail.review.workflowStatus)}</p><h1>{detail.review.lecturerName}</h1><p>{sessionLabel(detail.review.courseTitle, detail.review.moduleTitle)}</p></div>
         <div className="toolbar">{caps.canViewCompletedReport ? <ExportWordButton recordId={detail.review.recordId} /> : null}{caps.canReopen ? <Button disabled={isSaving || !reopenReason.trim()} icon={RotateCcw} onClick={() => void run(() => api.reopenUcoTlaReview(detail.review.recordId, reopenReason, detail.review.rowVersion), "Review reopened; section completion and sign-off must be repeated.")}>Reopen</Button> : null}</div>
       </section>
       {caps.canReopen ? <label className="entry-field"><span>Reason for reopening</span><input onChange={(event) => setReopenReason(event.target.value)} value={reopenReason} /></label> : null}
@@ -366,7 +388,7 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
 
       {caps.canManageFollowUp ? <section className="panel"><div className="panel-heading"><div><h2>Follow-up management</h2><span>Track a discussion checkpoint here, or create a separately linked UCO observation.</span></div></div><div className="form-grid form-grid-three"><label className="entry-field"><span>Follow-up type</span><select onChange={(event) => setManagedFollowUp({ ...managedFollowUp, followUpType: event.target.value as UcoTlaFollowUp["followUpType"] })} value={managedFollowUp.followUpType}><option value="discussion">Professional discussion</option><option value="observation">Further observation</option></select></label><Input label="Scheduled date/time" type="datetime-local" value={managedFollowUp.scheduledAt} onChange={(scheduledAt) => setManagedFollowUp({ ...managedFollowUp, scheduledAt })} /><label className="entry-field"><span>Status</span><select onChange={(event) => setManagedFollowUp({ ...managedFollowUp, status: event.target.value as UcoTlaFollowUp["status"] })} value={managedFollowUp.status}><option value="scheduled">Scheduled</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label></div><label className="entry-field"><span>Outcome notes{managedFollowUp.status === "completed" ? <strong> Required</strong> : null}</span><textarea onChange={(event) => setManagedFollowUp({ ...managedFollowUp, outcomeNotes: event.target.value })} rows={4} value={managedFollowUp.outcomeNotes} /></label><div className="toolbar toolbar-end"><Button disabled={isSaving || !managedFollowUp.scheduledAt || (managedFollowUp.status === "completed" && !managedFollowUp.outcomeNotes.trim())} icon={Save} onClick={() => void run(() => api.saveUcoTlaFollowUp(detail.review.recordId, { followUpType: managedFollowUp.followUpType, scheduledAt: fromLocalInput(managedFollowUp.scheduledAt), status: managedFollowUp.status, outcomeNotes: managedFollowUp.outcomeNotes || undefined, rowVersion: detail.followUp?.rowVersion }), "Follow-up details saved.")} variant="primary">Save follow-up</Button></div>
       {detail.followUp?.linkedReviewRecordId ? <div className="uco-linked-review"><div><strong>Linked UCO observation</strong><p className="muted-copy">A subsequent review has been created for this follow-up.</p></div><Button onClick={() => void onOpenReview(detail.followUp!.linkedReviewRecordId!)}>Open linked review</Button></div> : caps.canCreateLinkedReview && managedFollowUp.followUpType === "observation" && detail.followUp ? <div className="uco-linked-review-form"><h3>Create linked observation</h3><div className="form-grid form-grid-three"><StaffSelect label="Observer" options={access.ucoStaff} value={linkedReview.observerStaffId} onChange={(observerStaffId) => setLinkedReview({ ...linkedReview, observerStaffId })} /><Input label="Observation date/time" type="datetime-local" value={linkedReview.observationAt} onChange={(observationAt) => setLinkedReview({ ...linkedReview, observationAt })} /><Input label="Session type" value={linkedReview.sessionType} onChange={(sessionType) => setLinkedReview({ ...linkedReview, sessionType })} /><Input label="Course title" value={linkedReview.courseTitle} onChange={(courseTitle) => setLinkedReview({ ...linkedReview, courseTitle })} /><Input label="Module title" value={linkedReview.moduleTitle} onChange={(moduleTitle) => setLinkedReview({ ...linkedReview, moduleTitle })} /><Input label="Level" value={linkedReview.courseLevel} onChange={(courseLevel) => setLinkedReview({ ...linkedReview, courseLevel })} /></div><div className="toolbar toolbar-end"><Button disabled={isSaving || !canCreateLinkedReview(linkedReview, detail.review.lecturerStaffId)} icon={FilePlus2} onClick={() => void createLinkedReview()} variant="primary">Create linked review</Button></div></div> : null}</section> : null}
-    </div>
+    </div></fieldset>
   );
 }
 

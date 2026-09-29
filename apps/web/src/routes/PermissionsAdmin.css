@@ -1,0 +1,13 @@
+.permissions-help { margin-block: 1rem; padding: 1rem; background: var(--surface-muted, #f4f7f6); border-radius: .6rem; }
+.permissions-help summary, .permissions-capabilities summary { cursor: pointer; font-weight: 650; padding-block: .6rem; }
+.permissions-workspace { display: grid; grid-template-columns: minmax(220px, .7fr) minmax(0, 1.6fr); gap: 1.5rem; margin-top: 1rem; }
+.permissions-people { display: grid; gap: .4rem; max-height: 38rem; overflow-y: auto; margin-top: .6rem; }
+.permissions-people button { text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: .5rem; padding: .8rem; cursor: pointer; }
+.permissions-people button.is-selected { border-color: var(--teal); background: var(--teal-soft); }
+.permissions-people small, .permissions-checkboxes small { display: block; margin-top: .3rem; color: var(--text-muted); }
+.permissions-checkboxes { display: grid; gap: .6rem; padding: .8rem; border: 1px solid var(--line-strong); border-radius: .5rem; }
+.permissions-checkboxes label { display: flex; align-items: flex-start; gap: .7rem; padding: .45rem; }
+.permissions-checkboxes input { flex: none; width: 1.05rem; height: 1.05rem; margin-top: .2rem; }
+.permissions-capabilities { display: grid; gap: .6rem; margin-block: 1rem; }
+.permissions-tier-editor { display: grid; gap: .9rem; max-width: 65rem; }
+@media (max-width: 800px) { .permissions-workspace { grid-template-columns: 1fr; } .permissions-people { max-height: 16rem; } }

@@ -18,7 +18,7 @@ public static class ModuleCatalog
         new("als_learning_walks", "ALS Learning Walks", "/als-learning-walks", ["als_learning_walk.submit"], ["als_learning_walk"], true),
         new("als_liv", "ALS LIV", "/als-liv", ["als_liv.submit", "als_liv.manage"], ["als_liv"], false),
         new("work_scrutiny", "Work Scrutiny", "/work-scrutiny", ["work_scrutiny.submit"], ["work_scrutiny"], true),
-        new("cpd", "CPD Management", "/cpd", ["cpd.manage", "cpd.self_log"], ["cpd_event"], false),
+        new("cpd", "CPD Management", "/cpd", ["cpd.manage", "cpd.self_log", "cpd.mandatory_log"], ["cpd_event"], false),
         new("elevate_practice", "Elevate Learning and Innovation", "/elevate-your-practice", ["elevate_practice.submit"], ["elevate_practice_assessment"], false),
         new("coaching_mentoring", "Coaching and Mentoring", "/coaching-mentoring", ["coaching.submit", "coaching.manage"], ["coaching_session"], false),
         new("evidence", "Staff Development Evidence", "/evidence", ["evidence.submit", "evidence.review"], ["impact_evidence"], true),

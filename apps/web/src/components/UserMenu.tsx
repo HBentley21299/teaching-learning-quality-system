@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, KeyRound, LogOut } from "lucide-react";
 import { api } from "../services/api";
+import { confirmUnsavedNavigation } from "./UnsavedChangesGuard";
 import { getLocalToken, isAuthEnabled, signOut } from "../services/auth";
 
 /**
@@ -15,6 +16,15 @@ export function UserMenu({ displayName }: { displayName: string }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [feedback, setFeedback] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (isChangingPassword) dialogRef.current?.showModal();
+  }, [isChangingPassword]);
+  useEffect(() => {
+    if (isOpen) menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [isOpen]);
 
   const hasLocalSession = Boolean(getLocalToken());
   const canSignOut = isAuthEnabled || hasLocalSession;
@@ -25,6 +35,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
     setNewPassword("");
     setConfirmPassword("");
     setFeedback("");
+    triggerRef.current?.focus();
   }
 
   async function submitPasswordChange(event: React.FormEvent) {
@@ -45,10 +56,19 @@ export function UserMenu({ displayName }: { displayName: string }) {
   }
 
   return (
-    <div className="user-chip user-menu">
+    <div className="user-chip user-menu" onKeyDown={event => {
+      if (event.key === "Escape" && isOpen) { setIsOpen(false); triggerRef.current?.focus(); }
+      if (isOpen && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+        event.preventDefault();
+        const options = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+        const next = options.indexOf(document.activeElement as HTMLButtonElement) + (event.key === "ArrowDown" ? 1 : -1);
+        options[(next + options.length) % options.length]?.focus();
+      }
+    }}>
       <button
         aria-expanded={isOpen}
         aria-haspopup="menu"
+        ref={triggerRef}
         className="user-menu-trigger"
         onClick={() => setIsOpen((open) => !open)}
         type="button"
@@ -60,7 +80,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
       {isOpen ? (
         <>
           <div className="user-menu-backdrop" onClick={() => setIsOpen(false)} />
-          <div className="user-menu-list" role="menu">
+          <div className="user-menu-list" role="menu" ref={menuRef}>
             {hasLocalSession ? (
               <button
                 onClick={() => { setIsOpen(false); setIsChangingPassword(true); }}
@@ -72,7 +92,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
               </button>
             ) : null}
             {canSignOut ? (
-              <button onClick={signOut} role="menuitem" type="button">
+              <button onClick={async () => { if (await confirmUnsavedNavigation()) signOut(); }} role="menuitem" type="button">
                 <LogOut aria-hidden="true" size={15} />
                 Sign out
               </button>
@@ -84,7 +104,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
       ) : null}
 
       {isChangingPassword ? (
-        <div className="user-menu-dialog-backdrop" onClick={closeDialog}>
+        <dialog ref={dialogRef} className="user-menu-dialog-backdrop" aria-label="Change password" onCancel={event => { event.preventDefault(); if (!isSaving) closeDialog(); }}>
           <form
             className="panel user-menu-dialog"
             onClick={(event) => event.stopPropagation()}
@@ -125,7 +145,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
             </label>
             {feedback ? <p className="login-error" role="alert">{feedback}</p> : null}
             <div className="user-menu-dialog-actions">
-              <button className="button button-secondary" onClick={closeDialog} type="button">
+              <button className="button button-secondary" disabled={isSaving} onClick={closeDialog} type="button">
                 Cancel
               </button>
               <button className="button button-primary" disabled={isSaving} type="submit">
@@ -133,7 +153,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
               </button>
             </div>
           </form>
-        </div>
+        </dialog>
       ) : null}
     </div>
   );

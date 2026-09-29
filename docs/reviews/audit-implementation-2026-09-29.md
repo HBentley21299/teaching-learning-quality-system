@@ -1,0 +1,41 @@
+# Accepted audit changes — 29 September 2026
+
+Harry accepted A–K, with **A restricted to active Administrators**, and requested a modest optimisation pass while deferring L's full-scale stress test. These are local changes; no GitHub write or deployment was performed. The separate policy decisions P1–P7 remain unchanged.
+
+## Delivered behaviour
+
+| Item | Implementation |
+| --- | --- |
+| A | The backend verifies an active system Administrator role before role/scope allocation, custom-tier creation or changes, access activation, organisation assignments and account archive/restore. Account-maintenance capability alone does not confer this authority. UI controls reflect the same distinction. |
+| B | Account access changes share transactional locking and self/final-administrator checks, including disable, status, role removal and archive. |
+| C | Dashboard requests are keyed by year, process and access. Independent reads start together, obsolete replies are ignored, failed datasets are named, and retry targets failures. Incomplete results are not presented as current totals or exported. |
+| D | Shared Save/Discard/Stay protection covers shell navigation, browser history, year changes, form editors, staff/action editors and admin sections. LIV sibling-stage edits survive saving another stage. Operations needing a separate acknowledgement or destructive confirmation must be completed in their editor; leaving offers Stay/Discard without silently performing that operation. |
+| E | Work Scrutiny and Learning Environment drafts are resumable. Incomplete actions are stored with their draft submission and promoted atomically on final submission. Direct central-action creation against these draft records is rejected. Work Scrutiny warns before allocation changes clear responses. Learning Walk, ALS Learning Walk, Work Scrutiny and Environment drafts are excluded at the reporting source from dashboard records, dimensions and generic Excel exports, including for administrators and owners. |
+| F | Staff pickers have keyboard selection and accessible names. Core export, organisation, record and unsaved-change dialogs contain focus, handle Escape and restore focus. Save/failure feedback is announced. |
+| G | Authentication runs before identity-partitioned request limiting; anonymous traffic retains a separate fallback. |
+| H | Organisation-managed director roles are protected, inactive/archived roles stop granting permissions, and account edits require current account/staff revisions. Routine sign-in timestamps do not create false edit conflicts. |
+| I | The inert header search is removed. Mobile navigation is a grouped expandable menu. Ordinary staff lists and pickers use names, email and job information instead of technical identity keys. |
+| J | API errors explain session expiry, access denial, conflicts, throttling, timeouts and connection failures. Failed lookups have retry paths; expired local sessions no longer redirect away from unsaved work. Failed initial account loading is distinguished from an unprovisioned account. |
+| K | QA autosave keeps typing enabled, coalesces pending changes, carries row versions forward and serialises final submission behind the current save. Conflicts stop the queue and preserve the draft. |
+| L | QA exports skip edit-whitelist and revision-history reads that are unused by the workbook. The shell no longer fetches a full staff-profile summary dataset that none of its current screens consumes; individual profiles retain their own scoped endpoint. Record-detail reads materialise the selected form's field IDs to reduce excess memory grants, retaining the original access predicates. The records list recompiles its query for current parameters to avoid an excessive cached plan. A repeatable local reporting baseline, workbook parity comparison and bounded simultaneous-read check are included. Full-year/concurrent-user capacity testing remains deferred. |
+
+## Database and local runtime
+
+The local TLQS database was backed up with COPY_ONLY and CHECKSUM to `.localappdata/backups/TLQS-before-audit-089-090.bak`. Migrations 089 and 090 were then applied together in a transaction and recorded in the migration ledger. Earlier migration attempts rolled back before commit; their SQL binding/type issues were corrected before successful application. Migration 089 retains each installed visibility function's existing shape and scope semantics.
+
+The API was rebuilt and restarted using `scripts/start-local.ps1 -SkipDatabase`. Existing data was not reset or reseeded. The normal migration runner now includes migrations through 090.
+
+## Verification
+
+- Backend suite: **391 passed**, with the opt-in database test skipped in the normal run. A separate focused run with LocalDB enabled passed **17/17**, including that database test. These totals overlap and should not be added together.
+- Web production build passed. **41 JavaScript tests passed**, including dashboard response races, QA autosave ordering/conflicts and API error messages.
+- Browser: Down twice + Enter selected Test Colleague 02; no record was created. Mobile navigation at 390px exposed all grouped destinations without horizontal page overflow; the viewport override was reset.
+- Browser: edited room navigation to Dashboard and another admin section opened Save/Discard/Stay. An incomplete save retained its text and displayed validation feedback. Stay retained the original year. Browser Back + Stay retained both the room editor and URL; Back + Discard reached the intended prior admin section. Escape restored focus to the initiating control.
+- Browser: the Excel export dialog focused an internal control and Escape returned focus to Export Excel. The dashboard loaded 107 records and 108 actions after restart.
+- Initial reporting optimisation comparison: all fourteen sequential GETs returned HTTP 200 with matching before/after counts and payload sizes. This preceded the later correction excluding generic form drafts from reporting. QA workbook parity matched **8,474 data cells across 13 sheets**, including 8 entry rows and 337 columns; only the generated-at timestamp differed. A single export fell from 6,009 ms to 1,861 ms; this is a local observation, not a production capacity claim.
+- Final database/API lifecycle verification passed for **Work Scrutiny, Learning Walk, Elevate Environment and ALS Learning Walk**. Partial draft actions survive reopening; incomplete submissions and direct central-action bypasses are rejected; submission promotes exactly one action. Each draft was absent from reporting records, dimension facts and its actual Excel workbook, and present in all three after submission. Historical fixture choices, room and rubric scores were normalised only on temporary copies. All copies were archived; a final API check found zero active lifecycle-test copies and the cleanup journal has no pending IDs.
+- Final bounded read check: four simultaneous GETs all returned HTTP 200 in **410 ms combined**, returning 107 overview records, 1,100 dimension facts, 108 actions and 60 staff-participation rows. This is one local concurrency smoke check, not a production or full-year capacity result.
+
+Local SQL memory contention and timeouts were observed during integration checks. Query-plan inspection found a 58,480 KB detail-query grant despite about 2,024 KB used. Materialising the selected record's field IDs reduced the measured grants to 2,000/1,264 KB, with no grant wait in the probe. Administrator and owner-only probes returned the expected 34 field rows, and denied access returned none. Recompiling the records-list query returned 133 rows in a 30 ms execution probe with a 1,224 KB grant; its scope predicates were unchanged. After the final rebuild/restart and compiler shutdown, the remaining lifecycle checks and temporary-record cleanup passed. The normal backend suite passed again. These targeted improvements do not remove the machine's memory limitation; no production load test or backup-restore drill is claimed.
+
+Supporting notes: `permissions-audit-2026-09-29.md`, `reporting-workflow-fixes-2026-09-29.md`, and `local-reporting-baseline-2026-09-29.md`. Raw verification artifacts are under `.localappdata/audit-implementation` and `.localappdata/reporting-baseline`.

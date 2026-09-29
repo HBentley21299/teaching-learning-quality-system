@@ -74,6 +74,7 @@ public sealed record AdminOrganisationUnitSummary(
     int ChildTeamCount,
     int ManagedTeamCount,
     bool IsActive,
+    bool IncludeInDashboards,
     IReadOnlyList<string> LegacyCodes,
     IReadOnlyList<string> AlignedFacultyCodes,
     AdminOrganisationManagerSummary? Manager,
@@ -109,6 +110,8 @@ public sealed record SaveOrganisationUnitRequest(
     Guid? ParentOrgUnitId);
 
 public sealed record SetOrganisationUnitStatusRequest(bool IsActive, string Reason, bool ConfirmImpact);
+
+public sealed record SetOrganisationUnitDashboardVisibilityRequest(bool IncludeInDashboards);
 
 public sealed record OrganisationChangeImpactSummary(
     Guid OrgUnitId,

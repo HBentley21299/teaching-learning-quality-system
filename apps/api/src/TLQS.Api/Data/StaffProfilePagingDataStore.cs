@@ -76,7 +76,7 @@ public sealed partial class SqlFoundationDataStore
                  JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
                  WHERE attendance.staff_id = @staffId AND attendance.attendance_status = N'Attended' AND attendance.archived_at IS NULL
                    AND event_row.event_date BETWEEN @startDate AND @endDate
-                   AND NOT EXISTS (SELECT 1 FROM forms.form_submissions submission JOIN forms.form_template_versions version_row ON version_row.id=submission.form_template_version_id JOIN forms.form_templates template ON template.id=version_row.form_template_id WHERE submission.record_id=event_row.record_id AND submission.archived_at IS NULL AND template.template_key=N'cpd_core')),
+                   AND EXISTS (SELECT 1 FROM forms.form_submissions submission JOIN forms.form_template_versions version_row ON version_row.id=submission.form_template_version_id JOIN forms.form_templates template ON template.id=version_row.form_template_id WHERE submission.record_id=event_row.record_id AND submission.archived_at IS NULL AND template.template_key=N'cpd_external_self_log')),
                 (SELECT COALESCE(SUM(event_row.duration_minutes), 0) FROM cpd.cpd_attendance attendance
                  JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
                  WHERE attendance.staff_id = @staffId AND attendance.attendance_status = N'Attended' AND attendance.archived_at IS NULL
@@ -123,7 +123,12 @@ public sealed partial class SqlFoundationDataStore
                            EXISTS (SELECT 1 FROM org.fn_visible_staff(@currentUserAccountId) visible WHERE visible.staff_id = probation.subject_staff_id)
                            OR EXISTS (SELECT 1 FROM org.fn_visible_org_units(@currentUserAccountId) visible WHERE visible.org_unit_id = probation.org_unit_id)
                        ))
-                   ));
+                   )),
+                (SELECT COUNT(*) FROM cpd.cpd_attendance attendance
+                 JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
+                 WHERE attendance.staff_id = @staffId AND attendance.attendance_status = N'Attended' AND attendance.archived_at IS NULL
+                   AND event_row.event_date BETWEEN @startDate AND @endDate
+                   AND EXISTS (SELECT 1 FROM forms.form_submissions submission JOIN forms.form_template_versions version_row ON version_row.id=submission.form_template_version_id JOIN forms.form_templates template ON template.id=version_row.form_template_id WHERE submission.record_id=event_row.record_id AND submission.archived_at IS NULL AND template.template_key=N'cpd_mandatory'));
             """,
             command =>
             {
@@ -141,7 +146,7 @@ public sealed partial class SqlFoundationDataStore
             reader => new StaffProfileSectionSummary(
                 reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3),
                 reader.GetInt32(4), reader.GetInt32(5), reader.GetInt32(6), reader.GetInt32(7),
-                reader.GetInt32(8), reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11)),
+                reader.GetInt32(8), reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11), reader.GetInt32(12)),
             cancellationToken);
         return rows[0];
     }
@@ -229,7 +234,8 @@ public sealed partial class SqlFoundationDataStore
         var items = await QueryAsync(
             """
             SELECT event_row.id, event_row.record_id, event_row.event_title, event_row.event_date, themes.response_text, event_row.duration_minutes,
-                   CASE WHEN template_info.template_key = N'cpd_core' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END
+                   CASE WHEN template_info.template_key = N'cpd_core' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END,
+                   CASE WHEN template_info.template_key = N'cpd_mandatory' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END
             FROM cpd.cpd_attendance attendance
             JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
             OUTER APPLY (SELECT TOP (1) response.response_text FROM forms.form_submissions submission
@@ -245,7 +251,7 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY event_row.event_date DESC, event_row.id OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
             """,
             command => AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize),
-            reader => new StaffCpdRecordSummary(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), DateOnly.FromDateTime(reader.GetDateTime(3)), GetStringOrNull(reader, 4), GetIntOrNull(reader, 5), reader.GetBoolean(6)),
+            reader => new StaffCpdRecordSummary(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), DateOnly.FromDateTime(reader.GetDateTime(3)), GetStringOrNull(reader, 4), GetIntOrNull(reader, 5), reader.GetBoolean(6), reader.GetBoolean(7)),
             cancellationToken);
         return CreatePage(items, page, pageSize, total);
     }
@@ -310,7 +316,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN core.records record_row ON record_row.id = liv.record_id
             LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
             LEFT JOIN org.org_units area ON area.id = liv.org_unit_id
-            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id
+            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id AND parent.org_unit_type = N'faculty'
             WHERE {whereClause}
             ORDER BY COALESCE(liv.updated_at, liv.created_at) DESC, liv.id
             OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
@@ -367,7 +373,7 @@ public sealed partial class SqlFoundationDataStore
             FROM quality.probation_cases probation
             JOIN core.records record_row ON record_row.id = probation.record_id AND record_row.archived_at IS NULL
             LEFT JOIN org.org_units area ON area.id = probation.org_unit_id
-            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id
+            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id AND parent.org_unit_type = N'faculty'
             WHERE {whereClause}
             ORDER BY COALESCE(probation.updated_at, probation.created_at) DESC, probation.id
             OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;

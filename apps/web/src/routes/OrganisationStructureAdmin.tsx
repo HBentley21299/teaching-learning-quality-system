@@ -1,3 +1,5 @@
+import { ModalDialog } from "../components/ModalDialog";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import {
   Building2,
   ChevronRight,
@@ -36,7 +38,7 @@ type UnitEditor = SaveOrganisationUnitRequest & { id?: string };
 type PendingUnitStatus = { unit: AdminOrganisationUnit; impact: OrganisationChangeImpact; reason: string };
 type PendingMembershipRemoval = { staff: AdminOrganisationStaff; membershipId: string; impact: MembershipChangeImpact; reason: string };
 
-export function OrganisationStructureAdmin() {
+export function OrganisationStructureAdmin({ isAdministrator = false }: { isAdministrator?: boolean }) {
   const [workspace, setWorkspace] = useState<AdminOrganisationStructure | null>(null);
   const [staffDetails, setStaffDetails] = useState<AdminOrganisationStaff[]>([]);
   const [selectedUnitId, setSelectedUnitId] = useState("");
@@ -53,9 +55,21 @@ export function OrganisationStructureAdmin() {
   const [makePrimary, setMakePrimary] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
   const [unitEditor, setUnitEditor] = useState<UnitEditor | null>(null);
+  const [unitEditorBaseline, setUnitEditorBaseline] = useState("");
   const [pendingUnitStatus, setPendingUnitStatus] = useState<PendingUnitStatus | null>(null);
   const [pendingMembershipRemoval, setPendingMembershipRemoval] = useState<PendingMembershipRemoval | null>(null);
   const [migrationReviews, setMigrationReviews] = useState<OrganisationMigrationReview[]>([]);
+  const unitDirty = Boolean(unitEditor && JSON.stringify(unitEditor) !== unitEditorBaseline);
+  const assignmentDirty = Boolean(selectedManagerId || selectedStaffId || pendingChange || pendingUnitStatus || pendingMembershipRemoval);
+  const dirty = unitDirty || assignmentDirty;
+  const clearGuard = useUnsavedChanges({ label: "Organisation structure and assignments", dirty, saving: isSaving,
+    onSave: assignmentDirty ? undefined : async () => { const saved = await saveUnit(); if (saved) clearGuard(); return saved; },
+    onDiscard: () => { setUnitEditor(null); setSelectedManagerId(""); setManagerSearch(""); setSelectedStaffId(""); setStaffSearch(""); setMakePrimary(false); setPendingChange(null); setChangeReason(""); setPendingUnitStatus(null); setPendingMembershipRemoval(null); clearGuard(); } });
+
+  async function closeEditor(close: () => void) {
+    if (isSaving) return;
+    if (!dirty || await confirmUnsavedNavigation()) close();
+  }
 
   useEffect(() => {
     void refresh();
@@ -83,6 +97,8 @@ export function OrganisationStructureAdmin() {
   const units = workspace?.units ?? [];
   const staff = workspace?.staff ?? [];
   const selectedUnit = units.find((unit) => unit.id === selectedUnitId) ?? null;
+  const directorates = units.filter((unit) => unit.orgUnitType === "directorate" && (showInactive || unit.isActive
+    || units.some((child) => child.orgUnitType === "faculty" && child.isActive && child.parentOrgUnitId === unit.id)));
   const faculties = useMemo(
     () => units.filter((unit) => unit.orgUnitType === "faculty" && (showInactive || unit.isActive)),
     [showInactive, units]
@@ -102,9 +118,10 @@ export function OrganisationStructureAdmin() {
     if (!query) return faculties;
     return faculties.filter((faculty) => {
       const teams = teamsByFaculty.get(faculty.id) ?? [];
-      return unitMatches(faculty, query) || teams.some((team) => unitMatches(team, query));
+      const directorate = units.find((unit) => unit.id === faculty.parentOrgUnitId);
+      return unitMatches(faculty, query) || (directorate && unitMatches(directorate, query)) || teams.some((team) => unitMatches(team, query));
     });
-  }, [faculties, teamsByFaculty, unitSearch]);
+  }, [faculties, teamsByFaculty, unitSearch, units]);
 
   const managerCandidates = useMemo(() => {
     if (selectedManagerId) return [];
@@ -142,14 +159,24 @@ export function OrganisationStructureAdmin() {
   }, [selectedStaffId, selectedUnit, selectedUnitMembers, staffDetails, staffSearch]);
   const selectedStaff = staffDetails.find((person) => person.staffId === selectedStaffId) ?? null;
   const awaitingLeaders = useMemo(() => {
+    const directors = new Set(units.filter((unit) => unit.orgUnitType === "directorate" && unit.manager).map((unit) => unit.manager!.staffId));
     const facultyManagers = new Set(units.filter((unit) => unit.orgUnitType === "faculty" && unit.manager).map((unit) => unit.manager!.staffId));
     const teamManagers = new Set(units.filter((unit) => unit.orgUnitType === "team" && unit.manager).map((unit) => unit.manager!.staffId));
     return staffDetails.flatMap((person) => {
-      if ((person.staffCategory === "head_of_faculty_sector_manager" || person.roleNames.includes("Head of Faculty"))
+      if ((person.staffCategory === "director" || (!person.staffCategory && person.roleNames.includes("Director"))) && !directors.has(person.staffId)) {
+        return [{ person, roleName: "Director" }];
+      }
+      const awaitingFaculty = person.staffCategory
+        ? person.staffCategory === "head_of_faculty_sector_manager"
+        : person.roleNames.includes("Head of Faculty");
+      const awaitingTeam = person.staffCategory
+        ? person.staffCategory === "programme_leader"
+        : person.roleNames.includes("Programme Leader");
+      if (awaitingFaculty
           && !facultyManagers.has(person.staffId)) {
         return [{ person, roleName: "Head of Faculty / Sector Manager" }];
       }
-      if ((person.staffCategory === "programme_leader" || person.roleNames.includes("Programme Leader"))
+      if (awaitingTeam
           && !teamManagers.has(person.staffId)) {
         return [{ person, roleName: "Programme Leader" }];
       }
@@ -157,7 +184,8 @@ export function OrganisationStructureAdmin() {
     });
   }, [staffDetails, units]);
 
-  function selectUnit(unitId: string) {
+  async function selectUnit(unitId: string) {
+    if (unitId === selectedUnitId || !await confirmUnsavedNavigation()) return;
     setSelectedUnitId(unitId);
     setManagerSearch("");
     setSelectedManagerId("");
@@ -169,6 +197,7 @@ export function OrganisationStructureAdmin() {
   }
 
   async function addStaffToTeam() {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     if (!selectedUnit || selectedUnit.orgUnitType !== "team" || !selectedStaff) return;
     setIsSaving(true);
     const result = await api.saveOrganisationMembership(selectedStaff.staffId, {
@@ -189,12 +218,14 @@ export function OrganisationStructureAdmin() {
   }
 
   function prepareLeaderAssignment(person: AdminOrganisationStaff) {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     setManagerSearch(person.displayName);
     setSelectedManagerId(person.staffId);
-    setMessage("Select the correct faculty or team, then confirm the manager assignment.");
+    setMessage("Select the correct organisation unit, then confirm the manager assignment.");
   }
 
   async function assignInitialManager() {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     if (!selectedUnit || !selectedManager) return;
     setIsSaving(true);
     const result = await api.saveOrgUnitManager(selectedUnit.id, { managerStaffId: selectedManager.staffId });
@@ -209,7 +240,8 @@ export function OrganisationStructureAdmin() {
   }
 
   async function confirmChange() {
-    if (!selectedUnit || !pendingChange || !changeReason.trim()) return;
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
+    if (!isAdministrator || !selectedUnit || !pendingChange || !changeReason.trim()) return;
     setIsSaving(true);
     const result = pendingChange.kind === "remove"
       ? await api.archiveOrgUnitManager(selectedUnit.id, changeReason.trim())
@@ -234,44 +266,55 @@ export function OrganisationStructureAdmin() {
   }
 
   function requestAssignment() {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     if (!selectedUnit || !selectedManager) return;
     if (!selectedUnit.manager) {
       void assignInitialManager();
       return;
     }
+    if (!isAdministrator) return;
     setPendingChange({ kind: "change", manager: selectedManager });
     setChangeReason("");
   }
 
-  function openNewUnit(orgUnitType: "faculty" | "team") {
+  async function openNewUnit(orgUnitType: SaveOrganisationUnitRequest["orgUnitType"]) {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     const parentOrgUnitId = orgUnitType === "team"
       ? selectedUnit?.orgUnitType === "faculty"
         ? selectedUnit.id
-        : selectedUnit?.parentOrgUnitId
-      : undefined;
-    setUnitEditor({ orgUnitType, code: "", name: "", description: "", parentOrgUnitId });
+        : selectedUnit?.orgUnitType === "team" ? selectedUnit.parentOrgUnitId : undefined
+      : orgUnitType === "faculty"
+        ? selectedUnit?.orgUnitType === "directorate" ? selectedUnit.id : selectedUnit?.orgUnitType === "faculty" ? selectedUnit.parentOrgUnitId : undefined
+        : undefined;
+    if (!await confirmUnsavedNavigation()) return;
+    const next: UnitEditor = { orgUnitType, code: "", name: "", description: "", parentOrgUnitId };
+    setUnitEditor(next); setUnitEditorBaseline(JSON.stringify(next));
   }
 
-  function openEditUnit(unit: AdminOrganisationUnit) {
-    setUnitEditor({
+  async function openEditUnit(unit: AdminOrganisationUnit) {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
+    if (!await confirmUnsavedNavigation()) return;
+    const next: UnitEditor = {
       id: unit.id,
       orgUnitType: unit.orgUnitType,
       code: unit.code,
       name: unit.name,
       description: unit.description ?? "",
       parentOrgUnitId: unit.parentOrgUnitId
-    });
+    };
+    setUnitEditor(next); setUnitEditorBaseline(JSON.stringify(next));
   }
 
   async function saveUnit() {
-    if (!unitEditor || !unitEditor.code.trim() || !unitEditor.name.trim()) return;
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return false; }
+    if (!unitEditor || !unitEditor.code.trim() || !unitEditor.name.trim()) return false;
     setIsSaving(true);
     const request: SaveOrganisationUnitRequest = {
       orgUnitType: unitEditor.orgUnitType,
       code: unitEditor.code.trim().toUpperCase(),
       name: unitEditor.name.trim(),
       description: unitEditor.description?.trim() || undefined,
-      parentOrgUnitId: unitEditor.orgUnitType === "team" ? unitEditor.parentOrgUnitId : undefined
+      parentOrgUnitId: unitEditor.orgUnitType !== "directorate" ? unitEditor.parentOrgUnitId || undefined : undefined
     };
     const result = unitEditor.id
       ? await api.updateOrganisationUnit(unitEditor.id, request)
@@ -279,15 +322,29 @@ export function OrganisationStructureAdmin() {
     setIsSaving(false);
     if (!result.ok) {
       setMessage(result.message ?? "The organisation unit could not be saved.");
-      return;
+      return false;
     }
     const savedId = unitEditor.id ?? result.data?.id;
     setUnitEditor(null);
     await refresh(`${request.code} saved.`);
     if (savedId) setSelectedUnitId(savedId);
+    if (!assignmentDirty) clearGuard();
+    return true;
+  }
+
+  async function setDashboardInclusion(unit: AdminOrganisationUnit, includeInDashboards: boolean) {
+    setIsSaving(true);
+    const result = await api.setOrganisationUnitDashboardVisibility(unit.id, includeInDashboards);
+    setIsSaving(false);
+    if (!result.ok) {
+      setMessage(result.message ?? "Dashboard inclusion could not be saved.");
+      return;
+    }
+    await refresh(`${unit.code} ${includeInDashboards ? "included in" : "excluded from"} dashboards.`);
   }
 
   async function requestUnitStatusChange(unit: AdminOrganisationUnit) {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     setIsSaving(true);
     try {
       const impact = await api.organisationUnitImpact(unit.id);
@@ -300,6 +357,7 @@ export function OrganisationStructureAdmin() {
   }
 
   async function confirmUnitStatusChange() {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     if (!pendingUnitStatus?.reason.trim()) return;
     setIsSaving(true);
     const nextStatus = !pendingUnitStatus.unit.isActive;
@@ -320,6 +378,7 @@ export function OrganisationStructureAdmin() {
   }
 
   async function requestMembershipRemoval(person: AdminOrganisationStaff, membershipId: string) {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     setIsSaving(true);
     try {
       const impact = await api.organisationMembershipImpact(person.staffId, membershipId);
@@ -332,6 +391,7 @@ export function OrganisationStructureAdmin() {
   }
 
   async function confirmMembershipRemoval() {
+    if (!isAdministrator) { setMessage("Only Administrators can change organisation assignments or hierarchy because these control access."); return; }
     if (!pendingMembershipRemoval?.reason.trim()) return;
     setIsSaving(true);
     const result = await api.archiveOrganisationMembership(
@@ -354,9 +414,10 @@ export function OrganisationStructureAdmin() {
       <div className="panel-heading">
         <div>
           <h2>Organisation structure</h2>
-          <span>Faculty and team management</span>
+          <span>Directorate, faculty and team management</span>
         </div>
         <div className="toolbar">
+          <Button icon={Plus} onClick={() => openNewUnit("directorate")}>Add directorate</Button>
           <Button icon={Plus} onClick={() => openNewUnit("faculty")}>Add faculty</Button>
           <Button icon={Plus} onClick={() => openNewUnit("team")}>Add team</Button>
         </div>
@@ -382,13 +443,13 @@ export function OrganisationStructureAdmin() {
       ) : null}
 
       <div className="organisation-unit-layout">
-        <aside className="organisation-unit-directory" aria-label="Faculties and teams">
+        <aside className="organisation-unit-directory" aria-label="Directorates, faculties and teams">
           <label className="admin-search-field">
             <Search aria-hidden="true" size={16} />
             <input
-              aria-label="Search faculties and teams"
+              aria-label="Search directorates, faculties and teams"
               onChange={(event) => setUnitSearch(event.target.value)}
-              placeholder="Search faculty, team or manager"
+              placeholder="Search unit or manager"
               type="search"
               value={unitSearch}
             />
@@ -399,7 +460,17 @@ export function OrganisationStructureAdmin() {
           </label>
 
           <div className="organisation-faculty-list">
-            {visibleFaculties.map((faculty) => {
+            {[...directorates.filter((directorate) => !unitSearch.trim() || unitMatches(directorate, unitSearch.trim().toLocaleLowerCase()) || visibleFaculties.some((faculty) => faculty.parentOrgUnitId === directorate.id)), null].map((directorate) => {
+              const groupedFaculties = visibleFaculties.filter((faculty) => directorate
+                ? faculty.parentOrgUnitId === directorate.id
+                : !directorates.some((item) => item.id === faculty.parentOrgUnitId));
+              if (!directorate && groupedFaculties.length === 0) return null;
+              return <div className="organisation-directorate-group" key={directorate?.id ?? "standalone"}>
+                {directorate
+                  ? <UnitButton isSelected={directorate.id === selectedUnitId} onClick={() => selectUnit(directorate.id)} unit={directorate} />
+                  : <h3 className="eyebrow">Separate faculties</h3>}
+                <div className={directorate ? "organisation-directorate-faculties" : undefined}>
+            {groupedFaculties.map((faculty) => {
               const teams = teamsByFaculty.get(faculty.id) ?? [];
               const query = unitSearch.trim().toLocaleLowerCase();
               const visibleTeams = query ? teams.filter((team) => unitMatches(team, query)) : teams;
@@ -414,7 +485,11 @@ export function OrganisationStructureAdmin() {
                 </div>
               );
             })}
-            {visibleFaculties.length === 0 ? <div className="empty-row">No faculties or teams match this search.</div> : null}
+                {directorate && groupedFaculties.length === 0 ? <div className="empty-row">No faculties allocated.</div> : null}
+                </div>
+              </div>;
+            })}
+            {visibleFaculties.length === 0 && !directorates.some((unit) => !unitSearch.trim() || unitMatches(unit, unitSearch.trim().toLocaleLowerCase())) ? <div className="empty-row">No organisation units match this search.</div> : null}
           </div>
         </aside>
 
@@ -422,8 +497,9 @@ export function OrganisationStructureAdmin() {
           <div className="organisation-unit-detail">
             <header className="organisation-unit-heading">
               <div>
-                <span className="eyebrow">{selectedUnit.orgUnitType === "faculty" ? "Faculty" : "Team"}</span>
+                <span className="eyebrow">{selectedUnit.orgUnitType}</span>
                 <h3>{selectedUnit.code} - {selectedUnit.name}</h3>
+                {selectedUnit.orgUnitType === "faculty" ? <span>Directorate: {units.find((unit) => unit.id === selectedUnit.parentOrgUnitId)?.name ?? "Separate faculty"}</span> : null}
                 {selectedUnit.alignedFacultyCodes.length > 0 ? <span>Service coverage: {selectedUnit.alignedFacultyCodes.join(", ")}</span> : null}
                 {selectedUnit.legacyCodes.length > 0 ? <span>Previous code: {selectedUnit.legacyCodes.join(", ")}</span> : null}
               </div>
@@ -440,21 +516,38 @@ export function OrganisationStructureAdmin() {
               </div>
             </header>
 
+            <div className="notice-row">
+              <label>
+                <input
+                  checked={selectedUnit.includeInDashboards}
+                  disabled={isSaving}
+                  onChange={(event) => void setDashboardInclusion(selectedUnit, event.target.checked)}
+                  type="checkbox"
+                />{" "}
+                Include this {selectedUnit.orgUnitType} in dashboards
+              </label>
+              <p>
+                Excluding a unit also excludes the faculties and teams beneath it. A unit is only included when its parent units are included. Existing records remain available.
+              </p>
+            </div>
+
             <div className="organisation-unit-metrics" aria-label="Organisation coverage">
               <Metric label="Staff in scope" value={selectedUnit.totalStaffCount} />
               <Metric label="Direct allocations" value={selectedUnit.directStaffCount} />
-              {selectedUnit.orgUnitType === "faculty" ? (
+              {selectedUnit.orgUnitType === "directorate" ? (
+                <Metric label="Faculties" value={units.filter((unit) => unit.orgUnitType === "faculty" && unit.parentOrgUnitId === selectedUnit.id && unit.isActive).length} />
+              ) : selectedUnit.orgUnitType === "faculty" ? (
                 <Metric label="Managed teams" value={`${selectedUnit.managedTeamCount}/${selectedUnit.childTeamCount}`} />
               ) : (
                 <Metric label="Faculty manager" value={selectedUnit.parentManager?.displayName ?? "Unassigned"} />
               )}
-              <Metric label="Permission level" value={selectedUnit.orgUnitType === "faculty" ? "Head of Faculty" : "Programme Leader"} />
+              <Metric label="Permission level" value={selectedUnit.orgUnitType === "directorate" ? "Director" : selectedUnit.orgUnitType === "faculty" ? "Head of Faculty" : "Programme Leader"} />
             </div>
 
             <div className="organisation-manager-section">
               <div className="admin-detail-heading">
                 <h3>{managerLabel(selectedUnit)}</h3>
-                <span>{selectedUnit.orgUnitType === "faculty" ? "Faculty scope" : "Team scope"}</span>
+                <span>{selectedUnit.orgUnitType} scope</span>
               </div>
 
               {selectedUnit.manager ? (
@@ -467,7 +560,7 @@ export function OrganisationStructureAdmin() {
                   <span>{selectedUnit.manager.permissionLevel}</span>
                   <button
                     className="icon-button"
-                    disabled={isSaving}
+                    disabled={!isAdministrator || isSaving}
                     onClick={() => { setPendingChange({ kind: "remove" }); setChangeReason(""); }}
                     title={`Remove ${managerLabel(selectedUnit)}`}
                     type="button"
@@ -480,10 +573,12 @@ export function OrganisationStructureAdmin() {
               <div className="organisation-reporting-rule">
                 <ShieldCheck aria-hidden="true" size={18} />
                 <div>
-                  <strong>{selectedUnit.orgUnitType === "faculty" ? "Faculty reporting line" : "Team reporting line"}</strong>
+                  <strong>{selectedUnit.orgUnitType === "directorate" ? "Directorate reporting line" : selectedUnit.orgUnitType === "faculty" ? "Faculty reporting line" : "Team reporting line"}</strong>
                   <span>
-                    {selectedUnit.orgUnitType === "faculty"
-                      ? `${selectedUnit.managedTeamCount} team managers report to this role.`
+                    {selectedUnit.orgUnitType === "directorate"
+                      ? "Faculty managers in this directorate report to the director."
+                      : selectedUnit.orgUnitType === "faculty"
+                      ? `${selectedUnit.managedTeamCount} team managers report to this role.${selectedUnit.parentManager ? ` The faculty manager reports to ${selectedUnit.parentManager.displayName}.` : selectedUnit.parentOrgUnitId ? " Assign a director to complete the reporting line." : " This faculty is separate from the directorates."}`
                       : selectedUnit.parentManager
                         ? `The team manager reports to ${selectedUnit.parentManager.displayName}.`
                         : "Assign the faculty manager to complete the reporting line."}
@@ -493,8 +588,9 @@ export function OrganisationStructureAdmin() {
             </div>
 
             <div className="organisation-manager-assignment">
+              {!isAdministrator ? <p>Only Administrators can change managers, memberships or the organisation hierarchy because these control access.</p> : null}
               <div className="admin-detail-heading">
-                <h3>{selectedUnit.manager ? "Change manager" : "Assign manager"}</h3>
+                <h3>{selectedUnit.manager ? "Change" : "Assign"} {managerLabel(selectedUnit).toLowerCase()}</h3>
                 <span>{selectedUnit.totalStaffCount} staff records covered by this role</span>
               </div>
               <label className="entry-field">
@@ -508,6 +604,7 @@ export function OrganisationStructureAdmin() {
                     onChange={(event) => { setManagerSearch(event.target.value); setSelectedManagerId(""); }}
                     placeholder="Type a name, AD number or email"
                     role="combobox"
+                    disabled={!isAdministrator}
                     value={managerSearch}
                   />
                 </div>
@@ -531,8 +628,8 @@ export function OrganisationStructureAdmin() {
                 <div className="organisation-selected-manager">
                   <UserRoundCog aria-hidden="true" size={18} />
                   <div><strong>{selectedManager.displayName}</strong><span>{selectedManager.externalId} / {selectedManager.primaryOrgCode ?? "No primary team"}</span></div>
-                  <Button disabled={isSaving} icon={ShieldCheck} onClick={requestAssignment} variant="primary">
-                    {selectedUnit.manager ? "Change manager" : "Assign manager"}
+                  <Button disabled={isSaving || !isAdministrator} icon={ShieldCheck} onClick={requestAssignment} variant="primary">
+                    {`${selectedUnit.manager ? "Change" : "Assign"} ${managerLabel(selectedUnit).toLowerCase()}`}
                   </Button>
                 </div>
               ) : null}
@@ -613,7 +710,7 @@ export function OrganisationStructureAdmin() {
               </div>
             ) : null}
           </div>
-        ) : <div className="empty-row">Select a faculty or team.</div>}
+        ) : <div className="empty-row">Select a directorate, faculty or team.</div>}
       </div>
 
       {migrationReviews.some((review) => review.status === "open") ? (
@@ -634,11 +731,11 @@ export function OrganisationStructureAdmin() {
       ) : null}
 
       {unitEditor ? (
-        <div className="admin-reason-dialog" role="dialog" aria-modal="true" aria-label={unitEditor.id ? "Edit organisation unit" : "Add organisation unit"}>
+        <ModalDialog className="admin-reason-dialog" label={unitEditor.id ? "Edit organisation unit" : "Add organisation unit"} busy={isSaving} onClose={() => void closeEditor(() => setUnitEditor(null))}>
           <div>
             <div className="panel-heading">
               <div><h2>{unitEditor.id ? "Edit" : "Add"} {unitEditor.orgUnitType}</h2><span>Organisation structure</span></div>
-              <button className="icon-button" onClick={() => setUnitEditor(null)} title="Close" type="button"><X size={16} /></button>
+              <button className="icon-button" onClick={() => void closeEditor(() => setUnitEditor(null))} title="Close" type="button"><X size={16} /></button>
             </div>
             <div className="responsive-form-grid">
               <label className="entry-field"><span>Code <strong>Required</strong></span><input maxLength={50} onChange={(event) => setUnitEditor({ ...unitEditor, code: event.target.value.toUpperCase() })} value={unitEditor.code} /></label>
@@ -646,64 +743,67 @@ export function OrganisationStructureAdmin() {
               {unitEditor.orgUnitType === "team" ? (
                 <label className="entry-field"><span>Faculty <strong>Required</strong></span><select onChange={(event) => setUnitEditor({ ...unitEditor, parentOrgUnitId: event.target.value })} value={unitEditor.parentOrgUnitId ?? ""}><option value="">Select faculty</option>{units.filter((unit) => unit.orgUnitType === "faculty" && unit.isActive).map((faculty) => <option key={faculty.id} value={faculty.id}>{faculty.code} - {faculty.name}</option>)}</select></label>
               ) : null}
+              {unitEditor.orgUnitType === "faculty" ? (
+                <label className="entry-field"><span>Directorate</span><select onChange={(event) => setUnitEditor({ ...unitEditor, parentOrgUnitId: event.target.value || undefined })} value={unitEditor.parentOrgUnitId ?? ""}><option value="">Separate faculty (no directorate)</option>{units.filter((unit) => unit.orgUnitType === "directorate" && (unit.isActive || unit.id === unitEditor.parentOrgUnitId)).map((directorate) => <option key={directorate.id} value={directorate.id}>{directorate.name}{directorate.isActive ? "" : " (inactive)"}</option>)}</select><small>Change this allocation to move the faculty and its teams into a different directorate.</small></label>
+              ) : null}
             </div>
             <label className="entry-field"><span>Description</span><textarea onChange={(event) => setUnitEditor({ ...unitEditor, description: event.target.value })} rows={3} value={unitEditor.description ?? ""} /></label>
-            <div className="toolbar"><Button icon={X} onClick={() => setUnitEditor(null)}>Cancel</Button><Button disabled={isSaving || !unitEditor.code.trim() || !unitEditor.name.trim() || (unitEditor.orgUnitType === "team" && !unitEditor.parentOrgUnitId)} icon={SaveIcon} onClick={() => void saveUnit()} variant="primary">Save</Button></div>
+            <div className="toolbar"><Button icon={X} onClick={() => void closeEditor(() => setUnitEditor(null))}>Cancel</Button><Button disabled={isSaving || !unitEditor.code.trim() || !unitEditor.name.trim() || (unitEditor.orgUnitType === "team" && !unitEditor.parentOrgUnitId)} icon={SaveIcon} onClick={() => void saveUnit()} variant="primary">Save</Button></div>
           </div>
-        </div>
+        </ModalDialog>
       ) : null}
 
       {pendingUnitStatus ? (
-        <div className="admin-reason-dialog" role="dialog" aria-modal="true" aria-label={`${pendingUnitStatus.unit.isActive ? "Deactivate" : "Activate"} organisation unit`}>
+        <ModalDialog className="admin-reason-dialog" label={`${pendingUnitStatus.unit.isActive ? "Deactivate" : "Activate"} organisation unit`} busy={isSaving} onClose={() => void closeEditor(() => setPendingUnitStatus(null))}>
           <div>
-            <div className="panel-heading"><div><h2>{pendingUnitStatus.unit.isActive ? "Deactivate" : "Activate"} {pendingUnitStatus.unit.code}</h2><span>Review impact before confirming</span></div><button className="icon-button" onClick={() => setPendingUnitStatus(null)} title="Close" type="button"><X size={16} /></button></div>
+            <div className="panel-heading"><div><h2>{pendingUnitStatus.unit.isActive ? "Deactivate" : "Activate"} {pendingUnitStatus.unit.code}</h2><span>Review impact before confirming</span></div><button className="icon-button" onClick={() => void closeEditor(() => setPendingUnitStatus(null))} title="Close" type="button"><X size={16} /></button></div>
             <ImpactSummary impact={pendingUnitStatus.impact} />
             <label className="entry-field"><span>Reason <strong>Required</strong></span><textarea autoFocus onChange={(event) => setPendingUnitStatus({ ...pendingUnitStatus, reason: event.target.value })} rows={3} value={pendingUnitStatus.reason} /></label>
-            <div className="toolbar"><Button icon={X} onClick={() => setPendingUnitStatus(null)}>Cancel</Button><Button disabled={isSaving || !pendingUnitStatus.reason.trim()} icon={Power} onClick={() => void confirmUnitStatusChange()} variant="primary">Confirm status change</Button></div>
+            <div className="toolbar"><Button icon={X} onClick={() => void closeEditor(() => setPendingUnitStatus(null))}>Cancel</Button><Button disabled={isSaving || !pendingUnitStatus.reason.trim()} icon={Power} onClick={() => void confirmUnitStatusChange()} variant="primary">Confirm status change</Button></div>
           </div>
-        </div>
+        </ModalDialog>
       ) : null}
 
       {pendingMembershipRemoval ? (
-        <div className="admin-reason-dialog" role="dialog" aria-modal="true" aria-label="Remove staff allocation">
+        <ModalDialog className="admin-reason-dialog" label="Remove staff allocation" busy={isSaving} onClose={() => void closeEditor(() => setPendingMembershipRemoval(null))}>
           <div>
-            <div className="panel-heading"><div><h2>Remove {pendingMembershipRemoval.impact.orgUnitCode} allocation</h2><span>{pendingMembershipRemoval.staff.displayName}</span></div><button className="icon-button" onClick={() => setPendingMembershipRemoval(null)} title="Close" type="button"><X size={16} /></button></div>
+            <div className="panel-heading"><div><h2>Remove {pendingMembershipRemoval.impact.orgUnitCode} allocation</h2><span>{pendingMembershipRemoval.staff.displayName}</span></div><button className="icon-button" onClick={() => void closeEditor(() => setPendingMembershipRemoval(null))} title="Close" type="button"><X size={16} /></button></div>
             <MembershipImpactSummary impact={pendingMembershipRemoval.impact} />
             <label className="entry-field"><span>Reason <strong>Required</strong></span><textarea autoFocus onChange={(event) => setPendingMembershipRemoval({ ...pendingMembershipRemoval, reason: event.target.value })} rows={3} value={pendingMembershipRemoval.reason} /></label>
-            <div className="toolbar"><Button icon={X} onClick={() => setPendingMembershipRemoval(null)}>Cancel</Button><Button disabled={isSaving || !pendingMembershipRemoval.reason.trim()} icon={Trash2} onClick={() => void confirmMembershipRemoval()} variant="primary">Remove allocation</Button></div>
+            <div className="toolbar"><Button icon={X} onClick={() => void closeEditor(() => setPendingMembershipRemoval(null))}>Cancel</Button><Button disabled={isSaving || !pendingMembershipRemoval.reason.trim()} icon={Trash2} onClick={() => void confirmMembershipRemoval()} variant="primary">Remove allocation</Button></div>
           </div>
-        </div>
+        </ModalDialog>
       ) : null}
 
       {pendingChange && selectedUnit ? (
-        <div className="admin-reason-dialog" role="dialog" aria-modal="true" aria-label={pendingChange.kind === "remove" ? "Remove manager" : "Change manager"}>
+        <ModalDialog className="admin-reason-dialog" label={pendingChange.kind === "remove" ? "Remove manager" : "Change manager"} busy={isSaving} onClose={() => void closeEditor(() => setPendingChange(null))}>
           <div>
             <div className="panel-heading">
               <div>
                 <h2>{pendingChange.kind === "remove" ? `Remove ${managerLabel(selectedUnit)}` : `Change ${managerLabel(selectedUnit)}`}</h2>
                 <span>{selectedUnit.code} - {selectedUnit.name}</span>
               </div>
-              <button className="icon-button" onClick={() => setPendingChange(null)} title="Close" type="button"><X size={16} /></button>
+              <button className="icon-button" onClick={() => void closeEditor(() => setPendingChange(null))} title="Close" type="button"><X size={16} /></button>
             </div>
             <label className="entry-field">
               <span>Reason <strong>Required</strong></span>
               <textarea autoFocus onChange={(event) => setChangeReason(event.target.value)} rows={4} value={changeReason} />
             </label>
             <div className="toolbar">
-              <Button icon={X} onClick={() => setPendingChange(null)}>Cancel</Button>
-              <Button disabled={isSaving || !changeReason.trim()} icon={pendingChange.kind === "remove" ? Trash2 : ShieldCheck} onClick={() => void confirmChange()} variant="primary">
+              <Button icon={X} onClick={() => void closeEditor(() => setPendingChange(null))}>Cancel</Button>
+              <Button disabled={isSaving || !isAdministrator || !changeReason.trim()} icon={pendingChange.kind === "remove" ? Trash2 : ShieldCheck} onClick={() => void confirmChange()} variant="primary">
                 {pendingChange.kind === "remove" ? "Remove manager" : "Confirm change"}
               </Button>
             </div>
           </div>
-        </div>
+        </ModalDialog>
       ) : null}
     </section>
   );
 }
 
 function UnitButton({ unit, isSelected, onClick }: { unit: AdminOrganisationUnit; isSelected: boolean; onClick: () => void }) {
-  const Icon = unit.orgUnitType === "faculty" ? Building2 : Users;
+  const Icon = unit.orgUnitType === "team" ? Users : Building2;
   return (
     <button className={`organisation-unit-button${isSelected ? " is-selected" : ""}${unit.isActive ? "" : " is-inactive"}`} onClick={onClick} type="button">
       <Icon aria-hidden="true" size={17} />
@@ -727,7 +827,7 @@ function MembershipImpactSummary({ impact }: { impact: MembershipChangeImpact })
 }
 
 function managerLabel(unit: AdminOrganisationUnit) {
-  return unit.orgUnitType === "faculty" ? "Faculty Manager" : "Team Manager";
+  return unit.orgUnitType === "directorate" ? "Director" : unit.orgUnitType === "faculty" ? "Faculty Manager" : "Team Manager";
 }
 
 function unitMatches(unit: AdminOrganisationUnit, query: string) {
