@@ -21,7 +21,7 @@ jobs:
       VITE_ENTRA_TENANT_ID: ${{ vars.ENTRA_TENANT_ID }}
       VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_API_SCOPE }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Check Microsoft Entra build settings
         shell: pwsh
         run: |
