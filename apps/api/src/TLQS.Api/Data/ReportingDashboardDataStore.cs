@@ -75,7 +75,7 @@ public sealed partial class SqlFoundationDataStore
     public Task<IReadOnlyList<DashboardDimensionFactSummary>> GetDashboardDimensionFactsAsync(
         string? academicYear,
         CurrentUser currentUser,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken, string? dashboardKey = null) =>
         QueryAsync(
             """
             CREATE TABLE #visible_records (
@@ -98,8 +98,9 @@ public sealed partial class SqlFoundationDataStore
                 LEFT JOIN people.staff subject_staff ON subject_staff.id = record.subject_staff_id
                 LEFT JOIN people.staff owner_staff ON owner_staff.id = record.owner_staff_id
                 LEFT JOIN org.org_units org_unit ON org_unit.id = COALESCE(record.org_unit_id, subject_staff.primary_org_unit_id, owner_staff.primary_org_unit_id)
-                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
                 WHERE record.archived_at IS NULL
+                  AND org.fn_dashboard_process_unit_visible(org_unit.id, COALESCE(@dashboardKey, record.record_type)) = 1
                   AND (record.record_type <> N'uco_tla_review' OR @canManageUco = 1)
                   AND (@academicYear IS NULL OR record.academic_year_key = @academicYear);
             END
@@ -113,8 +114,9 @@ public sealed partial class SqlFoundationDataStore
                 LEFT JOIN people.staff subject_staff ON subject_staff.id = record.subject_staff_id
                 LEFT JOIN people.staff owner_staff ON owner_staff.id = record.owner_staff_id
                 LEFT JOIN org.org_units org_unit ON org_unit.id = COALESCE(record.org_unit_id, subject_staff.primary_org_unit_id, owner_staff.primary_org_unit_id)
-                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
                 WHERE record.archived_at IS NULL
+                  AND org.fn_dashboard_process_unit_visible(org_unit.id, COALESCE(@dashboardKey, record.record_type)) = 1
                   AND (record.record_type <> N'uco_tla_review' OR @canManageUco = 1)
                   AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
                   AND (
@@ -134,6 +136,18 @@ public sealed partial class SqlFoundationDataStore
                         ))
                   );
             END;
+
+            -- Draft access in the editor does not make the answers reportable, even for admins.
+            DELETE record
+            FROM #visible_records record
+            CROSS APPLY (
+                SELECT TOP (1) submission.status
+                FROM forms.form_submissions submission
+                WHERE submission.record_id = record.id AND submission.archived_at IS NULL
+                ORDER BY submission.created_at DESC, submission.id DESC
+            ) latest_submission
+            WHERE record.record_type IN (N'learning_walk', N'als_learning_walk', N'work_scrutiny', N'elevate_environment')
+              AND latest_submission.status = N'draft';
 
             CREATE TABLE #facts (
                 id uniqueidentifier NOT NULL,
@@ -186,22 +200,6 @@ public sealed partial class SqlFoundationDataStore
 
             INSERT #facts
 
-                SELECT record.id, record.record_type, COALESCE(visit.visit_date, record.occurred_on), record.org_unit_id,
-                       record.area_code, record.area_name, record.parent_area_code,
-                       N'focus_outcome', focus.value_key, focus.display_name, descriptor.descriptor_key,
-                       descriptor.visible_wording, rating.hidden_numeric_value
-                FROM #visible_records record
-                JOIN quality.liv_records liv ON liv.record_id = record.id AND liv.archived_at IS NULL
-                JOIN quality.liv_visits visit ON visit.liv_record_id = liv.id AND visit.archived_at IS NULL AND visit.visit_status = N'completed'
-                JOIN quality.liv_visit_ratings rating ON rating.visit_id = visit.id AND rating.is_not_applicable = 0
-                JOIN core.lookup_values focus ON focus.id = rating.focus_lookup_value_id
-                JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id
-                WHERE record.record_type IN (N'liv', N'als_liv')
-
-                ;
-
-            INSERT #facts
-
                 SELECT record.id, N'eli', record.occurred_on, record.org_unit_id,
                        record.area_code, record.area_name, record.parent_area_code,
                        N'practice_area_outcome', area.area_key, area.name, descriptor.descriptor_key,
@@ -221,9 +219,9 @@ public sealed partial class SqlFoundationDataStore
                        record.area_code, record.area_name, record.parent_area_code,
                        N'practice_statement_outcome', CONCAT(area.area_key, N'::', statement.statement_key),
                        CONCAT(area.name, N'|||', statement.statement_text),
-                       COALESCE(descriptor.descriptor_key, CONVERT(nvarchar(20), COALESCE(statement_rating.score, area_rating.hidden_numeric_value))),
-                       COALESCE(descriptor.visible_wording, CONVERT(nvarchar(20), COALESCE(statement_rating.score, area_rating.hidden_numeric_value))),
-                       CONVERT(decimal(10,2), COALESCE(statement_rating.score, area_rating.hidden_numeric_value))
+                       COALESCE(descriptor.descriptor_key, CONVERT(nvarchar(20), statement_rating.score)),
+                       COALESCE(descriptor.visible_wording, CONVERT(nvarchar(20), statement_rating.score)),
+                       CONVERT(decimal(10,2), statement_rating.score)
                 FROM #visible_records record
                 JOIN quality.elevate_practice_assessments assessment
                   ON assessment.record_id = record.id
@@ -232,11 +230,11 @@ public sealed partial class SqlFoundationDataStore
                 JOIN quality.elevate_practice_area_ratings area_rating ON area_rating.assessment_id = assessment.id
                 JOIN quality.elevate_practice_areas area ON area.id = area_rating.area_id
                 JOIN quality.elevate_practice_statements statement ON statement.area_id = area.id
-                LEFT JOIN quality.elevate_practice_ratings statement_rating
+                JOIN quality.elevate_practice_ratings statement_rating
                   ON statement_rating.assessment_id = assessment.id
                  AND statement_rating.statement_id = statement.id
                 LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor
-                  ON descriptor.id = COALESCE(statement_rating.descriptor_id, area_rating.descriptor_id)
+                  ON descriptor.id = statement_rating.descriptor_id
                 WHERE record.record_type = N'elevate_practice_assessment';
 
             INSERT #facts
@@ -335,8 +333,35 @@ public sealed partial class SqlFoundationDataStore
                 FROM #visible_records record
                 JOIN quality.work_scrutiny_course_samples sample ON sample.record_id = record.id
                 JOIN curriculum.courses course ON course.id = sample.course_id
-                WHERE record.record_type = N'work_scrutiny';
+                WHERE record.record_type = N'work_scrutiny'
+                  AND (SELECT TOP (1) submission.status FROM forms.form_submissions submission
+                       WHERE submission.record_id = record.id AND submission.archived_at IS NULL
+                       ORDER BY submission.created_at DESC, submission.id DESC) = N'submitted';
 
+            INSERT #facts
+                SELECT record.id, N'work_scrutiny', record.occurred_on, record.org_unit_id,
+                       record.area_code, record.area_name, record.parent_area_code,
+                       N'course_level', LEFT(level_response.response_text, 80), level_response.response_text,
+                       LEFT(level_response.response_text, 80), level_response.response_text, CONVERT(decimal(10,2), NULL)
+                FROM #visible_records record
+                CROSS APPLY (
+                    SELECT TOP (1) submission.id, submission.status FROM forms.form_submissions submission
+                    WHERE submission.record_id = record.id AND submission.archived_at IS NULL
+                    ORDER BY submission.created_at DESC, submission.id DESC
+                ) latest
+                CROSS APPLY (
+                    SELECT TOP (1) response.response_text
+                    FROM forms.form_responses response
+                    JOIN forms.form_fields field ON field.id = response.form_field_id
+                    WHERE response.form_submission_id = latest.id AND response.archived_at IS NULL
+                      AND field.field_key IN (N'qualification_level', N'course_level', N'course_or_unit')
+                      AND NULLIF(LTRIM(RTRIM(response.response_text)), N'') IS NOT NULL
+                    ORDER BY CASE field.field_key WHEN N'qualification_level' THEN 0 WHEN N'course_level' THEN 1 ELSE 2 END
+                ) level_response
+                WHERE record.record_type = N'work_scrutiny' AND latest.status = N'submitted'
+                  AND NOT EXISTS (SELECT 1 FROM quality.work_scrutiny_course_samples sample WHERE sample.record_id = record.id);
+
+            """ + WorkScrutinyDashboardFacts.Sql + """
             SELECT id, process_key, occurred_on, org_unit_id, area_code, area_name, parent_area_code,
                    dimension_key, series_key, series_label, value_key, value_label, numeric_value
             FROM #facts;
@@ -344,13 +369,14 @@ public sealed partial class SqlFoundationDataStore
             command =>
             {
                 AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@dashboardKey", ToDbValue(string.IsNullOrWhiteSpace(dashboardKey) ? null : dashboardKey));
                 command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
                 command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
                 command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
                 command.Parameters.AddWithValue("@canViewAlsLiv", currentUser.HasPermission(PermissionKeys.AlsLivSubmit) || currentUser.HasPermission(PermissionKeys.AlsLivManage));
                 command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
             },
-            reader => new DashboardDimensionFactSummary(
+            reader => WorkScrutinyDashboardFacts.Normalize(new DashboardDimensionFactSummary(
                 reader.GetGuid(0),
                 reader.GetString(1),
                 reader.GetFieldValue<DateOnly>(2),
@@ -363,13 +389,13 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetString(9),
                 reader.GetString(10),
                 reader.GetString(11),
-                reader.IsDBNull(12) ? null : reader.GetDecimal(12)),
+                reader.IsDBNull(12) ? null : reader.GetDecimal(12))),
             cancellationToken);
 
     public async Task<IReadOnlyList<DashboardActionSummary>> GetDashboardActionsAsync(
         string academicYear,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? dashboardKey = null)
     {
         var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
         return await QueryAsync(
@@ -402,10 +428,11 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN org.org_units area
               ON area.id = COALESCE(record.org_unit_id, subject_staff.primary_org_unit_id, owner_staff.primary_org_unit_id)
             LEFT JOIN org.org_units faculty
-              ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
+              ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
             LEFT JOIN org.org_units team
-              ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id END
+              ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
             WHERE action.archived_at IS NULL
+              AND org.fn_dashboard_process_unit_visible(area.id, COALESCE(@dashboardKey, COALESCE(action.source_form_type, record.record_type, N'standalone'))) = 1
               AND (COALESCE(action.source_form_type, record.record_type, N'standalone') <> N'uco_tla_review'
                    OR @canManageUco = 1)
               AND (
@@ -448,6 +475,7 @@ public sealed partial class SqlFoundationDataStore
             command =>
             {
                 AddScopeParameters(command, currentUser);
+                command.Parameters.AddWithValue("@dashboardKey", ToDbValue(string.IsNullOrWhiteSpace(dashboardKey) ? null : dashboardKey));
                 command.Parameters.AddWithValue("@canViewStandardLearningWalk", currentUser.HasPermission(PermissionKeys.LearningWalkSubmit));
                 command.Parameters.AddWithValue("@canViewAlsLearningWalk", currentUser.HasPermission(PermissionKeys.AlsLearningWalkSubmit));
                 command.Parameters.AddWithValue("@canViewStandardLiv", currentUser.HasPermission(PermissionKeys.LivSubmit) || currentUser.HasPermission(PermissionKeys.LivManage));
@@ -492,22 +520,23 @@ public sealed partial class SqlFoundationDataStore
                    org_unit.code, org_unit.name, parent_org.code,
                    N'practice_statement_outcome', CONCAT(area.area_key, N'::', statement.statement_key),
                    CONCAT(area.name, N'|||', statement.statement_text),
-                   COALESCE(descriptor.descriptor_key, CONVERT(nvarchar(20), COALESCE(rating.score, area_rating.hidden_numeric_value))),
-                   COALESCE(descriptor.visible_wording, CONVERT(nvarchar(20), COALESCE(rating.score, area_rating.hidden_numeric_value))),
-                   CONVERT(decimal(10,2), COALESCE(rating.score, area_rating.hidden_numeric_value))
+                   COALESCE(descriptor.descriptor_key, CONVERT(nvarchar(20), rating.score)),
+                   COALESCE(descriptor.visible_wording, CONVERT(nvarchar(20), rating.score)),
+                   CONVERT(decimal(10,2), rating.score)
             FROM core.records record
             JOIN quality.elevate_practice_assessments assessment ON assessment.record_id = record.id
                 AND assessment.archived_at IS NULL AND assessment.status = N'submitted'
             JOIN people.staff staff ON staff.id = assessment.staff_id
             LEFT JOIN org.org_units org_unit ON org_unit.id = COALESCE(record.org_unit_id, staff.primary_org_unit_id)
-            LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+            LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
             JOIN quality.elevate_practice_area_ratings area_rating ON area_rating.assessment_id = assessment.id
             JOIN quality.elevate_practice_areas area ON area.id = area_rating.area_id
             JOIN quality.elevate_practice_statements statement ON statement.area_id = area.id
-            LEFT JOIN quality.elevate_practice_ratings rating ON rating.assessment_id = assessment.id AND rating.statement_id = statement.id
-            LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = COALESCE(rating.descriptor_id, area_rating.descriptor_id)
+            JOIN quality.elevate_practice_ratings rating ON rating.assessment_id = assessment.id AND rating.statement_id = statement.id
+            LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id
             WHERE record.record_type = N'elevate_practice_assessment'
               AND record.archived_at IS NULL
+              AND org.fn_dashboard_process_unit_visible(org_unit.id, N'eli') = 1
               AND assessment.academic_year = @academicYear
               AND (
                     @canViewAll = 1
@@ -550,8 +579,9 @@ public sealed partial class SqlFoundationDataStore
                 FROM people.staff staff
                 CROSS JOIN selected_year academic_year
                 LEFT JOIN org.org_units org_unit ON org_unit.id = staff.primary_org_unit_id
-                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
                 WHERE staff.archived_at IS NULL
+                  AND org.fn_dashboard_process_unit_visible(org_unit.id, N'elevate_status') = 1
                   AND (staff.start_date IS NULL OR staff.start_date <= academic_year.end_date)
                   AND (staff.end_date IS NULL OR staff.end_date >= academic_year.start_date)
                   AND (staff.account_status = N'active' OR staff.end_date IS NOT NULL)
@@ -607,35 +637,8 @@ public sealed partial class SqlFoundationDataStore
         CurrentUser currentUser,
         CancellationToken cancellationToken) =>
         QueryAsync(
-            """
-            WITH selected_year AS (
-                SELECT start_date, end_date
-                FROM core.academic_years
-                WHERE academic_year_key = @academicYear
-                  AND is_active = 1
-                  AND archived_at IS NULL
-            ),
-            eligible_staff AS (
-                SELECT staff.id, staff.primary_org_unit_id,
-                       org_unit.code area_code, org_unit.name area_name,
-                       parent_org.code parent_area_code
-                FROM people.staff staff
-                CROSS JOIN selected_year academic_year
-                LEFT JOIN org.org_units org_unit ON org_unit.id = staff.primary_org_unit_id
-                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
-                WHERE staff.archived_at IS NULL
-                  AND (staff.start_date IS NULL OR staff.start_date <= academic_year.end_date)
-                  AND (staff.end_date IS NULL OR staff.end_date >= academic_year.start_date)
-                  AND (staff.account_status = N'active' OR staff.end_date IS NOT NULL)
-                  AND (
-                        @canViewAll = 1
-                        OR EXISTS (
-                            SELECT 1
-                            FROM org.fn_visible_staff(@currentUserAccountId) visible
-                            WHERE visible.staff_id = staff.id
-                        )
-                  )
-            ),
+            StaffParticipationEligibilitySql + """
+            ,
             staff_metrics AS (
                 SELECT staff.*,
                        CASE WHEN EXISTS (
@@ -703,6 +706,7 @@ public sealed partial class SqlFoundationDataStore
                 (N'cpd_event', staff.cpd_participation),
                 (N'coaching_session', staff.coaching_participation)
             ) metric(process_key, is_participating)
+            WHERE org.fn_dashboard_process_unit_visible(staff.primary_org_unit_id, metric.process_key) = 1
             GROUP BY metric.process_key, staff.primary_org_unit_id, staff.area_code, staff.area_name, staff.parent_area_code
             ORDER BY metric.process_key, staff.area_name, staff.area_code;
             """,
@@ -741,8 +745,9 @@ public sealed partial class SqlFoundationDataStore
                 FROM people.staff staff
                 CROSS JOIN selected_year academic_year
                 LEFT JOIN org.org_units org_unit ON org_unit.id = staff.primary_org_unit_id
-                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
                 WHERE staff.archived_at IS NULL
+                  AND org.fn_dashboard_process_unit_visible(org_unit.id, N'cpd_event') = 1
                   AND (staff.start_date IS NULL OR staff.start_date <= academic_year.end_date)
                   AND (staff.end_date IS NULL OR staff.end_date >= academic_year.start_date)
                   AND (staff.account_status = N'active' OR staff.end_date IS NOT NULL)
@@ -809,7 +814,7 @@ public sealed partial class SqlFoundationDataStore
                 LEFT JOIN core.records source_record ON source_record.id = assessment.record_id
                 LEFT JOIN org.org_units org_unit
                   ON org_unit.id = COALESCE(source_record.org_unit_id, staff.primary_org_unit_id)
-                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
                 LEFT JOIN quality.liv_records liv
                   ON liv.source_elevate_assessment_id = assessment.id
                  AND liv.process_key = @processKey
@@ -819,6 +824,7 @@ public sealed partial class SqlFoundationDataStore
                   AND assessment.status = N'submitted'
                   AND assessment.archived_at IS NULL
                   AND staff.archived_at IS NULL
+                  AND org.fn_dashboard_process_unit_visible(org_unit.id, @processKey) = 1
                   AND (
                         @canViewAll = 1
                         OR assessment.staff_id = @currentStaffId
@@ -849,13 +855,14 @@ public sealed partial class SqlFoundationDataStore
                 JOIN people.staff staff ON staff.id = liv.subject_staff_id
                 LEFT JOIN org.org_units org_unit
                   ON org_unit.id = COALESCE(liv.org_unit_id, record.org_unit_id, staff.primary_org_unit_id)
-                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
                 WHERE @processKey = N'als_liv'
                   AND liv.process_key = N'als_liv'
                   AND record.academic_year_key = @academicYear
                   AND liv.archived_at IS NULL
                   AND record.archived_at IS NULL
                   AND staff.archived_at IS NULL
+                  AND org.fn_dashboard_process_unit_visible(org_unit.id, @processKey) = 1
                   AND (
                         @canViewAll = 1
                         OR liv.subject_staff_id = @currentStaffId
@@ -890,7 +897,7 @@ public sealed partial class SqlFoundationDataStore
                 LEFT JOIN core.records source_record ON source_record.id = probation.record_id
                 LEFT JOIN org.org_units org_unit
                   ON org_unit.id = COALESCE(probation.org_unit_id, source_record.org_unit_id, staff.primary_org_unit_id)
-                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+                LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
                 LEFT JOIN quality.liv_records liv
                   ON liv.id = observation.linked_liv_record_id
                  AND liv.process_key = @processKey
@@ -899,6 +906,7 @@ public sealed partial class SqlFoundationDataStore
                   AND @processKey = N'liv'
                   AND probation.archived_at IS NULL
                   AND staff.archived_at IS NULL
+                  AND org.fn_dashboard_process_unit_visible(org_unit.id, @processKey) = 1
                   AND (
                         @canViewAll = 1
                         OR probation.subject_staff_id = @currentStaffId

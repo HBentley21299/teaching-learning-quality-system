@@ -73,6 +73,17 @@ public sealed record StaffParticipationDashboardSummary(
     long ActiveStaffCount,
     int ParticipatingStaffCount);
 
+public sealed record EliSubmissionStaffSummary(
+    Guid StaffId,
+    string StaffName,
+    Guid? OrgUnitId,
+    string? AreaCode,
+    string? AreaName,
+    string? ParentAreaCode,
+    bool HasSubmitted,
+    DateTimeOffset? SubmittedAt,
+    Guid? AssessmentRecordId);
+
 public sealed record CpdAttendanceDashboardSummary(
     Guid StaffId,
     string StaffName,

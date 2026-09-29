@@ -74,7 +74,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN people.staff subject_staff ON subject_staff.id = liv.subject_staff_id
             LEFT JOIN people.staff reviewer_staff ON reviewer_staff.id = liv.reviewer_staff_id
             LEFT JOIN org.org_units org_unit ON org_unit.id = liv.org_unit_id
-            LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id
+            LEFT JOIN org.org_units parent_org ON parent_org.id = org_unit.parent_org_unit_id AND parent_org.org_unit_type = N'faculty'
             LEFT JOIN org.org_units subject_org ON subject_org.id = subject_staff.primary_org_unit_id
             WHERE liv.archived_at IS NULL
             {visibilityFilter}

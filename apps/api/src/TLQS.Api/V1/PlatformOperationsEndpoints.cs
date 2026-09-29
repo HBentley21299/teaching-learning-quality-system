@@ -66,6 +66,20 @@ public static class PlatformOperationsEndpoints
                 : Results.NotFound();
         });
 
+        api.MapPut("/admin/organisation/units/{orgUnitId:guid}/dashboard-visibility", async (
+            Guid orgUnitId,
+            SetOrganisationUnitDashboardVisibilityRequest request,
+            ClaimsPrincipal principal,
+            SqlFoundationDataStore store,
+            CancellationToken cancellationToken) =>
+        {
+            var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
+            if (!AdministrationAccessPolicy.CanManageOrganisation(user)) return Results.Forbid();
+            return await store.SetOrganisationUnitDashboardVisibilityAsync(orgUnitId, request, user, cancellationToken)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
         api.MapGet("/admin/organisation/staff/{staffId:guid}/memberships/{membershipId:guid}/impact", async (
             Guid staffId,
             Guid membershipId,
@@ -361,6 +375,8 @@ public static class PlatformOperationsEndpoints
             Guid? reviewerId,
             string? status,
             string? recordType,
+            string? deliveryAreaKey,
+            string? dimensionLabel,
             ClaimsPrincipal principal,
             SqlFoundationDataStore store,
             ExcelExportService exporter,
@@ -370,8 +386,8 @@ public static class PlatformOperationsEndpoints
             if (!CanCreateExport(user, moduleKey)) return Results.Forbid();
             var filter = new ExportFilter(
                 academicYear, facultyCode, teamCode, fromDate, toDate,
-                staffId, reviewerId, status, recordType);
-            var workbook = await store.GetExportWorkbookAsync(moduleKey, filter, user, cancellationToken);
+                staffId, reviewerId, status, recordType, deliveryAreaKey, dimensionLabel);
+            var workbook = await store.GetDashboardExportAsync(moduleKey, filter, user, cancellationToken);
             var result = exporter.CreateWorkbook(workbook);
             await store.RecordExportAuditAsync(moduleKey, "xlsx", filter, user, cancellationToken);
             return Results.File(result.Content, result.ContentType, result.FileName);
@@ -388,6 +404,8 @@ public static class PlatformOperationsEndpoints
             Guid? reviewerId,
             string? status,
             string? recordType,
+            string? deliveryAreaKey,
+            string? dimensionLabel,
             ClaimsPrincipal principal,
             SqlFoundationDataStore store,
             QaPdfReportService exporter,
@@ -397,8 +415,8 @@ public static class PlatformOperationsEndpoints
             if (!CanCreateExport(user, moduleKey)) return Results.Forbid();
             var filter = new ExportFilter(
                 academicYear, facultyCode, teamCode, fromDate, toDate,
-                staffId, reviewerId, status, recordType);
-            var report = await store.GetExportWorkbookAsync(moduleKey, filter, user, cancellationToken);
+                staffId, reviewerId, status, recordType, deliveryAreaKey, dimensionLabel);
+            var report = await store.GetDashboardExportAsync(moduleKey, filter, user, cancellationToken, includeWorkbookEntries: false);
             var result = exporter.CreateDashboardReport(report);
             await store.RecordExportAuditAsync(moduleKey, "pdf", filter, user, cancellationToken);
             return Results.File(result.Content, result.ContentType, result.FileName);

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using TLQS.Api.V1;
+using TLQS.Api.Exports;
 using TLQS.Application.Security;
 using TLQS.Application.Workflows;
 
@@ -19,6 +20,7 @@ public sealed partial class SqlFoundationDataStore
         CancellationToken cancellationToken)
     {
         var normalizedKey = NormalizeExportModuleKey(moduleKey);
+        ValidateExportFilters(normalizedKey, filter);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var sheets = (normalizedKey switch
         {
@@ -41,89 +43,65 @@ public sealed partial class SqlFoundationDataStore
             _ => throw new WorkflowValidationException("Select a supported export area.")
         }).ToList();
         var questionRecordType = DashboardQuestionRecordType(normalizedKey);
-        if (questionRecordType is not null || normalizedKey == "dashboard-overview")
+        var answers = sheets.FirstOrDefault(sheet => sheet.Name == "Form Answers");
+        if (answers is null && (questionRecordType is not null || normalizedKey == "dashboard-overview"))
         {
-            var questionResults = await BuildQuestionLevelResultsAsync(
-                connection, questionRecordType, filter, currentUser, cancellationToken);
-            if (questionResults.Rows.Count > 0)
+            answers = await BuildQuestionLevelResultsAsync(connection, questionRecordType, filter, currentUser, cancellationToken);
+            if (answers.Rows.Count > 0)
             {
-                var existingIndex = sheets.FindIndex(sheet =>
-                    string.Equals(sheet.Name, questionResults.Name, StringComparison.OrdinalIgnoreCase));
-                if (existingIndex >= 0) sheets[existingIndex] = questionResults;
-                else sheets.Add(questionResults);
+                if (sheets[0].Columns.Contains("Record ID"))
+                    sheets[0] = FlattenByKey("Full Records", sheets[0], "Record ID", answers);
+                sheets.Add(answers);
             }
         }
+        if (answers is not null) sheets.Add(FormEntryExportBuilder.Definitions(answers));
+        if (normalizedKey != "staff") sheets[0] = sheets[0] with { Name = "Form entries" };
         return new ExportWorkbookData(
             normalizedKey, ExportDisplayName(normalizedKey), filter,
             currentUser.DisplayName, DateTimeOffset.UtcNow, sheets);
     }
 
+    private static void ValidateExportFilters(string normalizedKey, ExportFilter filter)
+    {
+        if (!string.IsNullOrWhiteSpace(filter.DeliveryAreaKey)
+            && normalizedKey is not ("learning-walks" or "als-learning-walks" or "dashboard-overview"))
+            throw new WorkflowValidationException("Delivery area filtering is available for Learning Walk exports.");
+        if (filter.DeliveryAreaKey?.Trim().Length > 100)
+            throw new WorkflowValidationException("Select a valid Learning Walk delivery area.");
+    }
+
     private async Task<ExportSheet> BuildQuestionLevelResultsAsync(
-        SqlConnection connection,
-        string? recordType,
-        ExportFilter filter,
-        CurrentUser user,
-        CancellationToken cancellationToken) =>
-        await ReadExportSheetAsync(connection, "Question-Level Results", $"""
+        SqlConnection connection, string? recordType, ExportFilter filter, CurrentUser user, CancellationToken cancellationToken)
+    {
+        var raw = await ReadExportSheetAsync(connection, "Form Answers", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), record_row.id) AS [Record ID],
-                   record_row.title AS [Record title], record_row.record_type AS [Process],
-                   COALESCE(status_value.display_name, status_value.value_key, N'Draft') AS [Record status],
-                   record_row.record_date AS [Record date], record_row.academic_year_key AS [Academic year],
-                   faculty.code AS [Faculty code], faculty.name AS [Faculty],
-                   team.code AS [Team code], team.name AS [Team],
-                   subject.display_name AS [Staff member], owner.display_name AS [Reviewer or owner],
-                   submission.status AS [Form status], section.title AS [Section],
-                   CONCAT(field.field_key, CASE WHEN expanded.item_key IS NULL THEN N'' ELSE CONCAT(N':', expanded.item_key COLLATE DATABASE_DEFAULT) END) AS [Question key],
-                   CONCAT(field.label, CASE WHEN expanded.item_label IS NULL THEN N'' ELSE CONCAT(N' - ', expanded.item_label COLLATE DATABASE_DEFAULT) END) AS [Question],
-                   field.field_type AS [Response type],
-                   CASE WHEN expanded.item_key IS NOT NULL OR expanded.item_label IS NOT NULL
-                        THEN expanded.item_response COLLATE DATABASE_DEFAULT
-                        ELSE COALESCE(response.response_text, CONVERT(nvarchar(100), response.response_number),
-                             CONVERT(nvarchar(30), response.response_date, 23), lookup_value.display_name,
-                             response.response_json) END AS [Response],
-                   response.updated_at AS [Response updated at]
+                CONVERT(nvarchar(36), record_row.id) AS [Record ID], record_row.title AS [Record title],
+                CONVERT(nvarchar(36), submission.id) AS [Submission ID], template.template_key AS [Form template],
+                version.version_label AS [Form version], section.title AS [Section],
+                CONCAT(template.template_key, N'/', section.section_key, N'/', field.field_key) AS [Question key],
+                field.label AS [Question], field.field_type AS [Response type],
+                CASE WHEN field.field_key = N'learning_walk_delivery_area'
+                    THEN COALESCE(JSON_VALUE(response.response_json, '$.displayName'), lookup_value.display_name, NULLIF(response.response_text,N''),N'Not recorded')
+                    ELSE COALESCE(response.response_text, CONVERT(nvarchar(100),response.response_number),
+                        CONVERT(nvarchar(30),response.response_date,23),lookup_value.display_name,response.response_json) END AS [Response],
+                field.configuration_json AS [Field configuration], CONVERT(nvarchar(36),field.options_lookup_type_id) AS [Options lookup]
             FROM scoped_records record_row
-            LEFT JOIN core.lookup_values status_value ON status_value.id = record_row.status_lookup_value_id
-            LEFT JOIN people.staff subject ON subject.id = record_row.subject_staff_id
-            LEFT JOIN people.staff owner ON owner.id = record_row.owner_staff_id
-            LEFT JOIN org.org_units area ON area.id = record_row.org_unit_id
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
-            JOIN forms.form_submissions submission ON submission.record_id = record_row.id AND submission.archived_at IS NULL
-            JOIN forms.form_responses response ON response.form_submission_id = submission.id AND response.archived_at IS NULL
-            JOIN forms.form_fields field ON field.id = response.form_field_id
-            JOIN forms.form_sections section ON section.id = field.form_section_id
-            LEFT JOIN core.lookup_values lookup_value ON lookup_value.id = response.response_lookup_value_id
-            OUTER APPLY (
-                SELECT COALESCE(response.response_json,
-                    CASE WHEN ISJSON(response.response_text) = 1 THEN response.response_text END) AS json_value
-            ) json_source
-            OUTER APPLY (
-                SELECT CAST(NULL AS nvarchar(200)) AS item_key,
-                       CAST(NULL AS nvarchar(500)) AS item_label,
-                       CAST(NULL AS nvarchar(max)) AS item_response,
-                       0 AS item_order
-                WHERE LEFT(LTRIM(COALESCE(json_source.json_value, N'')), 1) <> N'['
-                   OR json_source.json_value = N'[]'
-                UNION ALL
-                SELECT COALESCE(JSON_VALUE(item.[value], N'$.focusId'), JSON_VALUE(item.[value], N'$.id'), item.[key]),
-                       COALESCE(JSON_VALUE(item.[value], N'$.focusName'), JSON_VALUE(item.[value], N'$.name'), JSON_VALUE(item.[value], N'$.label')),
-                       COALESCE(
-                           NULLIF(CONCAT(
-                               JSON_VALUE(item.[value], N'$.rating'),
-                               CASE WHEN JSON_VALUE(item.[value], N'$.score') IS NULL THEN N''
-                                    ELSE CONCAT(N' (', JSON_VALUE(item.[value], N'$.score'), N')') END), N''),
-                           JSON_VALUE(item.[value], N'$.value'),
-                           item.[value]),
-                       TRY_CONVERT(int, item.[key]) + 1
-                FROM OPENJSON(json_source.json_value) item
-                WHERE LEFT(LTRIM(COALESCE(json_source.json_value, N'')), 1) = N'['
-            ) expanded
-            ORDER BY record_row.record_date DESC, record_row.created_at DESC,
-                     section.display_order, field.display_order, expanded.item_order;
-            """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
+            CROSS APPLY (
+                SELECT TOP (1) latest.* FROM forms.form_submissions latest
+                WHERE latest.record_id=record_row.id AND latest.archived_at IS NULL
+                ORDER BY latest.created_at DESC, latest.id DESC
+            ) submission
+            JOIN forms.form_template_versions version ON version.id=submission.form_template_version_id
+            JOIN forms.form_templates template ON template.id=version.form_template_id
+            JOIN forms.form_sections section ON section.form_template_version_id=version.id
+            JOIN forms.form_fields field ON field.form_section_id=section.id
+            LEFT JOIN forms.form_responses response ON response.form_submission_id=submission.id AND response.form_field_id=field.id AND response.archived_at IS NULL
+            LEFT JOIN core.lookup_values lookup_value ON lookup_value.id=response.response_lookup_value_id
+            ORDER BY record_row.record_date DESC, record_row.created_at DESC, record_row.id, section.display_order, field.display_order, field.id;
+            """, command => AddExportParameters(command,user,filter,recordType),cancellationToken, 500_000);
+        return FormEntryExportBuilder.ExpandAnswers(FormEntryExportBuilder.AlignWorkScrutinyClones(raw));
+    }
 
     public async Task<RecordReportData?> GetRecordReportAsync(
         Guid recordId,
@@ -184,11 +162,13 @@ public sealed partial class SqlFoundationDataStore
             connection,
             """
             SELECT section.title, field.label,
-                   COALESCE(response.response_text,
+                   CASE WHEN field.field_key = N'learning_walk_delivery_area'
+                        THEN COALESCE(JSON_VALUE(response.response_json, '$.displayName'), lookup_value.display_name, NULLIF(response.response_text, N''), N'Not recorded')
+                        ELSE COALESCE(response.response_text,
                             CONVERT(nvarchar(100), response.response_number),
                             CONVERT(nvarchar(30), response.response_date, 23),
                             lookup_value.display_name,
-                            response.response_json)
+                            response.response_json) END
             FROM forms.form_submissions submission
             JOIN forms.form_responses response ON response.form_submission_id = submission.id AND response.archived_at IS NULL
             JOIN forms.form_fields field ON field.id = response.form_field_id
@@ -200,6 +180,9 @@ public sealed partial class SqlFoundationDataStore
             command => command.Parameters.AddWithValue("@recordId", recordId),
             reader => new RecordReportResponse(reader.GetString(0), reader.GetString(1), GetStringOrNull(reader, 2)),
             cancellationToken)).ToList();
+        if (header.RecordType is "learning_walk" or "als_learning_walk"
+            && !fields.Any(field => field.Label.Equals("Learning walk delivery area", StringComparison.OrdinalIgnoreCase)))
+            fields.Insert(0, new RecordReportResponse("Visit context", "Learning walk delivery area", "Not recorded"));
         fields.AddRange(await GetSpecialistRecordResponsesAsync(connection, recordId, header.RecordType, currentUser, cancellationToken));
         if (string.Equals(header.RecordType, "uco_tla_review", StringComparison.OrdinalIgnoreCase))
             fields.AddRange(await GetUcoTlaReportResponsesAsync(connection, recordId, cancellationToken));
@@ -244,7 +227,7 @@ public sealed partial class SqlFoundationDataStore
             """
             SELECT detail.section_name, detail.field_label, detail.field_value
             FROM (
-                SELECT N'Coaching — Session details' AS section_name, values_row.field_label, values_row.field_value, values_row.display_order
+                SELECT N'Coaching â€” Session details' AS section_name, values_row.field_label, values_row.field_value, values_row.display_order
                 FROM quality.coaching_sessions session_row
                 JOIN quality.coaching_cycles cycle ON cycle.id = session_row.cycle_id
                 LEFT JOIN core.lookup_values qualification ON qualification.id = session_row.development_stage_lookup_value_id
@@ -257,7 +240,7 @@ public sealed partial class SqlFoundationDataStore
                     (N'Delivery method', CONVERT(nvarchar(max), session_row.delivery_method), 4),
                     (N'Duration minutes', CONVERT(nvarchar(max), session_row.duration_minutes), 5),
                     (N'Qualification status', CONVERT(nvarchar(max), qualification.display_name), 6),
-                    (N'Coaching cycle', CONCAT(N'Cycle ', cycle.cycle_number, N' — ', cycle.status), 7),
+                    (N'Coaching cycle', CONCAT(N'Cycle ', cycle.cycle_number, N' â€” ', cycle.status), 7),
                     (N'Primary focus', CONVERT(nvarchar(max), primary_focus.display_name), 8),
                     (N'Secondary focus', CONVERT(nvarchar(max), secondary_focus.display_name), 9),
                     (N'Other focus', CONVERT(nvarchar(max), session_row.focus_other_text), 10),
@@ -276,7 +259,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT N'Learning environment — Audit details', values_row.field_label, values_row.field_value, values_row.display_order
+                SELECT N'Learning environment â€” Audit details', values_row.field_label, values_row.field_value, values_row.display_order
                 FROM quality.elevate_environment_assessments assessment
                 JOIN quality.rooms room ON room.id = assessment.room_id
                 CROSS APPLY (VALUES
@@ -290,7 +273,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT CONCAT(N'Learning environment — ', pillar.name), values_row.field_label, values_row.field_value,
+                SELECT CONCAT(N'Learning environment â€” ', pillar.name), values_row.field_label, values_row.field_value,
                        (pillar.display_order * 10) + values_row.display_order
                 FROM quality.elevate_environment_pillar_ratings rating
                 JOIN quality.elevate_environment_pillars pillar ON pillar.pillar_key = rating.pillar_key
@@ -303,7 +286,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT N'LIV — Preferences and focus', values_row.field_label, values_row.field_value, values_row.display_order
+                SELECT N'LIV â€” Preferences and focus', values_row.field_label, values_row.field_value, values_row.display_order
                 FROM quality.liv_records liv
                 LEFT JOIN quality.elevate_practice_liv_information liv_info ON liv_info.assessment_id = liv.source_elevate_assessment_id
                 CROSS APPLY (VALUES
@@ -319,7 +302,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT CONCAT(N'LIV — Cycle ', cycle.cycle_number, N' — ', stage.stage_type), values_row.field_label,
+                SELECT CONCAT(N'LIV â€” Cycle ', cycle.cycle_number, N' â€” ', stage.stage_type), values_row.field_label,
                        values_row.field_value, (cycle.cycle_number * 100) + (stage.stage_order * 10) + values_row.display_order
                 FROM quality.liv_records liv
                 JOIN quality.liv_cycles cycle ON cycle.liv_record_id = liv.id
@@ -338,7 +321,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT CONCAT(N'LIV — Cycle ', cycle.cycle_number, N' — Visit'), values_row.field_label,
+                SELECT CONCAT(N'LIV â€” Cycle ', cycle.cycle_number, N' â€” Visit'), values_row.field_label,
                        values_row.field_value, (cycle.cycle_number * 100) + 50 + values_row.display_order
                 FROM quality.liv_records liv
                 JOIN quality.liv_cycles cycle ON cycle.liv_record_id = liv.id
@@ -360,9 +343,9 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT CONCAT(N'LIV — Cycle ', cycle.cycle_number, N' — Rubric'), focus.display_name,
+                SELECT CONCAT(N'LIV â€” Cycle ', cycle.cycle_number, N' â€” Rubric'), focus.display_name,
                        CASE WHEN rating.is_not_applicable = 1 THEN N'N/A'
-                            ELSE CONCAT(rating.hidden_numeric_value, N' — ', descriptor.visible_wording) END,
+                            ELSE CONCAT(rating.hidden_numeric_value, N' â€” ', descriptor.visible_wording) END,
                        (cycle.cycle_number * 100) + 70 + focus.display_order
                 FROM quality.liv_records liv
                 JOIN quality.liv_cycles cycle ON cycle.liv_record_id = liv.id
@@ -374,7 +357,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT N'Probation — Cycle overview', values_row.field_label, values_row.field_value, values_row.display_order
+                SELECT N'Probation â€” Cycle overview', values_row.field_label, values_row.field_value, values_row.display_order
                 FROM quality.probation_cases probation_case
                 CROSS APPLY (VALUES
                     (N'Cycle status', CONVERT(nvarchar(max), probation_case.status), 1),
@@ -385,7 +368,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT N'Probation — Reviewers', reviewer.reviewer_role, staff.display_name, 10
+                SELECT N'Probation â€” Reviewers', reviewer.reviewer_role, staff.display_name, 10
                 FROM quality.probation_cases probation_case
                 JOIN quality.probation_case_reviewers reviewer ON reviewer.probation_case_id = probation_case.id
                 JOIN people.staff staff ON staff.id = reviewer.staff_id
@@ -393,7 +376,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT CONCAT(N'Probation — Observation ', observation.observation_number, N' — ', stage.stage_type),
+                SELECT CONCAT(N'Probation â€” Observation ', observation.observation_number, N' â€” ', stage.stage_type),
                        values_row.field_label, values_row.field_value,
                        (observation.observation_number * 100) + (stage.stage_order * 10) + values_row.display_order
                 FROM quality.probation_cases probation_case
@@ -412,7 +395,7 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT CONCAT(N'Probation — Observation ', observation.observation_number, N' — Visit'), values_row.field_label,
+                SELECT CONCAT(N'Probation â€” Observation ', observation.observation_number, N' â€” Visit'), values_row.field_label,
                        values_row.field_value, (observation.observation_number * 100) + 60 + values_row.display_order
                 FROM quality.probation_cases probation_case
                 JOIN quality.probation_observations observation ON observation.probation_case_id = probation_case.id
@@ -432,8 +415,8 @@ public sealed partial class SqlFoundationDataStore
 
                 UNION ALL
 
-                SELECT CONCAT(N'Probation — Observation ', observation.observation_number, N' — Rubric'), focus.display_name,
-                       CONCAT(rating.hidden_numeric_value, N' — ', descriptor.visible_wording,
+                SELECT CONCAT(N'Probation â€” Observation ', observation.observation_number, N' â€” Rubric'), focus.display_name,
+                       CONCAT(rating.hidden_numeric_value, N' â€” ', descriptor.visible_wording,
                               CASE WHEN NULLIF(rating.evidence_of_practice, N'') IS NULL THEN N'' ELSE CONCAT(N' | Evidence: ', rating.evidence_of_practice) END),
                        (observation.observation_number * 100) + 80 + focus.display_order
                 FROM quality.probation_cases probation_case
@@ -494,6 +477,7 @@ public sealed partial class SqlFoundationDataStore
                    record_row.title AS [Title], record_row.record_type AS [Record type],
                    COALESCE(status_value.display_name, status_value.value_key, N'Draft') AS [Status],
                    subject.display_name AS [Staff member], owner.display_name AS [Reviewer or owner],
+                   record_row.learning_walk_delivery_area_name AS [Learning walk delivery area],
                    faculty.code AS [Faculty code], faculty.name AS [Faculty],
                    team.code AS [Sub-team code], team.name AS [Sub-team],
                    record_row.record_date AS [Record date], record_row.academic_year_key AS [Academic year],
@@ -504,28 +488,13 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN people.staff subject ON subject.id = record_row.subject_staff_id
             LEFT JOIN people.staff owner ON owner.id = record_row.owner_staff_id
             LEFT JOIN org.org_units area ON area.id = record_row.org_unit_id
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
             LEFT JOIN auth.user_accounts creator_account ON creator_account.id = record_row.created_by_user_account_id
             LEFT JOIN people.staff creator ON creator.id = creator_account.staff_id
             ORDER BY record_row.record_date DESC, record_row.created_at DESC;
             """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
-        var responses = await ReadExportSheetAsync(connection, "Form Responses", $"""
-            {ScopedRecordsCte}
-            SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], record_row.title AS [Record title],
-                   section.title AS [Section], field.label AS [Question],
-                   COALESCE(response.response_text, CONVERT(nvarchar(100), response.response_number),
-                            CONVERT(nvarchar(30), response.response_date, 23), lookup_value.display_name,
-                            response.response_json) AS [Response]
-            FROM scoped_records record_row
-            JOIN forms.form_submissions submission ON submission.record_id = record_row.id AND submission.archived_at IS NULL
-            JOIN forms.form_responses response ON response.form_submission_id = submission.id AND response.archived_at IS NULL
-            JOIN forms.form_fields field ON field.id = response.form_field_id
-            JOIN forms.form_sections section ON section.id = field.form_section_id
-            LEFT JOIN core.lookup_values lookup_value ON lookup_value.id = response.response_lookup_value_id
-            ORDER BY record_row.created_at DESC, section.display_order, field.display_order;
-            """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
+        var responses = await BuildQuestionLevelResultsAsync(connection, recordType, filter, user, cancellationToken);
         var actions = await ReadExportSheetAsync(connection, "Actions", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
@@ -536,7 +505,7 @@ public sealed partial class SqlFoundationDataStore
                    COALESCE(status_value.display_name, status_value.value_key, N'Open') AS [Status],
                    action_row.completed_date AS [Completed date], action_row.completion_note AS [Closure comments]
             FROM scoped_records record_row
-            JOIN quality.actions action_row ON action_row.source_record_id = record_row.id AND action_row.archived_at IS NULL
+            JOIN quality.actions action_row ON action_row.source_record_id = record_row.id AND action_row.archived_at IS NULL AND (@dashboardActionIds IS NULL OR action_row.id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardActionIds)))
             LEFT JOIN people.staff owner ON owner.id = action_row.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = action_row.status_lookup_value_id
             ORDER BY record_row.created_at DESC, action_row.due_date;
@@ -598,8 +567,8 @@ public sealed partial class SqlFoundationDataStore
             JOIN visible_staff visible ON visible.staff_id = staff.id
             LEFT JOIN people.staff manager ON manager.id = staff.line_manager_staff_id
             LEFT JOIN org.org_units area ON area.id = staff.primary_org_unit_id
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
             WHERE staff.archived_at IS NULL
               AND (@staffId IS NULL OR staff.id = @staffId)
               AND ((@facultyCode IS NULL AND @teamCode IS NULL)
@@ -621,7 +590,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN people.staff staff ON staff.id = membership.staff_id
             JOIN visible_staff visible ON visible.staff_id = staff.id
             JOIN org.org_units unit ON unit.id = membership.org_unit_id
-            LEFT JOIN org.org_units parent ON parent.id = unit.parent_org_unit_id
+            LEFT JOIN org.org_units parent ON parent.id = unit.parent_org_unit_id AND parent.org_unit_type = N'faculty'
             WHERE membership.archived_at IS NULL
               AND (@staffId IS NULL OR staff.id = @staffId)
               AND ((@facultyCode IS NULL AND @teamCode IS NULL)
@@ -636,10 +605,16 @@ public sealed partial class SqlFoundationDataStore
         SqlConnection connection, ExportFilter filter, CurrentUser user, CancellationToken cancellationToken)
     {
         var sheets = (await BuildStaffExportAsync(connection, filter, user, cancellationToken)).ToList();
+        var eligibleStaff = (await QueryAsync("SELECT id FROM people.staff WHERE org.fn_dashboard_process_unit_visible(primary_org_unit_id,N'elevate_status')=1;",
+            reader => reader.GetGuid(0).ToString(), cancellationToken)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        sheets = sheets.Select(sheet => {
+            var staffColumn = sheet.Columns.ToList().IndexOf("Staff ID");
+            return staffColumn < 0 ? sheet : sheet with { Rows = sheet.Rows.Where(row => row[staffColumn] is { } id && eligibleStaff.Contains(id)).ToArray() };
+        }).ToList();
         var awards = await ReadExportSheetAsync(connection, "Elevate Status Awards", """
             WITH visible_staff AS (SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId))
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), award.id) AS [Award ID], staff.display_name AS [Staff member],
+                   CONVERT(nvarchar(36), staff.id) AS [Staff ID], CONVERT(nvarchar(36), award.id) AS [Award ID], staff.display_name AS [Staff member],
                    staff.email AS [Email], faculty.code AS [Faculty code], faculty.name AS [Faculty],
                    team.code AS [Team code], team.name AS [Team], award.academic_year_key AS [Academic year],
                    award.level_number AS [Level], award.qualifying_attendance_count AS [Qualifying attendance],
@@ -648,9 +623,10 @@ public sealed partial class SqlFoundationDataStore
             JOIN people.staff staff ON staff.id = award.staff_id
             JOIN visible_staff visible ON visible.staff_id = staff.id
             LEFT JOIN org.org_units area ON area.id = staff.primary_org_unit_id
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
             WHERE award.archived_at IS NULL
+              AND org.fn_dashboard_process_unit_visible(staff.primary_org_unit_id,N'elevate_status')=1
               AND (@academicYear IS NULL OR award.academic_year_key = @academicYear)
               AND (@staffId IS NULL OR staff.id = @staffId)
               AND ((@facultyCode IS NULL AND @teamCode IS NULL)
@@ -659,6 +635,7 @@ public sealed partial class SqlFoundationDataStore
             ORDER BY staff.display_name, award.level_number;
             """, command => AddExportParameters(command, user, filter), cancellationToken);
         sheets.Add(awards);
+        sheets[0] = FlattenByKey("Form entries", sheets[0], "Staff ID", awards);
         return sheets;
     }
 
@@ -687,9 +664,9 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN core.lookup_values status_value ON status_value.id = action_row.status_lookup_value_id
             LEFT JOIN core.lookup_values priority_value ON priority_value.id = action_row.priority_lookup_value_id
             LEFT JOIN org.org_units area ON area.id = COALESCE(record_row.org_unit_id, subject.primary_org_unit_id, owner.primary_org_unit_id)
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
-            WHERE action_row.archived_at IS NULL
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
+            WHERE action_row.archived_at IS NULL AND (@dashboardActionIds IS NULL OR action_row.id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardActionIds)))
               AND (
                   @canViewAll = 1 OR action_row.owner_staff_id = @currentStaffId OR action_row.subject_staff_id = @currentStaffId
                   OR record_row.owner_staff_id = @currentStaffId
@@ -725,7 +702,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN quality.actions action_row ON action_row.id = extension.action_id
             LEFT JOIN auth.user_accounts extender_account ON extender_account.id = extension.created_by_user_account_id
             LEFT JOIN people.staff extender ON extender.id = extender_account.staff_id
-            WHERE action_row.archived_at IS NULL
+            WHERE action_row.archived_at IS NULL AND (@dashboardActionIds IS NULL OR action_row.id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardActionIds)))
               AND (action_row.owner_staff_id = @currentStaffId OR action_row.subject_staff_id = @currentStaffId OR @canViewAll = 1
                    OR EXISTS (SELECT 1 FROM visible_staff WHERE staff_id IN (action_row.subject_staff_id, action_row.owner_staff_id)))
               AND (@staffId IS NULL OR action_row.subject_staff_id = @staffId OR action_row.owner_staff_id = @staffId)
@@ -740,13 +717,22 @@ public sealed partial class SqlFoundationDataStore
         var events = await ReadExportSheetAsync(connection, "CPD Events", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), event_row.id) AS [CPD event ID], event_row.event_title AS [Event title],
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), event_row.id) AS [CPD event ID], event_row.event_title AS [Event title],
                    event_row.event_date AS [Event date], event_row.start_time AS [Start time], event_row.end_time AS [End time],
                    event_row.duration_minutes AS [Duration minutes], theme.display_name AS [Theme],
                    event_row.delivery_method AS [Delivery method], facilitator.display_name AS [Facilitator],
                    event_row.location AS [Location], event_row.target_audience AS [Target audience],
                    event_row.capacity AS [Capacity], record_row.academic_year_key AS [Academic year],
-                   record_row.created_at AS [Created at]
+                   record_row.created_at AS [Created at],
+                   CASE WHEN EXISTS (SELECT 1 FROM forms.form_submissions s
+                       JOIN forms.form_template_versions v ON v.id=s.form_template_version_id
+                       JOIN forms.form_templates t ON t.id=v.form_template_id
+                       WHERE s.record_id=record_row.id AND s.archived_at IS NULL AND t.template_key=N'cpd_mandatory')
+                       THEN N'Mandatory CPD' WHEN EXISTS (SELECT 1 FROM forms.form_submissions s
+                       JOIN forms.form_template_versions v ON v.id=s.form_template_version_id
+                       JOIN forms.form_templates t ON t.id=v.form_template_id
+                       WHERE s.record_id=record_row.id AND s.archived_at IS NULL AND t.template_key=N'cpd_external_self_log')
+                       THEN N'External CPD' ELSE N'Internal CPD' END AS [CPD type]
             FROM cpd.cpd_events event_row
             JOIN scoped_records record_row ON record_row.id = event_row.record_id
             LEFT JOIN core.lookup_values theme ON theme.id = event_row.theme_lookup_value_id
@@ -756,7 +742,7 @@ public sealed partial class SqlFoundationDataStore
         var attendance = await ReadExportSheetAsync(connection, "Attendance", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), event_row.id) AS [CPD event ID], event_row.event_title AS [Event title],
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), event_row.id) AS [CPD event ID], event_row.event_title AS [Event title],
                    event_row.event_date AS [Event date], staff.display_name AS [Staff member], staff.email AS [Email],
                    attendance.attendance_status AS [Attendance status], attendance.milestone_credit AS [Credit],
                    event_row.duration_minutes AS [Duration minutes], faculty.code AS [Faculty code],
@@ -766,12 +752,15 @@ public sealed partial class SqlFoundationDataStore
             JOIN cpd.cpd_attendance attendance ON attendance.cpd_event_id = event_row.id AND attendance.archived_at IS NULL
             JOIN people.staff staff ON staff.id = attendance.staff_id
             LEFT JOIN org.org_units area ON area.id = COALESCE(attendance.org_unit_id_at_time, staff.primary_org_unit_id)
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
             WHERE (@staffId IS NULL OR staff.id = @staffId)
+              AND org.fn_dashboard_process_unit_visible(COALESCE(attendance.org_unit_id_at_time, staff.primary_org_unit_id),COALESCE(@dashboardProcessKey,N'cpd_event'))=1
+              AND (@attendanceTeamCode IS NULL OR team.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@attendanceTeamCode,N',')))
+              AND (@attendanceTeamCode IS NOT NULL OR @attendanceFacultyCode IS NULL OR faculty.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@attendanceFacultyCode,N',')))
             ORDER BY event_row.event_date DESC, staff.display_name;
             """, command => AddExportParameters(command, user, filter, "cpd_event"), cancellationToken);
-        return [FlattenByKey("Full Records", attendance, "CPD event ID", events), events, attendance];
+        return [FlattenByKey("Full Records", events, "CPD event ID", attendance), events, attendance];
     }
 
     private async Task<IReadOnlyList<ExportSheet>> BuildCoachingExportAsync(
@@ -780,7 +769,7 @@ public sealed partial class SqlFoundationDataStore
         var sessions = await ReadExportSheetAsync(connection, "Coaching Sessions", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), session_row.id) AS [Session ID],
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), session_row.id) AS [Session ID],
                    CONVERT(nvarchar(36), cycle.id) AS [Cycle ID], staff.display_name AS [Staff member],
                    coach.display_name AS [Coach or mentor], cycle.cycle_number AS [Cycle number],
                    session_row.session_number AS [Session number], session_row.session_date AS [Session date],
@@ -808,13 +797,13 @@ public sealed partial class SqlFoundationDataStore
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
                    CONVERT(nvarchar(36), session_row.id) AS [Session ID], session_row.session_number AS [Session number],
-                   action_row.title AS [Action], owner.display_name AS [Owner], action_row.due_date AS [Due date],
+                   action_row.title AS [Action], action_row.action_theme AS [Action theme], owner.display_name AS [Owner], action_row.due_date AS [Due date],
                    action_row.review_date AS [Review date], action_row.intended_evidence AS [Intended evidence],
                    action_row.intended_impact AS [Intended impact], action_row.progress_status AS [Progress status],
                    COALESCE(status_value.display_name, status_value.value_key, N'Open') AS [Status]
             FROM quality.coaching_sessions session_row
             JOIN scoped_records record_row ON record_row.id = session_row.record_id
-            JOIN quality.actions action_row ON action_row.source_record_id = record_row.id AND action_row.archived_at IS NULL
+            JOIN quality.actions action_row ON action_row.source_record_id = record_row.id AND action_row.archived_at IS NULL AND (@dashboardActionIds IS NULL OR action_row.id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardActionIds)))
             LEFT JOIN people.staff owner ON owner.id = action_row.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = action_row.status_lookup_value_id
             ORDER BY session_row.session_date DESC, action_row.due_date;
@@ -831,7 +820,7 @@ public sealed partial class SqlFoundationDataStore
             FROM quality.coaching_action_reviews review
             JOIN quality.coaching_sessions session_row ON session_row.id = review.session_id
             JOIN scoped_records record_row ON record_row.id = session_row.record_id
-            JOIN quality.actions action_row ON action_row.id = review.action_id
+            JOIN quality.actions action_row ON action_row.id = review.action_id AND (@dashboardActionIds IS NULL OR action_row.id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardActionIds)))
             ORDER BY review.created_at DESC;
             """, command => AddExportParameters(command, user, filter, "coaching_session"), cancellationToken);
         return [FlattenByKey("Full Records", sessions, "Session ID", actions, reviews), sessions, actions, reviews];
@@ -853,8 +842,8 @@ public sealed partial class SqlFoundationDataStore
             JOIN visible_staff visible ON visible.staff_id = staff.id
             LEFT JOIN quality.elevate_practice_assessments assessment ON assessment.id = reflection.elevate_practice_assessment_id
             LEFT JOIN org.org_units area ON area.id = staff.primary_org_unit_id
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
             WHERE reflection.archived_at IS NULL
               AND (@academicYear IS NULL OR assessment.academic_year = @academicYear)
               AND ((@facultyCode IS NULL AND @teamCode IS NULL)
@@ -890,7 +879,7 @@ public sealed partial class SqlFoundationDataStore
         var cases = await ReadExportSheetAsync(connection, "LIV Cases", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), liv.id) AS [LIV case ID], staff.display_name AS [Staff member],
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), liv.id) AS [LIV case ID], staff.display_name AS [Staff member],
                    reviewer.display_name AS [Reviewer], liv.status AS [Status], liv.current_stage AS [Current stage],
                    liv.eli_primary_focus_snapshot AS [Primary focus], liv.eli_desired_outcome AS [Desired outcome],
                    CASE WHEN @canViewLivSensitive = 1 OR liv.reviewer_staff_id = @currentStaffId OR liv.created_by_user_account_id = @currentUserAccountId THEN CASE WHEN liv.is_elevate_practitioner = 1 THEN N'Yes' ELSE N'-' END END AS [Elevate practitioner],
@@ -903,8 +892,8 @@ public sealed partial class SqlFoundationDataStore
             JOIN people.staff staff ON staff.id = liv.subject_staff_id
             LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
             LEFT JOIN org.org_units area ON area.id = liv.org_unit_id
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
             ORDER BY liv.created_at DESC;
             """, command =>
             {
@@ -949,22 +938,6 @@ public sealed partial class SqlFoundationDataStore
             JOIN quality.liv_stages stage ON stage.liv_cycle_id = cycle.id AND stage.archived_at IS NULL
             ORDER BY liv.created_at DESC, cycle.cycle_number, stage.stage_order;
             """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
-        var ratings = await ReadExportSheetAsync(connection, "Practice Rubric", $"""
-            {ScopedRecordsCte}
-            SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), liv.id) AS [LIV case ID], cycle.cycle_number AS [Cycle],
-                   visit.visit_number AS [Visit number], focus.display_name AS [Focus area],
-                   CASE WHEN rating.is_not_applicable = 1 THEN N'N/A' ELSE descriptor.visible_wording END AS [Judgement],
-                   rating.hidden_numeric_value AS [Numerical score], rating.is_not_applicable AS [Not applicable]
-            FROM quality.liv_records liv
-            JOIN scoped_records record_row ON record_row.id = liv.record_id
-            JOIN quality.liv_cycles cycle ON cycle.liv_record_id = liv.id
-            JOIN quality.liv_visits visit ON visit.cycle_id = cycle.id AND visit.archived_at IS NULL
-            JOIN quality.liv_visit_ratings rating ON rating.visit_id = visit.id
-            JOIN core.lookup_values focus ON focus.id = rating.focus_lookup_value_id
-            LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id
-            ORDER BY liv.created_at DESC, cycle.cycle_number, focus.display_order;
-            """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
         var actions = await ReadExportSheetAsync(connection, "Actions", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
@@ -974,12 +947,12 @@ public sealed partial class SqlFoundationDataStore
                    action_row.completion_note AS [Closure comments]
             FROM quality.liv_records liv
             JOIN scoped_records record_row ON record_row.id = liv.record_id
-            JOIN quality.actions action_row ON action_row.source_record_id = record_row.id AND action_row.archived_at IS NULL
+            JOIN quality.actions action_row ON action_row.source_record_id = record_row.id AND action_row.archived_at IS NULL AND (@dashboardActionIds IS NULL OR action_row.id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardActionIds)))
             LEFT JOIN people.staff owner ON owner.id = action_row.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = action_row.status_lookup_value_id
             ORDER BY liv.created_at DESC, action_row.due_date;
             """, command => AddExportParameters(command, user, filter, recordType), cancellationToken);
-        return [FlattenByKey("Full Records", cases, "LIV case ID", visits, stages, ratings, actions), cases, visits, stages, ratings, actions];
+        return [FlattenByKey("Full Records", cases, "LIV case ID", visits, stages, actions), cases, visits, stages, actions];
     }
 
     private async Task<IReadOnlyList<ExportSheet>> BuildProbationExportAsync(
@@ -1002,8 +975,8 @@ public sealed partial class SqlFoundationDataStore
             JOIN scoped_records record_row ON record_row.id = probation_case.record_id
             JOIN people.staff staff ON staff.id = probation_case.subject_staff_id
             LEFT JOIN org.org_units area ON area.id = probation_case.org_unit_id
-            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.parent_org_unit_id IS NULL THEN area.id ELSE area.parent_org_unit_id END
-            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.parent_org_unit_id IS NOT NULL THEN area.id ELSE NULL END
+            LEFT JOIN org.org_units faculty ON faculty.id = CASE WHEN area.org_unit_type = N'faculty' THEN area.id WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.parent_org_unit_id END
+            LEFT JOIN org.org_units team ON team.id = CASE WHEN area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN area.id END
             LEFT JOIN quality.probation_case_reviewers reviewer ON reviewer.probation_case_id = probation_case.id
             LEFT JOIN people.staff reviewer_staff ON reviewer_staff.id = reviewer.staff_id
             GROUP BY record_row.id, probation_case.id, staff.display_name, staff.email,
@@ -1081,7 +1054,7 @@ public sealed partial class SqlFoundationDataStore
                    action_row.completed_date AS [Completed date], action_row.completion_note AS [Closure comments]
             FROM quality.probation_cases probation_case
             JOIN scoped_records record_row ON record_row.id = probation_case.record_id
-            JOIN quality.actions action_row ON action_row.source_record_id = record_row.id AND action_row.archived_at IS NULL
+            JOIN quality.actions action_row ON action_row.source_record_id = record_row.id AND action_row.archived_at IS NULL AND (@dashboardActionIds IS NULL OR action_row.id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardActionIds)))
             LEFT JOIN people.staff owner ON owner.id = action_row.owner_staff_id
             LEFT JOIN core.lookup_values status_value ON status_value.id = action_row.status_lookup_value_id
             ORDER BY probation_case.created_at DESC, action_row.due_date;
@@ -1098,34 +1071,52 @@ public sealed partial class SqlFoundationDataStore
         var assessments = await ReadExportSheetAsync(connection, "Assessments", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), assessment.id) AS [Assessment ID], staff.display_name AS [Staff member],
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), assessment.id) AS [Assessment ID], staff.display_name AS [Staff member],
                    assessment.academic_year AS [Academic year], assessment.status AS [Status],
                    assessment.submitted_at AS [Submitted at], assessment.created_at AS [Created at],
-                   assessment.updated_at AS [Updated at]
+                   assessment.updated_at AS [Updated at], CONVERT(nvarchar(36), assessment.framework_id) AS [Framework ID],
+                   framework.framework_key AS [Framework key], framework.version_label AS [Framework version],
+                   assessment.validation_status AS [Validation status], assessment.reviewed_at AS [Reviewed at],
+                   reviewer.display_name AS [Validated or reviewed by], assessment.validation_feedback AS [Validation feedback],
+                   CONVERT(nvarchar(7), information.preferred_visit_month, 126) AS [LIV - Preferred visit month],
+                   primary_focus.display_name AS [LIV - Primary focus], secondary_focus.display_name AS [LIV - Secondary focus],
+                   information.secondary_focus_other AS [LIV - Other secondary focus], information.desired_outcome AS [LIV - Desired outcome]
             FROM quality.elevate_practice_assessments assessment
             JOIN scoped_records record_row ON record_row.id = assessment.record_id
             JOIN people.staff staff ON staff.id = assessment.staff_id
+            JOIN quality.elevate_practice_frameworks framework ON framework.id = assessment.framework_id
+            LEFT JOIN quality.elevate_practice_liv_information information ON information.assessment_id = assessment.id
+            LEFT JOIN core.lookup_values primary_focus ON primary_focus.id = information.primary_focus_lookup_value_id
+            LEFT JOIN core.lookup_values secondary_focus ON secondary_focus.id = information.secondary_focus_lookup_value_id
+            LEFT JOIN auth.user_accounts review_account ON review_account.id = assessment.reviewed_by_user_account_id
+            LEFT JOIN people.staff reviewer ON reviewer.id = review_account.staff_id
             ORDER BY assessment.academic_year DESC, staff.display_name;
             """, command => AddExportParameters(command, user, filter, "elevate_practice_assessment"), cancellationToken);
         var ratings = await ReadExportSheetAsync(connection, "Area Outcomes", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), assessment.id) AS [Assessment ID], staff.display_name AS [Staff member],
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), assessment.id) AS [Assessment ID], staff.display_name AS [Staff member],
                    area.category AS [Category], area.name AS [Area], descriptor.visible_wording AS [Wording outcome],
-                   assessment.academic_year AS [Academic year]
+                   rating.hidden_numeric_value AS [Area score], CONVERT(nvarchar(36), area.id) AS [Area ID], area.area_key AS [Area key],
+                   assessment.academic_year AS [Academic year], CONVERT(nvarchar(36), assessment.framework_id) AS [Framework ID],
+                   framework.framework_key AS [Framework key], framework.version_label AS [Framework version]
             FROM quality.elevate_practice_assessments assessment
             JOIN scoped_records record_row ON record_row.id = assessment.record_id
             JOIN people.staff staff ON staff.id = assessment.staff_id
             JOIN quality.elevate_practice_area_ratings rating ON rating.assessment_id = assessment.id
             JOIN quality.elevate_practice_areas area ON area.id = rating.area_id
             JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id
+            JOIN quality.elevate_practice_frameworks framework ON framework.id = assessment.framework_id
             ORDER BY assessment.academic_year DESC, staff.display_name, area.display_order;
             """, command => AddExportParameters(command, user, filter, "elevate_practice_assessment"), cancellationToken);
         var development = await ReadExportSheetAsync(connection, "Development Areas", $"""
             {ScopedRecordsCte}
             SELECT TOP (@exportTake)
-                   CONVERT(nvarchar(36), assessment.id) AS [Assessment ID], staff.display_name AS [Staff member],
-                   area.name AS [Development area], development_plan.development_approach AS [Development approach],
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), assessment.id) AS [Assessment ID], staff.display_name AS [Staff member],
+                   area.name AS [Area], CONVERT(nvarchar(36), area.id) AS [Area ID],
+                   CONVERT(nvarchar(36), assessment.framework_id) AS [Framework ID],
+                   framework.framework_key AS [Framework key], framework.version_label AS [Framework version],
+                   development_plan.development_approach AS [Development approach],
                    development_plan.support_keys_json AS [Support], development_plan.support_details AS [Support details],
                    development_plan.success_evidence AS [Evidence of success], development_plan.intended_impact AS [Intended impact],
                    assessment.academic_year AS [Academic year]
@@ -1134,114 +1125,128 @@ public sealed partial class SqlFoundationDataStore
             JOIN people.staff staff ON staff.id = assessment.staff_id
             JOIN quality.elevate_practice_development_plans development_plan ON development_plan.assessment_id = assessment.id
             JOIN quality.elevate_practice_areas area ON area.id = development_plan.area_id
+            JOIN quality.elevate_practice_frameworks framework ON framework.id = assessment.framework_id
             ORDER BY assessment.academic_year DESC, staff.display_name, area.display_order;
             """, command => AddExportParameters(command, user, filter, "elevate_practice_assessment"), cancellationToken);
-        return [assessments, ratings, development];
-    }
+        var statements = await ReadExportSheetAsync(connection, "Statement Responses", $"""
+            {ScopedRecordsCte}
+            SELECT TOP (@exportTake)
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), assessment.id) AS [Assessment ID],
+                   staff.display_name AS [Staff member], CONVERT(nvarchar(36), assessment.framework_id) AS [Framework ID],
+                   framework.framework_key AS [Framework key], framework.version_label AS [Framework version],
+                   CONVERT(nvarchar(36), area.id) AS [Area ID], area.area_key AS [Area key], area.category AS [Category], area.name AS [Area],
+                   CONVERT(nvarchar(36), statement.id) AS [Statement ID], statement.statement_key AS [Statement key],
+                   statement.statement_text AS [Statement], rating.score AS [Statement score],
+                   descriptor.visible_wording AS [Statement outcome], rating.created_at AS [Response created at],
+                   assessment.academic_year AS [Academic year]
+            FROM quality.elevate_practice_assessments assessment
+            JOIN scoped_records record_row ON record_row.id = assessment.record_id
+            JOIN people.staff staff ON staff.id = assessment.staff_id
+            JOIN quality.elevate_practice_frameworks framework ON framework.id = assessment.framework_id
+            JOIN quality.elevate_practice_areas area ON area.framework_id = assessment.framework_id
+            JOIN quality.elevate_practice_statements statement ON statement.area_id = area.id
+            LEFT JOIN quality.elevate_practice_ratings rating ON rating.assessment_id = assessment.id AND rating.statement_id = statement.id
+            LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = rating.descriptor_id
+            ORDER BY assessment.academic_year DESC, staff.display_name, assessment.id, area.display_order, statement.display_order;
+            """, command => AddExportParameters(command, user, filter, "elevate_practice_assessment"), cancellationToken, 500_000);
+        var reflections = await ReadExportSheetAsync(connection, "Area Reflections", $"""
+            {ScopedRecordsCte}
+            SELECT TOP (@exportTake)
+                   CONVERT(nvarchar(36), record_row.id) AS [Record ID], CONVERT(nvarchar(36), assessment.id) AS [Assessment ID],
+                   staff.display_name AS [Staff member], CONVERT(nvarchar(36), assessment.framework_id) AS [Framework ID],
+                   framework.framework_key AS [Framework key], framework.version_label AS [Framework version],
+                   CONVERT(nvarchar(36), area.id) AS [Area ID], area.area_key AS [Area key], area.category AS [Category], area.name AS [Area],
+                   area.reflection_prompt AS [Reflection prompt], reflection.reflection_text AS [Reflection],
+                   assessment.academic_year AS [Academic year]
+            FROM quality.elevate_practice_assessments assessment
+            JOIN scoped_records record_row ON record_row.id = assessment.record_id
+            JOIN people.staff staff ON staff.id = assessment.staff_id
+            JOIN quality.elevate_practice_frameworks framework ON framework.id = assessment.framework_id
+            JOIN quality.elevate_practice_areas area ON area.framework_id = assessment.framework_id
+            LEFT JOIN quality.elevate_practice_reflections reflection ON reflection.assessment_id = assessment.id AND reflection.area_id = area.id
+            ORDER BY assessment.academic_year DESC, staff.display_name, assessment.id, area.display_order;
+            """, command => AddExportParameters(command, user, filter, "elevate_practice_assessment"), cancellationToken, 500_000);
 
-    private static ExportSheet FlattenByKey(
-        string name,
-        ExportSheet primary,
-        string primaryKeyColumn,
-        params ExportSheet[] relatedSheets)
-    {
-        var primaryKeyIndex = Array.FindIndex(primary.Columns.ToArray(), column =>
-            string.Equals(column, primaryKeyColumn, StringComparison.OrdinalIgnoreCase));
-        if (primaryKeyIndex < 0) return primary;
-
-        var related = relatedSheets.Select(sheet =>
+        var answerRows = new List<IReadOnlyList<string?>>();
+        foreach (var row in ratings.Rows)
         {
-            var keyIndex = Array.FindIndex(sheet.Columns.ToArray(), column =>
-                string.Equals(column, primaryKeyColumn, StringComparison.OrdinalIgnoreCase)
-                || column.EndsWith("Record ID", StringComparison.OrdinalIgnoreCase)
-                   && primaryKeyColumn.EndsWith("Record ID", StringComparison.OrdinalIgnoreCase)
-                || column.Equals("Reviewing session ID", StringComparison.OrdinalIgnoreCase)
-                   && primaryKeyColumn.Equals("Session ID", StringComparison.OrdinalIgnoreCase));
-            var groupedRows = keyIndex < 0
-                ? new Dictionary<string, IReadOnlyList<IReadOnlyList<string?>>>(StringComparer.OrdinalIgnoreCase)
-                : sheet.Rows
-                    .Where(row => row.Count > keyIndex && !string.IsNullOrWhiteSpace(row[keyIndex]))
-                    .GroupBy(row => row[keyIndex]!, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(group => group.Key, group => (IReadOnlyList<IReadOnlyList<string?>>)group.ToArray(), StringComparer.OrdinalIgnoreCase);
-            return new { Sheet = sheet, KeyIndex = keyIndex, Rows = groupedRows };
-        }).Where(item => item.KeyIndex >= 0).ToArray();
-
-        var maximumOccurrences = related.ToDictionary(
-            item => item.Sheet.Name,
-            item => Math.Max(1, item.Rows.Values.Select(rows => rows.Count).DefaultIfEmpty(0).Max()),
-            StringComparer.OrdinalIgnoreCase);
-        var columns = primary.Columns.ToList();
-        foreach (var item in related)
+            AddAnswer(ratings, row, "outcome", "Area outcome", "Wording outcome", "text");
+            AddAnswer(ratings, row, "score", "Area score", "Area score", "number");
+        }
+        foreach (var row in statements.Rows)
         {
-            var occurrenceCount = maximumOccurrences[item.Sheet.Name];
-            for (var occurrence = 1; occurrence <= occurrenceCount; occurrence++)
-            {
-                foreach (var column in item.Sheet.Columns.Where((_, index) => index != item.KeyIndex))
-                    columns.Add($"{item.Sheet.Name} {occurrence} — {column}");
-            }
+            // Only saved statement ratings are exported. An older area rating is never presented as a statement answer.
+            AddAnswer(statements, row, "outcome", "Statement outcome", "Statement outcome", "text", true);
+            AddAnswer(statements, row, "score", "Statement score", "Statement score", "number", true);
+        }
+        foreach (var row in reflections.Rows)
+            AddAnswer(reflections, row, "reflection", Get(reflections, row, "Reflection prompt") ?? "Reflection", "Reflection", "text");
+        foreach (var row in development.Rows)
+        {
+            foreach (var field in new[] { "Development approach", "Support", "Support details", "Evidence of success", "Intended impact" })
+                AddAnswer(development, row, $"development/{field.Replace(' ', '_').ToLowerInvariant()}", $"Development plan - {field}", field, "text");
         }
 
-        var rows = new List<IReadOnlyList<string?>>(primary.Rows.Count);
-        foreach (var primaryRow in primary.Rows)
+        var answers = FormEntryExportBuilder.ExpandAnswers(new ExportSheet("Form Answers", ["Record ID", "Assessment ID", "Form template", "Form version", "Section", "Question key", "Question", "Response type", "Response"], answerRows, false));
+        return [FlattenByKey("Full Records", assessments, "Assessment ID", answers), assessments, ratings, development, statements, reflections, answers];
+
+        static string? Get(ExportSheet sheet, IReadOnlyList<string?> row, string name)
         {
-            var row = primaryRow.ToList();
-            var key = primaryRow.Count > primaryKeyIndex ? primaryRow[primaryKeyIndex] : null;
-            foreach (var item in related)
-            {
-                var occurrenceCount = maximumOccurrences[item.Sheet.Name];
-                var matching = key is not null && item.Rows.TryGetValue(key, out var found)
-                    ? found
-                    : Array.Empty<IReadOnlyList<string?>>();
-                for (var occurrence = 0; occurrence < occurrenceCount; occurrence++)
-                {
-                    var source = occurrence < matching.Count ? matching[occurrence] : null;
-                    for (var column = 0; column < item.Sheet.Columns.Count; column++)
-                    {
-                        if (column == item.KeyIndex) continue;
-                        row.Add(source is not null && source.Count > column ? source[column] : null);
-                    }
-                }
-            }
-            rows.Add(row);
+            for (var index = 0; index < sheet.Columns.Count && index < row.Count; index++)
+                if (sheet.Columns[index] == name) return row[index];
+            return null;
         }
 
-        return new ExportSheet(
-            name,
-            columns,
-            rows,
-            primary.WasTruncated || relatedSheets.Any(sheet => sheet.WasTruncated));
+        void AddAnswer(ExportSheet sheet, IReadOnlyList<string?> row, string suffix, string label, string responseColumn, string type, bool isStatement = false)
+        {
+            var identity = $"eli/{Get(sheet, row, "Framework ID")}/areas/{Get(sheet, row, "Area ID")}";
+            var title = Get(sheet, row, "Area");
+            if (isStatement)
+            {
+                identity += $"/statements/{Get(sheet, row, "Statement ID")}";
+                title += $" - {Get(sheet, row, "Statement")}";
+            }
+            answerRows.Add([Get(sheet, row, "Record ID"), Get(sheet, row, "Assessment ID"), Get(sheet, row, "Framework key"),
+                Get(sheet, row, "Framework version"), Get(sheet, row, "Area"), $"{identity}/{suffix}", $"{title} - {label}", type, Get(sheet, row, responseColumn)]);
+        }
     }
+
+    private static ExportSheet FlattenByKey(string name, ExportSheet primary, string primaryKeyColumn, params ExportSheet[] relatedSheets) =>
+        FormEntryExportBuilder.Flatten(name, primary, primaryKeyColumn, relatedSheets);
 
     private async Task<ExportSheet> ReadExportSheetAsync(
         SqlConnection connection,
         string name,
         string sql,
         Action<SqlCommand> configure,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int rowLimit = InteractiveExportRowLimit)
     {
         var startedAt = Stopwatch.GetTimestamp();
         var optimizedSql = sql.TrimEnd();
         if (optimizedSql.EndsWith(';')) optimizedSql = optimizedSql[..^1];
         optimizedSql += " OPTION (RECOMPILE, MAX_GRANT_PERCENT = 1);";
         await using var command = new SqlCommand(optimizedSql, connection) { CommandTimeout = 90 };
-        command.Parameters.AddWithValue("@exportTake", InteractiveExportRowLimit + 1);
+        command.Parameters.AddWithValue("@exportTake", rowLimit + 1);
         configure(command);
         await using var reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, cancellationToken);
         var columns = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
+        var types = Enumerable.Range(0, reader.FieldCount).Select(index => reader.GetDataTypeName(index).ToLowerInvariant() switch
+        { "date" => "date", "datetime" or "datetime2" or "datetimeoffset" or "smalldatetime" => "datetime",
+          "int" or "bigint" or "smallint" or "tinyint" or "decimal" or "numeric" or "float" or "real" or "money" or "smallmoney" => "number", _ => "text" }).ToArray();
         var rows = new List<IReadOnlyList<string?>>();
-        while (rows.Count <= InteractiveExportRowLimit && await reader.ReadAsync(cancellationToken))
+        while (rows.Count <= rowLimit && await reader.ReadAsync(cancellationToken))
         {
             var row = new string?[reader.FieldCount];
             for (var index = 0; index < reader.FieldCount; index++)
                 row[index] = reader.IsDBNull(index) ? null : FormatExportValue(reader.GetValue(index));
             rows.Add(row);
         }
-        var truncated = rows.Count > InteractiveExportRowLimit;
-        if (truncated) rows.RemoveAt(rows.Count - 1);
+        var truncated = rows.Count > rowLimit;
+        if (truncated) throw new WorkflowValidationException($"The {name} dataset exceeds {rowLimit:N0} rows. Narrow the dashboard filters to export complete entries.");
         var elapsed = Stopwatch.GetElapsedTime(startedAt);
         if (elapsed > TimeSpan.FromSeconds(2))
             logger.LogWarning("Export sheet {SheetName} loaded {RowCount} rows in {ElapsedMilliseconds:F0} ms.", name, rows.Count, elapsed.TotalMilliseconds);
-        return new ExportSheet(SafeWorksheetName(name), columns, rows, truncated);
+        return new ExportSheet(SafeWorksheetName(name), columns, rows, truncated, types);
     }
 
     private static string FormatExportValue(object value) => value switch
@@ -1319,15 +1324,22 @@ public sealed partial class SqlFoundationDataStore
         string? recordType = null)
     {
         AddScopeParameters(command, user);
-        AddNullableText(command, "@academicYear", filter.AcademicYear, 10);
-        AddNullableText(command, "@facultyCode", filter.FacultyCode, 4000);
-        AddNullableText(command, "@teamCode", filter.TeamCode, 4000);
-        AddNullableDate(command, "@fromDate", filter.FromDate);
-        AddNullableDate(command, "@toDate", filter.ToDate);
+        command.Parameters.AddWithValue("@dashboardRecordIds", filter.DashboardRecordIds is null ? DBNull.Value : JsonSerializer.Serialize(filter.DashboardRecordIds));
+        command.Parameters.AddWithValue("@dashboardActionIds", filter.DashboardActionIds is null ? DBNull.Value : JsonSerializer.Serialize(filter.DashboardActionIds));
+        AddNullableText(command, "@dashboardProcessKey", filter.DashboardProcessKey, 100);
+        AddNullableText(command, "@attendanceFacultyCode", filter.FacultyCode, 4000);
+        AddNullableText(command, "@attendanceTeamCode", filter.TeamCode, 4000);
+        var hasDashboardScope = filter.DashboardRecordIds is not null || filter.DashboardActionIds is not null;
+        AddNullableText(command, "@academicYear", hasDashboardScope ? null : filter.AcademicYear, 10);
+        AddNullableText(command, "@facultyCode", hasDashboardScope ? null : filter.FacultyCode, 4000);
+        AddNullableText(command, "@teamCode", hasDashboardScope ? null : filter.TeamCode, 4000);
+        AddNullableDate(command, "@fromDate", hasDashboardScope ? null : filter.FromDate);
+        AddNullableDate(command, "@toDate", hasDashboardScope ? null : filter.ToDate);
         AddNullableGuid(command, "@staffId", filter.StaffId);
         AddNullableGuid(command, "@reviewerId", filter.ReviewerId);
-        AddNullableText(command, "@status", filter.Status, 100);
+        AddNullableText(command, "@status", hasDashboardScope ? null : filter.Status, 100);
         AddNullableText(command, "@recordType", recordType ?? filter.RecordType, 100);
+        AddNullableText(command, "@deliveryAreaKey", filter.DeliveryAreaKey, 100);
     }
 
     private static void AddNullableText(SqlCommand command, string name, string? value, int size) =>
@@ -1361,13 +1373,36 @@ public sealed partial class SqlFoundationDataStore
         WITH visible_staff AS (SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)),
              visible_org AS (SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId)),
              scoped_records AS (
-                 SELECT record_source.*
+                 SELECT record_source.*, delivery_area.delivery_area_key AS learning_walk_delivery_area_key,
+                        CASE WHEN record_source.record_type IN (N'learning_walk', N'als_learning_walk')
+                             THEN COALESCE(delivery_area.delivery_area_name, N'Not recorded') END AS learning_walk_delivery_area_name
                  FROM core.records record_source
                  LEFT JOIN core.lookup_values record_status ON record_status.id = record_source.status_lookup_value_id
                  LEFT JOIN org.org_units record_area ON record_area.id = record_source.org_unit_id
-                 LEFT JOIN org.org_units record_faculty ON record_faculty.id = CASE WHEN record_area.parent_org_unit_id IS NULL THEN record_area.id ELSE record_area.parent_org_unit_id END
-                 LEFT JOIN org.org_units record_team ON record_team.id = CASE WHEN record_area.parent_org_unit_id IS NOT NULL THEN record_area.id ELSE NULL END
+                 LEFT JOIN org.org_units record_faculty ON record_faculty.id = CASE WHEN record_area.org_unit_type = N'faculty' THEN record_area.id WHEN record_area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN record_area.parent_org_unit_id END
+                 LEFT JOIN org.org_units record_team ON record_team.id = CASE WHEN record_area.org_unit_type IN (N'team', N'faculty_child', N'faculty_child_code') THEN record_area.id END
+                 OUTER APPLY (
+                     SELECT TOP (1) submission.id, submission.status
+                     FROM forms.form_submissions submission
+                     WHERE submission.record_id = record_source.id AND submission.archived_at IS NULL
+                         AND record_source.record_type IN (N'learning_walk', N'als_learning_walk', N'work_scrutiny', N'elevate_environment')
+                     ORDER BY submission.created_at DESC, submission.id DESC
+                 ) latest_delivery_submission
+                 OUTER APPLY (
+                     SELECT TOP (1) NULLIF(delivery_response.response_text, N'') AS delivery_area_key,
+                            COALESCE(JSON_VALUE(delivery_response.response_json, '$.displayName'), delivery_lookup.display_name,
+                                NULLIF(delivery_response.response_text, N'')) AS delivery_area_name
+                     FROM forms.form_responses delivery_response
+                     JOIN forms.form_fields delivery_field ON delivery_field.id = delivery_response.form_field_id
+                     LEFT JOIN core.lookup_values delivery_lookup ON delivery_lookup.id = delivery_response.response_lookup_value_id
+                     WHERE delivery_response.form_submission_id = latest_delivery_submission.id AND delivery_response.archived_at IS NULL
+                         AND delivery_field.field_key = N'learning_walk_delivery_area'
+                     ORDER BY delivery_response.updated_at DESC, delivery_response.id DESC
+                 ) delivery_area
                  WHERE record_source.archived_at IS NULL
+                   AND (record_source.record_type NOT IN (N'learning_walk', N'als_learning_walk', N'work_scrutiny', N'elevate_environment')
+                        OR COALESCE(latest_delivery_submission.status, N'submitted') <> N'draft')
+                   AND (@dashboardRecordIds IS NULL OR record_source.id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardRecordIds)))
                    AND (@recordType IS NULL OR record_source.record_type = @recordType)
                    AND (
                        @canViewAll = 1 OR record_source.created_by_user_account_id = @currentUserAccountId
@@ -1383,6 +1418,10 @@ public sealed partial class SqlFoundationDataStore
                    AND (@staffId IS NULL OR record_source.subject_staff_id = @staffId)
                    AND (@reviewerId IS NULL OR record_source.owner_staff_id = @reviewerId)
                    AND (@status IS NULL OR record_status.value_key = @status)
+                   AND (@deliveryAreaKey IS NULL OR (
+                       record_source.record_type IN (N'learning_walk', N'als_learning_walk')
+                       AND ((@deliveryAreaKey = N'__not_recorded__' AND delivery_area.delivery_area_key IS NULL)
+                            OR delivery_area.delivery_area_key = @deliveryAreaKey)))
              )
         """;
 

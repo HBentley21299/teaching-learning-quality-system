@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   BookOpenCheck,
@@ -21,6 +21,8 @@ import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { Button } from "../design-system/Button";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
+import { useActionOwners } from "../components/useActionOwners";
 import { api } from "../services/api";
 import type {
   ActionOwnerOption,
@@ -166,23 +168,25 @@ export function ProbationObservations({
   async function createCase() {
     if (!subjectStaffId) return;
     setIsSaving(true);
-    const staffMember = configuration?.eligibleStaff.find((item) => item.id === subjectStaffId);
-    const result = await api.createProbationCase({
-      subjectStaffId,
-      teachingLearningReviewerStaffId: teachingLearningReviewerId || undefined,
-      orgUnitId: staffMember?.primaryOrgUnitId
-    });
-    setIsSaving(false);
-    if (!result.ok) {
-      setMessage(result.message ?? "The probationary observation case could not be created.");
-      return;
-    }
-    setIsCreating(false);
-    setSubjectStaffId("");
-    setTeachingLearningReviewerId("");
-    setSelectedCaseId(result.data?.id ?? "");
-    setSelectedObservationNumber(1);
-    await refresh("Probationary observation case created.");
+    try {
+      const staffMember = configuration?.eligibleStaff.find((item) => item.id === subjectStaffId);
+      const result = await api.createProbationCase({
+        subjectStaffId,
+        teachingLearningReviewerStaffId: teachingLearningReviewerId || undefined,
+        orgUnitId: staffMember?.primaryOrgUnitId
+      });
+
+      if (!result.ok) {
+        setMessage(result.message ?? "The probationary observation case could not be created.");
+        return;
+      }
+      setIsCreating(false);
+      setSubjectStaffId("");
+      setTeachingLearningReviewerId("");
+      setSelectedCaseId(result.data?.id ?? "");
+      setSelectedObservationNumber(1);
+      await refresh("Probationary observation case created.");
+    } finally { setIsSaving(false); }
   }
 
   if (selectedCase && configuration && livConfiguration) {
@@ -207,12 +211,12 @@ export function ProbationObservations({
   }
 
   return (
-    <div className="route-stack probation-route">
+    <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="route-stack probation-route">
       <div className="route-header">
         <div><p className="eyebrow">Staff probation observation process</p><h1>Probationary Observations</h1></div>
         {canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create probation case</Button> : null}
       </div>
-      {message ? <div className="notice-row">{message}</div> : null}
+      {message ? <div className="notice-row" role="alert">{message}</div> : null}
 
       {isCreating && configuration ? (
         <section className="panel probation-create-panel">
@@ -247,7 +251,7 @@ export function ProbationObservations({
           {filteredCases.length === 0 ? <tr><td colSpan={6}>{recordOwnershipView === "mine" ? "You have not created any probation records matching these filters." : "No probation records match these filters."}</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => openCase(item)} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
         </tbody></table></div>
       </details>
-    </div>
+    </div></fieldset>
   );
 }
 
@@ -275,35 +279,39 @@ function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRe
 
   async function startLiv() {
     setIsSaving(true);
-    const result = await api.startProbationLiv(record.id);
-    setIsSaving(false);
-    if (!result.ok) {
-      setMessage(result.message ?? "Observation 2 could not be started.");
-      return;
-    }
-    await onChanged("Observation 2 LIV created and linked to both records.");
+    try {
+      const result = await api.startProbationLiv(record.id);
+
+      if (!result.ok) {
+        setMessage(result.message ?? "Observation 2 could not be started.");
+        return;
+      }
+      await onChanged("Observation 2 LIV created and linked to both records.");
+    } finally { setIsSaving(false); }
   }
 
   async function completeObservation() {
     if (!observation || !window.confirm(`Complete Probation Observation ${observation.observationNumber}?`)) return;
     setIsSaving(true);
-    const result = await api.completeProbationObservation(record.id, observation.id);
-    setIsSaving(false);
-    if (!result.ok) {
-      setMessage(result.message ?? "The observation could not be completed.");
-      return;
-    }
-    await onChanged(observation.observationNumber === 1 ? "Observation 1 completed. Observation 2 is ready." : "Probationary observation cycle completed.");
-    onObservationChange(observation.observationNumber === 1 ? 2 : 3);
+    try {
+      const result = await api.completeProbationObservation(record.id, observation.id);
+
+      if (!result.ok) {
+        setMessage(result.message ?? "The observation could not be completed.");
+        return;
+      }
+      await onChanged(observation.observationNumber === 1 ? "Observation 1 completed. Observation 2 is ready." : "Probationary observation cycle completed.");
+      onObservationChange(observation.observationNumber === 1 ? 2 : 3);
+    } finally { setIsSaving(false); }
   }
 
   return (
     <div className="route-stack probation-workspace">
       <div className="route-header probation-case-header">
-        <div><Button icon={ArrowLeft} onClick={onBack}>Back to probation records</Button><p className="eyebrow">{record.academicYear} probation cycle</p><h1>{record.subjectStaffName}</h1></div>
+        <div><Button icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>Back to probation records</Button><p className="eyebrow">{record.academicYear} probation cycle</p><h1>{record.subjectStaffName}</h1></div>
         <div className="toolbar"><ExportWordButton recordId={record.recordId} /><Button disabled={!record.sourceElevateRecordId} icon={ClipboardCheck} onClick={() => record.sourceElevateRecordId && onOpenEliReport(record.subjectStaffId, record.sourceElevateRecordId)} variant="primary">{record.sourceElevateRecordId ? "Open ELI report" : "No submitted ELI report"}</Button></div>
       </div>
-      {message ? <div className="notice-row">{message}</div> : null}
+      {message ? <div className="notice-row" role="alert">{message}</div> : null}
       <section className="panel probation-case-summary">
         <div><span>Teaching and Learning reviewer</span><strong>{record.reviewers.find((reviewer) => reviewer.reviewerRole === "teaching_learning")?.displayName ?? "Not assigned"}</strong></div>
         <div><span>Leader reviewer</span><strong>{record.reviewers.find((reviewer) => reviewer.reviewerRole === "leader")?.displayName ?? "Not assigned"}</strong></div>
@@ -313,7 +321,7 @@ function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRe
       <div className="probation-observation-switcher" aria-label="Probation observation progress">
         {record.observations.map((item) => {
           const available = item.status !== "not_started" || item.observationNumber === record.currentObservationNumber;
-          return <button className={item.observationNumber === observation.observationNumber ? "is-active" : ""} disabled={!available} key={item.id} onClick={() => onObservationChange(item.observationNumber)} type="button"><span>{item.status === "completed" ? <CheckCircle2 size={18} /> : item.observationNumber}</span><strong>Observation {item.observationNumber}</strong><small>{item.observationNumber === 2 ? (item.observationType === "uco_tla" ? "UCO TLA" : "LIV") : "Probation template"} / {formatStatus(item.status)}</small></button>;
+          return <button className={item.observationNumber === observation.observationNumber ? "is-active" : ""} disabled={!available} key={item.id} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onObservationChange(item.observationNumber); })} type="button"><span>{item.status === "completed" ? <CheckCircle2 size={18} /> : item.observationNumber}</span><strong>Observation {item.observationNumber}</strong><small>{item.observationNumber === 2 ? (item.observationType === "uco_tla" ? "UCO TLA" : "LIV") : "Probation template"} / {formatStatus(item.status)}</small></button>;
         })}
       </div>
 
@@ -389,22 +397,39 @@ function ProbationStageEditor({ record, observation, stage, configuration, actio
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
 
-  useEffect(() => { setForm(stageToRequest(stage)); setVisit(visitToRequest(observation.visit, stage.stageStatus)); }, [observation.visit, stage]);
+  const baseline = useRef(JSON.stringify([form, visit]));
+  const dirty = stage.canEdit && JSON.stringify([form, visit]) !== baseline.current;
+  const clearNavigation = useUnsavedChanges({ label: `Probation ${stage.stageType.replaceAll("_", " ")}`, dirty, saving: isSaving,
+    onSave: () => stage.stageType === "visit_rubric" ? saveVisit() : saveStage(),
+    onDiscard: () => { const nextForm = stageToRequest(stage), nextVisit = visitToRequest(observation.visit, stage.stageStatus); baseline.current = JSON.stringify([nextForm, nextVisit]); setForm(nextForm); setVisit(nextVisit); } });
+  useEffect(() => {
+    if (dirty) return;
+    const nextForm = stageToRequest(stage); const nextVisit = visitToRequest(observation.visit, stage.stageStatus);
+    baseline.current = JSON.stringify([nextForm, nextVisit]); setForm(nextForm); setVisit(nextVisit);
+  }, [observation.visit, stage]);
 
-  async function saveStage() {
+  async function saveStage(): Promise<boolean> {
     setIsSaving(true);
-    const result = await api.updateProbationStage(record.id, observation.id, stage.id, form);
-    setIsSaving(false);
-    if (!result.ok) { setMessage(result.message ?? "The stage could not be saved."); return; }
-    await onChanged("Probation observation stage saved.");
+    try {
+      const result = await api.updateProbationStage(record.id, observation.id, stage.id, form);
+
+      if (!result.ok) { setMessage(result.message ?? "The stage could not be saved."); return false; }
+      baseline.current = JSON.stringify([form, visit]); clearNavigation();
+      await onChanged("Probation observation stage saved.");
+      return true;
+    } finally { setIsSaving(false); }
   }
 
-  async function saveVisit() {
+  async function saveVisit(): Promise<boolean> {
     setIsSaving(true);
-    const result = await api.updateProbationVisit(record.id, observation.id, visit);
-    setIsSaving(false);
-    if (!result.ok) { setMessage(result.message ?? "The observation and rubric could not be saved."); return; }
-    await onChanged("Observation details, rubric and evidence saved.");
+    try {
+      const result = await api.updateProbationVisit(record.id, observation.id, visit);
+
+      if (!result.ok) { setMessage(result.message ?? "The observation and rubric could not be saved."); return false; }
+      baseline.current = JSON.stringify([form, visit]); clearNavigation();
+      await onChanged("Observation details, rubric and evidence saved.");
+      return true;
+    } finally { setIsSaving(false); }
   }
 
   if (stage.stageType === "actions") {
@@ -412,14 +437,14 @@ function ProbationStageEditor({ record, observation, stage, configuration, actio
   }
 
   return (
-    <div className="form-stack probation-stage-form">
-      {message ? <div className="notice-row">{message}</div> : null}
+    <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="form-stack probation-stage-form">
+      {message ? <div className="notice-row" role="alert">{message}</div> : null}
       {stage.stageType === "professional_discussion" ? <div className="form-stack"><label className="entry-field"><span>Context</span><textarea disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, contextText: event.target.value })} rows={3} value={form.contextText ?? ""} /></label><label className="entry-field"><span>Aims and intended outcomes</span><textarea disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, aimsText: event.target.value })} rows={3} value={form.aimsText ?? ""} /></label><label className="entry-field"><span>Planned learner activity</span><textarea disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, learnerActivityText: event.target.value })} rows={3} value={form.learnerActivityText ?? ""} /></label></div> : null}
       {stage.stageType === "visit_rubric" ? <ProbationVisitEditor configuration={configuration} disabled={!stage.canEdit} value={visit} onChange={setVisit} /> : null}
       {stage.stageType === "reflection_feedback" ? <div className="form-stack"><label className="entry-field"><span>Reflection and feedback</span><textarea disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, reflectionText: event.target.value })} rows={6} value={form.reflectionText ?? ""} /></label><fieldset className="checklist-field"><legend>Development opportunities</legend><div>{configuration.developmentOpportunities.map((option) => <label key={option.key}><input checked={form.developmentOpportunityKeys.includes(option.key)} disabled={!stage.canEdit} onChange={() => setForm({ ...form, developmentOpportunityKeys: toggleValue(form.developmentOpportunityKeys, option.key) })} type="checkbox" /><span>{option.name}</span></label>)}</div></fieldset></div> : null}
       {stage.stageType === "next_observation" ? <label className="entry-field"><span>Agreed date of next probationary observation</span><input disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, intendedNextObservationDate: event.target.value })} type="date" value={form.intendedNextObservationDate ?? ""} /></label> : null}
       {stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={(stage.stageType === "visit_rubric" ? visit.stageStatus : form.stageStatus) === "completed"} onChange={(event) => stage.stageType === "visit_rubric" ? setVisit({ ...visit, stageStatus: event.target.checked ? "completed" : "in_progress" }) : setForm({ ...form, stageStatus: event.target.checked ? "completed" : "in_progress" })} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void (stage.stageType === "visit_rubric" ? saveVisit() : saveStage())} variant="primary">{isSaving ? "Saving..." : "Save stage"}</Button></div> : <p className="muted-copy">This record is visible but read-only for your current access.</p>}
-    </div>
+    </div></fieldset>
   );
 }
 
@@ -527,7 +552,7 @@ function ProbationVisitEditor({ configuration, disabled, value, onChange }: { co
 }
 
 function ProbationActions({ record, observation, stage, actions, staff, onChanged }: { record: ProbationCase; observation: ProbationObservation; stage: ProbationStage; actions: ActionSummary[]; staff: StaffSummary[]; onChanged: (message: string) => Promise<void> }) {
-  const [ownerOptions, setOwnerOptions] = useState<ActionOwnerOption[]>([]);
+  const { owners: ownerOptions, loading: ownersLoading, error: ownersError, retry: retryOwners } = useActionOwners(record.recordId, record.subjectStaffId);
   const [isAdding, setIsAdding] = useState(false);
   const [actionTheme, setActionTheme] = useState("");
   const [title, setTitle] = useState("");
@@ -535,27 +560,40 @@ function ProbationActions({ record, observation, stage, actions, staff, onChange
   const [dueDate, setDueDate] = useState("");
   const [stageComplete, setStageComplete] = useState(stage.stageStatus === "completed");
   const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const clearNavigation = useUnsavedChanges({ label: "Probation actions", saving: isSaving,
+    dirty: (isAdding && Boolean(actionTheme || title || dueDate || ownerId !== record.subjectStaffId)) || stageComplete !== (stage.stageStatus === "completed"),
+    onSave: async () => {
+      if (isAdding && (actionTheme || title || dueDate || ownerId !== record.subjectStaffId) && !await addAction()) return false;
+      return saveStage();
+    }, onDiscard: () => { setIsAdding(false); setActionTheme(""); setTitle(""); setDueDate(""); setOwnerId(record.subjectStaffId); setStageComplete(stage.stageStatus === "completed"); } });
   const permittedOwnerStaff = useMemo(() => {
     const permittedIds = new Set(ownerOptions.map((option) => option.staffId));
     return staff.filter((staffMember) => permittedIds.has(staffMember.id));
   }, [ownerOptions, staff]);
-  useEffect(() => { api.actionOwnerOptions(record.recordId, record.subjectStaffId).then(setOwnerOptions).catch(() => setOwnerOptions([])); }, [record.recordId, record.subjectStaffId]);
-  async function addAction() {
-    if (!actionTheme.trim() || !title.trim() || !ownerId || !dueDate) return;
+  async function addAction(): Promise<boolean> {
+    if (!actionTheme.trim() || !title.trim() || !ownerId || !dueDate) { setMessage("Complete the action theme, description, owner and implementation date."); return false; }
     setIsSaving(true);
-    const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "probation_observation", sourceSubRecordType: "probation_observation", sourceSubRecordId: observation.id, sourceSubRecordKey: `observation_${observation.observationNumber}`, subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, actionTheme: actionTheme.trim(), title: title.trim(), dueDate, publishedToStaff: true, visibilitySetting: "staff_and_management" });
-    setIsSaving(false);
-    if (!result.ok) return;
-    setActionTheme(""); setTitle(""); setDueDate(""); setOwnerId(record.subjectStaffId); setIsAdding(false);
-    await onChanged("Probation action added to the central Action Engine.");
+    try {
+      const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "probation_observation", sourceSubRecordType: "probation_observation", sourceSubRecordId: observation.id, sourceSubRecordKey: `observation_${observation.observationNumber}`, subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, actionTheme: actionTheme.trim(), title: title.trim(), dueDate, publishedToStaff: true, visibilitySetting: "staff_and_management" });
+
+      if (!result.ok) { setMessage(result.message ?? "The action could not be saved."); return false; }
+      setActionTheme(""); setTitle(""); setDueDate(""); setOwnerId(record.subjectStaffId); setIsAdding(false);
+      await onChanged("Probation action added to the central Action Engine.");
+      return true;
+    } finally { setIsSaving(false); }
   }
-  async function saveStage() {
+  async function saveStage(): Promise<boolean> {
     setIsSaving(true);
-    const result = await api.updateProbationStage(record.id, observation.id, stage.id, { developmentOpportunityKeys: [], stageStatus: stageComplete ? "completed" : "in_progress" });
-    setIsSaving(false);
-    if (result.ok) await onChanged("Actions stage saved.");
+    try {
+      const result = await api.updateProbationStage(record.id, observation.id, stage.id, { developmentOpportunityKeys: [], stageStatus: stageComplete ? "completed" : "in_progress" });
+
+      if (result.ok) { clearNavigation(); await onChanged("Actions stage saved."); }
+      else setMessage(result.message ?? "The action stage could not be saved.");
+      return result.ok;
+    } finally { setIsSaving(false); }
   }
-  return <div className="probation-actions"><div className="liv-actions-heading"><div><h3>Observation actions</h3><span>{actions.length} linked to Observation {observation.observationNumber}</span></div>{stage.canEdit ? <Button icon={Plus} onClick={() => setIsAdding((value) => !value)} variant="primary">Add action</Button> : null}</div>{isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`probation-action-theme-${observation.id}`} onChange={setActionTheme} sourceFormType="probation_observation" value={actionTheme} /></label><label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label><div className="form-grid form-grid-two"><div className="entry-field"><span>Owner <strong>Required</strong></span><StaffSearchSelect helperText="Type to find an authorised action owner." id={`probation-action-owner-${observation.id}`} onChange={setOwnerId} staff={permittedOwnerStaff} value={ownerId} /></div><label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsAdding(false)}>Cancel</Button><Button disabled={isSaving || !actionTheme.trim() || !title.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void addAction()} variant="primary">Create action</Button></div></div> : null}<div className="probation-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added.</p> : actions.map((action) => <div key={action.id}><span className={`status-pill ${action.completedDate ? "status-complete" : "status-draft"}`}>{action.completedDate ? "Completed" : action.isOverdue ? "Overdue" : "Open"}</span><div><strong>{action.title}</strong><span>{action.actionTheme} / {action.ownerStaffName ?? "Unassigned"} / {formatDate(action.dueDate)}</span></div></div>)}</div>{stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={stageComplete} onChange={(event) => setStageComplete(event.target.checked)} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void saveStage()} variant="primary">Save stage</Button></div> : null}{ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No action owners are available within your scope.</small> : null}</div>;
+  return <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="probation-actions">{message ? <p role="alert">{message}</p> : null}{ownersLoading ? <p role="status">Loading action owners…</p> : ownersError ? <div role="alert">{ownersError}<Button onClick={() => void retryOwners()}>Retry action owners</Button></div> : null}<div className="liv-actions-heading"><div><h3>Observation actions</h3><span>{actions.length} linked to Observation {observation.observationNumber}</span></div>{stage.canEdit ? <Button icon={Plus} onClick={() => setIsAdding(true)} variant="primary">Add action</Button> : null}</div>{isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`probation-action-theme-${observation.id}`} onChange={setActionTheme} sourceFormType="probation_observation" value={actionTheme} /></label><label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label><div className="form-grid form-grid-two"><div className="entry-field"><span>Owner <strong>Required</strong></span><StaffSearchSelect helperText="Type to find an authorised action owner." id={`probation-action-owner-${observation.id}`} onChange={setOwnerId} staff={permittedOwnerStaff} value={ownerId} /></div><label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) setIsAdding(false); })}>Cancel</Button><Button disabled={isSaving || !actionTheme.trim() || !title.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void addAction()} variant="primary">Create action</Button></div></div> : null}<div className="probation-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added.</p> : actions.map((action) => <div key={action.id}><span className={`status-pill ${action.completedDate ? "status-complete" : "status-draft"}`}>{action.completedDate ? "Completed" : action.isOverdue ? "Overdue" : "Open"}</span><div><strong>{action.title}</strong><span>{action.actionTheme} / {action.ownerStaffName ?? "Unassigned"} / {formatDate(action.dueDate)}</span></div></div>)}</div>{stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={stageComplete} onChange={(event) => setStageComplete(event.target.checked)} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void saveStage()} variant="primary">Save stage</Button></div> : null}{!ownersLoading && !ownersError && ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No action owners are available within your scope.</small> : null}</div></fieldset>;
 }
 
 function ProbationEliContext({ context }: { context: ProbationStaffContext }) {

@@ -160,7 +160,7 @@ public sealed partial class SqlFoundationDataStore
             JOIN people.staff subject ON subject.id = liv.subject_staff_id
             LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
             LEFT JOIN org.org_units area ON area.id = liv.org_unit_id
-            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id
+            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id AND parent.org_unit_type = N'faculty'
             LEFT JOIN core.lookup_values delivery ON delivery.id = liv.delivery_area_lookup_value_id
             LEFT JOIN quality.probation_observations probation_observation
               ON probation_observation.linked_liv_record_id = liv.id
@@ -696,7 +696,7 @@ public sealed partial class SqlFoundationDataStore
                 AddLivVisitParameters(command, request);
                 if (await command.ExecuteNonQueryAsync(cancellationToken) == 0) return FormSubmissionUpdateResult.NotFound;
             }
-            await SaveLivVisitRatingsAsync(connection, transaction, visitId, request.Ratings, processKey, cancellationToken);
+            // Practice ratings are retired; preserve historical ratings when editing visit details.
             await WriteAuditAsync(
                 connection, transaction, currentUser.UserAccountId, metadata.RecordId,
                 "liv_visit", visitId, "liv.visit_updated",
@@ -1229,50 +1229,6 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@lookupKey", LivLookupKey(processKey, "development_opportunity"));
         if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != values.Length)
             throw new WorkflowValidationException("One or more development opportunities are no longer available.");
-    }
-
-    private static async Task SaveLivVisitRatingsAsync(
-        SqlConnection connection,
-        System.Data.Common.DbTransaction transaction,
-        Guid visitId,
-        IReadOnlyList<LivVisitRatingRequest>? ratings,
-        string processKey,
-        CancellationToken cancellationToken)
-    {
-        var values = (ratings ?? []).Where(value => !string.IsNullOrWhiteSpace(value.FocusKey))
-            .GroupBy(value => value.FocusKey, StringComparer.OrdinalIgnoreCase).Select(group => group.Last()).ToArray();
-        await using (var clear = new SqlCommand("DELETE FROM quality.liv_visit_ratings WHERE visit_id = @visitId;", connection, (SqlTransaction)transaction))
-        {
-            clear.Parameters.AddWithValue("@visitId", visitId);
-            await clear.ExecuteNonQueryAsync(cancellationToken);
-        }
-        foreach (var rating in values)
-        {
-            if (!rating.IsNotApplicable && !rating.DescriptorId.HasValue)
-                throw new WorkflowValidationException("Select a rubric outcome for every rated LIV area.");
-            await using var command = new SqlCommand(
-                """
-                INSERT INTO quality.liv_visit_ratings (
-                    visit_id, focus_lookup_value_id, descriptor_id, hidden_numeric_value, is_not_applicable
-                )
-                SELECT @visitId, focus.id,
-                       CASE WHEN @isNa = 1 THEN NULL ELSE descriptor.id END,
-                       CASE WHEN @isNa = 1 THEN NULL ELSE descriptor.hidden_numeric_value END,
-                       @isNa
-                FROM core.lookup_values focus
-                JOIN core.lookup_types focus_type ON focus_type.id = focus.lookup_type_id AND focus_type.lookup_key = @lookupKey
-                LEFT JOIN quality.elevate_practice_rubric_descriptors descriptor ON descriptor.id = @descriptorId AND descriptor.archived_at IS NULL
-                WHERE focus.value_key = @focusKey AND focus.value_key <> N'other'
-                  AND focus.is_active = 1 AND focus.archived_at IS NULL;
-                """, connection, (SqlTransaction)transaction);
-            command.Parameters.AddWithValue("@visitId", visitId);
-            command.Parameters.AddWithValue("@focusKey", rating.FocusKey);
-            command.Parameters.AddWithValue("@descriptorId", ToDbValue(rating.DescriptorId));
-            command.Parameters.AddWithValue("@isNa", rating.IsNotApplicable);
-            command.Parameters.AddWithValue("@lookupKey", LivLookupKey(processKey, "visit_focus_area"));
-            if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
-                throw new WorkflowValidationException("One or more LIV rubric responses are invalid.");
-        }
     }
 
     private sealed record LivThemeSelectionV2Row(Guid LivRecordId, Guid ThemeId);

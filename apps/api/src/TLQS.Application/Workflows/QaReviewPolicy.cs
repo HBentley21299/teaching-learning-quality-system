@@ -13,6 +13,27 @@ public static class QaReviewPolicy
 
     public static bool CanManage(CurrentUser user) => user.HasPermission(PermissionKeys.QaReviewsManage);
 
+    public static bool CanConfigure(CurrentUser user, string status) =>
+        CanManage(user) && status.Trim().ToLowerInvariant() is "draft" or "open" or "reopened";
+
+    public static void ValidatePublishedStructure(QaPublishedReviewStructure existing, QaPublishedReviewStructure requested)
+    {
+        if (!string.Equals(existing.AcademicYear, requested.AcademicYear, StringComparison.Ordinal)
+            || !string.Equals(existing.QuestionTag, requested.QuestionTag, StringComparison.OrdinalIgnoreCase)
+            || existing.PlannedOpenDate != requested.PlannedOpenDate)
+            throw new WorkflowValidationException("The academic year, question tag and planned opening date are fixed after publication.");
+
+        if (existing.TeamOrgUnitIds.Except(requested.TeamOrgUnitIds).Any())
+            throw new WorkflowValidationException("Teams already included in a published review must remain included. You can add more teams or faculties.");
+
+        if (existing.Activities.Count != requested.Activities.Count
+            || existing.Activities.Zip(requested.Activities).Any(pair =>
+                pair.First.ActivityTypeId != pair.Second.ActivityTypeId
+                || pair.First.TemplateId != pair.Second.TemplateId
+                || !pair.First.QuestionIds.ToHashSet().SetEquals(pair.Second.QuestionIds)))
+            throw new WorkflowValidationException("Published activities, templates and questions are fixed to protect submitted evidence and reporting. Create another review for different questions.");
+    }
+
     public static bool CanCorrect(CurrentUser user) => user.HasPermission(PermissionKeys.QaReviewsCorrect);
 
     public static bool CanRemove(CurrentUser user) => user.HasPermission(PermissionKeys.QaReviewsRemove);
@@ -70,7 +91,10 @@ public static class QaReviewPolicy
         string? outcome,
         string? comment,
         string? notApplicableReason,
-        bool submitting)
+        bool submitting,
+        QaOutcomeLabels? labels = null,
+        bool allowsNotSeen = false,
+        string? savedOutcome = null)
     {
         var normalized = outcome?.Trim().ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(normalized))
@@ -78,15 +102,18 @@ public static class QaReviewPolicy
             return submitting && isRequired ? "Select an outcome." : null;
         }
 
-        if (normalized is not ("below" or "at" or "above" or "not_applicable"))
+        if (normalized is not ("below" or "at" or "above" or "not_applicable" or "not_seen"))
         {
             return "Select a valid QA outcome.";
         }
 
+        if (normalized == "not_seen" && !allowsNotSeen && savedOutcome != "not_seen")
+            return "Not seen is not enabled for this form.";
+
         if (normalized == "not_applicable")
         {
-            if (!allowsNotApplicable) return "Not applicable is not enabled for this criterion.";
-            if (string.IsNullOrWhiteSpace(notApplicableReason)) return "Add a reason for Not applicable.";
+            if (!allowsNotApplicable) return $"{(labels ?? QaOutcomeLabels.Default).NotApplicable} is not enabled for this criterion.";
+            if (string.IsNullOrWhiteSpace(notApplicableReason)) return $"Add a reason for {(labels ?? QaOutcomeLabels.Default).NotApplicable}.";
         }
 
         return null;
@@ -103,7 +130,8 @@ public static class QaReviewPolicy
         var rated = below + at + above;
         return new QaOutcomeDistribution(
             below, at, above, notApplicable, rated,
-            rated == 0 ? 0 : Math.Round((decimal)(at + above) * 100m / rated, 1));
+            rated == 0 ? 0 : Math.Round((decimal)(at + above) * 100m / rated, 1),
+            values.Count(value => value == "not_seen"));
     }
 }
 
@@ -113,4 +141,14 @@ public sealed record QaOutcomeDistribution(
     int Above,
     int NotApplicable,
     int Rated,
-    decimal AtOrAbovePercentage);
+    decimal AtOrAbovePercentage,
+    int NotSeen = 0);
+
+public sealed record QaPublishedReviewStructure(
+    string AcademicYear,
+    string QuestionTag,
+    DateOnly? PlannedOpenDate,
+    IReadOnlyList<Guid> TeamOrgUnitIds,
+    IReadOnlyList<QaPublishedReviewActivity> Activities);
+
+public sealed record QaPublishedReviewActivity(Guid ActivityTypeId, Guid TemplateId, IReadOnlyList<Guid> QuestionIds);

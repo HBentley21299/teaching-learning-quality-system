@@ -1,11 +1,13 @@
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Globalization;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using S = DocumentFormat.OpenXml.Spreadsheet;
 using W = DocumentFormat.OpenXml.Wordprocessing;
 using TLQS.Api.Data;
 using TLQS.Api.V1;
+using TLQS.Application.Workflows;
 
 namespace TLQS.Api.Exports;
 
@@ -26,9 +28,9 @@ public sealed class ExcelExportService
             var sheets = workbookPart.Workbook.AppendChild(new S.Sheets());
             uint sheetId = 1;
 
-            AddSheet(workbookPart, sheets, CreateInformationSheet(data), sheetId++);
-            foreach (var sheet in data.Sheets)
+            foreach (var sheet in data.Sheets.OrderBy(sheet => sheet.Name == "Form entries" ? 0 : 1))
                 AddSheet(workbookPart, sheets, sheet, sheetId++);
+            AddSheet(workbookPart, sheets, CreateInformationSheet(data), sheetId++);
             workbookPart.Workbook.Save();
         }
         return new GeneratedExport(
@@ -50,6 +52,8 @@ public sealed class ExcelExportService
             new string?[] { "From date", data.Filter.FromDate?.ToString("dd MMM yyyy") },
             new string?[] { "To date", data.Filter.ToDate?.ToString("dd MMM yyyy") },
             new string?[] { "Status", data.Filter.Status },
+            new string?[] { "Theme, focus or area", data.Filter.DimensionLabel },
+            new string?[] { "Learning walk delivery area filter", data.Filter.DeliveryAreaKey == "__not_recorded__" ? "Not recorded" : data.Filter.DeliveryAreaKey },
             new string?[] { "Interactive row limit", SqlFoundationDataStore.InteractiveExportRowLimit.ToString() }
         };
         foreach (var sheet in data.Sheets.Where(item => item.WasTruncated))
@@ -63,6 +67,12 @@ public sealed class ExcelExportService
         ExportSheet data,
         uint sheetId)
     {
+        if (data.Columns.Count > 16_384)
+            throw new WorkflowValidationException($"The '{data.Name}' worksheet has more than Excel's 16,384-column limit. Narrow the form or date filters and export again.");
+        if (data.Rows.Count > 1_048_575)
+            throw new WorkflowValidationException($"The '{data.Name}' worksheet has more than Excel's row limit. Narrow the filters and export again.");
+        if (data.Rows.Any(row => row.Count > data.Columns.Count))
+            throw new WorkflowValidationException($"The '{data.Name}' worksheet contains answers without matching column headings.");
         var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
         using (var writer = OpenXmlWriter.Create(worksheetPart))
         {
@@ -82,8 +92,8 @@ public sealed class ExcelExportService
                 columns.Append(new S.Column { Min = index, Max = index, Width = ColumnWidth(data, (int)index - 1), CustomWidth = true });
             writer.WriteElement(columns);
             writer.WriteStartElement(new S.SheetData());
-            WriteRow(writer, data.Columns.Cast<string?>(), 1U);
-            foreach (var row in data.Rows) WriteRow(writer, row, 2U);
+            WriteRow(writer, ReadableHeadings(data.Columns), 1U);
+            foreach (var row in data.Rows) WriteRow(writer, row, 2U, data.ColumnTypes);
             writer.WriteEndElement();
             if (data.Columns.Count > 0)
             {
@@ -102,23 +112,79 @@ public sealed class ExcelExportService
         });
     }
 
-    private static void WriteRow(OpenXmlWriter writer, IEnumerable<string?> values, uint styleIndex)
+    internal static IReadOnlyList<string> ReadableHeadings(IReadOnlyList<string> columns)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return columns.Select(column =>
+        {
+            var marker = column.LastIndexOf(" [", StringComparison.Ordinal);
+            var label = column.EndsWith(']') && marker > 0 ? column[..marker] : column;
+            var heading = label;
+            for (var suffix = 2; !seen.Add(heading); suffix++) heading = $"{label} ({suffix})";
+            return heading;
+        }).ToArray();
+    }
+
+    private static void WriteRow(OpenXmlWriter writer, IEnumerable<string?> values, uint styleIndex, IReadOnlyList<string>? columnTypes = null)
     {
         writer.WriteStartElement(new S.Row());
+        var index = 0;
         foreach (var value in values)
         {
             var clean = CleanCellText(value);
-            writer.WriteElement(new S.Cell
-            {
-                DataType = S.CellValues.InlineString,
-                StyleIndex = styleIndex,
-                InlineString = new S.InlineString(new S.Text(clean) { Space = SpaceProcessingModeValues.Preserve })
-            });
+            var type = columnTypes is not null && index < columnTypes.Count ? columnTypes[index] : "text";
+            writer.WriteElement(CreateCell(clean, type, styleIndex));
+            index++;
         }
         writer.WriteEndElement();
     }
 
+    private static S.Cell CreateCell(string value, string type, uint styleIndex)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            if (type == "number" && HasExcelNumericPrecision(value) && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number))
+                return new S.Cell { DataType = S.CellValues.Number, StyleIndex = styleIndex, CellValue = new S.CellValue(number.ToString("R", CultureInfo.InvariantCulture)) };
+            if (type == "boolean" && (bool.TryParse(value, out var boolean) || value is "0" or "1"))
+                return new S.Cell { DataType = S.CellValues.Boolean, StyleIndex = styleIndex, CellValue = new S.CellValue(boolean || value == "1" ? "1" : "0") };
+            if (type is "date" or "datetime" && TryExcelDate(value, type == "date", out var serialDate))
+                return new S.Cell { DataType = S.CellValues.Number, StyleIndex = type == "date" ? 3U : 4U, CellValue = new S.CellValue(serialDate.ToString("R", CultureInfo.InvariantCulture)) };
+        }
+        // Free text, identifiers and unparseable legacy values remain literal text, including formula-looking answers.
+        return new S.Cell { DataType = S.CellValues.InlineString, StyleIndex = styleIndex,
+            InlineString = new S.InlineString(new S.Text(value) { Space = SpaceProcessingModeValues.Preserve }) };
+    }
+
+    private static bool HasExcelNumericPrecision(string value)
+    {
+        var mantissa = value.Split('e', 'E')[0];
+        return new string(mantissa.Where(char.IsDigit).ToArray()).TrimStart('0').Length <= 15;
+    }
+
+    private static bool TryExcelDate(string value, bool dateOnly, out double serialDate)
+    {
+        serialDate = 0;
+        DateTime date;
+        if (dateOnly)
+        {
+            if (!DateTime.TryParseExact(value, ["yyyy-MM-dd", "dd MMM yyyy", "d MMM yyyy", "dd/MM/yyyy", "dd MMM yyyy HH:mm"], CultureInfo.InvariantCulture,
+                    DateTimeStyles.AllowWhiteSpaces, out date)) return false;
+            date = date.Date;
+        }
+        else
+        {
+            if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out var timestamp)) return false;
+            date = timestamp.UtcDateTime;
+        }
+        // Excel's 1900 date system cannot display earlier dates correctly. Preserve those as text.
+        if (date < new DateTime(1900, 1, 1)) return false;
+        serialDate = date.ToOADate();
+        if (date < new DateTime(1900, 3, 1)) serialDate--;
+        return true;
+    }
+
     private static S.Stylesheet CreateStylesheet() => new(
+        new S.NumberingFormats(new S.NumberingFormat { NumberFormatId = 164U, FormatCode = "yyyy-mm-dd hh:mm" }),
         new S.Fonts(
             new S.Font(new S.FontSize { Val = 10D }, new S.FontName { Val = "Aptos" }),
             new S.Font(new S.Bold(), new S.FontSize { Val = 10D }, new S.Color { Rgb = "FFFFFFFF" }, new S.FontName { Val = "Aptos" })),
@@ -133,7 +199,11 @@ public sealed class ExcelExportService
             new S.CellFormat { FontId = 1U, FillId = 2U, BorderId = 0U, ApplyFont = true, ApplyFill = true,
                 Alignment = new S.Alignment { WrapText = true, Vertical = S.VerticalAlignmentValues.Center } },
             new S.CellFormat { FontId = 0U, FillId = 0U, BorderId = 0U,
-                Alignment = new S.Alignment { WrapText = true, Vertical = S.VerticalAlignmentValues.Top } }),
+                Alignment = new S.Alignment { WrapText = true, Vertical = S.VerticalAlignmentValues.Top } },
+            new S.CellFormat { FontId = 0U, FillId = 0U, BorderId = 0U, NumberFormatId = 14U, ApplyNumberFormat = true,
+                Alignment = new S.Alignment { Vertical = S.VerticalAlignmentValues.Top } },
+            new S.CellFormat { FontId = 0U, FillId = 0U, BorderId = 0U, NumberFormatId = 164U, ApplyNumberFormat = true,
+                Alignment = new S.Alignment { Vertical = S.VerticalAlignmentValues.Top } }),
         new S.CellStyles(new S.CellStyle { Name = "Normal", FormatId = 0U, BuiltinId = 0U }));
 
     private static double ColumnWidth(ExportSheet sheet, int index)
@@ -165,7 +235,9 @@ public sealed class ExcelExportService
     {
         if (string.IsNullOrEmpty(value)) return "";
         var clean = string.Concat(value.Where(character => character is '\t' or '\n' or '\r' || character >= ' '));
-        return clean[..Math.Min(clean.Length, 32_767)];
+        if (clean.Length > 32_767)
+            throw new WorkflowValidationException("An answer exceeds Excel's 32,767-character cell limit. Export a narrower selection or use the PDF report to retain the complete response.");
+        return clean;
     }
 
     private static string SafeFileName(string value) =>
@@ -187,6 +259,11 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
 
     public GeneratedExport CreateRecordReport(RecordReportData data)
     {
+        if (data.RecordType is "learning_walk" or "als_learning_walk"
+            && !data.Sections.SelectMany(section => section.Fields).Any(field =>
+                field.Label.Equals("Learning walk delivery area", StringComparison.OrdinalIgnoreCase)))
+            data = data with { Sections = [new RecordReportSection("Visit context",
+                [new RecordReportField("Learning walk delivery area", "Not recorded")]), .. data.Sections] };
         if (string.Equals(data.RecordType, "uco_tla_review", StringComparison.OrdinalIgnoreCase))
             return CreateUcoTlaRecordReport(data);
         var templateName = TemplateName(data.RecordType);
@@ -447,6 +524,10 @@ public sealed class WordExportService(Microsoft.Extensions.Options.IOptions<Expo
         SetCell(tables, 2, 3, 1, Value(data, "Team level", "Team"));
         SetCell(tables, 2, 5, 0, Value(data, "Agreed Learning Walk theme", "Agreed theme", "Theme"));
         SetCell(tables, 2, 5, 1, data.AcademicYear);
+        if (tables.Count > 2)
+            tables[2].Append(new W.TableRow(
+                new W.TableCell(Paragraph("Learning walk delivery area", "FieldLabel")),
+                new W.TableCell(Paragraph(Value(data, "Learning walk delivery area") ?? "Not recorded", "Normal"))));
         MarkLabelCheckboxes(tables, 3, ParseSelections(Value(data, "Additional themes or context", "Additional themes")));
         SetCell(tables, 4, 0, 0, Value(data, "Other theme or additional context", "Other theme"));
         MarkRubric(tables, 6, ParseScore(Value(data, "Practice Observed", "Practice observed", "Practice observed score")));

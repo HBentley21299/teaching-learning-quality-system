@@ -12,6 +12,55 @@ public static class QaReviewEndpoints
     public static IEndpointRouteBuilder MapQaReviewEndpoints(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api/v1/qa-hub").RequireAuthorization();
+        api.AddEndpointFilter(async (context, next) =>
+        {
+            try { return await next(context); }
+            catch (UnauthorizedAccessException exception)
+            {
+                return Results.Json(new { message = exception.Message }, statusCode: StatusCodes.Status403Forbidden);
+            }
+        });
+
+        api.MapGet("/form-access-settings", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken token) =>
+        {
+            var user = await CurrentUser(principal, store, token);
+            return QaReviewPolicy.CanManage(user) ? Results.Ok(await store.GetQaFormAccessSettingsAsync(user, token)) : Results.Forbid();
+        });
+        api.MapPut("/form-access-settings/{templateId:guid}", async (Guid templateId, SaveQaFormAccessSettingRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken token) =>
+        {
+            var user = await CurrentUser(principal, store, token);
+            if (!QaReviewPolicy.CanManage(user)) return Results.Forbid();
+            try { return Results.Ok(await store.SaveQaFormAccessSettingAsync(templateId, request, user, token)); }
+            catch (System.Data.DBConcurrencyException exception) { return Results.Conflict(new { message = exception.Message }); }
+        });
+
+        api.MapGet("/not-seen-settings", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken token) =>
+        {
+            var user = await CurrentUser(principal, store, token);
+            return QaReviewPolicy.CanManage(user) ? Results.Ok(await store.GetQaNotSeenSettingsAsync(token)) : Results.Forbid();
+        });
+        api.MapPut("/not-seen-settings/{templateId:guid}", async (Guid templateId, SaveQaNotSeenSettingRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken token) =>
+        {
+            var user = await CurrentUser(principal, store, token);
+            if (!QaReviewPolicy.CanManage(user)) return Results.Forbid();
+            try { return Results.Ok(await store.SaveQaNotSeenSettingAsync(templateId, request, user, token)); }
+            catch (System.Data.DBConcurrencyException exception) { return Results.Conflict(new { message = exception.Message }); }
+        });
+
+        api.MapGet("/outcome-labels", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken token) =>
+        {
+            var user = await CurrentUser(principal, store, token);
+            return QaReviewPolicy.HasHubPermission(user) || QaReviewPolicy.CanManage(user)
+                ? Results.Ok(await store.GetQaOutcomeLabelsAsync(token)) : Results.Forbid();
+        });
+
+        api.MapPut("/outcome-labels", async (SaveQaOutcomeLabelsRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken token) =>
+        {
+            var user = await CurrentUser(principal, store, token);
+            if (!QaReviewPolicy.CanManage(user)) return Results.Forbid();
+            try { return Results.Ok(await store.SaveQaOutcomeLabelsAsync(request, user, token)); }
+            catch (System.Data.DBConcurrencyException exception) { return Results.Conflict(new { message = exception.Message }); }
+        });
 
         api.MapGet("/summary", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken token) =>
         {
@@ -24,7 +73,7 @@ public static class QaReviewEndpoints
         api.MapGet("/activities", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken token) =>
         {
             var user = await CurrentUser(principal, store, token);
-            return QaReviewPolicy.HasHubPermission(user)
+            return QaReviewPolicy.HasHubPermission(user) || QaReviewPolicy.CanManage(user)
                 ? Results.Ok(await store.GetQaActivityTypesAsync(token))
                 : Results.Forbid();
         });

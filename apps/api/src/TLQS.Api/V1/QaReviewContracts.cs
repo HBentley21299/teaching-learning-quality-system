@@ -1,4 +1,15 @@
+using TLQS.Application.Workflows;
+
 namespace TLQS.Api.V1;
+
+public sealed record QaOutcomeLabelsState(QaOutcomeLabels Labels, byte[]? RowVersion, bool IsAvailable);
+public sealed record SaveQaOutcomeLabelsRequest(string Below, string At, string Above, string NotApplicable, byte[]? RowVersion);
+public sealed record QaNotSeenSetting(Guid TemplateId, string ActivityName, string TemplateName, bool AllowsNotSeen, byte[] RowVersion);
+public sealed record SaveQaNotSeenSettingRequest(bool AllowsNotSeen, byte[]? RowVersion);
+public sealed record QaFormAccessSetting(Guid TemplateId, string ActivityName, string TemplateName, bool RestrictQaStaff, IReadOnlyList<Guid> StaffIds, byte[] RowVersion);
+public sealed record QaFormAccessStaff(Guid StaffId, string DisplayName, string Email);
+public sealed record QaFormAccessSettings(IReadOnlyList<QaFormAccessSetting> Forms, IReadOnlyList<QaFormAccessStaff> Staff);
+public sealed record SaveQaFormAccessSettingRequest(bool RestrictQaStaff, IReadOnlyList<Guid> StaffIds, byte[]? RowVersion);
 
 public sealed record QaCapabilities(
     bool CanConfigure,
@@ -79,7 +90,8 @@ public sealed record QaReviewActivitySummary(
     Guid TemplateId,
     string TemplateName,
     int DisplayOrder,
-    IReadOnlyList<QaQuestionSummary> Questions);
+    IReadOnlyList<QaQuestionSummary> Questions,
+    bool CanSubmitEvidence = true);
 
 public sealed record QaQuestionSummary(
     Guid Id,
@@ -97,7 +109,8 @@ public sealed record QaQuestionSummary(
     bool IsActive,
     string SourceStatus,
     string QuestionTag,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    bool AllowsNotSeen = false);
 
 public sealed record SaveQaReviewRequest(
     string Title,
@@ -165,7 +178,9 @@ public sealed record QaEvidenceSummary(
     int VersionNumber,
     byte[] RowVersion,
     bool CanEdit,
-    bool CanRemove);
+    bool CanRemove,
+    string? DeliveryAreaKey = null,
+    string? DeliveryAreaName = null);
 
 public sealed record QaEvidenceDetail(
     QaEvidenceSummary Evidence,
@@ -192,7 +207,8 @@ public sealed record QaEvidenceResponseSummary(
     bool CommentRequiredAtExpected,
     string? Outcome,
     string? Comment,
-    string? NotApplicableReason);
+    string? NotApplicableReason,
+    bool AllowsNotSeen = false);
 
 public sealed record SaveQaEvidenceRequest(
     Guid ReviewActivityId,
@@ -211,7 +227,8 @@ public sealed record SaveQaEvidenceRequest(
     string? AdditionalContext,
     IReadOnlyList<SaveQaEvidenceResponseRequest> Responses,
     string? CorrectionReason,
-    byte[]? RowVersion = null);
+    byte[]? RowVersion = null,
+    string? DeliveryAreaKey = null);
 
 public sealed record SaveQaEvidenceResponseRequest(
     Guid ReviewQuestionId,
@@ -246,7 +263,8 @@ public sealed record QaDashboardSummary(
     IReadOnlyList<string> TeamsWithoutEvidence,
     int LinkedActionCount,
     int OpenActionCount,
-    int SnapshotVersion);
+    int SnapshotVersion,
+    int NotSeenCount = 0);
 
 public sealed record QaDashboardBreakdown(
     string Key,
@@ -256,7 +274,8 @@ public sealed record QaDashboardBreakdown(
     int Above,
     int NotApplicable,
     int Rated,
-    decimal AtOrAbovePercentage);
+    decimal AtOrAbovePercentage,
+    int NotSeen = 0);
 
 public sealed record QaDashboardQuestionBreakdown(
     string ActivityKey,
@@ -271,7 +290,8 @@ public sealed record QaDashboardQuestionBreakdown(
     int Rated,
     decimal BelowPercentage,
     decimal AtPercentage,
-    decimal AbovePercentage);
+    decimal AbovePercentage,
+    int NotSeen = 0);
 
 public sealed record QaDashboardTimelinePoint(DateOnly Date, int EvidenceCount, int ResponseCount);
 
@@ -284,7 +304,8 @@ public sealed record QaReviewReportData(
     Guid? FacultyOrgUnitId,
     string? FacultyName,
     Guid? TeamOrgUnitId,
-    string? TeamName);
+    string? TeamName,
+    QaOutcomeLabels? OutcomeLabels = null);
 
 public sealed record QaAuditSummary(
     Guid Id,

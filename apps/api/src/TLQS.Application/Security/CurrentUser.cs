@@ -10,6 +10,8 @@ public sealed record CurrentUser(
     IReadOnlySet<string> Permissions,
     IReadOnlyList<AccessScopeDto> Scopes)
 {
+    public bool IsAdministrator { get; init; }
+
     public bool HasPermission(string permissionKey) => Permissions.Contains(permissionKey);
 
     public static CurrentUser Empty(string email) => new(

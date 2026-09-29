@@ -19,7 +19,8 @@ public sealed record StaffProfileSectionSummary(
     int CompletedActionCount,
     int OverdueActionCount,
     int LivCount,
-    int ProbationCount);
+    int ProbationCount,
+    int MandatoryCpdCount = 0);
 
 public sealed record StaffProfileLivSummary(
     Guid Id,

@@ -1,3 +1,4 @@
+import { useUnsavedChanges, confirmUnsavedNavigation } from "../components/UnsavedChangesGuard";
 import {
   CalendarClock,
   CheckCircle2,
@@ -111,6 +112,9 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   const [dueDate, setDueDate] = useState("");
   const [visibilitySetting, setVisibilitySetting] = useState<ActionVisibility>("staff_and_management");
   const [ownerOptions, setOwnerOptions] = useState<ActionOwnerOption[]>([]);
+  const [ownersLoading, setOwnersLoading] = useState(false);
+  const [ownersError, setOwnersError] = useState("");
+  const ownerRequest = useRef(0);
   const [completingId, setCompletingId] = useState("");
   const [completionNote, setCompletionNote] = useState("");
   const [cancellingId, setCancellingId] = useState("");
@@ -130,6 +134,22 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   const [deletingId, setDeletingId] = useState("");
   const [deletionReason, setDeletionReason] = useState("");
   const extensionPanelRef = useRef<HTMLElement | null>(null);
+  const editBaseline = localActions.find(action => action.id === editingId);
+  const createDirty = isCreating && Boolean(actionTheme || title || detail || dueDate || subjectStaffId || ownerStaffId !== (user.staffId ?? "") || visibilitySetting !== "staff_and_management");
+  const editDirty = Boolean(editBaseline && (editActionTheme !== editBaseline.actionTheme || editTitle !== editBaseline.title || editDetail !== (editBaseline.detail ?? "") || editOwnerId !== editBaseline.ownerStaffId || editDueDate !== (editBaseline.dueDate ?? "") || editVisibility !== editBaseline.visibilitySetting));
+  const notesDirty = Boolean(completingId && completionNote || cancellingId && cancellationComments || deletingId && deletionReason || extendingId && (extensionReason || extendedDueDate !== nextDate(localActions.find(action => action.id === extendingId)?.dueDate)));
+  const clearNavigation = useUnsavedChanges({ dirty: createDirty || editDirty || notesDirty, saving: isSaving, label: "Action changes",
+    onSave: isCreating ? createAction : editingId ? saveEdit : undefined, onDiscard: resetActionEditors });
+  function resetActionEditors() {
+    setIsCreating(false); setEditingId(""); setCompletingId(""); setCancellingId(""); setExtendingId(""); setDeletingId("");
+    setActionTheme(""); setTitle(""); setDetail(""); setDueDate(""); setSubjectStaffId(""); setOwnerStaffId(user.staffId ?? ""); setVisibilitySetting("staff_and_management");
+    setCompletionNote(""); setCancellationComments(""); setExtendedDueDate(""); setExtensionReason(""); setDeletionReason("");
+  }
+  async function changeEditor(change: () => void) {
+    if (!await confirmUnsavedNavigation()) return;
+    resetActionEditors(); clearNavigation(); change();
+  }
+
 
   const canManageActions = user.permissions.includes("actions.manage");
   const canManageUcoActions = user.permissions.includes("uco_tla.manage")
@@ -168,14 +188,27 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   useEffect(() => {
     if (!initialActionId) return;
     const action = localActions.find((candidate) => candidate.id === initialActionId);
-    if (action) void showDetail(action);
+    if (action && detailId !== action.id) void showDetail(action);
   }, [initialActionId, localActions]);
 
+  async function loadOwnerOptions() {
+    const version = ++ownerRequest.current;
+    const action = localActions.find(item => item.id === editingId);
+    setOwnersLoading(true); setOwnersError(""); setOwnerOptions([]);
+    try {
+      const options = await api.actionOwnerOptions(action?.sourceRecordId, action?.subjectStaffId ?? (subjectStaffId || undefined));
+      if (version !== ownerRequest.current) return;
+      setOwnerOptions(options);
+    } catch {
+      if (version === ownerRequest.current) setOwnersError("Eligible owners could not be loaded. Retry before assigning this action.");
+    } finally { if (version === ownerRequest.current) setOwnersLoading(false); }
+  }
   useEffect(() => {
-    void api.actionOwnerOptions(undefined, subjectStaffId || undefined)
-      .then(setOwnerOptions)
-      .catch(() => setOwnerOptions([]));
-  }, [subjectStaffId]);
+    void loadOwnerOptions();
+    return () => { ownerRequest.current += 1; };
+  // The owner scope changes with the edited action or the new action's subject.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingId, subjectStaffId]);
 
   const availableOwnerStaff = useMemo(() => {
     const ids = new Set(ownerOptions.map((option) => option.staffId));
@@ -183,11 +216,11 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   }, [ownerOptions, staff]);
 
   const facultyOptions = useMemo(
-    () => orgUnits.filter((unit) => !unit.parentOrgUnitId && unit.isActive).sort((left, right) => left.name.localeCompare(right.name)),
+    () => orgUnits.filter((unit) => unit.orgUnitType === "faculty" && unit.isActive).sort((left, right) => left.name.localeCompare(right.name)),
     [orgUnits]
   );
   const teamOptions = useMemo(
-    () => orgUnits.filter((unit) => unit.parentOrgUnitId === facultyFilter && unit.isActive).sort((left, right) => left.name.localeCompare(right.name)),
+    () => orgUnits.filter((unit) => ["team", "faculty_child", "faculty_child_code"].includes(unit.orgUnitType) && unit.parentOrgUnitId === facultyFilter && unit.isActive).sort((left, right) => left.name.localeCompare(right.name)),
     [facultyFilter, orgUnits]
   );
   const sourceOptions = useMemo(
@@ -230,27 +263,29 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   }, [dueFilter, facultyFilter, includeDeleted, localActions, ownerFilter, ownershipFilter, sortMode, sourceFilter, staffFilter, statusFilter, teamFilter, user.staffId]);
 
   async function refresh() {
-    await onChanged();
-    const nextActions = await api.actions(includeDeleted, academicYear);
-    setLocalActions(nextActions);
+    try {
+      await onChanged();
+      const nextActions = await api.actions(includeDeleted, academicYear);
+      setLocalActions(nextActions);
+    } catch { setStatusMessage(current => `${current} The action list could not be refreshed; reload it to see the latest state.`); }
   }
 
-  async function createAction() {
+  async function createAction(): Promise<boolean> {
+    if (isSaving) return false;
+    if (ownersLoading || ownersError) { setStatusMessage("Load the eligible owners before saving."); return false; }
     if (!actionTheme.trim() || !title.trim() || !ownerStaffId || !dueDate) {
-      setStatusMessage("An action needs an action theme, action, assigned owner and implementation date.");
-      return;
+      setStatusMessage("An action needs an action theme, action, assigned owner and implementation date."); return false;
     }
     setIsSaving(true);
-    const result = await api.createAction({
-      actionTheme: actionTheme.trim(), title: title.trim(), detail: detail.trim() || undefined, ownerStaffId,
-      subjectStaffId: subjectStaffId || undefined, dueDate: dueDate || undefined,
-      publishedToStaff: visibilitySetting !== "source_editors", visibilitySetting
-    });
-    setIsSaving(false);
-    if (!result.ok) return setStatusMessage(result.message ?? "The action could not be created.");
-    setStatusMessage("Action created and assigned.");
-    setIsCreating(false); setActionTheme(""); setTitle(""); setDetail(""); setDueDate(""); setSubjectStaffId("");
-    await refresh();
+    try {
+      const result = await api.createAction({
+        actionTheme: actionTheme.trim(), title: title.trim(), detail: detail.trim() || undefined, ownerStaffId,
+        subjectStaffId: subjectStaffId || undefined, dueDate: dueDate || undefined,
+        publishedToStaff: visibilitySetting !== "source_editors", visibilitySetting
+      });
+      if (!result.ok) { setStatusMessage(result.message ?? "The action could not be created. Your changes are still here."); return false; }
+      setStatusMessage("Action created and assigned."); resetActionEditors(); clearNavigation(); await refresh(); return true;
+    } finally { setIsSaving(false); }
   }
 
   async function completeAction(actionId: string) {
@@ -286,35 +321,46 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   }
 
   async function showDetail(action: ActionSummary) {
+    if (!await confirmUnsavedNavigation()) return;
+    resetActionEditors(); clearNavigation();
     setDetailId(action.id);
     onActionOpened?.(action.id);
-    setExtensions(action.extensionCount ? await api.actionExtensions(action.id) : []);
+    setExtensions([]);
+    try { setExtensions(action.extensionCount ? await api.actionExtensions(action.id) : []); }
+    catch { setStatusMessage("Action details are available, but extension history could not be loaded. Open the action again to retry."); }
   }
 
   async function beginEdit(action: ActionSummary) {
-    setEditingId(action.id); setEditActionTheme(action.actionTheme); setEditTitle(action.title); setEditDetail(action.detail ?? "");
-    setEditOwnerId(action.ownerStaffId); setEditDueDate(action.dueDate ?? ""); setEditVisibility(action.visibilitySetting);
-    const options = await api.actionOwnerOptions(action.sourceRecordId, action.subjectStaffId);
-    setOwnerOptions(options);
+    await changeEditor(() => {
+      setEditingId(action.id); setEditActionTheme(action.actionTheme); setEditTitle(action.title); setEditDetail(action.detail ?? "");
+      setEditOwnerId(action.ownerStaffId); setEditDueDate(action.dueDate ?? ""); setEditVisibility(action.visibilitySetting);
+    });
   }
 
-  async function saveEdit() {
-    if (!editingId || !editActionTheme.trim() || !editTitle.trim() || !editOwnerId) return;
+  async function saveEdit(): Promise<boolean> {
+    if (isSaving) return false;
+    if (ownersLoading || ownersError) { setStatusMessage("Load the eligible owners before saving."); return false; }
+    if (!editingId || !editActionTheme.trim() || !editTitle.trim() || !editOwnerId) { setStatusMessage("An action theme, action and owner are required."); return false; }
     setIsSaving(true);
-    const result = await api.updateAction(editingId, {
-      actionTheme: editActionTheme.trim(), title: editTitle.trim(), detail: editDetail.trim() || undefined,
-      dueDate: editDueDate || undefined, ownerStaffId: editOwnerId, visibilitySetting: editVisibility
-    });
-    setIsSaving(false);
-    if (!result.ok) return setStatusMessage(result.message ?? "The action could not be updated.");
-    setStatusMessage("Action updated."); setEditingId(""); await refresh();
+    try {
+      const result = await api.updateAction(editingId, {
+        actionTheme: editActionTheme.trim(), title: editTitle.trim(), detail: editDetail.trim() || undefined,
+        dueDate: editDueDate || undefined, ownerStaffId: editOwnerId, visibilitySetting: editVisibility
+      });
+      if (!result.ok) { setStatusMessage(result.message ?? "The action could not be updated. Your changes are still here."); return false; }
+      setStatusMessage("Action updated."); setEditingId(""); clearNavigation(); await refresh(); return true;
+    } finally { setIsSaving(false); }
   }
 
   async function deleteAction() {
+    if (isSaving) return;
     if (!deletingId || !deletionReason.trim()) return setStatusMessage("Add a deletion reason.");
-    const result = await api.deleteAction(deletingId, deletionReason.trim());
-    if (!result.ok) return setStatusMessage(result.message ?? "The action could not be deleted.");
-    setStatusMessage("Action moved to deleted records."); setDeletingId(""); setDeletionReason(""); await refresh();
+    setIsSaving(true);
+    try {
+      const result = await api.deleteAction(deletingId, deletionReason.trim());
+      if (!result.ok) return setStatusMessage(result.message ?? "The action could not be deleted.");
+      setStatusMessage("Action moved to deleted records."); setDeletingId(""); setDeletionReason(""); await refresh();
+    } finally { setIsSaving(false); }
   }
 
   async function restoreAction(actionId: string) {
@@ -337,7 +383,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
         <div><p className="eyebrow">{canViewTeamActions ? "Teaching and learning follow-up" : "Your follow-up"}</p><h1>Actions</h1></div>
         <div className="toolbar">
           {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear }} moduleKey="actions" /> : null}
-          {canManageActions ? <Button icon={Plus} onClick={() => setIsCreating((current) => !current)} variant="primary">Create action</Button> : null}
+          {canManageActions ? <Button icon={Plus} onClick={() => void changeEditor(() => setIsCreating(!isCreating))} variant="primary">Create action</Button> : null}
         </div>
       </div>
 
@@ -348,30 +394,32 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
         <button onClick={() => setStatusFilter("complete")} type="button"><strong>{counts.completed}</strong><span>Completed</span></button>
       </div>
 
-      {statusMessage ? <div className="notice-row">{statusMessage}</div> : null}
+      {statusMessage ? <div className="notice-row" role="status">{statusMessage}</div> : null}
+      {(isCreating || editingId) && ownersLoading ? <p role="status">Loading eligible owners…</p> : null}
+      {(isCreating || editingId) && ownersError ? <div className="notice-row" role="alert">{ownersError} <Button onClick={() => void loadOwnerOptions()}>Retry owners</Button></div> : null}
 
       {isCreating ? (
         <section className="panel">
           <div className="panel-heading"><h2>New action</h2><span>Assign a standalone action within your permitted scope</span></div>
-          <div className="entry-form">
+          <fieldset className="entry-form" disabled={isSaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             <div className="entry-field-grid">
               <label className="entry-field entry-field-wide"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id="standalone-action-theme" onChange={setActionTheme} sourceFormType="standalone" value={actionTheme} /></label>
-              <label className="entry-field entry-field-wide"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label>
-              <label className="entry-field entry-field-wide"><span>Description</span><textarea onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} /></label>
+              <label className="entry-field entry-field-wide"><span>Action <strong>Required</strong></span><textarea maxLength={300} disabled={isSaving} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label>
+              <label className="entry-field entry-field-wide"><span>Description</span><textarea disabled={isSaving} onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} /></label>
               <label className="entry-field"><span>Staff member</span><StaffSearchSelect id="action-subject" onChange={setSubjectStaffId} staff={staff} value={subjectStaffId} /></label>
               <label className="entry-field"><span>Owner <strong>Required</strong></span><StaffSearchSelect id="action-owner" onChange={setOwnerStaffId} staff={availableOwnerStaff} value={ownerStaffId} /></label>
-              <label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label>
+              <label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input disabled={isSaving} onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label>
               <label className="entry-field"><span>Visibility</span><select onChange={(event) => setVisibilitySetting(event.target.value as ActionVisibility)} value={visibilitySetting}>{Object.entries(visibilityLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
             </div>
-            <div className="toolbar"><Button icon={X} onClick={() => setIsCreating(false)}>Cancel</Button><Button disabled={isSaving} icon={Plus} onClick={() => void createAction()} variant="primary">Create action</Button></div>
-          </div>
+            <div className="toolbar"><Button icon={X} onClick={() => void changeEditor(() => undefined)}>Cancel</Button><Button disabled={isSaving || ownersLoading || Boolean(ownersError)} icon={Plus} onClick={() => void createAction()} variant="primary">Create action</Button></div>
+          </fieldset>
         </section>
       ) : null}
 
-      {extendingId ? <section className="panel" ref={extensionPanelRef}><div className="panel-heading"><h2>Extend action</h2><span>The original implementation date remains in the audit history</span></div><div className="entry-form"><div className="entry-field-grid">
-        <label className="entry-field"><span>Revised implementation date</span><input min={nextDate(localActions.find((action) => action.id === extendingId)?.dueDate)} onChange={(event) => setExtendedDueDate(event.target.value)} type="date" value={extendedDueDate} /></label>
-        <label className="entry-field entry-field-wide"><span>Extension reason</span><textarea onChange={(event) => setExtensionReason(event.target.value)} rows={3} value={extensionReason} /></label>
-      </div><div className="toolbar"><Button icon={X} onClick={() => { setExtendingId(""); setExtendedDueDate(""); setExtensionReason(""); }}>Cancel</Button><Button disabled={isSaving} icon={CalendarClock} onClick={() => void extendAction(extendingId)} variant="primary">{isSaving ? "Extending…" : "Extend action"}</Button></div></div></section> : null}
+      {extendingId ? <section className="panel" ref={extensionPanelRef}><div className="panel-heading"><h2>Extend action</h2><span>The original implementation date remains in the audit history</span></div><fieldset className="entry-form" disabled={isSaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><div className="entry-field-grid">
+        <label className="entry-field"><span>Revised implementation date</span><input min={nextDate(localActions.find((action) => action.id === extendingId)?.dueDate)} disabled={isSaving} onChange={(event) => setExtendedDueDate(event.target.value)} type="date" value={extendedDueDate} /></label>
+        <label className="entry-field entry-field-wide"><span>Extension reason</span><textarea disabled={isSaving} onChange={(event) => setExtensionReason(event.target.value)} rows={3} value={extensionReason} /></label>
+      </div><div className="toolbar"><Button icon={X} onClick={() => void changeEditor(() => undefined)}>Cancel</Button><Button disabled={isSaving} icon={CalendarClock} onClick={() => void extendAction(extendingId)} variant="primary">{isSaving ? "Extending…" : "Extend action"}</Button></div></fieldset></section> : null}
 
       <section className="panel action-inbox-panel">
         <div className="panel-heading"><h2>Action inbox</h2><span>{visibleActions.length} matching action{visibleActions.length === 1 ? "" : "s"}</span></div>
@@ -400,9 +448,9 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
               <Button icon={Eye} onClick={() => void showDetail(row)} variant="quiet">View</Button>
               {row.isDeleted && canManageAction(row) ? <Button icon={RotateCcw} onClick={() => void restoreAction(row.id)} variant="quiet">Restore</Button> : null}
               {!row.isDeleted && canManageAction(row) ? <Button icon={Pencil} onClick={() => void beginEdit(row)} variant="quiet">Edit</Button> : null}
-              {!row.isDeleted && row.dueDate && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={CalendarClock} onClick={() => { setStatusMessage(""); setExtendingId(row.id); setExtendedDueDate(nextDate(row.dueDate)); setExtensionReason(""); }} variant="quiet">Extend</Button> : null}
-              {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={CheckCircle2} onClick={() => setCompletingId(row.id)} variant="quiet">Complete</Button> : null}
-              {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={XCircle} onClick={() => setCancellingId(row.id)} variant="quiet">Cancel</Button> : null}
+              {!row.isDeleted && row.dueDate && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={CalendarClock} onClick={() => void changeEditor(() => { setStatusMessage(""); setExtendingId(row.id); setExtendedDueDate(nextDate(row.dueDate)); })} variant="quiet">Extend</Button> : null}
+              {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={CheckCircle2} onClick={() => void changeEditor(() => setCompletingId(row.id))} variant="quiet">Complete</Button> : null}
+              {!row.isDeleted && !row.completedDate && row.statusKey !== "cancelled" && (canManageAction(row) || row.ownerStaffId === user.staffId) ? <Button icon={XCircle} onClick={() => void changeEditor(() => setCancellingId(row.id))} variant="quiet">Cancel</Button> : null}
               {!row.isDeleted && canManageAction(row) && (row.completedDate || row.statusKey === "cancelled") ? <Button icon={RotateCcw} onClick={() => void reopenAction(row.id)} variant="quiet">Reopen</Button> : null}
             </div> }
           ]} />
@@ -429,22 +477,22 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
           </dl>
           {extensions.length ? <div className="action-history"><h3>Extension history</h3>{extensions.map((extension) => <div key={extension.id}><strong>{extension.previousDueDate} to {extension.extendedDueDate}</strong><span>{extension.reason}</span><small>{formatDateTime(extension.createdAt)} by {extension.createdByName ?? "System"}</small></div>)}</div> : null}
           {selectedAction.sourceRecordId && onOpenSource ? <div className="toolbar"><Button icon={ExternalLink} onClick={() => onOpenSource(selectedAction)} variant="secondary">Open source record</Button></div> : null}
-          {canManageAction(selectedAction) && !selectedAction.isDeleted ? <div className="toolbar"><Button icon={Trash2} onClick={() => { setDeletingId(selectedAction.id); setDeletionReason(""); }} variant="danger">Delete action</Button></div> : null}
+          {canManageAction(selectedAction) && !selectedAction.isDeleted ? <div className="toolbar"><Button icon={Trash2} onClick={() => void changeEditor(() => setDeletingId(selectedAction.id))} variant="danger">Delete action</Button></div> : null}
         </section>
       ) : null}
 
-      {editingId ? <section className="panel"><div className="panel-heading"><h2>Edit action</h2><span>Changes are audit logged</span></div><div className="entry-form"><div className="entry-field-grid">
+      {editingId ? <section className="panel"><div className="panel-heading"><h2>Edit action</h2><span>Changes are audit logged</span></div><fieldset className="entry-form" disabled={isSaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><div className="entry-field-grid">
         <label className="entry-field entry-field-wide"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id="edit-action-theme" onChange={setEditActionTheme} sourceFormType={localActions.find((action) => action.id === editingId)?.sourceFormType ?? "standalone"} value={editActionTheme} /></label>
-        <label className="entry-field entry-field-wide"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setEditTitle(event.target.value)} rows={3} value={editTitle} /></label>
-        <label className="entry-field entry-field-wide"><span>Description</span><textarea onChange={(event) => setEditDetail(event.target.value)} rows={3} value={editDetail} /></label>
+        <label className="entry-field entry-field-wide"><span>Action <strong>Required</strong></span><textarea maxLength={300} disabled={isSaving} onChange={(event) => setEditTitle(event.target.value)} rows={3} value={editTitle} /></label>
+        <label className="entry-field entry-field-wide"><span>Description</span><textarea disabled={isSaving} onChange={(event) => setEditDetail(event.target.value)} rows={3} value={editDetail} /></label>
         <label className="entry-field"><span>Owner</span><StaffSearchSelect id="edit-action-owner" onChange={setEditOwnerId} staff={availableOwnerStaff} value={editOwnerId} /></label>
-        <label className="entry-field"><span>Date to be implemented by</span><input onChange={(event) => setEditDueDate(event.target.value)} type="date" value={editDueDate} /></label>
+        <label className="entry-field"><span>Date to be implemented by</span><input disabled={isSaving} onChange={(event) => setEditDueDate(event.target.value)} type="date" value={editDueDate} /></label>
         <label className="entry-field"><span>Visibility</span><select onChange={(event) => setEditVisibility(event.target.value as ActionVisibility)} value={editVisibility}>{Object.entries(visibilityLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-      </div><div className="toolbar"><Button icon={X} onClick={() => setEditingId("")}>Cancel</Button><Button disabled={isSaving} icon={CheckCircle2} onClick={() => void saveEdit()} variant="primary">Save changes</Button></div></div></section> : null}
+      </div><div className="toolbar"><Button icon={X} onClick={() => void changeEditor(() => undefined)}>Cancel</Button><Button disabled={isSaving || ownersLoading || Boolean(ownersError)} icon={CheckCircle2} onClick={() => void saveEdit()} variant="primary">Save changes</Button></div></fieldset></section> : null}
 
-      {completingId ? <ActionNotePanel heading="Complete action" label="Closure comments" value={completionNote} onChange={setCompletionNote} onCancel={() => { setCompletingId(""); setCompletionNote(""); }} onSave={() => void completeAction(completingId)} saveLabel="Mark completed" saving={isSaving} /> : null}
-      {cancellingId ? <ActionNotePanel heading="Cancel action" label="Cancellation reason" value={cancellationComments} onChange={setCancellationComments} onCancel={() => { setCancellingId(""); setCancellationComments(""); }} onSave={() => void cancelAction(cancellingId)} saveLabel="Cancel action" saving={isSaving} danger /> : null}
-      {deletingId ? <ActionNotePanel heading="Delete action" label="Deletion reason" value={deletionReason} onChange={setDeletionReason} onCancel={() => { setDeletingId(""); setDeletionReason(""); }} onSave={() => void deleteAction()} saveLabel="Delete action" saving={isSaving} danger /> : null}
+      {completingId ? <ActionNotePanel heading="Complete action" label="Closure comments" value={completionNote} onChange={setCompletionNote} onCancel={() => void changeEditor(() => undefined)} onSave={() => void completeAction(completingId)} saveLabel="Mark completed" saving={isSaving} /> : null}
+      {cancellingId ? <ActionNotePanel heading="Cancel action" label="Cancellation reason" value={cancellationComments} onChange={setCancellationComments} onCancel={() => void changeEditor(() => undefined)} onSave={() => void cancelAction(cancellingId)} saveLabel="Cancel action" saving={isSaving} danger /> : null}
+      {deletingId ? <ActionNotePanel heading="Delete action" label="Deletion reason" value={deletionReason} onChange={setDeletionReason} onCancel={() => void changeEditor(() => undefined)} onSave={() => void deleteAction()} saveLabel="Delete action" saving={isSaving} danger /> : null}
 
     </div>
   );
@@ -463,8 +511,8 @@ type ActionNotePanelProps = {
 };
 
 function ActionNotePanel({ heading, label, value, onChange, onCancel, onSave, saveLabel, saving, danger = false }: ActionNotePanelProps) {
-  return <section className="panel"><div className="panel-heading"><h2>{heading}</h2><span>This change is audit logged</span></div><div className="entry-form">
-    <label className="entry-field entry-field-wide"><span>{label}</span><textarea onChange={(event) => onChange(event.target.value)} rows={3} value={value} /></label>
+  return <section className="panel"><div className="panel-heading"><h2>{heading}</h2><span>This change is audit logged</span></div><fieldset className="entry-form" disabled={saving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+    <label className="entry-field entry-field-wide"><span>{label}</span><textarea disabled={saving} onChange={(event) => onChange(event.target.value)} rows={3} value={value} /></label>
     <div className="toolbar"><Button icon={X} onClick={onCancel}>Back</Button><Button disabled={saving} icon={danger ? Trash2 : CheckCircle2} onClick={onSave} variant={danger ? "danger" : "primary"}>{saveLabel}</Button></div>
-  </div></section>;
+  </fieldset></section>;
 }

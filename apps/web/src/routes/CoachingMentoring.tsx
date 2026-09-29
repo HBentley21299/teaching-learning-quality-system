@@ -17,6 +17,7 @@ import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { ActionThemeSelect } from "../components/ActionThemeSelect";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { Button } from "../design-system/Button";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { api } from "../services/api";
 import type {
   CoachingActionReview,
@@ -26,7 +27,6 @@ import type {
   CoachingLookupOption,
   CoachingPreviousActionSummary,
   CoachingReviewOutcome,
-  CoachingRubricOption,
   CoachingSessionAction,
   CoachingSessionDetail,
   CoachingSessionSummary,
@@ -85,6 +85,9 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
   const [historyOpen, setHistoryOpen] = useState(false);
   const [recordOwnershipView, setRecordOwnershipView] = useState<"mine" | "scope">("mine");
   const openedInitialRecord = useRef("");
+  const formBaseline = useRef("");
+  const clearNavigation = useUnsavedChanges({ label: "Coaching and mentoring session", dirty: view === "form" && Boolean(form) && JSON.stringify(form) !== formBaseline.current,
+    saving: isSaving, onSave: () => save(detail?.status === "completed" ? "completed" : "draft"), onDiscard: () => { if (formBaseline.current) setForm(JSON.parse(formBaseline.current) as SaveCoachingSessionRequest); } });
 
   useEffect(() => {
     void refreshSessions();
@@ -126,7 +129,8 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
       const nextContext = await api.coachingContext(selectedStaffId);
       setContext(nextContext);
       setDetail(null);
-      setForm(emptyCoachingForm(selectedStaffId));
+      const nextForm = emptyCoachingForm(selectedStaffId);
+      formBaseline.current = JSON.stringify(nextForm); setForm(nextForm);
       setView("form");
     } catch {
       setMessage("A coaching record cannot be started for the selected staff member.");
@@ -136,6 +140,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
   }
 
   async function openSession(id: string) {
+    if (!await confirmUnsavedNavigation()) return;
     setIsLoading(true);
     setMessage("");
     try {
@@ -146,6 +151,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
       setSelectedStaffId(nextDetail.staffId);
       setContext(nextContext);
       setDetail(nextDetail);
+      formBaseline.current = JSON.stringify(formFromDetail(nextDetail));
       setForm(formFromDetail(nextDetail));
       setView("form");
       onRecordOpened?.(nextDetail.recordId);
@@ -183,45 +189,50 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
     }
   }
 
-  async function save(status: "draft" | "completed") {
-    if (!form) return;
+  async function save(status: "draft" | "completed"): Promise<boolean> {
+    if (!form) return false;
     const previousActions = detail?.previousActions ?? context?.previousActions ?? [];
     if (status === "completed") {
       const validationMessage = validateCompletion(form, previousActions, configuration?.maxActionsPerSession ?? 3);
       if (validationMessage) {
         setMessage(validationMessage);
-        return;
+        return false;
       }
       if (!window.confirm(form.closeCycle
         ? "Complete this session and close the coaching cycle?"
-        : "Complete this session and publish its agreed actions?")) return;
+        : "Complete this session and publish its agreed actions?")) return false;
     }
 
     setIsSaving(true);
-    setMessage("");
-    const request = { ...form, status };
-    const result = detail
-      ? await api.updateCoachingSession(detail.id, request)
-      : await api.createCoachingSession(request);
-    setIsSaving(false);
+    try {
+      setMessage("");
+      const request = { ...form, status };
+      const result = detail
+        ? await api.updateCoachingSession(detail.id, request)
+        : await api.createCoachingSession(request);
 
-    if (!result.ok || !result.data) {
-      setMessage(result.message ?? "The coaching session could not be saved.");
-      return;
-    }
 
-    await refreshSessions();
-    const savedDetail = await api.coachingSession(result.data.id).catch(() => null);
-    if (savedDetail) {
-      setDetail(savedDetail);
-      setForm(formFromDetail(savedDetail));
-    }
-    setMessage(status === "completed"
-      ? form.closeCycle
-        ? "Session completed and coaching cycle closed."
-        : "Session completed and agreed actions published."
-      : "Draft session saved.");
-    if (status === "completed") onActionsChanged();
+      if (!result.ok || !result.data) {
+        setMessage(result.message ?? "The coaching session could not be saved.");
+        return false;
+      }
+
+      formBaseline.current = JSON.stringify(form); clearNavigation();
+      await refreshSessions();
+      const savedDetail = await api.coachingSession(result.data.id).catch(() => null);
+      if (savedDetail) {
+        setDetail(savedDetail);
+        formBaseline.current = JSON.stringify(formFromDetail(savedDetail));
+        setForm(formFromDetail(savedDetail));
+      }
+      setMessage(status === "completed"
+        ? form.closeCycle
+          ? "Session completed and coaching cycle closed."
+          : "Session completed and agreed actions published."
+        : "Draft session saved.");
+      if (status === "completed") onActionsChanged();
+      return true;
+    } finally { setIsSaving(false); }
   }
 
   const filteredSessions = useMemo(() => {
@@ -252,7 +263,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
         form={form}
         isSaving={isSaving}
         message={message}
-        onBack={() => { setView("list"); setMessage(""); onRecordClosed?.(); }}
+        onBack={() => void confirmUnsavedNavigation().then(leave => { if (leave) { setView("list"); setMessage(""); onRecordClosed?.(); } })}
         onChange={setForm}
         onCycleChange={(value) => void changeCycle(value)}
         onSave={(status) => void save(status)}
@@ -266,7 +277,7 @@ export function CoachingMentoring({ staff, orgUnits, user, onActionsChanged, ini
         <div><p className="eyebrow">Professional development</p><h1>Coaching and Mentoring</h1></div>
       </div>
 
-      {message ? <div className="notice-row">{message}</div> : null}
+      {message ? <div className="notice-row" role="alert">{message}</div> : null}
 
       {canCreate ? (
         <section className="panel coaching-start-panel">
@@ -405,7 +416,7 @@ function CoachingSessionEditor({
     <div className="route-stack coaching-editor">
       <div className="route-header coaching-editor-header">
         <div>
-          <button className="back-link" onClick={onBack} type="button"><ArrowLeft size={16} aria-hidden="true" />Back to sessions</button>
+          <button className="back-link" onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })} type="button"><ArrowLeft size={16} aria-hidden="true" />Back to sessions</button>
           <p className="eyebrow">Coaching and Mentoring</p>
           <h1>{staffName || "Coaching and Mentoring Record"}</h1>
         </div>
@@ -417,7 +428,7 @@ function CoachingSessionEditor({
         </div>
       </div>
 
-      {message ? <div className="notice-row">{message}</div> : null}
+      {message ? <div className="notice-row" role="alert">{message}</div> : null}
 
       <fieldset disabled={!editable || isSaving}>
         <CoachingSection defaultOpen number={1} title="Session Details">
@@ -480,15 +491,13 @@ function CoachingSessionEditor({
           </CoachingSection>
         ) : null}
 
-        <CoachingSection number={sessionNumber > 1 && previousActions.length > 0 ? 3 : 2} title="Focus of Session and Current Practice">
+        <CoachingSection number={sessionNumber > 1 && previousActions.length > 0 ? 3 : 2} title="Focus of Session">
           <div className="coaching-form-grid coaching-form-grid-2">
             <label className="entry-field"><span>Primary focus area</span><select onChange={(event) => update("primaryFocusKey", event.target.value || undefined)} value={form.primaryFocusKey ?? ""}><option value="">Select primary focus</option>{configuration?.focusAreas.map((option) => <option key={option.id} value={option.valueKey}>{option.displayName}</option>)}</select></label>
             <label className="entry-field"><span>Secondary focus area <small>Optional</small></span><select onChange={(event) => update("secondaryFocusKey", event.target.value || undefined)} value={form.secondaryFocusKey ?? ""}><option value="">No secondary focus</option>{configuration?.focusAreas.filter((option) => option.valueKey !== form.primaryFocusKey).map((option) => <option key={option.id} value={option.valueKey}>{option.displayName}</option>)}</select></label>
           </div>
           {hasOtherFocus ? <label className="entry-field coaching-conditional-field"><span>Describe the other focus area</span><input onChange={(event) => update("focusOtherText", event.target.value)} value={form.focusOtherText ?? ""} /></label> : null}
           <TextAreaField label="What is the specific focus for this session?" onChange={(value) => update("specificSessionFocus", value)} rows={2} value={form.specificSessionFocus} />
-          <WordingRubric label="Current practice at the time of this session" onChange={(id) => update("currentPracticeDescriptorId", id)} options={configuration?.currentPracticeRubric ?? []} value={form.currentPracticeDescriptorId} />
-          <TextAreaField label="Briefly describe the current practice or evidence that informed this judgement" onChange={(value) => update("currentPracticeEvidence", value)} optional rows={2} value={form.currentPracticeEvidence} />
         </CoachingSection>
 
         <CoachingSection number={sessionNumber > 1 && previousActions.length > 0 ? 4 : 3} title="Coaching and Mentoring Conversation">
@@ -589,22 +598,6 @@ function MultiSelect({ title, options, values, onToggle }: { title: string; opti
   return <fieldset className="coaching-multi-select"><legend>{title}</legend>{options.map((option) => <label key={option.id}><input checked={values.includes(option.valueKey)} onChange={() => onToggle(option.valueKey)} type="checkbox" /><span>{option.displayName}</span></label>)}</fieldset>;
 }
 
-function WordingRubric({ label, options, value, onChange }: { label: string; options: CoachingRubricOption[]; value?: string; onChange: (id: string) => void }) {
-  return (
-    <fieldset className="coaching-wording-rubric">
-      <legend>{label}</legend>
-      <div>
-        {options.map((option) => (
-          <button aria-pressed={value === option.id} className={value === option.id ? "is-selected" : ""} key={option.id} onClick={() => onChange(option.id)} type="button">
-            <i aria-hidden="true" style={{ backgroundColor: option.colorHex ?? "#60736b" }} />
-            <span><strong>{option.visibleWording}</strong><small>{option.guidanceText}</small></span>
-          </button>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
 function ActionFields({ action, coachName, index, staffName, onChange }: { action: CoachingSessionAction; coachName: string; index: number; staffName: string; onChange: (changes: Partial<CoachingSessionAction>) => void }) {
   return (
     <div className="coaching-action-fields">
@@ -678,7 +671,7 @@ function formFromDetail(detail: CoachingSessionDetail): SaveCoachingSessionReque
 
 function validateCompletion(form: SaveCoachingSessionRequest, previousActions: CoachingPreviousActionSummary[], maxActions: number) {
   if (!form.deliveryMethod || !form.durationMinutes || !form.qualificationStatusKey) return "Complete all required Session Details before completing the record.";
-  if (!form.primaryFocusKey || !form.specificSessionFocus?.trim() || !form.currentPracticeDescriptorId) return "Complete the session focus and current-practice judgement.";
+  if (!form.primaryFocusKey || !form.specificSessionFocus?.trim()) return "Complete the session focus.";
   if ((form.primaryFocusKey === "other" || form.secondaryFocusKey === "other") && !form.focusOtherText?.trim()) return "Describe the focus area selected as Other.";
   if (form.supportTypes.length === 0 || !form.conversationSummary?.trim()) return "Select the support provided and add the conversation summary.";
   if (form.supportTypes.includes("other") && !form.supportOtherText?.trim()) return "Describe the support type selected as Other.";

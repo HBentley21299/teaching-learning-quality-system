@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, ArrowRight, BarChart3, BookOpenCheck, CalendarClock, CheckCircle2, ClipboardCheck, Eye, MessageSquareText, RefreshCw, Search, ShieldCheck, Sparkles, UsersRound } from "lucide-react";
-import { ExportExcelButton } from "../components/ExportButtons";
+import { DashboardReportButton } from "../components/ExportButtons";
 import { KpiStrip } from "../components/KpiStrip";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -66,7 +66,7 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview }: Props) {
   return <>
     <header className="intelligence-header">
       <div><p className="eyebrow">University Centre Oldham · {academicYear}</p><h1>Teaching, Learning and Assessment Reviews</h1><p>Workflow oversight and qualitative practice evidence. No teaching rating or score is calculated.</p></div>
-      <div className="intelligence-header-actions">{access.canExport ? <ExportExcelButton filters={{ academicYear }} moduleKey="uco-tla-reviews" /> : null}<Button disabled={isRefreshing} icon={RefreshCw} onClick={() => void refresh()}>{isRefreshing ? "Refreshing" : "Refresh"}</Button></div>
+      <div className="intelligence-header-actions">{access.canExport ? <DashboardReportButton filters={{ academicYear }} moduleKey="uco-tla-reviews" /> : null}<Button disabled={isRefreshing} icon={RefreshCw} onClick={() => void refresh()}>{isRefreshing ? "Refreshing" : "Refresh"}</Button></div>
     </header>
 
     {error ? <div className="intelligence-warning"><AlertCircle size={16} />{error}</div> : null}

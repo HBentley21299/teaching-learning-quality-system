@@ -20,7 +20,13 @@ public sealed record ElevatePracticeWorkspaceSummary(
     IReadOnlyList<string> SuggestedStrengthAreaKeys,
     IReadOnlyList<string> SuggestedDevelopmentAreaKeys,
     IReadOnlyList<ElevatePracticePlanSummary> DevelopmentPlans,
-    ElevateLivInformationSummary LivInformation);
+    ElevateLivInformationSummary LivInformation,
+    ElevateValidationSummary? Validation = null);
+
+public sealed record ElevateValidationEvent(string Action, string ActorName, DateTimeOffset At, string? Note);
+public sealed record ElevateValidationSummary(string Status, string? ReviewedByName, DateTimeOffset? ReviewedAt,
+    string? Feedback, byte[] RowVersion, bool CanValidate, IReadOnlyList<ElevateValidationEvent> History);
+public sealed record ReviewElevatePracticeRequest(string Action, string? Note, byte[]? RowVersion);
 
 public sealed record ElevatePracticeRatingScaleSummary(
     Guid Id,
@@ -60,7 +66,8 @@ public sealed record SaveElevatePracticeAssessmentRequest(
     bool Submit = false,
     IReadOnlyList<string>? StrengthAreaKeys = null,
     IReadOnlyList<string>? DevelopmentAreaKeys = null,
-    IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans = null);
+    IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans = null,
+    byte[]? RowVersion = null);
 public sealed record ElevatePracticeRatingRequest(Guid AreaId, Guid DescriptorId, Guid StatementId);
 public sealed record ElevatePracticeReflectionRequest(string AreaKey, string? Text);
 public sealed record ElevatePracticePlanRequest(
@@ -85,7 +92,11 @@ public sealed record ElevatePracticeProgressSummary(
     string AcademicYear,
     string Status,
     DateTimeOffset? UpdatedAt,
-    DateTimeOffset? SubmittedAt);
+    DateTimeOffset? SubmittedAt,
+    string ValidationStatus = "draft",
+    string? ReviewedByName = null,
+    DateTimeOffset? ReviewedAt = null,
+    string? Feedback = null);
 
 public sealed record AdminSaveElevatePracticeAssessmentRequest(
     IReadOnlyList<ElevatePracticeRatingRequest>? Ratings,
@@ -94,7 +105,10 @@ public sealed record AdminSaveElevatePracticeAssessmentRequest(
     string Status,
     IReadOnlyList<string>? StrengthAreaKeys = null,
     IReadOnlyList<string>? DevelopmentAreaKeys = null,
-    IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans = null);
+    IReadOnlyList<ElevatePracticePlanRequest>? DevelopmentPlans = null,
+    byte[]? RowVersion = null,
+    string? EditReason = null,
+    bool StaffPresent = false);
 
 public sealed record ElevateLookupOptionSummary(string Key, string Name, int DisplayOrder, bool IsOther = false);
 

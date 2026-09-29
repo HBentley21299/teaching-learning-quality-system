@@ -1,4 +1,12 @@
+import type { LearningWalkDeliveryArea } from "./learningWalkDeliveryAreas";
+import { ApiHttpError } from "./apiHttpError";
+import { apiFailureMessage } from "./apiFailure";
 import type {
+  QaOutcomeLabels,
+  QaNotSeenSetting,
+  QaFormAccessSetting,
+  QaFormAccessSettings,
+  QaOutcomeLabelsState,
   ActionSummary,
   AcademicYearSummary,
   ActionExtensionSummary,
@@ -46,6 +54,7 @@ import type {
   LivLifecycleDashboardSummary,
   ElevateEnvironmentPillarSummary,
   ElevatePracticeProgress,
+  ElevatePracticeValidationProgress,
   ElevatePracticeAudit,
   ElevatePracticeWorkspace,
   FormDefinition,
@@ -71,6 +80,8 @@ import type {
   RecordAudit,
   RecordSummary,
   RoomSummary,
+  AdminRoomSummary,
+  SaveAdminRoomRequest,
   SaveLivRecordRequest,
   SaveLivStageRequest,
   SaveManagerRelationshipRequest,
@@ -88,6 +99,7 @@ import type {
   SaveElevateStatusLevelRequest,
   SaveStaffReflectionRequest,
   StaffParticipationDashboardSummary,
+  EliSubmissionStaffSummary,
   StaffProfileDetail,
   StaffProfileActionSummary,
   StaffProfileCoachingSummary,
@@ -129,12 +141,11 @@ import type {
 
 import { clearLocalSession, getAccessToken, getLocalToken } from "./auth";
 
-// An expired local test-account token yields 401s; clear it and return to
-// the sign-in screen instead of leaving the app half-broken.
+// Expired local sessions need a sign-in prompt without discarding unsaved work.
 function handleExpiredLocalSession(status: number) {
   if (status === 401 && getLocalToken()) {
     clearLocalSession();
-    window.location.assign("/");
+    window.dispatchEvent(new Event("api:session-expired"));
   }
 }
 
@@ -153,6 +164,8 @@ export type ApiResult<T = never> = {
 };
 
 export type ExportFilters = {
+  deliveryAreaKey?: string;
+  dimensionLabel?: string;
   academicYear?: string;
   facultyCode?: string;
   teamCode?: string;
@@ -177,11 +190,17 @@ async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> 
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
+async function responseFailure(response: Response): Promise<string> {
+  handleExpiredLocalSession(response.status);
+  const payload: unknown = await response.json().catch(() => null);
+  return apiFailureMessage(response.status, payload, response.headers.get("retry-after"));
+}
+
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await requestApi(url, { headers: await buildHeaders(false) }, signal);
   if (!response.ok) {
     handleExpiredLocalSession(response.status);
-    throw new Error(`${response.status} ${response.statusText} for ${url}`);
+    throw new ApiHttpError(response.status, response.statusText, url, await responseFailure(response));
   }
 
   return (await response.json()) as T;
@@ -203,25 +222,12 @@ async function sendJson<TRequest, TResponse = never>(url: string, method: "POST"
       return { ok: true, data };
     }
 
-    handleExpiredLocalSession(response.status);
-    let message = `The request failed (${response.status}).`;
-    if (response.status === 403) {
-      message = "You do not have permission to do that.";
-    }
-
-    try {
-      const payload = (await response.json()) as { message?: string; Message?: string };
-      message = payload.message ?? payload.Message ?? message;
-    } catch {
-      // keep the default message when the body is not JSON
-    }
-
-    return { ok: false, message };
+    return { ok: false, message: await responseFailure(response) };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       return { ok: false, message: "The API request timed out. Please try again." };
     }
-    return { ok: false, message: "The API could not be reached. Check it is running." };
+    return { ok: false, message: "The connection failed. Your changes are still here; check your connection and try again." };
   }
 }
 
@@ -235,23 +241,13 @@ async function sendForm<TResponse>(url: string, body: FormData): Promise<ApiResu
     if (response.ok) {
       return { ok: true, data: (await response.json()) as TResponse };
     }
-    handleExpiredLocalSession(response.status);
-    let message = response.status === 403
-      ? "You do not have permission to do that."
-      : `The upload failed (${response.status}).`;
-    try {
-      const payload = (await response.json()) as { message?: string; Message?: string };
-      message = payload.message ?? payload.Message ?? message;
-    } catch {
-      // keep the status-based message
-    }
-    return { ok: false, message };
+    return { ok: false, message: await responseFailure(response) };
   } catch (error) {
     return {
       ok: false,
       message: error instanceof Error && error.name === "AbortError"
         ? "The upload took too long. Please try again."
-        : "The API could not be reached. Check it is running."
+        : "The connection failed. Your changes are still here; check your connection and try again."
     };
   }
 }
@@ -260,16 +256,17 @@ async function getApiBlob(url: string): Promise<Blob | null> {
   const response = await requestApi(url, { headers: await buildHeaders(false) });
   if (response.status === 404) return null;
   if (!response.ok) {
-    handleExpiredLocalSession(response.status);
-    throw new Error(`The image could not be loaded (${response.status}).`);
+    throw new Error(await responseFailure(response));
   }
   return response.blob();
 }
 
 async function requestApi(url: string, init: RequestInit, externalSignal?: AbortSignal, timeoutMs = apiRequestTimeoutMs): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timeoutId = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   const abortFromCaller = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
   externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
   try {
@@ -278,6 +275,10 @@ async function requestApi(url: string, init: RequestInit, externalSignal?: Abort
       cache: "no-store",
       signal: controller.signal
     });
+  } catch (error) {
+    if (timedOut) throw new Error("The service took too long to respond. Please retry. Your unsaved changes remain on this page.");
+    if (externalSignal?.aborted) throw error;
+    throw new Error("The connection failed. Please check your connection and retry.");
   } finally {
     window.clearTimeout(timeoutId);
     externalSignal?.removeEventListener("abort", abortFromCaller);
@@ -288,12 +289,7 @@ async function downloadApiFile(url: string): Promise<ApiResult> {
   try {
     const response = await requestApi(url, { headers: await buildHeaders(false) }, undefined, exportRequestTimeoutMs);
     if (!response.ok) {
-      return {
-        ok: false,
-        message: response.status === 403
-          ? "You do not have permission to create this export."
-          : `The export could not be created (${response.status}).`
-      };
+      return { ok: false, message: await responseFailure(response) };
     }
 
     const blob = await response.blob();
@@ -314,7 +310,7 @@ async function downloadApiFile(url: string): Promise<ApiResult> {
     if (error instanceof Error && error.name === "AbortError") {
       return { ok: false, message: "The export took too long. Narrow the filters and try again." };
     }
-    return { ok: false, message: "The API could not be reached. Check it is running." };
+    return { ok: false, message: "The connection failed. Check your connection and try again." };
   }
 }
 
@@ -345,6 +341,12 @@ export const api = {
     sendJson<typeof request, UcoTlaReviewDetail>(`/api/v1/uco-tla-reviews/${recordId}/follow-up`, "PUT", request),
   createLinkedUcoTlaReview: (recordId: string, request: { observerStaffId: string; observationAt: string; sessionType: string; courseTitle: string; moduleTitle: string; courseLevel: string }) =>
     sendJson<typeof request, { recordId: string }>(`/api/v1/uco-tla-reviews/${recordId}/linked-review`, "POST", request),
+  qaNotSeenSettings: () => getJson<QaNotSeenSetting[]>("/api/v1/qa-hub/not-seen-settings"),
+  qaFormAccessSettings: () => getJson<QaFormAccessSettings>("/api/v1/qa-hub/form-access-settings"),
+  saveQaFormAccessSetting: (templateId: string, request: { restrictQaStaff: boolean; staffIds: string[]; rowVersion: string }) => sendJson<typeof request, QaFormAccessSetting>(`/api/v1/qa-hub/form-access-settings/${templateId}`, "PUT", request),
+  saveQaNotSeenSetting: (templateId: string, allowsNotSeen: boolean, rowVersion: string) => sendJson<{ allowsNotSeen: boolean; rowVersion: string }, QaNotSeenSetting>(`/api/v1/qa-hub/not-seen-settings/${templateId}`, "PUT", { allowsNotSeen, rowVersion }),
+  qaOutcomeLabels: () => getJson<QaOutcomeLabelsState>("/api/v1/qa-hub/outcome-labels"),
+  saveQaOutcomeLabels: (labels: QaOutcomeLabels, rowVersion: string) => sendJson<QaOutcomeLabels & { rowVersion: string }, QaOutcomeLabelsState>("/api/v1/qa-hub/outcome-labels", "PUT", { ...labels, rowVersion }),
   qaHubSummary: () => getJson<QaHubSummary>("/api/v1/qa-hub/summary"),
   qaActivityTypes: () => getJson<QaActivityTypeSummary[]>("/api/v1/qa-hub/activities"),
   qaQuestions: (activityTypeId?: string, includeInactive = false) => {
@@ -434,6 +436,11 @@ export const api = {
     sendJson(`/api/v1/admin/lookups/${encodeURIComponent(lookupKey)}/values/${id}/archive`, "POST"),
   orgUnits: () => getJson<OrgUnitSummary[]>("/api/v1/org-units"),
   rooms: () => getJson<RoomSummary[]>("/api/v1/rooms"),
+  adminRooms: () => getJson<AdminRoomSummary[]>("/api/v1/admin/rooms"),
+  createAdminRoom: (request: SaveAdminRoomRequest) =>
+    sendJson<SaveAdminRoomRequest, AdminRoomSummary>("/api/v1/admin/rooms", "POST", request),
+  updateAdminRoom: (id: string, request: SaveAdminRoomRequest) =>
+    sendJson<SaveAdminRoomRequest, AdminRoomSummary>(`/api/v1/admin/rooms/${id}`, "PUT", request),
   elevateEnvironmentPillars: () =>
     getJson<ElevateEnvironmentPillarSummary[]>("/api/v1/elevate-environment/pillars"),
   courses: (orgUnitId: string) =>
@@ -478,20 +485,24 @@ export const api = {
   deleteAction: (id: string, reason: string) => sendJson(`/api/v1/actions/${id}`, "DELETE", { reason }),
   restoreAction: (id: string) => sendJson(`/api/v1/actions/${id}/restore`, "POST"),
   dashboards: () => getJson<DashboardSummary[]>("/api/v1/reports/dashboards"),
-  processDashboardRecords: (academicYear?: string) =>
-    getJson<ProcessDashboardRecordSummary[]>(`/api/v1/reports/process-records${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
-  dashboardActions: (academicYear: string) =>
-    getJson<DashboardActionSummary[]>(`/api/v1/reports/actions?academicYear=${encodeURIComponent(academicYear)}`),
+  processDashboardRecords: (academicYear?: string, dashboardKey?: string) =>
+    getJson<ProcessDashboardRecordSummary[]>(`/api/v1/reports/process-records?academicYear=${encodeURIComponent(academicYear ?? "")}&dashboardKey=${encodeURIComponent(dashboardKey ?? "")}`),
+  dashboardActions: (academicYear?: string, dashboardKey?: string) =>
+    getJson<DashboardActionSummary[]>(`/api/v1/reports/actions?academicYear=${encodeURIComponent(academicYear ?? "")}&dashboardKey=${encodeURIComponent(dashboardKey ?? "")}`),
+  dashboardFacultySelections: () => getJson<{ dashboardKey: string; excludedFacultyIds: string[] }[]>("/api/v1/reports/faculty-selections"),
+  saveDashboardFacultySelections: (selections: { dashboardKey: string; excludedFacultyIds: string[] }[]) => sendJson("/api/v1/admin/reports/faculty-selections", "PUT", { selections }),
   dashboardConfiguration: () =>
     getJson<DashboardConfiguration>("/api/v1/reports/dashboard-configuration"),
-  dashboardDimensions: (academicYear?: string) =>
-    getJson<DashboardDimensionFact[]>(`/api/v1/reports/dashboard-dimensions${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
+  dashboardDimensions: (academicYear?: string, dashboardKey?: string) =>
+    getJson<DashboardDimensionFact[]>(`/api/v1/reports/dashboard-dimensions?academicYear=${encodeURIComponent(academicYear ?? "")}&dashboardKey=${encodeURIComponent(dashboardKey ?? "")}`),
   eliStatementDashboardDimensions: (academicYear: string) =>
     getJson<DashboardDimensionFact[]>(`/api/v1/reports/eli-statement-dimensions?academicYear=${encodeURIComponent(academicYear)}`),
   elevateStatusDashboard: (academicYear: string) =>
     getJson<ElevateStatusDashboardSummary[]>(`/api/v1/reports/elevate-status?academicYear=${encodeURIComponent(academicYear)}`),
   staffParticipationDashboard: (academicYear: string) =>
     getJson<StaffParticipationDashboardSummary[]>(`/api/v1/reports/staff-participation?academicYear=${encodeURIComponent(academicYear)}`),
+  eliSubmissionsDashboard: (academicYear: string) =>
+    getJson<EliSubmissionStaffSummary[]>(`/api/v1/reports/eli-submissions?academicYear=${encodeURIComponent(academicYear)}`),
   cpdAttendanceDashboard: (academicYear: string) =>
     getJson<CpdAttendanceDashboardSummary[]>(`/api/v1/reports/cpd-attendance?academicYear=${encodeURIComponent(academicYear)}`),
   livLifecycleDashboard: (academicYear: string, process = "liv") =>
@@ -505,6 +516,8 @@ export const api = {
     getJson<FormDefinition>(`/api/v1/form-templates/${templateKey}/definition`),
   workScrutinyTemplate: (orgUnitId: string) =>
     getJson<FormDefinition>(`/api/v1/work-scrutiny/template/${encodeURIComponent(orgUnitId)}`),
+  learningWalkDeliveryAreas: (process = "learning_walk") =>
+    getJson<LearningWalkDeliveryArea[]>(`/api/v1/learning-walk/delivery-areas?process=${encodeURIComponent(process)}`),
   learningWalkThemeMappings: (process = "learning_walk") =>
     getJson<LearningWalkThemeMappingSummary[]>(`/api/v1/learning-walk/theme-mappings?process=${encodeURIComponent(process)}`),
   updateLearningWalkThemeMapping: (request: UpdateLearningWalkThemeMappingRequest, process = "learning_walk") =>
@@ -540,7 +553,7 @@ export const api = {
   livConfiguration: (process = "liv") => getJson<LivConfiguration>(`/api/v1/liv-records/configuration?process=${encodeURIComponent(process)}`),
   livStaffContext: (staffId: string, process = "liv") =>
     getJson<LivStaffContext>(`/api/v1/liv-records/staff/${staffId}/context?process=${encodeURIComponent(process)}`),
-  createLivRecord: (request: SaveLivRecordRequest, process = "liv") => sendJson(`/api/v1/liv-records?process=${encodeURIComponent(process)}`, "POST", request),
+  createLivRecord: (request: SaveLivRecordRequest, process = "liv") => sendJson<SaveLivRecordRequest, { id: string }>(`/api/v1/liv-records?process=${encodeURIComponent(process)}`, "POST", request),
   updateLivRecord: (id: string, request: SaveLivRecordRequest, process = "liv") =>
     sendJson(`/api/v1/liv-records/${id}?process=${encodeURIComponent(process)}`, "PUT", request),
   addLivVisit: (id: string, request: SaveLivVisitRequest, process = "liv") =>
@@ -641,6 +654,9 @@ export const api = {
   saveElevatePractice: (request: SaveElevatePracticeAssessmentRequest) =>
     sendJson<SaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>("/api/v1/elevate-practice/me", "PUT", request),
   elevatePracticeProgress: () => getJson<ElevatePracticeProgress[]>("/api/v1/elevate-practice/progress"),
+  elevatePracticeValidationProgress: () => getJson<ElevatePracticeValidationProgress[]>("/api/v1/elevate-practice/validation-progress"),
+  reviewElevatePractice: (staffId: string, assessmentId: string, request: { action: "validate" | "return"; note?: string; rowVersion: string }) =>
+    sendJson<typeof request, ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/records/${assessmentId}/validation`, "PUT", request),
   adminElevatePracticeRecord: (assessmentId: string) =>
     getJson<ElevatePracticeWorkspace>(`/api/v1/elevate-practice/admin/records/${assessmentId}`),
   saveAdminElevatePracticeRecord: (assessmentId: string, request: AdminSaveElevatePracticeAssessmentRequest) =>
@@ -688,7 +704,8 @@ export const api = {
       "PUT",
       request
     ),
-  adminUsers: () => getJson<AdminUserSummary[]>("/api/v1/admin/users"),
+  adminUsers: (includeArchived = false) =>
+    getJson<AdminUserSummary[]>(`/api/v1/admin/users?includeArchived=${includeArchived}`),
   adminOrganisationStaff: () =>
     getJson<AdminOrganisationStaff[]>("/api/v1/admin/organisation/staff"),
   adminOrganisationStructure: () =>
@@ -701,6 +718,8 @@ export const api = {
     getJson<OrganisationChangeImpact>(`/api/v1/admin/organisation/units/${orgUnitId}/impact`),
   setOrganisationUnitStatus: (orgUnitId: string, isActive: boolean, reason: string, confirmImpact: boolean) =>
     sendJson(`/api/v1/admin/organisation/units/${orgUnitId}/status`, "POST", { isActive, reason, confirmImpact }),
+  setOrganisationUnitDashboardVisibility: (orgUnitId: string, includeInDashboards: boolean) =>
+    sendJson(`/api/v1/admin/organisation/units/${orgUnitId}/dashboard-visibility`, "PUT", { includeInDashboards }),
   organisationMigrationReviews: () =>
     getJson<OrganisationMigrationReview[]>("/api/v1/admin/organisation/migration-reviews"),
   saveOrgUnitManager: (orgUnitId: string, request: SaveOrgUnitManagerRequest) =>
@@ -748,7 +767,13 @@ export const api = {
   createAdminUser: (request: CreateAdminUserRequest) => sendJson("/api/v1/admin/users", "POST", request),
   updateAdminUser: (id: string, request: UpdateAdminUserRequest) =>
     sendJson(`/api/v1/admin/users/${id}`, "PUT", request),
+  setAdminUserArchived: (id: string, archived: boolean, rowVersion: string, staffRowVersion: string) =>
+    sendJson(`/api/v1/admin/users/${id}/archive`, "PUT", { archived, rowVersion, staffRowVersion }),
   adminRoles: () => getJson<AdminRoleSummary[]>("/api/v1/admin/roles"),
+  permissionCatalogue: () => getJson<Array<{ permissionKey: string; name: string; category: string }>>("/api/v1/admin/permission-catalogue"),
+  customRole: (id: string) => getJson<{ id: string; name: string; description?: string; permissionKeys: string[]; rowVersion: string }>(`/api/v1/admin/custom-roles/${id}`),
+  saveCustomRole: (id: string | undefined, request: { name: string; description?: string; permissionKeys: string[]; rowVersion?: string }) =>
+    sendJson(id ? `/api/v1/admin/custom-roles/${id}` : "/api/v1/admin/custom-roles", id ? "PUT" : "POST", request),
   updateFormTemplateStructure: (id: string, request: UpdateFormTemplateStructureRequest) =>
     sendJson(`/api/v1/form-templates/${id}/structure`, "PUT", request),
   publishFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST"),

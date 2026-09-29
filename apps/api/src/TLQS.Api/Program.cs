@@ -78,9 +78,7 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            context.User.FindFirst("oid")?.Value
-                ?? context.Connection.RemoteIpAddress?.ToString()
-                ?? "anonymous",
+            RequestRateLimitIdentity.PartitionKey(context),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 180,
@@ -90,7 +88,7 @@ builder.Services.AddRateLimiter(options =>
             }));
     options.AddPolicy("sensitive", context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            $"sensitive:{context.User.FindFirst("oid")?.Value ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous"}",
+            "sensitive:" + RequestRateLimitIdentity.PartitionKey(context),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 20,
@@ -242,8 +240,7 @@ app.UseStaticFiles(new StaticFileOptions
     }
 });
 app.UseCors("web");
-app.UseRateLimiter();
-app.UseAuthentication();
+app.UseAuthenticatedRateLimiting();
 app.UseAuthorization();
 
 // Workflow rule violations (missing required fields, invalid status transitions)

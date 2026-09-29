@@ -78,6 +78,30 @@ public sealed class MessagingAndExportTests
         Assert.Contains("Complete record detail", text);
     }
 
+    [Theory]
+    [InlineData("learning_walk", "Adult provision")]
+    [InlineData("als_learning_walk", "Supported learning")]
+    [InlineData("learning_walk", null)]
+    [InlineData("als_learning_walk", null)]
+    public void Learning_walk_word_exports_include_delivery_area_in_context_and_legacy_missing_state(string recordType, string? deliveryArea)
+    {
+        var service = new WordExportService(Options.Create(new ExportBrandingOptions()));
+        var report = new RecordReportData(
+            Guid.NewGuid(), "Learning Walk", recordType, "Submitted", "Test staff", "Test reviewer",
+            "Faculty", "2026/27", new DateOnly(2026, 9, 8), DateTimeOffset.Parse("2026-09-08T10:00:00Z"), "Test user",
+            deliveryArea is null ? [] : [new RecordReportSection("Visit context",
+                [new RecordReportField("Learning walk delivery area", deliveryArea)])], []);
+        var file = service.CreateRecordReport(report);
+        using var stream = new MemoryStream(file.Content);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var body = document.MainDocumentPart!.Document.Body!;
+        var contextTable = body.Descendants<DocumentFormat.OpenXml.Wordprocessing.Table>()
+            .First(table => table.InnerText.Contains("Learning walk delivery area", StringComparison.Ordinal));
+        Assert.Contains(deliveryArea ?? "Not recorded", contextTable.InnerText);
+        Assert.Contains("Learning walk delivery area", body.InnerText);
+        Assert.Contains(deliveryArea ?? "Not recorded", body.InnerText);
+    }
+
     [Fact]
     public void Uco_word_export_uses_the_three_part_form_and_contains_no_rating_judgement()
     {

@@ -1,46 +1,30 @@
-import type { KeyboardEvent } from "react";
+import { ArrowUpRight, Check, GraduationCap, ShieldCheck } from "lucide-react";
 
 type WorkspaceSwitchProps = {
   active: "elevate" | "qa";
   onChange: (workspace: "elevate" | "qa") => void;
 };
 
-export function WorkspaceSwitch({ active, onChange }: WorkspaceSwitchProps) {
-  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
-    event.preventDefault();
-    const next = event.key === "ArrowLeft" || event.key === "Home" ? "elevate" : "qa";
-    onChange(next);
-    const parent = event.currentTarget.parentElement;
-    window.requestAnimationFrame(() => parent?.querySelector<HTMLButtonElement>(`[data-workspace="${next}"]`)?.focus());
-  }
+const workspaces = [
+  { key: "elevate", label: "i-Elevate", description: "Staff development, forms and profiles", icon: GraduationCap },
+  { key: "qa", label: "QA Hub", description: "Quality reviews, evidence and improvement", icon: ShieldCheck }
+] as const;
 
+export function WorkspaceSwitch({ active, onChange }: WorkspaceSwitchProps) {
   return (
-    <div aria-label="Choose workspace" className="workspace-switch" role="tablist">
-      <button
-        aria-selected={active === "elevate"}
-        className={active === "elevate" ? "is-active" : ""}
-        data-workspace="elevate"
-        onClick={() => onChange("elevate")}
-        onKeyDown={handleKeyDown}
-        role="tab"
-        tabIndex={active === "elevate" ? 0 : -1}
-        type="button"
-      >
-        i-Elevate
-      </button>
-      <button
-        aria-selected={active === "qa"}
-        className={active === "qa" ? "is-active" : ""}
-        data-workspace="qa"
-        onClick={() => onChange("qa")}
-        onKeyDown={handleKeyDown}
-        role="tab"
-        tabIndex={active === "qa" ? 0 : -1}
-        type="button"
-      >
-        QA Hub
-      </button>
-    </div>
+    <nav aria-label="Choose workspace" className="workspace-picker">
+      <p className="workspace-picker-label">Your workspaces <span>Choose an area to get started</span></p>
+      <div className="workspace-switch">
+        {workspaces.map(({ key, label, description, icon: Icon }) => (
+          <button aria-current={active === key ? "true" : undefined}
+            className={active === key ? "is-active" : ""} key={key}
+            onClick={() => { if (active !== key) onChange(key); }} type="button">
+            <Icon aria-hidden="true" className="workspace-icon" size={24} />
+            <span className="workspace-copy"><strong>{label}</strong><span>{description}</span></span>
+            <span className="workspace-status">{active === key ? <>You’re here <Check size={16} aria-hidden="true" /></> : <>Open <ArrowUpRight size={16} aria-hidden="true" /></>}</span>
+          </button>
+        ))}
+      </div>
+    </nav>
   );
 }

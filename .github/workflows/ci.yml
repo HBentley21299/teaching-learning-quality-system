@@ -79,6 +79,13 @@ jobs:
       - name: Install dependencies
         working-directory: apps/web
         run: npm ci
+      - name: Run web regression tests
+        shell: pwsh
+        run: |
+          $testFiles = @(Get-ChildItem -LiteralPath tests -Filter '*.test.mjs' -File | Sort-Object Name | ForEach-Object FullName)
+          if ($testFiles.Count -eq 0) { throw 'No web regression tests were found.' }
+          node --test @testFiles
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Audit production dependencies
         working-directory: apps/web
         run: npm audit --omit=dev --audit-level=high

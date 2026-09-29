@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { CollapsibleSection } from "../components/CollapsibleSection";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type {
@@ -140,6 +141,11 @@ export function MessagingAdminPanel() {
   const [configurationLoading, setConfigurationLoading] = useState(true);
   const [configurationSaving, setConfigurationSaving] = useState(false);
   const [configurationError, setConfigurationError] = useState("");
+  const [editorBaseline, setEditorBaseline] = useState("");
+  const clearTemplate = useUnsavedChanges({ label: "Message template", dirty: editor !== null && JSON.stringify(editor) !== editorBaseline, saving,
+    onSave: saveTemplate, onDiscard: () => { setEditor(null); setPreview(null); } });
+  const clearConfiguration = useUnsavedChanges({ label: "Email delivery settings", dirty: configuration !== null && JSON.stringify(configurationForm) !== JSON.stringify(toConfigurationEditor(configuration)), saving: configurationSaving,
+    onSave: saveConfiguration, onDiscard: () => { if (configuration) setConfigurationForm(toConfigurationEditor(configuration)); } });
 
   const groupedParameters = useMemo(() => {
     const groups = new Map<string, MessagingParameter[]>();
@@ -169,11 +175,13 @@ export function MessagingAdminPanel() {
     setConfigurationSaving(false);
     if (!result.ok || !result.data) {
       setConfigurationError(result.message ?? "Email delivery settings could not be saved.");
-      return;
+      return false;
     }
     setConfiguration(result.data);
     setConfigurationForm(toConfigurationEditor(result.data));
     setMessage("Email delivery settings saved. The message worker will use them on its next polling cycle.");
+    clearConfiguration();
+    return true;
   }
 
   async function loadTemplates() {
@@ -199,7 +207,9 @@ export function MessagingAdminPanel() {
   }
 
   async function editTemplate(template: MessageTemplateSummary) {
+    if (!await confirmUnsavedNavigation()) return;
     setEditor(toEditor(template));
+    setEditorBaseline(JSON.stringify(toEditor(template)));
     setPreview(null);
     setMessage("");
     try {
@@ -209,15 +219,17 @@ export function MessagingAdminPanel() {
     }
   }
 
-  function startNew() {
+  async function startNew() {
+    if (!await confirmUnsavedNavigation()) return;
     setEditor({ ...emptyEditor, recipients: [...emptyEditor.recipients] });
+    setEditorBaseline(JSON.stringify(emptyEditor));
     setVersions([]);
     setPreview(null);
     setMessage("");
   }
 
   async function saveTemplate() {
-    if (!editor) return;
+    if (!editor || saving) return false;
     setSaving(true);
     setError("");
     const request = toRequest(editor);
@@ -227,11 +239,13 @@ export function MessagingAdminPanel() {
     setSaving(false);
     if (!result.ok) {
       setError(result.message ?? "The message template could not be saved.");
-      return;
+      return false;
     }
     setMessage(editor.id ? "A new template version has been saved." : "Message template created.");
     setEditor(null);
+    clearTemplate();
     await loadTemplates();
+    return true;
   }
 
   async function renderPreview() {
@@ -327,7 +341,7 @@ export function MessagingAdminPanel() {
         </div>
         {configurationError ? <div className="section-state section-state-error" role="alert">{configurationError}</div> : null}
         {configurationLoading ? <div className="section-state">Loading email delivery settings...</div> : (
-          <>
+          <fieldset disabled={configurationSaving || !configuration} className="editor-fieldset">
             <div className="messaging-delivery-switches">
               <label className="compact-checkbox"><input checked={configurationForm.enabled} onChange={(event) => setConfigurationForm({ ...configurationForm, enabled: event.target.checked })} type="checkbox" />Enable delivery worker</label>
               <label className="compact-checkbox"><input checked={configurationForm.testMode} onChange={(event) => setConfigurationForm({ ...configurationForm, testMode: event.target.checked })} type="checkbox" />Test mode: redirect every message to the test recipient</label>
@@ -372,7 +386,7 @@ export function MessagingAdminPanel() {
               <small>{configuration?.updatedAt ? `Last updated ${new Date(configuration.updatedAt).toLocaleString()}${configuration.updatedBy ? ` by ${configuration.updatedBy}` : ""}` : "Using server configuration until these settings are saved."}</small>
               <Button disabled={configurationSaving} icon={Save} onClick={() => void saveConfiguration()} variant="primary">{configurationSaving ? "Saving..." : "Save email settings"}</Button>
             </div>
-          </>
+          </fieldset>
         )}
       </section>
 
@@ -416,10 +430,10 @@ export function MessagingAdminPanel() {
 
       {editor ? (
         <>
-        <section className="panel message-editor">
+        <fieldset disabled={saving} className="panel message-editor editor-fieldset">
           <div className="panel-heading">
             <div><h2>{editor.id ? "Edit message" : "Add message"}</h2><span>{editor.id ? "Saving creates a new immutable version" : "Inactive until you choose to activate it"}</span></div>
-            <button aria-label="Close message editor" className="icon-button" onClick={() => setEditor(null)} title="Close editor" type="button"><X size={18} /></button>
+            <button aria-label="Close message editor" className="icon-button" disabled={saving} onClick={async () => { if (await confirmUnsavedNavigation()) setEditor(null); }} title="Close editor" type="button"><X size={18} /></button>
           </div>
 
           <div className="entry-field-grid message-editor-basics">
@@ -482,7 +496,7 @@ export function MessagingAdminPanel() {
 
           {editor.id ? <div className="message-test-row"><label className="entry-field"><span>Test recipient</span><input onChange={(event) => setTestEmail(event.target.value)} placeholder="name@example.ac.uk" type="email" value={testEmail} /></label><Button icon={Send} onClick={() => void sendTest()}>Queue test</Button></div> : null}
 
-        </section>
+        </fieldset>
         {versions.length > 0 ? <CollapsibleSection count={versions.length} isEmpty={false} storageKey={`message-versions-${editor.id}`} title="Template versions"><div className="version-list">{versions.map((version) => <div key={version.id}><strong>Version {version.versionNumber}</strong><span>{new Date(version.createdAt).toLocaleString()} · {version.createdBy ?? "System"}</span><small>{version.subjectTemplate}</small></div>)}</div></CollapsibleSection> : null}
         </>
       ) : null}

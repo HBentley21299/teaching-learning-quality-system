@@ -45,6 +45,7 @@ export type MyTeamMember = {
   openActionCount: number;
   overdueActionCount: number;
   elevateJudgement?: string;
+  elevateLevel?: number | null;
   canOpenProfile: boolean;
   canManageActions: boolean;
 };
@@ -307,6 +308,7 @@ export type QaQuestionSummary = {
   displayOrder: number;
   isRequired: boolean;
   allowsNotApplicable: boolean;
+  allowsNotSeen?: boolean;
   commentRequiredAtExpected: boolean;
   isActive: boolean;
   sourceStatus: "active" | "draft" | "inactive" | "frozen";
@@ -354,6 +356,7 @@ export type QaReviewActivitySummary = {
   templateName: string;
   displayOrder: number;
   questions: QaQuestionSummary[];
+  canSubmitEvidence?: boolean;
 };
 
 export type QaEvidenceSummary = {
@@ -367,6 +370,8 @@ export type QaEvidenceSummary = {
   teamName: string;
   courseProgramme?: string;
   courseLevel?: string;
+  deliveryAreaKey?: string;
+  deliveryAreaName?: string;
   subjectStaffName?: string;
   reviewerStaffId: string;
   reviewerName: string;
@@ -421,8 +426,9 @@ export type QaEvidenceResponseSummary = {
   displayOrder: number;
   isRequired: boolean;
   allowsNotApplicable: boolean;
+  allowsNotSeen?: boolean;
   commentRequiredAtExpected: boolean;
-  outcome?: "below" | "at" | "above" | "not_applicable";
+  outcome?: "below" | "at" | "above" | "not_applicable" | "not_seen";
   comment?: string;
   notApplicableReason?: string;
 };
@@ -450,6 +456,7 @@ export type SaveQaEvidenceRequest = {
   teamOrgUnitIds?: string[];
   courseProgramme?: string;
   courseLevel?: string;
+  deliveryAreaKey?: string;
   subjectStaffId?: string;
   activityAt: string;
   sampleSize?: number;
@@ -464,8 +471,8 @@ export type SaveQaEvidenceRequest = {
   rowVersion?: string;
 };
 
-export type QaDashboardBreakdown = { key: string; label: string; below: number; at: number; above: number; notApplicable: number; rated: number; atOrAbovePercentage: number };
-export type QaDashboardQuestionBreakdown = { activityKey: string; activityLabel: string; questionId: string; themeOrWeek?: string; questionText: string; below: number; at: number; above: number; notApplicable: number; rated: number; belowPercentage: number; atPercentage: number; abovePercentage: number };
+export type QaDashboardBreakdown = { key: string; label: string; below: number; at: number; above: number; notApplicable: number; notSeen?: number; rated: number; atOrAbovePercentage: number };
+export type QaDashboardQuestionBreakdown = { activityKey: string; activityLabel: string; questionId: string; themeOrWeek?: string; questionText: string; below: number; at: number; above: number; notApplicable: number; notSeen?: number; rated: number; belowPercentage: number; atPercentage: number; abovePercentage: number };
 export type QaDashboardSummary = {
   reviewId: string;
   evidenceCount: number;
@@ -477,6 +484,7 @@ export type QaDashboardSummary = {
   atCount: number;
   aboveCount: number;
   notApplicableCount: number;
+  notSeenCount?: number;
   ratedCount: number;
   atOrAbovePercentage: number;
   byActivity: QaDashboardBreakdown[];
@@ -626,6 +634,8 @@ export type ActionOwnerOption = {
 
 export type RecordSummary = {
   id: string;
+  deliveryAreaKey?: string;
+  deliveryAreaName?: string;
   moduleId: string;
   recordType: string;
   title: string;
@@ -936,6 +946,7 @@ export type RecordDetail = {
   canEdit: boolean;
   courseIds: string[];
   sections: RecordDetailSection[];
+  draftActions?: DraftFormAction[];
 };
 
 export type AdminWorkScrutinyRecord = {
@@ -987,6 +998,7 @@ export type RecordDetailSection = {
 
 export type RecordDetailField = FormFieldDefinition & {
   value?: string;
+  displayValue?: string;
 };
 
 export type LearningWalkRollupSummary = {
@@ -1011,6 +1023,8 @@ export type DashboardSummary = {
 
 export type ProcessDashboardRecordSummary = {
   id: string;
+  deliveryAreaKey?: string;
+  deliveryAreaName?: string;
   processKey: "learning_walk" | "als_learning_walk" | "liv" | "als_liv" | "eli" | "work_scrutiny" | "cpd_event" | "elevate_environment" | "coaching_session" | "probation_case";
   title: string;
   summary?: string;
@@ -1022,6 +1036,7 @@ export type ProcessDashboardRecordSummary = {
   areaName?: string;
   parentAreaCode?: string;
   ownerDisplayName?: string;
+  submitterDisplayName?: string;
   subjectDisplayName?: string;
   theme?: string;
   detail?: string;
@@ -1084,6 +1099,18 @@ export type ElevateStatusDashboardSummary = {
   level3OrAbove: number;
   level4OrAbove: number;
   level5OrAbove: number;
+};
+
+export type EliSubmissionStaffSummary = {
+  staffId: string;
+  staffName: string;
+  orgUnitId?: string;
+  areaCode?: string;
+  areaName?: string;
+  parentAreaCode?: string;
+  hasSubmitted: boolean;
+  submittedAt?: string;
+  assessmentRecordId?: string;
 };
 
 export type StaffParticipationDashboardSummary = {
@@ -1198,6 +1225,7 @@ export type StaffCpdRecordSummary = {
   themes?: string;
   durationMinutes?: number;
   isInternal: boolean;
+  isMandatory: boolean;
 };
 
 export type ElevateStatusCpdSummary = {
@@ -1331,6 +1359,7 @@ export type ElevatePracticePlan = {
 };
 
 export type ElevatePracticeWorkspace = {
+  validation?: ElevatePracticeValidation;
   academicYear: string;
   assessmentId?: string;
   recordId?: string;
@@ -1368,6 +1397,7 @@ export type StaffProfileSectionSummary = {
   cpdCount: number;
   internalCpdCount: number;
   externalCpdCount: number;
+  mandatoryCpdCount: number;
   totalCpdMinutes: number;
   openActionCount: number;
   completedActionCount: number;
@@ -1415,6 +1445,7 @@ export type ElevateLivInformation = {
 };
 
 export type SaveElevatePracticeAssessmentRequest = {
+  rowVersion?: string;
   ratings: Array<{ areaId: string; statementId: string; descriptorId: string }>;
   reflections: Array<{ areaKey: string; text: string }>;
   livInformation: Omit<ElevateLivInformation, "focusOptions">;
@@ -1423,6 +1454,25 @@ export type SaveElevatePracticeAssessmentRequest = {
 
 export type AdminSaveElevatePracticeAssessmentRequest = Omit<SaveElevatePracticeAssessmentRequest, "submit"> & {
   status: "draft" | "submitted";
+  editReason?: string;
+  staffPresent?: boolean;
+};
+
+export type ElevatePracticeValidation = {
+  status: "draft" | "pending" | "returned" | "validated";
+  reviewedByName?: string;
+  reviewedAt?: string;
+  feedback?: string;
+  rowVersion?: string;
+  canValidate: boolean;
+  history: Array<{ action: string; actorName: string; at: string; note?: string }>;
+};
+
+export type ElevatePracticeValidationProgress = ElevatePracticeProgress & {
+  validationStatus: ElevatePracticeValidation["status"];
+  reviewedByName?: string;
+  reviewedAt?: string;
+  feedback?: string;
 };
 
 export type ElevatePracticeAudit = {
@@ -1673,6 +1723,8 @@ export type AdminUserScopeSummary = {
 };
 
 export type AdminUserSummary = {
+  rowVersion: string;
+  staffRowVersion: string;
   userAccountId: string;
   staffId: string;
   externalId: string;
@@ -1686,6 +1738,8 @@ export type AdminUserSummary = {
   lastLoginAt?: string;
   roles: RoleSummary[];
   scopes: AdminUserScopeSummary[];
+  staffCategory?: string;
+  archivedAt?: string;
 };
 
 export type RoleSummary = {
@@ -1722,6 +1776,8 @@ export type CreateAdminUserRequest = {
 };
 
 export type UpdateAdminUserRequest = {
+  rowVersion: string;
+  staffRowVersion: string;
   displayName?: string;
   jobTitle?: string;
   primaryOrgUnitId?: string;
@@ -1729,6 +1785,7 @@ export type UpdateAdminUserRequest = {
   isDisabled?: boolean;
   roleKeys?: string[];
   scopeOrgUnitIds?: string[];
+  staffCategory?: string;
 };
 
 export type UpdateFormTemplateStructureRequest = {
@@ -1752,6 +1809,7 @@ export type UpdateFormTemplateStructureRequest = {
 };
 
 export type CurrentUser = {
+  isAdministrator?: boolean;
   userAccountId?: string;
   staffId?: string;
   displayName: string;
@@ -1785,12 +1843,26 @@ export type OrgUnitSummary = {
   code: string;
   name: string;
   isActive: boolean;
+  includeInDashboards: boolean;
 };
 
 export type RoomSummary = {
   id: string;
   roomCode: string;
   buildingName: string;
+};
+
+export type AdminRoomSummary = RoomSummary & {
+  isActive: boolean;
+  assessmentCount: number;
+  rowVersion: string;
+};
+
+export type SaveAdminRoomRequest = {
+  roomCode: string;
+  buildingName: string;
+  isActive: boolean;
+  rowVersion?: string;
 };
 
 export type AdminOrganisationMembership = {
@@ -1854,7 +1926,7 @@ export type AdminOrganisationManager = {
 export type AdminOrganisationUnit = {
   id: string;
   parentOrgUnitId?: string;
-  orgUnitType: "faculty" | "team";
+  orgUnitType: "directorate" | "faculty" | "team";
   code: string;
   name: string;
   description?: string;
@@ -1863,6 +1935,7 @@ export type AdminOrganisationUnit = {
   childTeamCount: number;
   managedTeamCount: number;
   isActive: boolean;
+  includeInDashboards: boolean;
   legacyCodes: string[];
   alignedFacultyCodes: string[];
   manager?: AdminOrganisationManager;
@@ -1890,7 +1963,7 @@ export type SaveOrgUnitManagerRequest = {
 };
 
 export type SaveOrganisationUnitRequest = {
-  orgUnitType: "faculty" | "team";
+  orgUnitType: "directorate" | "faculty" | "team";
   code: string;
   name: string;
   description?: string;
@@ -2146,8 +2219,11 @@ export type SubmitFormRequest = {
   responses: Array<{ fieldId: string; value?: string }>;
   saveAsDraft?: boolean;
   courseIds?: string[];
-  actions?: Array<{ title: string; ownerStaffId: string; dueDate: string }>;
+  actions?: Array<{ actionTheme: string; title: string; ownerStaffId: string; dueDate: string; detail?: string }>;
+  draftActions?: DraftFormAction[];
 };
+
+export type DraftFormAction = { actionTheme?: string; title?: string; ownerStaffId?: string; dueDate?: string; detail?: string };
 
 export type UpdateFormSubmissionRequest = {
   title: string;
@@ -2157,6 +2233,7 @@ export type UpdateFormSubmissionRequest = {
   recordDate?: string;
   responses: Array<{ fieldId: string; value?: string }>;
   courseIds?: string[];
+  draftActions?: DraftFormAction[];
 };
 
 export type MessageAttachmentRequest = {
@@ -2264,3 +2341,9 @@ export type SaveMessagingConfigurationRequest = Omit<
   smtpPassword?: string;
   clearSmtpPassword: boolean;
 };
+
+export type QaOutcomeLabels = { below: string; at: string; above: string; notApplicable: string };
+export type QaNotSeenSetting = { templateId: string; activityName: string; templateName: string; allowsNotSeen: boolean; rowVersion: string };
+export type QaFormAccessSetting = { templateId: string; activityName: string; templateName: string; restrictQaStaff: boolean; staffIds: string[]; rowVersion: string };
+export type QaFormAccessSettings = { forms: QaFormAccessSetting[]; staff: { staffId: string; displayName: string; email: string }[] };
+export type QaOutcomeLabelsState = { labels: QaOutcomeLabels; rowVersion?: string; isAvailable: boolean };

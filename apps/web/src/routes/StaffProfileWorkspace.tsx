@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
+import { confirmUnsavedNavigation } from "../components/UnsavedChangesGuard";
 import { StaffProfilePanel, type StaffProfileRecordLinkHandler } from "../features/StaffProfilePanel";
-import type { CurrentUser, StaffProfileSummary, StaffSummary } from "../services/types";
+import type { CurrentUser, StaffSummary } from "../services/types";
 
 export function StaffProfileWorkspace({
   academicYear,
-  profiles,
   staff,
   user,
   initialStaffId = "",
@@ -15,7 +15,6 @@ export function StaffProfileWorkspace({
   onStaffChanged
 }: {
   academicYear: string;
-  profiles: StaffProfileSummary[];
   staff: StaffSummary[];
   user: CurrentUser;
   initialStaffId?: string;
@@ -62,15 +61,17 @@ export function StaffProfileWorkspace({
               <Search size={16} aria-hidden="true" />
               <select
                 aria-label="Select staff profile"
-                onChange={(event) => {
-                  setSelectedStaffId(event.target.value);
-                  onStaffChanged?.(event.target.value);
+                onChange={async (event) => {
+                  const next = event.target.value;
+                  if (!await confirmUnsavedNavigation()) return;
+                  setSelectedStaffId(next);
+                  onStaffChanged?.(next);
                 }}
                 value={selectedStaffId}
               >
                 {accessibleStaff.map((staffMember) => (
                   <option key={staffMember.id} value={staffMember.id}>
-                    {staffMember.displayName}
+                    {staffMember.displayName} · {staffMember.email}
                   </option>
                 ))}
               </select>
@@ -85,7 +86,6 @@ export function StaffProfileWorkspace({
           elevateRecordId={initialElevateRecordId}
           academicYear={academicYear}
           openElevateResult={Boolean(initialElevateRecordId)}
-          profiles={profiles}
           staffId={selectedStaffId}
           user={user}
           onOpenActionDetails={onOpenActionDetails}

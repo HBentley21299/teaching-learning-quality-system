@@ -8,12 +8,14 @@ type StaffSearchSelectProps = {
   staff: StaffSummary[];
   value: string;
   helperText?: string;
+  label?: string;
 };
 
-export function StaffSearchSelect({ id, onChange, staff, value, helperText }: StaffSearchSelectProps) {
+export function StaffSearchSelect({ id, onChange, staff, value, helperText, label }: StaffSearchSelectProps) {
   const selectedStaff = staff.find((staffMember) => staffMember.id === value);
   const [query, setQuery] = useState(selectedStaff?.displayName ?? "");
   const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const optionsId = `${id}-options`;
 
   useEffect(() => {
@@ -55,6 +57,8 @@ export function StaffSearchSelect({ id, onChange, staff, value, helperText }: St
         <div className="search-box staff-search-input">
           <Search size={16} aria-hidden="true" />
           <input
+            aria-label={label ?? (id.includes("owner") ? "Action owner" : "Staff member")}
+            aria-activedescendant={isOpen && activeIndex >= 0 && filteredStaff[activeIndex] ? `${optionsId}-${filteredStaff[activeIndex].id}` : undefined}
             aria-autocomplete="list"
             aria-controls={optionsId}
             aria-expanded={isOpen}
@@ -62,22 +66,27 @@ export function StaffSearchSelect({ id, onChange, staff, value, helperText }: St
             id={id}
             onBlur={() => setIsOpen(false)}
             onChange={(event) => {
+              setActiveIndex(-1);
               setQuery(event.target.value);
               setIsOpen(true);
               onChange("");
             }}
-            onFocus={() => setIsOpen(true)}
+            onFocus={() => { setIsOpen(true); setActiveIndex(-1); }}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && filteredStaff.length > 0) {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault(); setIsOpen(true);
+                setActiveIndex(current => event.key === "ArrowDown" ? Math.min(current + 1, filteredStaff.length - 1) : Math.max(current - 1, 0));
+              }
+              if (event.key === "Enter" && isOpen && filteredStaff.length > 0) {
                 event.preventDefault();
-                selectStaff(filteredStaff[0]);
+                selectStaff(filteredStaff[Math.max(0, activeIndex)] ?? filteredStaff[0]);
               }
 
               if (event.key === "Escape") {
                 setIsOpen(false);
               }
             }}
-            placeholder="Type a name, email or staff ID"
+            placeholder="Type a name, email or job title"
             role="combobox"
             type="text"
             value={query}
@@ -94,9 +103,11 @@ export function StaffSearchSelect({ id, onChange, staff, value, helperText }: St
             {filteredStaff.length === 0 ? (
               <div className="staff-search-empty">No staff match "{query.trim()}".</div>
             ) : (
-              filteredStaff.map((staffMember) => (
+              filteredStaff.map((staffMember, index) => (
                 <button
-                  aria-selected={staffMember.id === value}
+                  aria-selected={index === activeIndex}
+                  id={`${optionsId}-${staffMember.id}`}
+                  tabIndex={-1}
                   className="staff-search-result"
                   key={staffMember.id}
                   onClick={() => selectStaff(staffMember)}
@@ -105,8 +116,7 @@ export function StaffSearchSelect({ id, onChange, staff, value, helperText }: St
                 >
                   <strong>{staffMember.displayName}</strong>
                   <span>
-                    {staffMember.externalId}
-                    {staffMember.jobTitle ? ` - ${staffMember.jobTitle}` : ""}
+                    {staffMember.jobTitle ?? "Staff member"}
                   </span>
                   <small>{staffMember.email}</small>
                 </button>
@@ -117,7 +127,7 @@ export function StaffSearchSelect({ id, onChange, staff, value, helperText }: St
       </div>
       <small>
         {selectedStaff
-          ? `Selected: ${selectedStaff.externalId} - ${selectedStaff.email}`
+          ? `Selected: ${selectedStaff.displayName} — ${selectedStaff.email}`
           : helperText ?? "Start typing, then select a staff member from the results."}
       </small>
     </>

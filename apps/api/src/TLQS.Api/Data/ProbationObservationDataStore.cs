@@ -197,7 +197,7 @@ public sealed partial class SqlFoundationDataStore
             FROM quality.probation_cases probation
             JOIN people.staff subject ON subject.id = probation.subject_staff_id
             LEFT JOIN org.org_units area ON area.id = probation.org_unit_id
-            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id
+            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id AND parent.org_unit_type = N'faculty'
             LEFT JOIN quality.elevate_practice_assessments assessment ON assessment.id = probation.source_elevate_assessment_id
             WHERE probation.archived_at IS NULL
               AND (

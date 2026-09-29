@@ -1555,11 +1555,10 @@ public sealed partial class SqlFoundationDataStore
             || string.IsNullOrWhiteSpace(request.QualificationStatusKey)
             || string.IsNullOrWhiteSpace(request.PrimaryFocusKey)
             || string.IsNullOrWhiteSpace(request.SpecificSessionFocus)
-            || !request.CurrentPracticeDescriptorId.HasValue
             || request.SupportTypes is null || request.SupportTypes.Count == 0
             || string.IsNullOrWhiteSpace(request.ConversationSummary))
         {
-            throw new WorkflowValidationException("Complete the session details, qualification status, focus, current-practice judgement, support and conversation summary before completing the session.");
+            throw new WorkflowValidationException("Complete the session details, qualification status, focus, support and conversation summary before completing the session.");
         }
 
         if ((string.Equals(request.PrimaryFocusKey, "other", StringComparison.OrdinalIgnoreCase)

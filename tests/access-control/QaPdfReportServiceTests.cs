@@ -33,6 +33,26 @@ public sealed class QaPdfReportServiceTests
         Assert.DoesNotContain("Dashboard Records", raw, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("learning-walks", "Adult provision", "adult")]
+    [InlineData("als-learning-walks", "Supported learning", "supported")]
+    [InlineData("learning-walks", "Not recorded", "__not_recorded__")]
+    [InlineData("dashboard-overview", "Adult provision", "adult")]
+    public void Dashboard_pdf_keeps_delivery_area_even_when_after_the_first_five_columns(string module, string label, string key)
+    {
+        var workbook = new ExportWorkbookData(module, "Learning Walks",
+            new ExportFilter("2026/27", null, null, null, null, null, null, null, null, key),
+            "Test user", DateTimeOffset.Parse("2026-09-08T10:00:00Z"),
+            [new ExportSheet("Full Records",
+                ["Record ID", "Title", "Record type", "Status", "Staff member", "Reviewer or owner", "Learning walk delivery area", "Record date"],
+                [new string?[] { Guid.NewGuid().ToString(), "Walk example", "learning_walk", "Submitted", "Staff example", "Reviewer", label, "08 Sep 2026" }], false)]);
+        var file = new QaPdfReportService().CreateDashboardReport(workbook);
+        var raw = Encoding.ASCII.GetString(file.Content);
+        Assert.Contains(label, raw);
+        Assert.Contains("delivery area", raw, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("__not_recorded__", raw);
+    }
+
     [Fact]
     public void CreateReport_ProducesMultipageDashboardWithExpandedCriteria()
     {

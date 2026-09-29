@@ -11,6 +11,7 @@ public static class PermissionKeys
     public const string AlsLearningWalkSubmit = "als_learning_walk.submit";
     public const string WorkScrutinySubmit = "work_scrutiny.submit";
     public const string CpdManage = "cpd.manage";
+    public const string CpdMandatoryLog = "cpd.mandatory_log";
     public const string CpdSelfLog = "cpd.self_log";
     public const string ElevateStatusManage = "elevate_status.manage";
     public const string EvidenceSubmit = "evidence.submit";
@@ -28,6 +29,7 @@ public static class PermissionKeys
     public const string ElevateSubmit = "elevate.submit";
     public const string ElevateManage = "elevate.manage";
     public const string ElevatePracticeSubmit = "elevate_practice.submit";
+    public const string ElevatePracticeValidate = "elevate_practice.validate";
     public const string CoachingSubmit = "coaching.submit";
     public const string CoachingManage = "coaching.manage";
     public const string ProbationSubmit = "probation.submit";
@@ -60,6 +62,7 @@ public static class PermissionKeys
         AlsLearningWalkSubmit,
         WorkScrutinySubmit,
         CpdManage,
+        CpdMandatoryLog,
         CpdSelfLog,
         ElevateStatusManage,
         EvidenceSubmit,
@@ -77,6 +80,7 @@ public static class PermissionKeys
         ElevateSubmit,
         ElevateManage,
         ElevatePracticeSubmit,
+        ElevatePracticeValidate,
         CoachingSubmit,
         CoachingManage,
         ProbationSubmit,

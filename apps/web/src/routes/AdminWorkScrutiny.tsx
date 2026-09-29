@@ -1,6 +1,7 @@
 import { ArchiveRestore, ArrowLeft, Edit3, History, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { CourseMultiSelect } from "../components/CourseMultiSelect";
+import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { WorkScrutinyResponseField } from "../components/WorkScrutinyCreateForm";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
@@ -28,6 +29,12 @@ export function AdminWorkScrutiny() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const usesCourseLevel = detail?.sections.some(section => section.fields.some(field => ["qualification_level", "course_level", "course_or_unit"].includes(field.fieldKey))) ?? false;
+  const dirty = isEditing && detail !== null && (recordDate !== (detail.recordDate ?? "")
+    || JSON.stringify([...courseIds].sort()) !== JSON.stringify([...detail.courseIds].sort())
+    || detail.sections.some(section => section.fields.some(field => (responses[field.id] ?? "") !== (field.value ?? ""))));
+  const clearUnsaved = useUnsavedChanges({ label: "Work Scrutiny correction", dirty, saving: isSaving, onSave: saveRecord,
+    onDiscard: () => { setIsEditing(false); if (detail) { setResponses(Object.fromEntries(detail.sections.flatMap(section => section.fields.map(field => [field.id, field.value ?? ""])))); setCourseIds(detail.courseIds); setRecordDate(detail.recordDate ?? ""); } } });
 
   async function refreshRecords(nextMessage = "") {
     setIsLoading(true);
@@ -61,7 +68,8 @@ export function AdminWorkScrutiny() {
     );
   }, [recordState, records, search]);
 
-  async function openRecord(record: AdminWorkScrutinyRecord) {
+  async function openRecord(record: AdminWorkScrutinyRecord, afterSave = false) {
+    if (!afterSave && !await confirmUnsavedNavigation()) return;
     setSelectedRecord(record);
     setDetail(null);
     setIsEditing(false);
@@ -86,9 +94,9 @@ export function AdminWorkScrutiny() {
   }
 
   async function saveRecord() {
-    if (!detail || !selectedRecord || !recordDate || courseIds.length === 0) {
-      setMessage("Enter the scrutiny date and select at least one sampled course.");
-      return;
+    if (!detail || !selectedRecord || !recordDate || (!usesCourseLevel && courseIds.length === 0)) {
+      setMessage(usesCourseLevel ? "Enter the scrutiny date." : "Enter the scrutiny date and select at least one sampled course.");
+      return false;
     }
 
     const missingField = detail.sections
@@ -96,7 +104,7 @@ export function AdminWorkScrutiny() {
       .find((field) => field.isRequired && !responses[field.id]?.trim());
     if (missingField) {
       setMessage(`Complete the required field: ${missingField.label}.`);
-      return;
+      return false;
     }
 
     const selectedCourses = courseIds
@@ -105,7 +113,7 @@ export function AdminWorkScrutiny() {
     setIsSaving(true);
     const result = await api.updateFormSubmission(detail.submissionId, {
       title: detail.title,
-      summary: selectedCourses.map((course) => `${course.courseCode} - ${course.courseName}`).join("; "),
+      summary: selectedCourses.length ? selectedCourses.map((course) => `${course.courseCode} - ${course.courseName}`).join("; ") : detail.summary,
       orgUnitId: detail.orgUnitId,
       recordDate,
       responses: detail.sections.flatMap((section) => section.fields.map((field) => ({
@@ -118,16 +126,19 @@ export function AdminWorkScrutiny() {
 
     if (!result.ok) {
       setMessage(result.message ?? "The Work Scrutiny record could not be updated.");
-      return;
+      return false;
     }
 
+    clearUnsaved();
     await refreshRecords();
-    await openRecord({ ...selectedRecord, recordDate });
+    await openRecord({ ...selectedRecord, recordDate }, true);
     setIsEditing(false);
     setMessage("Work Scrutiny record updated and audit history recorded.");
+    return true;
   }
 
   async function deleteRecord() {
+    if (!await confirmUnsavedNavigation()) return;
     if (!selectedRecord || !window.confirm("Delete this Work Scrutiny record? It will leave dashboards and action lists, but can be restored from Deleted records.")) {
       return;
     }
@@ -169,7 +180,7 @@ export function AdminWorkScrutiny() {
     return (
       <div className="route-stack">
         <div className="admin-record-editor-heading">
-          <Button icon={ArrowLeft} onClick={() => { setSelectedRecord(null); setDetail(null); }}>Back to records</Button>
+          <Button icon={ArrowLeft} onClick={async () => { if (await confirmUnsavedNavigation()) { setSelectedRecord(null); setDetail(null); } }}>Back to records</Button>
           {selectedRecord.archivedAt ? (
             <Button disabled={isSaving} icon={ArchiveRestore} onClick={() => void restoreRecord()} variant="primary">Restore record</Button>
           ) : (
@@ -195,7 +206,7 @@ export function AdminWorkScrutiny() {
               </div>
 
               {isEditing ? (
-                <div className="entry-form">
+                <fieldset className="entry-form editor-fieldset" disabled={isSaving}>
                   <div className="entry-section">
                     <h3>Context and sample</h3>
                     <div className="entry-field-grid">
@@ -203,7 +214,7 @@ export function AdminWorkScrutiny() {
                         <span>Date of scrutiny <strong>Required</strong></span>
                         <input onChange={(event) => setRecordDate(event.target.value)} type="date" value={recordDate} />
                       </label>
-                      <label className="entry-field entry-field-wide">
+                      {!usesCourseLevel || courseIds.length > 0 ? <label className="entry-field entry-field-wide">
                         <span>Courses sampled <strong>Required</strong></span>
                         <CourseMultiSelect
                           courses={courses}
@@ -211,7 +222,7 @@ export function AdminWorkScrutiny() {
                           onChange={setCourseIds}
                           selectedIds={courseIds}
                         />
-                      </label>
+                      </label> : null}
                     </div>
                   </div>
                   {detail.sections.map((section) => (
@@ -230,10 +241,10 @@ export function AdminWorkScrutiny() {
                     </div>
                   ))}
                   <div className="toolbar">
-                    <Button icon={X} onClick={() => setIsEditing(false)}>Cancel</Button>
+                    <Button disabled={isSaving} icon={X} onClick={async () => { if (await confirmUnsavedNavigation()) setIsEditing(false); }}>Cancel</Button>
                     <Button disabled={isSaving} icon={Save} onClick={() => void saveRecord()} variant="primary">Save changes</Button>
                   </div>
-                </div>
+                </fieldset>
               ) : (
                 <>
                   <div className="record-context-note">

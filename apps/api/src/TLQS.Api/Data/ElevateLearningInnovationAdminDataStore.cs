@@ -20,10 +20,41 @@ public sealed partial class SqlFoundationDataStore
             return null;
         }
 
+        var isAdministrator = AdministrationAccessPolicy.CanManageRecords(currentUser);
+        if (!isAdministrator)
+        {
+            var managementDepth = await GetStaffManagementDepthAsync(current.StaffId, currentUser, cancellationToken);
+            var canValidate = await CanValidateElevateStaffAsync(current.StaffId, currentUser, cancellationToken);
+            if (currentUser.StaffId == current.StaffId || (!(managementDepth > 0) && !canValidate))
+            {
+                throw new UnauthorizedAccessException("You do not have permission to amend this staff member's assessment.");
+            }
+            if (current.Status != "submitted" && current.Validation?.Status != "returned")
+            {
+                throw new UnauthorizedAccessException("Staff must submit their assessment before it can be reviewed or amended together.");
+            }
+            if (!request.StaffPresent || string.IsNullOrWhiteSpace(request.EditReason))
+            {
+                throw new WorkflowValidationException("Confirm that the staff member is present and explain the agreed amendments.");
+            }
+        }
+        else if (current.Status == "submitted" && string.IsNullOrWhiteSpace(request.EditReason))
+        {
+            throw new WorkflowValidationException("Explain why the submitted assessment is being amended.");
+        }
+        if (request.EditReason?.Length > 4000)
+        {
+            throw new WorkflowValidationException("The amendment explanation must be no more than 4,000 characters.");
+        }
+
         var status = request.Status.Trim().ToLowerInvariant();
         if (status is not ("draft" or "submitted"))
         {
             throw new WorkflowValidationException("The record status must be Draft or Submitted.");
+        }
+        if (!isAdministrator && status != "submitted")
+        {
+            throw new WorkflowValidationException("Save the agreed assessment as submitted, or return it to the staff member for amendments.");
         }
 
         var ratings = (request.Ratings ?? [])
@@ -79,7 +110,7 @@ public sealed partial class SqlFoundationDataStore
             string academicYear;
             await using (var command = new SqlCommand(
                 """
-                SELECT record_id, framework_id, academic_year
+                SELECT record_id, framework_id, academic_year, row_version, status, validation_status
                 FROM quality.elevate_practice_assessments WITH (UPDLOCK, HOLDLOCK)
                 WHERE id = @assessmentId AND archived_at IS NULL;
                 """,
@@ -96,6 +127,11 @@ public sealed partial class SqlFoundationDataStore
                 recordId = reader.GetGuid(0);
                 frameworkId = reader.GetGuid(1);
                 academicYear = reader.GetString(2);
+                EnsureElevateAssessmentVersion(request.RowVersion, current.Validation?.RowVersion, reader.GetFieldValue<byte[]>(3));
+                if (!isAdministrator && reader.GetString(4) != "submitted" && reader.GetString(5) != "returned")
+                {
+                    throw new UnauthorizedAccessException("Staff must submit their assessment before it can be amended together.");
+                }
             }
 
             var beforeJson = JsonSerializer.Serialize(current);
@@ -147,6 +183,10 @@ public sealed partial class SqlFoundationDataStore
                 "elevate_practice.admin_updated",
                 $"Elevate Learning and Innovation {academicYear} amended by {currentUser.DisplayName}; status set to {status}.",
                 beforeJson, JsonSerializer.Serialize(request), cancellationToken);
+
+            await RecordElevateContentChangeAsync(
+                connection, (SqlTransaction)transaction, assessmentId, currentUser, status,
+                request.EditReason?.Trim(), cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
         }

@@ -1,11 +1,12 @@
-import { navigationItems, type AppRoute } from "../app/navigation";
+import { navigationGroups, navigationItems, type AppRoute } from "../app/navigation";
+import { ArrowRight, LayoutDashboard } from "lucide-react";
 import { EliStage } from "../components/EliScene";
 import type { CurrentUser } from "../services/types";
-import { WorkspaceSwitch } from "../components/WorkspaceSwitch";
+
 
 /**
  * Landing page: a time-aware personalised greeting from ELI, plus a grid of
- * pixel-art tiles into every area the signed-in user can access. The tile
+ * grouped navigation into every area the signed-in user can access. The tile
  * list arrives pre-filtered by the same permission rules as the sidebar.
  */
 
@@ -18,7 +19,6 @@ type HomeProps = {
   user: CurrentUser;
   tiles: readonly HomeTile[];
   onNavigate: (route: AppRoute) => void;
-  canAccessQaHub: boolean;
 };
 
 const tileDescriptions: Partial<Record<AppRoute, string>> = {
@@ -84,19 +84,21 @@ function greetingFor(now: Date) {
   return { salutation, message };
 }
 
-export function Home({ user, tiles, onNavigate, canAccessQaHub }: HomeProps) {
+export function Home({ user, tiles, onNavigate }: HomeProps) {
   const firstName = user.displayName.split(" ")[0] || user.displayName;
   const { salutation, message } = greetingFor(new Date());
   const visibleTiles = tiles.filter((tile) => tile.key !== "home");
-  const standardTiles = visibleTiles.filter((tile) => tile.key !== "uco" && tile.key !== "als_learning" && tile.key !== "als_liv");
-  const ucoTiles = visibleTiles.filter((tile) => tile.key === "uco");
-  const alsTiles = visibleTiles.filter((tile) => tile.key === "als_learning" || tile.key === "als_liv");
-  const orderedTiles = [...standardTiles, ...ucoTiles, ...alsTiles];
-  const firstVisibleAlsRoute = alsTiles[0]?.key;
+
 
   return (
     <div className="route-stack home-stack">
-      {canAccessQaHub ? <WorkspaceSwitch active="elevate" onChange={(workspace) => { if (workspace === "qa") onNavigate("qa"); }} /> : null}
+      {visibleTiles.some((tile) => tile.key === "dashboard") ? (
+        <button className="home-tile home-dashboard-tile" onClick={() => onNavigate("dashboard")} type="button">
+          <span aria-hidden="true" className="home-tile-glyph"><LayoutDashboard size={40} strokeWidth={1.6} /></span>
+          <span className="home-tile-text"><strong>Dashboard</strong><span>{tileDescriptions.dashboard}</span></span>
+          <ArrowRight aria-hidden="true" className="home-dashboard-arrow" size={24} />
+        </button>
+      ) : null}
       <section className="panel home-hero">
         <div className="home-hero-copy">
           <p className="eyebrow">i-Elevate</p>
@@ -108,31 +110,28 @@ export function Home({ user, tiles, onNavigate, canAccessQaHub }: HomeProps) {
         <EliStage />
       </section>
 
-      <nav aria-label="Areas you can access" className="home-tiles">
-        {orderedTiles.map((tile) => {
-          const Icon = navigationItems.find((item) => item.key === tile.key)?.icon;
-          const sectionLabel = tile.key === "uco"
-            ? "University Centre Oldham"
-            : tile.key === firstVisibleAlsRoute
-              ? "Additional Learning Support"
-              : undefined;
+      <nav aria-label="Areas you can access" className="home-groups">
+        {navigationGroups.map((group) => {
+          const groupTiles = group.routes.flatMap((key) => visibleTiles.filter((tile) => tile.key === key));
+          if (!groupTiles.length) return null;
           return (
-            <div className={sectionLabel ? "home-tile-entry home-tile-entry-section-start" : "home-tile-entry"} key={tile.key}>
-              {sectionLabel ? <div className="home-tiles-divider"><span>{sectionLabel}</span></div> : null}
-              <button
-                className="home-tile"
-                onClick={() => onNavigate(tile.key)}
-                type="button"
-              >
-                <span aria-hidden="true" className="home-tile-glyph">
-                  {Icon ? <Icon size={24} strokeWidth={1.8} /> : null}
-                </span>
-                <span className="home-tile-text">
-                  <strong>{tile.label}</strong>
-                  <span>{tileDescriptions[tile.key] ?? ""}</span>
-                </span>
-              </button>
-            </div>
+            <section aria-labelledby={`home-${group.id}`} className="home-group" key={group.id}>
+              <div className="home-group-heading">
+                <h2 id={`home-${group.id}`}>{group.title}</h2>
+                <p>{group.description}</p>
+              </div>
+              <div className="home-tiles">
+                {groupTiles.map((tile) => {
+                  const Icon = navigationItems.find((item) => item.key === tile.key)?.icon;
+                  return (
+                    <button className="home-tile" key={tile.key} onClick={() => onNavigate(tile.key)} type="button">
+                      <span aria-hidden="true" className="home-tile-glyph">{Icon ? <Icon size={24} strokeWidth={1.8} /> : null}</span>
+                      <span className="home-tile-text"><strong>{tile.label}</strong><span>{tileDescriptions[tile.key] ?? ""}</span></span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           );
         })}
       </nav>

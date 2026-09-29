@@ -6,6 +6,7 @@ namespace TLQS.AccessControl.Tests;
 public sealed class OrganisationLeadershipRulesTests
 {
     [Theory]
+    [InlineData("directorate", "director", "Director")]
     [InlineData("faculty", "head_of_faculty", "Head of Faculty")]
     [InlineData("team", "programme_leader", "Programme Leader")]
     public void Managed_unit_maps_to_expected_permission_tier(string unitType, string roleKey, string roleName)

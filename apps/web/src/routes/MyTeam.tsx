@@ -10,7 +10,7 @@ type MyTeamProps = {
   onOpenProfile: (staffId: string) => void;
 };
 
-type TeamSort = "name" | "open_desc" | "overdue_desc" | "judgement";
+type TeamSort = "name" | "open_desc" | "overdue_desc" | "judgement" | "elevate_level_desc";
 
 export function MyTeam({ onOpenActions, onOpenProfile }: MyTeamProps) {
   const [members, setMembers] = useState<MyTeamMember[]>([]);
@@ -76,6 +76,7 @@ export function MyTeam({ onOpenActions, onOpenProfile }: MyTeamProps) {
         if (sort === "open_desc") return right.openActionCount - left.openActionCount || left.displayName.localeCompare(right.displayName);
         if (sort === "overdue_desc") return right.overdueActionCount - left.overdueActionCount || left.displayName.localeCompare(right.displayName);
         if (sort === "judgement") return (left.elevateJudgement ?? "ZZZ").localeCompare(right.elevateJudgement ?? "ZZZ") || left.displayName.localeCompare(right.displayName);
+        if (sort === "elevate_level_desc") return (right.elevateLevel ?? 0) - (left.elevateLevel ?? 0) || left.displayName.localeCompare(right.displayName);
         return left.displayName.localeCompare(right.displayName);
       });
   }, [actionFilter, facultyId, members, search, sort, teamId]);
@@ -115,7 +116,7 @@ export function MyTeam({ onOpenActions, onOpenProfile }: MyTeamProps) {
           <label><span>Faculty</span><select onChange={(event) => { setFacultyId(event.target.value); setTeamId(""); }} value={facultyId}><option value="">All faculties</option>{faculties.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label>
           <label><span>Team</span><select onChange={(event) => setTeamId(event.target.value)} value={teamId}><option value="">All teams</option>{teams.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label>
           <label><span>Actions</span><select onChange={(event) => setActionFilter(event.target.value as "all" | "open" | "overdue")} value={actionFilter}><option value="all">Any status</option><option value="open">Has open actions</option><option value="overdue">Has overdue actions</option></select></label>
-          <label><span><ArrowUpDown size={14} aria-hidden="true" />Sort by</span><select onChange={(event) => setSort(event.target.value as TeamSort)} value={sort}><option value="name">Staff name</option><option value="open_desc">Most open actions</option><option value="overdue_desc">Most overdue</option><option value="judgement">Elevate outcome</option></select></label>
+          <label><span><ArrowUpDown size={14} aria-hidden="true" />Sort by</span><select onChange={(event) => setSort(event.target.value as TeamSort)} value={sort}><option value="name">Staff name</option><option value="open_desc">Most open actions</option><option value="overdue_desc">Most overdue</option><option value="judgement">Elevate outcome</option><option value="elevate_level_desc">Highest Elevate level</option></select></label>
         </div>
 
         {loadError ? <div className="empty-row"><AlertTriangle size={18} aria-hidden="true" />{loadError}</div> : isLoading ? (
@@ -124,12 +125,13 @@ export function MyTeam({ onOpenActions, onOpenProfile }: MyTeamProps) {
           <div className="empty-row">No team members match the current filters.</div>
         ) : (
           <DataTable rows={pageMembers} rowKey={(member) => member.staffId} columns={[
-            { key: "staff", header: "Staff member", render: (member) => <span><strong>{member.displayName}</strong><small className="table-subline">{member.externalId}</small></span> },
+            { key: "staff", header: "Staff member", render: (member) => <span><strong>{member.displayName}</strong></span> },
             { key: "faculty", header: "Faculty", render: (member) => <UnitList units={member.faculties} /> },
             { key: "team", header: "Team", render: (member) => <UnitList units={member.teams} empty="No sub-team" /> },
             { key: "role", header: "Role", render: (member) => member.roleNames.join(", ") || "Not allocated" },
             { key: "actions", header: "Actions", render: (member) => <span className="team-action-count"><strong>{member.openActionCount}</strong> open{member.overdueActionCount ? <small>{member.overdueActionCount} overdue</small> : null}</span> },
             { key: "elevate", header: "Elevate Learning and Innovation", render: (member) => member.canOpenProfile ? <span className="team-judgement">{member.elevateJudgement ?? "Not yet submitted"}</span> : <span className="muted-copy">Restricted</span> },
+            { key: "elevate-level", header: "Elevate level (this year)", render: (member) => !member.canOpenProfile ? <span className="muted-copy">Restricted</span> : member.elevateLevel ? <span className="team-judgement">Level {member.elevateLevel}</span> : <span className="muted-copy">Not awarded</span> },
             { key: "commands", header: "", render: (member) => <div className="team-row-commands"><Button disabled={!member.canOpenProfile} icon={UserRound} onClick={() => onOpenProfile(member.staffId)} variant="quiet">Personal Profile</Button><Button icon={ListChecks} onClick={() => onOpenActions(member.staffId)} variant="quiet">Actions</Button></div> }
           ]} />
         )}
