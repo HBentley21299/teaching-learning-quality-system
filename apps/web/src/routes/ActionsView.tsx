@@ -134,6 +134,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   const [deletingId, setDeletingId] = useState("");
   const [deletionReason, setDeletionReason] = useState("");
   const extensionPanelRef = useRef<HTMLElement | null>(null);
+  const statusMessageRef = useRef<HTMLDivElement | null>(null);
   const editBaseline = localActions.find(action => action.id === editingId);
   const createDirty = isCreating && Boolean(actionTheme || title || detail || dueDate || subjectStaffId || ownerStaffId !== (user.staffId ?? "") || visibilitySetting !== "staff_and_management");
   const editDirty = Boolean(editBaseline && (editActionTheme !== editBaseline.actionTheme || editTitle !== editBaseline.title || editDetail !== (editBaseline.detail ?? "") || editOwnerId !== editBaseline.ownerStaffId || editDueDate !== (editBaseline.dueDate ?? "") || editVisibility !== editBaseline.visibilitySetting));
@@ -147,7 +148,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
   }
   async function changeEditor(change: () => void) {
     if (!await confirmUnsavedNavigation()) return;
-    resetActionEditors(); clearNavigation(); change();
+    resetActionEditors(); clearNavigation(); setStatusMessage(""); change();
   }
 
 
@@ -164,8 +165,18 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
     if (!extendingId) return;
     window.requestAnimationFrame(() => {
       extensionPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      extensionPanelRef.current?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
     });
   }, [extendingId]);
+
+  useEffect(() => {
+    if (!statusMessage) return;
+    const frame = window.requestAnimationFrame(() => {
+      statusMessageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      statusMessageRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [statusMessage]);
 
   useEffect(() => {
     if (!includeDeleted) {
@@ -394,7 +405,7 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
         <button onClick={() => setStatusFilter("complete")} type="button"><strong>{counts.completed}</strong><span>Completed</span></button>
       </div>
 
-      {statusMessage ? <div className="notice-row" role="status">{statusMessage}</div> : null}
+      {statusMessage ? <div className="notice-row" ref={statusMessageRef} role="status" tabIndex={-1}>{statusMessage}</div> : null}
       {(isCreating || editingId) && ownersLoading ? <p role="status">Loading eligible owners…</p> : null}
       {(isCreating || editingId) && ownersError ? <div className="notice-row" role="alert">{ownersError} <Button onClick={() => void loadOwnerOptions()}>Retry owners</Button></div> : null}
 
@@ -420,6 +431,10 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
         <label className="entry-field"><span>Revised implementation date</span><input min={nextDate(localActions.find((action) => action.id === extendingId)?.dueDate)} disabled={isSaving} onChange={(event) => setExtendedDueDate(event.target.value)} type="date" value={extendedDueDate} /></label>
         <label className="entry-field entry-field-wide"><span>Extension reason</span><textarea disabled={isSaving} onChange={(event) => setExtensionReason(event.target.value)} rows={3} value={extensionReason} /></label>
       </div><div className="toolbar"><Button icon={X} onClick={() => void changeEditor(() => undefined)}>Cancel</Button><Button disabled={isSaving} icon={CalendarClock} onClick={() => void extendAction(extendingId)} variant="primary">{isSaving ? "Extending…" : "Extend action"}</Button></div></fieldset></section> : null}
+
+      {completingId ? <ActionNotePanel key={completingId} heading="Complete action" label="Closure comments" value={completionNote} onChange={setCompletionNote} onCancel={() => void changeEditor(() => undefined)} onSave={() => void completeAction(completingId)} saveLabel="Mark completed" saving={isSaving} /> : null}
+      {cancellingId ? <ActionNotePanel key={cancellingId} heading="Cancel action" label="Cancellation reason" value={cancellationComments} onChange={setCancellationComments} onCancel={() => void changeEditor(() => undefined)} onSave={() => void cancelAction(cancellingId)} saveLabel="Cancel action" saving={isSaving} danger /> : null}
+      {deletingId ? <ActionNotePanel key={deletingId} heading="Delete action" label="Deletion reason" value={deletionReason} onChange={setDeletionReason} onCancel={() => void changeEditor(() => undefined)} onSave={() => void deleteAction()} saveLabel="Delete action" saving={isSaving} danger /> : null}
 
       <section className="panel action-inbox-panel">
         <div className="panel-heading"><h2>Action inbox</h2><span>{visibleActions.length} matching action{visibleActions.length === 1 ? "" : "s"}</span></div>
@@ -490,10 +505,6 @@ export function ActionsView({ academicYear, actions, staff, orgUnits, user, onCh
         <label className="entry-field"><span>Visibility</span><select onChange={(event) => setEditVisibility(event.target.value as ActionVisibility)} value={editVisibility}>{Object.entries(visibilityLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       </div><div className="toolbar"><Button icon={X} onClick={() => void changeEditor(() => undefined)}>Cancel</Button><Button disabled={isSaving || ownersLoading || Boolean(ownersError)} icon={CheckCircle2} onClick={() => void saveEdit()} variant="primary">Save changes</Button></div></fieldset></section> : null}
 
-      {completingId ? <ActionNotePanel heading="Complete action" label="Closure comments" value={completionNote} onChange={setCompletionNote} onCancel={() => void changeEditor(() => undefined)} onSave={() => void completeAction(completingId)} saveLabel="Mark completed" saving={isSaving} /> : null}
-      {cancellingId ? <ActionNotePanel heading="Cancel action" label="Cancellation reason" value={cancellationComments} onChange={setCancellationComments} onCancel={() => void changeEditor(() => undefined)} onSave={() => void cancelAction(cancellingId)} saveLabel="Cancel action" saving={isSaving} danger /> : null}
-      {deletingId ? <ActionNotePanel heading="Delete action" label="Deletion reason" value={deletionReason} onChange={setDeletionReason} onCancel={() => void changeEditor(() => undefined)} onSave={() => void deleteAction()} saveLabel="Delete action" saving={isSaving} danger /> : null}
-
     </div>
   );
 }
@@ -511,7 +522,12 @@ type ActionNotePanelProps = {
 };
 
 function ActionNotePanel({ heading, label, value, onChange, onCancel, onSave, saveLabel, saving, danger = false }: ActionNotePanelProps) {
-  return <section className="panel"><div className="panel-heading"><h2>{heading}</h2><span>This change is audit logged</span></div><fieldset className="entry-form" disabled={saving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+  const panelRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    panelRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus({ preventScroll: true });
+  }, []);
+  return <section className="panel" ref={panelRef}><div className="panel-heading"><h2>{heading}</h2><span>This change is audit logged</span></div><fieldset className="entry-form" disabled={saving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <label className="entry-field entry-field-wide"><span>{label}</span><textarea disabled={saving} onChange={(event) => onChange(event.target.value)} rows={3} value={value} /></label>
     <div className="toolbar"><Button icon={X} onClick={onCancel}>Back</Button><Button disabled={saving} icon={danger ? Trash2 : CheckCircle2} onClick={onSave} variant={danger ? "danger" : "primary"}>{saveLabel}</Button></div>
   </fieldset></section>;
