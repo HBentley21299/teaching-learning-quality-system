@@ -16,6 +16,7 @@
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Keys" />
     <PackageReference Include="DocumentFormat.OpenXml" />
     <PackageReference Include="MailKit" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Templates\Exports\*.docx" CopyToOutputDirectory="PreserveNewest" />
