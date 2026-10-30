@@ -1,13 +1,15 @@
 import {
-  Activity,
+  BookOpenCheck,
   Building2,
   ClipboardCheck,
+  ClipboardPenLine,
+  Footprints,
   GraduationCap,
   House,
   LayoutDashboard,
-  Lightbulb,
   ListChecks,
   MessagesSquare,
+  School,
   Sparkles,
   Settings,
   ShieldCheck,
@@ -22,19 +24,21 @@ export const navigationItems = [
   { key: "staff", label: "Staff", icon: Users },
   { key: "team", label: "My Team", icon: UsersRound },
   { key: "admin", label: "Admin Centre", icon: Settings },
-  { key: "learning", label: "Learning Walks", icon: Activity },
-  { key: "liv", label: "LIV", icon: Lightbulb },
+  { key: "learning", label: "Learning Walks", icon: Footprints },
+  { key: "digital", label: "Digital Learning Walks", icon: ClipboardCheck },
+  { key: "activate", label: "Activate+ Growth Reviews", icon: BookOpenCheck },
+  { key: "liv", label: "LIV", icon: ClipboardPenLine },
   { key: "probation", label: "Probationary Observations", icon: ClipboardCheck },
-  { key: "uco", label: "UCO TLA Reviews", icon: ClipboardCheck },
+  { key: "uco", label: "UCO TLA Reviews", icon: School },
   { key: "elevate", label: "Elevate Environments", icon: Building2 },
   { key: "practice", label: "Elevate Learning and Innovation", icon: Sparkles },
   { key: "coaching", label: "Coaching & Mentoring", icon: MessagesSquare },
-  { key: "scrutiny", label: "Work Scrutiny", icon: ClipboardCheck },
+  { key: "scrutiny", label: "Work Scrutiny", icon: BookOpenCheck },
   { key: "cpd", label: "CPD", icon: GraduationCap },
   { key: "profile", label: "Staff Profile", icon: UserRound },
   { key: "actions", label: "Actions", icon: ListChecks },
-  { key: "als_learning", label: "ALS Learning Walks", icon: Activity },
-  { key: "als_liv", label: "ALS LIV", icon: Lightbulb },
+  { key: "als_learning", label: "ALS Learning Walks", icon: Footprints },
+  { key: "als_liv", label: "ALS LIV", icon: ClipboardPenLine },
   { key: "qa", label: "QA Hub", icon: ShieldCheck, hidden: true }
 ] as const;
 
@@ -42,7 +46,7 @@ export type AppRoute = (typeof navigationItems)[number]["key"];
 
 
 export const navigationGroups: { id: string; title: string; description: string; routes: AppRoute[] }[] = [
-    { id: "forms", title: "Forms & observations", description: "Record teaching practice and review learning.", routes: ["learning", "liv", "scrutiny", "elevate", "probation"] },
+    { id: "forms", title: "Forms & observations", description: "Record teaching practice and review learning.", routes: ["learning", "digital", "activate", "liv", "scrutiny", "elevate", "probation"] },
     { id: "staff", title: "Staff information", description: "Find your profile, colleagues and team.", routes: ["profile", "staff", "team"] },
     { id: "development", title: "Professional development", description: "Plan your learning, coaching and next steps.", routes: ["practice", "cpd", "coaching"] },
     { id: "tracking", title: "Actions", description: "Follow up on actions and see progress.", routes: ["actions"] },
@@ -51,7 +55,7 @@ export const navigationGroups: { id: string; title: string; description: string;
 ];
 
 const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
-  dashboard: ["reports.view_all", "reports.view_scoped", "uco_tla.manage"],
+  dashboard: ["reports.view_all", "reports.view_scoped", "uco_tla.manage", "forms.manage", "digital_learning_walk.view_all", "digital_learning_walk.view_scoped", "digital_learning_walk.manage", "digital_learning_walk.submit", "activate_growth_review.view_all", "activate_growth_review.view_scoped", "activate_growth_review.manage", "activate_growth_review.submit"],
   staff: ["reports.view_all", "reports.view_scoped", "staff.manage", "users.manage"],
   team: ["my_team.view"],
   admin: [
@@ -66,9 +70,9 @@ const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
     "qa_reviews.manage"
   ],
   learning: ["learning_walk.submit", "forms.manage"],
-  liv: ["liv.submit", "liv.manage"],
+  digital: ["digital_learning_walk.submit", "digital_learning_walk.view_all", "digital_learning_walk.view_scoped", "digital_learning_walk.manage", "forms.manage"],
+  activate: ["activate_growth_review.submit", "activate_growth_review.view_all", "activate_growth_review.view_scoped", "activate_growth_review.manage", "forms.manage"],
   als_learning: ["als_learning_walk.submit", "forms.manage"],
-  als_liv: ["als_liv.submit", "als_liv.manage"],
   probation: ["probation.submit", "probation.manage"],
   uco: ["uco_tla.manage", "records.manage"],
   elevate: ["elevate.submit", "elevate.manage", "forms.manage", "reports.view_all", "reports.view_scoped"],
@@ -76,13 +80,14 @@ const routePermissions: Partial<Record<AppRoute, readonly string[]>> = {
   coaching: ["coaching.submit", "coaching.manage"],
   scrutiny: ["work_scrutiny.submit", "forms.manage", "reports.view_all", "reports.view_scoped"],
   cpd: ["cpd.self_log", "cpd.manage", "cpd.mandatory_log"],
-  qa: ["qa_reviews.view_all", "qa_reviews.view_scoped", "qa_reviews.view_assigned"]
+  qa: ["qa_reviews.view_all", "qa_reviews.view_scoped", "qa_reviews.view_assigned", "qa_reviews.manage", "lists.manage", "records.manage"]
 };
 
 /**
  * Keeps the sidebar and home tiles aligned with the API permission model.
- * Home, a user's own profile and their assigned actions remain available to
- * every provisioned account; all other workspaces require one matching grant.
+ * Home, a user's own profile, assigned actions and LIV workspaces remain available
+ * to every provisioned account. The API scopes LIV records to the current user;
+ * creating or managing reviews still requires the corresponding grant.
  */
 export function canAccessRoute(route: AppRoute, permissions: readonly string[]) {
   const required = routePermissions[route];

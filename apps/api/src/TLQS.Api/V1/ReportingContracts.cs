@@ -64,6 +64,33 @@ public sealed record ElevateStatusDashboardSummary(
     int Level4OrAbove,
     int Level5OrAbove);
 
+public sealed record ElevateStatusStaffDashboardSummary(
+    Guid StaffId,
+    string StaffName,
+    Guid? OrgUnitId,
+    string? AreaCode,
+    string? AreaName,
+    string? ParentAreaCode,
+    int CurrentLevel,
+    string CurrentLevelName,
+    int QualifyingAttendanceCount,
+    int? NextLevel,
+    string? NextLevelName,
+    int? SessionsToNextLevel,
+    DateTimeOffset? LastConfirmedAt);
+
+public sealed record DashboardRecordDataColumn(string Key, string Label, string? Section, string? DataType);
+public sealed record DashboardRecordDataRow(Guid RecordId, IReadOnlyDictionary<string, string?> Values);
+public sealed record DashboardRecordDataTable(
+    string Key, string Label, IReadOnlyList<DashboardRecordDataColumn> Columns, IReadOnlyList<DashboardRecordDataRow> Rows);
+public sealed record DashboardRecordDataSummary(
+    string DashboardKey,
+    IReadOnlyList<DashboardRecordDataColumn> Columns,
+    IReadOnlyList<DashboardRecordDataRow> Rows,
+    bool WasTruncated,
+    DateTimeOffset GeneratedAt,
+    IReadOnlyList<DashboardRecordDataTable>? RelatedTables = null);
+
 public sealed record StaffParticipationDashboardSummary(
     string ProcessKey,
     Guid? OrgUnitId,

@@ -19,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Templates\Exports\*.docx" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="..\..\..\..\shared\workflow-form-content.json" LogicalName="TLQS.WorkflowFormContent.json" />
     <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 </Project>

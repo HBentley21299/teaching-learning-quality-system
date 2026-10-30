@@ -733,7 +733,7 @@ public sealed partial class SqlFoundationDataStore(
                 m.module_key,
                 m.name,
                 ft.template_key,
-                ft.name,
+                COALESCE(latest_version.display_name, ft.name),
                 latest_version.version_label,
                 CASE
                     WHEN ft.archived_at IS NOT NULL THEN 'Archived'
@@ -748,7 +748,7 @@ public sealed partial class SqlFoundationDataStore(
             FROM forms.form_templates ft
             JOIN core.modules m ON m.id = ft.module_id
             OUTER APPLY (
-                SELECT TOP (1) id, version_label, is_published
+                SELECT TOP (1) id, version_label, is_published, display_name
                 FROM forms.form_template_versions ftv
                 WHERE ftv.form_template_id = ft.id
                   AND ftv.archived_at IS NULL
@@ -761,7 +761,7 @@ public sealed partial class SqlFoundationDataStore(
             LEFT JOIN forms.form_template_org_units ftou ON ftou.form_template_id = ft.id
                 AND ftou.archived_at IS NULL
             LEFT JOIN org.org_units assigned_org ON assigned_org.id = ftou.org_unit_id
-            WHERE m.module_key IN ('learning_walks', 'work_scrutiny', 'cpd')
+            WHERE m.module_key IN ('learning_walks', 'work_scrutiny', 'cpd', 'elevate_environments')
             GROUP BY
                 ft.id,
                 m.id,
@@ -770,6 +770,7 @@ public sealed partial class SqlFoundationDataStore(
                 m.display_order,
                 ft.template_key,
                 ft.name,
+                latest_version.display_name,
                 latest_version.version_label,
                 latest_version.is_published,
                 ft.archived_at,
@@ -843,7 +844,7 @@ public sealed partial class SqlFoundationDataStore(
                 ft.id,
                 ftv.id,
                 ft.template_key,
-                ft.name,
+                COALESCE(ftv.display_name, ft.name),
                 ftv.version_label,
                 fs.id,
                 fs.section_key,
@@ -1616,15 +1617,85 @@ public sealed partial class SqlFoundationDataStore(
                    COALESCE(latest_submission.status, 'submitted') AS submission_status,
                    r.academic_year_key,
                    CONVERT(bit, CASE WHEN r.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END),
-                   delivery_area.response_text, delivery_area.display_name
+                   delivery_area.response_text, delivery_area.display_name,
+                   owner_staff.display_name, subject_staff.display_name, submitter_staff.display_name,
+                   template.template_key, COALESCE(template_version.display_name, template.name),
+                   CASE WHEN r.record_type IN (N'learning_walk', N'als_learning_walk', N'cpd_event', N'work_scrutiny', N'elevate_environment') THEN r.summary END,
+                   theme_names.names,
+                   CASE WHEN latest_submission.status = N'draft' THEN saved_participants.names ELSE COALESCE(participants.names, saved_participants.names) END,
+                   CASE WHEN latest_submission.status = N'draft' THEN saved_context.room_code ELSE COALESCE(room.room_code, saved_context.room_code) END,
+                   CASE WHEN latest_submission.status = N'draft' THEN saved_context.building_name ELSE COALESCE(room.building_name, saved_context.building_name) END
             FROM core.records r
+            LEFT JOIN people.staff owner_staff ON owner_staff.id = r.owner_staff_id
+            LEFT JOIN people.staff subject_staff ON subject_staff.id = r.subject_staff_id
             OUTER APPLY (
-                SELECT TOP (1) fsub.id, fsub.status
+                SELECT TOP (1) fsub.id, fsub.status, fsub.form_template_version_id, fsub.submitted_by_user_account_id
                 FROM forms.form_submissions fsub
                 WHERE fsub.record_id = r.id
                   AND fsub.archived_at IS NULL
                 ORDER BY fsub.created_at DESC, fsub.id DESC
             ) latest_submission
+            LEFT JOIN forms.form_template_versions template_version ON template_version.id = latest_submission.form_template_version_id
+            LEFT JOIN forms.form_templates template ON template.id = template_version.form_template_id
+            LEFT JOIN auth.user_accounts submitter_account ON submitter_account.id = CASE WHEN latest_submission.status = N'submitted' THEN latest_submission.submitted_by_user_account_id END
+            LEFT JOIN people.staff submitter_staff ON submitter_staff.id = submitter_account.staff_id
+            LEFT JOIN quality.elevate_environment_assessments environment ON environment.record_id = r.id AND r.record_type = N'elevate_environment'
+            LEFT JOIN quality.rooms room ON room.id = environment.room_id
+            OUTER APPLY (
+                SELECT STRING_AGG(CONVERT(nvarchar(max), participant.display_name), NCHAR(31)) AS names
+                FROM cpd.cpd_events event_row
+                JOIN cpd.cpd_attendance attendance ON attendance.cpd_event_id = event_row.id AND attendance.archived_at IS NULL
+                JOIN people.staff participant ON participant.id = attendance.staff_id
+                WHERE event_row.record_id = r.id AND event_row.archived_at IS NULL AND r.record_type = N'cpd_event'
+            ) participants
+            OUTER APPLY (
+                SELECT MAX(CASE WHEN answer.field_key = N'staff_search' THEN answer.response_text END) AS staff_ids,
+                       MAX(CASE WHEN answer.field_key = N'room_code' THEN answer.response_text END) AS room_code,
+                       MAX(CASE WHEN answer.field_key = N'building_name' THEN answer.response_text END) AS building_name
+                FROM (
+                    SELECT field.field_key, response.response_text,
+                           ROW_NUMBER() OVER (PARTITION BY field.field_key ORDER BY response.updated_at DESC, response.id DESC) AS position
+                    FROM forms.form_responses response
+                    JOIN forms.form_fields field ON field.id = response.form_field_id
+                    WHERE response.form_submission_id = latest_submission.id AND response.archived_at IS NULL
+                      AND ((r.record_type = N'cpd_event' AND field.field_key = N'staff_search')
+                        OR (r.record_type = N'elevate_environment' AND field.field_key IN (N'room_code', N'building_name')))
+                ) answer
+                WHERE answer.position = 1
+            ) saved_context
+            OUTER APPLY (
+                SELECT STRING_AGG(CONVERT(nvarchar(max), participant.display_name), NCHAR(31)) WITHIN GROUP (ORDER BY participant.display_name) AS names
+                FROM people.staff participant
+                WHERE r.record_type = N'cpd_event'
+                  AND participant.id IN (
+                    SELECT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value)))
+                    FROM STRING_SPLIT(saved_context.staff_ids, N'|')
+                  )
+            ) saved_participants
+            OUTER APPLY (
+                SELECT TOP (1) response.response_text
+                FROM forms.form_responses response
+                JOIN forms.form_fields field ON field.id = response.form_field_id
+                WHERE response.form_submission_id = latest_submission.id AND response.archived_at IS NULL
+                  AND field.field_key = CASE r.record_type
+                    WHEN N'learning_walk' THEN N'learning_walk_theme'
+                    WHEN N'als_learning_walk' THEN N'learning_walk_theme'
+                    WHEN N'work_scrutiny' THEN N'finding_tag'
+                    WHEN N'cpd_event' THEN N'cpd_themes' END
+                ORDER BY response.updated_at DESC, response.id DESC
+            ) theme_response
+            OUTER APPLY (
+                SELECT STRING_AGG(CONVERT(nvarchar(max), selected_theme.name), NCHAR(31)) WITHIN GROUP (ORDER BY selected_theme.name) AS names
+                FROM (
+                    SELECT record_theme.theme_name_snapshot AS name
+                    FROM quality.learning_walk_record_themes record_theme
+                    WHERE record_theme.record_id = r.id AND r.record_type IN (N'learning_walk', N'als_learning_walk')
+                    UNION
+                    SELECT LTRIM(RTRIM(value))
+                    FROM STRING_SPLIT(REPLACE(theme_response.response_text, N';', N'|'), N'|')
+                    WHERE NULLIF(LTRIM(RTRIM(value)), N'') IS NOT NULL
+                ) selected_theme
+            ) theme_names
             OUTER APPLY (
                 SELECT TOP (1) response.response_text,
                     COALESCE(JSON_VALUE(response.response_json, '$.displayName'), lookup_value.display_name, response.response_text) AS display_name
@@ -1687,7 +1758,7 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
               )
-            ORDER BY created_at DESC OPTION (RECOMPILE);
+            ORDER BY r.created_at DESC, r.id DESC OPTION (RECOMPILE);
             """,
             command =>
             {
@@ -1710,7 +1781,12 @@ public sealed partial class SqlFoundationDataStore(
                 reader.GetString(10),
                 reader.GetBoolean(11),
                 GetStringOrNull(reader, 12),
-                GetStringOrNull(reader, 13)),
+                GetStringOrNull(reader, 13),
+                GetStringOrNull(reader, 14), GetStringOrNull(reader, 15), GetStringOrNull(reader, 16),
+                GetStringOrNull(reader, 17), GetStringOrNull(reader, 18), GetStringOrNull(reader, 19),
+                (GetStringOrNull(reader, 20) ?? "").Split('\u001f', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                (GetStringOrNull(reader, 21) ?? "").Split('\u001f', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                GetStringOrNull(reader, 22), GetStringOrNull(reader, 23)),
             cancellationToken);
 
     public async Task<RecordDetailSummary?> GetRecordDetailAsync(
@@ -1762,7 +1838,7 @@ public sealed partial class SqlFoundationDataStore(
                 r.archived_at,
                 fsub.id AS form_submission_id,
                 ft.template_key,
-                ft.name AS template_name,
+                COALESCE(ftv.display_name, ft.name) AS template_name,
                 ftv.version_label,
                 fsub.status,
                 fsub.submitted_at,
@@ -2082,6 +2158,13 @@ public sealed partial class SqlFoundationDataStore(
                 ORDER BY extension.created_at DESC
             ) latest_extension
             WHERE (@includeDeleted = 1 OR a.archived_at IS NULL)
+              AND (r.record_type NOT IN (N'digital_learning_walk',N'activate_growth_review') OR r.record_type IS NULL
+                    OR a.owner_staff_id=@currentStaffId OR r.owner_staff_id=@currentStaffId
+                    OR EXISTS(SELECT 1 FROM quality.process_review_action_assignees assigned WHERE assigned.action_id=a.id AND assigned.staff_id=@currentStaffId)
+                    OR r.record_type=N'digital_learning_walk' AND (@digitalAll=1 OR @digitalScoped=1 AND EXISTS(
+                        SELECT 1 FROM visible_org_units scope WHERE scope.org_unit_id=r.org_unit_id OR (r.record_type=N'activate_growth_review' AND EXISTS(SELECT 1 FROM quality.process_review_scopes selected WHERE selected.record_id=r.id AND selected.org_unit_id=scope.org_unit_id))))
+                    OR r.record_type=N'activate_growth_review' AND (@activateAll=1 OR @activateScoped=1 AND EXISTS(
+                        SELECT 1 FROM visible_org_units scope WHERE scope.org_unit_id=r.org_unit_id OR (r.record_type=N'activate_growth_review' AND EXISTS(SELECT 1 FROM quality.process_review_scopes selected WHERE selected.record_id=r.id AND selected.org_unit_id=scope.org_unit_id)))))
               AND (
                     r.record_type <> N'uco_tla_review'
                     OR @canManageUco = 1
@@ -2099,6 +2182,11 @@ public sealed partial class SqlFoundationDataStore(
                     OR a.owner_staff_id = @currentStaffId
                     OR a.subject_staff_id = @currentStaffId
                     OR r.owner_staff_id = @currentStaffId
+                    OR EXISTS(SELECT 1 FROM quality.process_review_action_assignees assigned WHERE assigned.action_id=a.id AND assigned.staff_id=@currentStaffId)
+                    OR r.record_type=N'digital_learning_walk' AND (@digitalAll=1 OR @digitalScoped=1 AND EXISTS(
+                        SELECT 1 FROM visible_org_units scope WHERE scope.org_unit_id=r.org_unit_id OR (r.record_type=N'activate_growth_review' AND EXISTS(SELECT 1 FROM quality.process_review_scopes selected WHERE selected.record_id=r.id AND selected.org_unit_id=scope.org_unit_id))))
+                    OR r.record_type=N'activate_growth_review' AND (@activateAll=1 OR @activateScoped=1 AND EXISTS(
+                        SELECT 1 FROM visible_org_units scope WHERE scope.org_unit_id=r.org_unit_id OR (r.record_type=N'activate_growth_review' AND EXISTS(SELECT 1 FROM quality.process_review_scopes selected WHERE selected.record_id=r.id AND selected.org_unit_id=scope.org_unit_id))))
                     OR (
                         @canViewScopedActivities = 1
                         AND (
@@ -2108,6 +2196,7 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
               )
+              AND EXISTS (SELECT 1 FROM quality.fn_liv_action_access(a.id, @currentUserAccountId))
               AND (
                     @canViewAll = 1
                     OR a.visibility_setting = 'staff_and_management'
@@ -2115,6 +2204,7 @@ public sealed partial class SqlFoundationDataStore(
                     OR (a.visibility_setting = 'source_editors' AND (
                         a.created_by_user_account_id = @currentUserAccountId
                         OR r.owner_staff_id = @currentStaffId
+                    OR EXISTS(SELECT 1 FROM quality.process_review_action_assignees assigned WHERE assigned.action_id=a.id AND assigned.staff_id=@currentStaffId)
                     ))
                     OR (a.visibility_setting = 'management_only' AND @canViewScopedActivities = 1)
               )
@@ -2127,6 +2217,7 @@ public sealed partial class SqlFoundationDataStore(
             {
                 AddScopeParameters(command, currentUser);
                 command.Parameters.AddWithValue("@includeDeleted", canIncludeDeleted);
+                AddProcessParameters(command, currentUser);
                 command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
                 if (AcademicYearPolicy.TryGetBounds(academicYear, out var academicYearStart, out var academicYearEnd))
                 {
@@ -2197,6 +2288,7 @@ public sealed partial class SqlFoundationDataStore(
             },
             cancellationToken);
 
+        actions = await EnrichActivateActionResponsiblesAsync(actions, cancellationToken);
         return actions
             .OrderBy(action => action.IsDeleted)
             .ThenBy(action => action.CompletedDate.HasValue)
@@ -2424,7 +2516,13 @@ public sealed partial class SqlFoundationDataStore(
                 r.academic_year_key,
                 delivery_area.response_text AS delivery_area_key,
                 delivery_area.display_name AS delivery_area_name,
-                submitter_staff.display_name AS submitter_display_name
+                submitter_staff.display_name AS submitter_display_name,
+                r.owner_staff_id,
+                submitter_staff.id AS submitter_staff_id,
+                CASE WHEN r.record_type = N'elevate_practice_assessment' AND eli_assessment.status = N'submitted' THEN eli_assessment.submitted_at
+                     WHEN r.record_type IN (N'learning_walk', N'als_learning_walk', N'work_scrutiny', N'elevate_environment', N'cpd_event')
+                          THEN CASE WHEN latest_submission.status = N'submitted' THEN latest_submission.submitted_at END
+                     ELSE submission_audit.created_at END AS submitted_at
             FROM core.records r
             LEFT JOIN people.staff owner_staff ON owner_staff.id = r.owner_staff_id
             LEFT JOIN people.staff subject_staff ON subject_staff.id = r.subject_staff_id
@@ -2480,7 +2578,7 @@ public sealed partial class SqlFoundationDataStore(
                 WHERE area_rating.assessment_id = eli_assessment.id
             ) eli_metrics
             OUTER APPLY (
-                SELECT TOP (1) submission.id, submission.status, submission.submitted_by_user_account_id
+                SELECT TOP (1) submission.id, submission.status, submission.submitted_by_user_account_id, submission.submitted_at
                 FROM forms.form_submissions submission
                 WHERE submission.record_id = r.id
                   AND submission.archived_at IS NULL
@@ -2489,7 +2587,7 @@ public sealed partial class SqlFoundationDataStore(
             OUTER APPLY (
                 -- Only explicit submission/completion events identify the submitting actor.
                 -- Owners, subjects and later administrators are not historical submitters.
-                SELECT TOP (1) audit.user_account_id
+                SELECT TOP (1) audit.user_account_id, audit.created_at
                 FROM ops.audit_logs audit
                 WHERE audit.record_id = r.id
                   AND (
@@ -2762,7 +2860,10 @@ public sealed partial class SqlFoundationDataStore(
                 GetStringOrNull(reader, 26),
                 GetStringOrNull(reader, 27),
                 GetStringOrNull(reader, 28),
-                GetStringOrNull(reader, 29)),
+                GetStringOrNull(reader, 29),
+                GetGuidOrNull(reader, 30),
+                GetGuidOrNull(reader, 31),
+                reader.IsDBNull(32) ? null : reader.GetFieldValue<DateTimeOffset>(32)),
             cancellationToken);
 
     public Task<IReadOnlyList<LearningWalkRollupSummary>> GetLearningWalkRollupAsync(CurrentUser currentUser, CancellationToken cancellationToken) =>
@@ -3086,6 +3187,7 @@ public sealed partial class SqlFoundationDataStore(
                             )
                         )
                   )
+                  AND EXISTS (SELECT 1 FROM quality.fn_liv_action_access(action.id, @currentUserAccountId))
                   AND (
                         @canViewAll = 1
                         OR action.visibility_setting = 'staff_and_management'
@@ -3154,6 +3256,8 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<Guid> CreateRecordAsync(CreateRecordRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
+        if(ProcessReviewRules.IsProcess(request.RecordType))
+            throw new WorkflowValidationException("Use this process’s review form so its creator and framework are recorded correctly.");
         if (request.ModuleId == Guid.Empty || string.IsNullOrWhiteSpace(request.RecordType) || string.IsNullOrWhiteSpace(request.Title))
         {
             throw new WorkflowValidationException("A module, record type and title are required.");
@@ -3204,6 +3308,14 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<Guid> CreateActionAsync(CreateActionRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
+        if (ProcessReviewRules.IsProcess(request.SourceFormType ?? ""))
+            throw new WorkflowValidationException("Assign this action from its review so its support, success evidence and history are retained.");
+        if (request.SourceRecordId.HasValue)
+        {
+            var types=await QueryAsync("SELECT record_type FROM core.records WHERE id=@id AND archived_at IS NULL;",
+                command=>command.Parameters.AddWithValue("@id",request.SourceRecordId.Value),reader=>reader.GetString(0),cancellationToken);
+            if(types.Any(ProcessReviewRules.IsProcess))throw new WorkflowValidationException("Assign this action from its review so its support, success evidence and history are retained.");
+        }
         if (string.IsNullOrWhiteSpace(request.ActionTheme))
         {
             throw new WorkflowValidationException("Enter an action theme.");
@@ -3319,7 +3431,6 @@ public sealed partial class SqlFoundationDataStore(
                     JOIN quality.probation_cases probation_case ON probation_case.id = observation.probation_case_id
                     WHERE observation.id = @observationId
                       AND probation_case.record_id = @sourceRecordId
-                      AND observation.archived_at IS NULL
                       AND probation_case.archived_at IS NULL;
                     """,
                     connection,
@@ -3494,6 +3605,8 @@ public sealed partial class SqlFoundationDataStore(
         var visibleAction = (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
             .FirstOrDefault(action => action.Id == actionId);
         var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
+        PreventGenericProcessActionMutation(visibleAction);
+
 
         if (request.OwnerStaffId.HasValue)
         {
@@ -3750,6 +3863,7 @@ public sealed partial class SqlFoundationDataStore(
         var visibleAction = (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
             .FirstOrDefault(action => action.Id == actionId);
         var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
+        PreventGenericProcessActionMutation(visibleAction);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
@@ -4106,6 +4220,7 @@ public sealed partial class SqlFoundationDataStore(
         var visibleAction = (await GetActionsAsync(currentUser, includeDeleted: false, cancellationToken))
             .FirstOrDefault(action => action.Id == actionId);
         var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
+        PreventGenericProcessActionMutation(visibleAction);
         if (!canManageVisibleAction)
         {
             return FormSubmissionUpdateResult.Forbidden;
@@ -4160,6 +4275,7 @@ public sealed partial class SqlFoundationDataStore(
         var visibleAction = (await GetActionsAsync(currentUser, includeDeleted: true, cancellationToken))
             .FirstOrDefault(action => action.Id == actionId);
         var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
+        PreventGenericProcessActionMutation(visibleAction);
         if (!canManageVisibleAction)
         {
             return FormSubmissionUpdateResult.Forbidden;
@@ -4706,6 +4822,7 @@ public sealed partial class SqlFoundationDataStore(
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            await EnsureWorkScrutinyCoreQuestionsAsync(connection, transaction, versionId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return templateId;
         }
@@ -4743,14 +4860,33 @@ public sealed partial class SqlFoundationDataStore(
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-
         try
         {
+            var result = await SubmitFormWithinTransactionAsync(request, currentUser, connection, (SqlTransaction)transaction, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return result;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    private async Task<SubmittedFormResult> SubmitFormWithinTransactionAsync(
+        SubmitFormRequest request,
+        CurrentUser currentUser,
+        SqlConnection connection,
+        SqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+            if(ProcessReviewRules.IsProcess(request.RecordType))
+                throw new WorkflowValidationException("Use this process’s review form so its creator and framework are recorded correctly.");
             if (CpdRecordingPolicy.IsMandatory(request.TemplateKey) && !CpdRecordingPolicy.CanManageMandatory(currentUser))
             {
                 throw new WorkflowValidationException("Only Teaching and Learning can log mandatory CPD.");
             }
-            var template = await GetLatestTemplateVersionAsync(connection, transaction, request.TemplateKey, cancellationToken);
+            var template = await GetLatestTemplateVersionAsync(connection, transaction, request.TemplateKey, cancellationToken, request.TemplateVersionId);
             if (!template.IsPublished)
             {
                 throw new WorkflowValidationException("Only published form templates can accept submissions.");
@@ -4804,10 +4940,7 @@ public sealed partial class SqlFoundationDataStore(
                     cancellationToken);
             }
 
-            if (!request.SaveAsDraft)
-            {
-                ValidateRequiredFields(fields, request.Responses);
-            }
+            await ValidateFormAnswersAsync(connection, transaction, fields, request.Responses, request.RecordType, !request.SaveAsDraft, cancellationToken);
 
             var deliveryArea = (IsLearningWalkRecordType(request.RecordType) || request.RecordType == "work_scrutiny")
                 ? await ResolveLearningWalkDeliveryAreaAsync(connection, transaction, request.RecordType,
@@ -4994,15 +5127,7 @@ public sealed partial class SqlFoundationDataStore(
                 null,
                 SerializeSubmissionSnapshot(request.Title, request.Summary, request.OrgUnitId, request.RecordDate, status, MapResponsesByFieldKey(fields, request.Responses)),
                 cancellationToken);
-
-            await transaction.CommitAsync(cancellationToken);
             return new SubmittedFormResult(submissionId, recordId);
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
     }
 
     public async Task<FormSubmissionUpdateResult> UpdateFormSubmissionAsync(
@@ -5092,10 +5217,7 @@ public sealed partial class SqlFoundationDataStore(
             }
 
             // A record that is already submitted must stay complete when edited.
-            if (submission.Status == SubmissionLifecycle.Submitted)
-            {
-                ValidateRequiredFields(fields, request.Responses);
-            }
+            await ValidateFormAnswersAsync(connection, transaction, fields, request.Responses, submission.RecordType, submission.Status == SubmissionLifecycle.Submitted, cancellationToken);
 
             var beforeResponses = await GetResponsesByFieldKeyAsync(connection, transaction, submissionId, cancellationToken);
             if (submission.Status == SubmissionLifecycle.Submitted && string.Equals(submission.RecordType, "work_scrutiny", StringComparison.OrdinalIgnoreCase))
@@ -5274,15 +5396,9 @@ public sealed partial class SqlFoundationDataStore(
             {
                 var fields = await GetFieldInfoAsync(connection, transaction, submission.VersionId, cancellationToken);
                 var stored = await GetResponsesByFieldKeyAsync(connection, transaction, submissionId, cancellationToken);
-                var missing = fields.Values
-                    .Where(field => field.IsRequired && !stored.ContainsKey(field.FieldKey))
-                    .Select(field => field.Label)
-                    .ToArray();
-                if (missing.Length > 0)
-                {
-                    throw new WorkflowValidationException(
-                        $"Complete the required fields before submitting: {string.Join(", ", missing)}.");
-                }
+                await ValidateFormAnswersAsync(connection, transaction, fields,
+                    fields.Select(field => new SubmitFormResponseRequest(field.Key, stored.GetValueOrDefault(field.Value.FieldKey))).ToArray(),
+                    submission.RecordType, true, cancellationToken);
 
                 if (submission.RecordType == "work_scrutiny")
                 {
@@ -6499,28 +6615,41 @@ public sealed partial class SqlFoundationDataStore(
                     "Published templates or templates with submissions cannot be restructured. Create a new template instead.");
             }
 
+            await RequireEditableFormVersionAsync(connection, transaction, templateId, template.VersionId, request.RowVersion ?? "", cancellationToken);
+
             await ValidateWorkScrutinyTemplateOrgUnitAsync(
                 connection,
                 transaction,
                 request.OrgUnitId,
                 cancellationToken);
             ValidateTemplateStructure(request);
+            var existing = await ReadFormAdminSectionsAsync(connection, transaction, template.VersionId, template.ModuleKey, cancellationToken);
+            FormAdministrationRules.ValidateProtectedFields(existing, request.Sections);
+            var original = await ReadControlledFormConfigurationsAsync(connection, transaction, template.VersionId, cancellationToken);
 
             await using (var command = new SqlCommand(
                 """
                 DELETE ff
                 FROM forms.form_fields ff
                 JOIN forms.form_sections fs ON fs.id = ff.form_section_id
-                WHERE fs.form_template_version_id = @versionId;
+                WHERE fs.form_template_version_id = @versionId
+                  AND fs.archived_at IS NULL AND ff.archived_at IS NULL AND ff.is_active = 1;
 
-                DELETE FROM forms.form_sections
-                WHERE form_template_version_id = @versionId;
+                DELETE section FROM forms.form_sections section
+                WHERE section.form_template_version_id = @versionId
+                  AND NOT EXISTS(SELECT 1 FROM forms.form_fields field WHERE field.form_section_id=section.id);
 
                 UPDATE forms.form_templates
                 SET name = @name,
                     description = @description,
                     updated_at = sysutcdatetime()
                 WHERE id = @templateId;
+
+                UPDATE forms.form_template_versions
+                SET display_name = @name,
+                    description = @description,
+                    updated_at = sysutcdatetime()
+                WHERE id = @versionId;
                 """,
                 connection,
                 (SqlTransaction)transaction))
@@ -6534,25 +6663,30 @@ public sealed partial class SqlFoundationDataStore(
 
             foreach (var section in request.Sections)
             {
-                var sectionId = Guid.NewGuid();
+                Guid sectionId;
                 await using (var command = new SqlCommand(
                     """
-                    INSERT INTO forms.form_sections (id, form_template_version_id, section_key, title, display_order)
-                    VALUES (@id, @versionId, @sectionKey, @title, @displayOrder);
+                    DECLARE @sectionId uniqueidentifier=(SELECT id FROM forms.form_sections WHERE form_template_version_id=@versionId AND section_key=@sectionKey);
+                    IF @sectionId IS NULL BEGIN SET @sectionId=NEWID();
+                        INSERT INTO forms.form_sections (id, form_template_version_id, section_key, title, display_order)
+                        VALUES (@sectionId, @versionId, @sectionKey, @title, @displayOrder); END;
+                    ELSE UPDATE forms.form_sections SET title=@title,display_order=@displayOrder,archived_at=NULL,updated_at=sysutcdatetime() WHERE id=@sectionId;
+                    SELECT @sectionId;
                     """,
                     connection,
                     (SqlTransaction)transaction))
                 {
-                    command.Parameters.AddWithValue("@id", sectionId);
                     command.Parameters.AddWithValue("@versionId", template.VersionId);
                     command.Parameters.AddWithValue("@sectionKey", section.SectionKey.Trim());
                     command.Parameters.AddWithValue("@title", section.Title.Trim());
                     command.Parameters.AddWithValue("@displayOrder", section.DisplayOrder);
-                    await command.ExecuteNonQueryAsync(cancellationToken);
+                    sectionId = (Guid)(await command.ExecuteScalarAsync(cancellationToken))!;
                 }
 
                 foreach (var field in section.Fields)
                 {
+                    var isProtected = existing.SelectMany(item => item.Fields).Any(item => item.FieldKey == field.FieldKey && item.IsProtected);
+                    var controlled = original.GetValueOrDefault(field.FieldKey);
                     await using var command = new SqlCommand(
                         """
                         INSERT INTO forms.form_fields (
@@ -6560,6 +6694,8 @@ public sealed partial class SqlFoundationDataStore(
                             field_key,
                             label,
                             field_type,
+                            options_lookup_type_id,
+                            validation_json,
                             is_required,
                             display_order,
                             help_text,
@@ -6570,6 +6706,8 @@ public sealed partial class SqlFoundationDataStore(
                             @fieldKey,
                             @label,
                             @fieldType,
+                            @lookup,
+                            @validation,
                             @isRequired,
                             @displayOrder,
                             @helpText,
@@ -6582,10 +6720,12 @@ public sealed partial class SqlFoundationDataStore(
                     command.Parameters.AddWithValue("@fieldKey", field.FieldKey.Trim());
                     command.Parameters.AddWithValue("@label", field.Label.Trim());
                     command.Parameters.AddWithValue("@fieldType", field.FieldType.Trim());
+                    command.Parameters.AddWithValue("@lookup", ToDbValue(isProtected ? controlled.Lookup : null));
+                    command.Parameters.AddWithValue("@validation", ToDbValue(isProtected ? controlled.Validation : null));
                     command.Parameters.AddWithValue("@isRequired", field.IsRequired);
                     command.Parameters.AddWithValue("@displayOrder", field.DisplayOrder);
                     command.Parameters.AddWithValue("@helpText", ToDbValue(field.HelpText));
-                    command.Parameters.AddWithValue("@configurationJson", ToDbValue(SerializeFieldConfiguration(field.Options)));
+                    command.Parameters.AddWithValue("@configurationJson", ToDbValue(isProtected ? controlled.Configuration : SerializeFieldConfiguration(field.Options)));
                     await command.ExecuteNonQueryAsync(cancellationToken);
                 }
             }
@@ -6618,6 +6758,7 @@ public sealed partial class SqlFoundationDataStore(
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            await EnsureWorkScrutinyCoreQuestionsAsync(connection, transaction, template.VersionId, cancellationToken);
             await WriteAuditAsync(
                 connection,
                 transaction,
@@ -6650,7 +6791,8 @@ public sealed partial class SqlFoundationDataStore(
     public async Task<FormSubmissionUpdateResult> PublishFormTemplateAsync(
         Guid templateId,
         CurrentUser currentUser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? rowVersion = null)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -6673,6 +6815,9 @@ public sealed partial class SqlFoundationDataStore(
             {
                 throw new WorkflowValidationException("This template version is already published.");
             }
+
+            await RequireEditableFormVersionAsync(connection, transaction, templateId, template.VersionId, rowVersion ?? "", cancellationToken);
+            ValidateWorkScrutinyCoreReadiness(await ReadFormAdminSectionsAsync(connection, transaction, template.VersionId, template.ModuleKey, cancellationToken));
 
             if (template.FieldCount == 0)
             {
@@ -6766,6 +6911,11 @@ public sealed partial class SqlFoundationDataStore(
             await transaction.CommitAsync(cancellationToken);
             return FormSubmissionUpdateResult.Saved;
         }
+        catch (SqlException exception) when (exception.Number == 51000)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw new WorkflowValidationException(exception.Message);
+        }
         catch
         {
             await transaction.RollbackAsync(cancellationToken);
@@ -6796,7 +6946,8 @@ public sealed partial class SqlFoundationDataStore(
             "single_select",
             "multi_select",
             "checkbox_group",
-            "rubric_scale"
+            "rubric_scale",
+            "learning_walk_delivery_area"
         };
         var optionFieldTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -6911,7 +7062,7 @@ public sealed partial class SqlFoundationDataStore(
                    AND fsec.archived_at IS NULL
                    AND ff.archived_at IS NULL
                    AND ff.is_active = 1) AS field_count
-            FROM forms.form_templates ft
+            FROM forms.form_templates ft WITH (UPDLOCK, HOLDLOCK)
             JOIN core.modules m ON m.id = ft.module_id
             OUTER APPLY (
                 SELECT TOP (1) id, is_published
@@ -7314,7 +7465,8 @@ public sealed partial class SqlFoundationDataStore(
         SqlConnection connection,
         System.Data.Common.DbTransaction transaction,
         string templateKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? requestedVersionId = null)
     {
         await using var command = new SqlCommand(
             """
@@ -7330,17 +7482,19 @@ public sealed partial class SqlFoundationDataStore(
             WHERE ft.template_key = @templateKey
               AND ft.archived_at IS NULL
               AND ftv.archived_at IS NULL
+              AND (@requestedVersionId IS NULL OR ftv.id = @requestedVersionId)
             ORDER BY ftv.is_published DESC, ftv.active_from DESC, ftv.created_at DESC;
             """,
             connection,
             (SqlTransaction)transaction);
 
         command.Parameters.AddWithValue("@templateKey", templateKey);
+        command.Parameters.AddWithValue("@requestedVersionId", ToDbValue(requestedVersionId));
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
-            throw new InvalidOperationException($"Template '{templateKey}' was not found.");
+            throw new WorkflowValidationException("This form version is no longer available. Reload the form before submitting.");
         }
 
         return new TemplateVersionInfo(
@@ -7359,7 +7513,7 @@ public sealed partial class SqlFoundationDataStore(
     {
         await using var command = new SqlCommand(
             """
-            SELECT ff.id, ff.field_type, ff.field_key, ff.is_required, ff.label, ff.configuration_json
+            SELECT ff.id, ff.field_type, ff.field_key, ff.is_required, ff.label, ff.configuration_json, fs.section_key
             FROM forms.form_sections fs
             JOIN forms.form_fields ff ON ff.form_section_id = fs.id
             WHERE fs.form_template_version_id = @versionId
@@ -7381,30 +7535,10 @@ public sealed partial class SqlFoundationDataStore(
                 reader.GetString(2),
                 reader.GetBoolean(3),
                 reader.GetString(4),
-                ParseFieldOptions(reader.IsDBNull(5) ? null : reader.GetString(5)));
+                ParseFieldOptions(reader.IsDBNull(5) ? null : reader.GetString(5)), reader.GetString(6));
         }
 
         return fields;
-    }
-
-    private static void ValidateRequiredFields(
-        Dictionary<Guid, FormFieldInfo> fields,
-        IReadOnlyList<SubmitFormResponseRequest> responses)
-    {
-        var valuesByFieldId = responses
-            .Where(response => !string.IsNullOrWhiteSpace(response.Value))
-            .ToDictionary(response => response.FieldId, response => response.Value!);
-
-        var missing = fields
-            .Where(field => field.Value.IsRequired && !valuesByFieldId.ContainsKey(field.Key))
-            .Select(field => field.Value.Label)
-            .ToArray();
-
-        if (missing.Length > 0)
-        {
-            throw new WorkflowValidationException(
-                $"Complete the required fields before submitting: {string.Join(", ", missing)}.");
-        }
     }
 
     private static async Task ValidateVisibleStaffTargetAsync(
@@ -9140,7 +9274,7 @@ public sealed partial class SqlFoundationDataStore(
         Guid? OrgUnitId,
         DateOnly? RecordDate);
 
-    private sealed record FormFieldInfo(string FieldType, string FieldKey, bool IsRequired, string Label, IReadOnlyList<string> Options);
+    private sealed record FormFieldInfo(string FieldType, string FieldKey, bool IsRequired, string Label, IReadOnlyList<string> Options, string SectionKey = "");
 
     private sealed record ActionEditInfo(
         Guid OwnerStaffId,

@@ -1,5 +1,7 @@
 # Admin Centre review — 8 September 2026
 
+The navigation below is historical. The [29 October 2026 administration review](admin-settings-organisation-2026-10-29.md) documents the current focused settings pages and separate QA administration workspace.
+
 ## Scope and approach
 
 Reviewed the Admin Centre, its existing child editors, API contracts, endpoint permissions and underlying configuration stores. The local implementation preserves the preceding homepage/navigation work. No production deployment, GitHub writes or test-data seeding is part of this change. The follow-up form editor adds migration 075 for QA display wording; it has been applied only to local development.

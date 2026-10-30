@@ -66,7 +66,9 @@ public sealed class DashboardSubmissionExportTests
         var outputSheet = document.WorkbookPart!.Workbook.Sheets!.Elements<Sheet>().Single(item => item.Name == "ELI staff submissions");
         var output = ((WorksheetPart)document.WorkbookPart.GetPartById(outputSheet.Id!)).Worksheet;
         Assert.Contains("Pending Example", output.InnerText); Assert.Contains("Submitted Example", output.InnerText);
-        Assert.Contains(DashboardSubmissionExportBuilder.EliScopeNote, output.InnerText);
+        Assert.DoesNotContain(DashboardSubmissionExportBuilder.EliScopeNote, output.InnerText);
+        var information = document.WorkbookPart.Workbook.Sheets.Elements<Sheet>().Single(item => item.Name == "Export Information");
+        Assert.Contains(DashboardSubmissionExportBuilder.EliScopeNote, ((WorksheetPart)document.WorkbookPart.GetPartById(information.Id!)).Worksheet.InnerText);
         Assert.DoesNotContain(pending.AssessmentRecordId!.Value.ToString(), output.InnerText);
     }
 

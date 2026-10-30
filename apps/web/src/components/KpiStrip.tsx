@@ -5,15 +5,16 @@ type Kpi = {
 };
 
 export function KpiStrip({ items }: { items: Kpi[] }) {
+  if (items.length === 0) return null;
   return (
-    <section className="kpi-strip" aria-label="Key metrics">
+    <dl className="kpi-strip" aria-label="Key metrics">
       {items.map((item) => (
         <div className={`kpi kpi-${item.tone}`} key={item.label}>
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
         </div>
       ))}
-    </section>
+    </dl>
   );
 }
 

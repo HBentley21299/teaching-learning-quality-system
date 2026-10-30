@@ -1,0 +1,49 @@
+/* Focused QA and administration interactions, layered over the shared foundation. */
+.admin-settings-layout .admin-workbench { grid-template-areas: "directory workspace"; }
+.admin-workbench > .admin-directory { grid-area: directory; }
+.admin-workbench > .admin-workspace { grid-area: workspace; }
+.admin-settings-layout .admin-workbench.is-overview {
+  grid-template-areas: "directory" "workspace";
+  grid-template-columns: minmax(0, 1fr);
+}
+.admin-workbench > .admin-overview-search { max-height: none; overflow: visible; position: static; }
+.admin-overview-search .admin-search-count { margin-bottom: 0; }
+
+@media (max-width: 900px) {
+  .admin-settings-layout .admin-workbench:not(.is-overview) { grid-template-areas: "workspace" "directory"; }
+}
+
+.qa-outcome-buttons button[aria-checked="true"] {
+  background: color-mix(in srgb, var(--qa-outcome-colour) 13%, var(--surface));
+  border-color: var(--qa-outcome-colour);
+  box-shadow: 0 0 0 1px var(--qa-outcome-colour) inset;
+}
+
+.admin-settings-layout .notice-row > .button,
+.qa-hub .notice-row > .button,
+.qa-hub .api-error-banner > .button { margin-inline-start: auto; }
+
+.qa-revisions { border-top: 1px solid var(--line); margin-top: 1.5rem; padding-top: 1rem; }
+.qa-revisions > summary { color: var(--text); cursor: pointer; font-weight: 650; min-height: 2.75rem; padding-block: .5rem; }
+.qa-revisions .timeline-list { margin-top: 1rem; }
+
+.template-find-options { border-bottom: 1px solid var(--line); margin-bottom: 1rem; padding-bottom: .75rem; }
+.template-find-options > summary,
+.message-extra-recipients > summary,
+.message-html-editor > summary { cursor: pointer; font-weight: 600; min-height: 2.75rem; padding-block: .65rem; }
+.template-find-options > summary span { color: var(--text-muted); float: right; font-size: .8rem; font-weight: 450; }
+.template-find-options .profile-list-controls { margin-top: .5rem; }
+.message-extra-recipients .recipient-checklist { margin-top: .75rem; }
+.message-html-editor .entry-field { margin-top: .5rem; }
+.message-html-editor > summary small { color: var(--text-muted); font-weight: 450; }
+.preview-field[role="group"] { display: grid; gap: .5rem; min-width: 0; }
+.admin-dialog-fields { border: 0; margin: 0; min-width: 0; padding: 0; width: 100%; }
+dialog.app-dialog.admin-reason-dialog { display: block; height: fit-content; }
+dialog.app-dialog.admin-reason-dialog > div { background: transparent; border: 0; border-radius: 0; box-shadow: none; max-width: none; padding: 0; }
+.data-table-scroll > .admin-record-table { min-width: 930px; overflow: visible; }
+
+@media (max-width: 680px) {
+  .admin-settings-layout .notice-row > .button,
+  .qa-hub .notice-row > .button,
+  .qa-hub .api-error-banner > .button { margin-inline-start: 0; width: 100%; }
+}

@@ -1,0 +1,93 @@
+/* App structure: permanent navigation, a quiet header and a single workspace switch. */
+.app-shell { grid-template-columns: 16.5rem minmax(0, 1fr); }
+.sidebar { position: sticky; top: 0; align-self: start; height: 100dvh; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; gap: 1rem; padding: 1.25rem .875rem; }
+.sidebar-navigation-wrapper { min-width: 0; width: 100%; }
+.sidebar-navigation-wrapper > .workspace-compact { display: grid; grid-template-columns: 1fr 1fr; gap: .375rem; margin: 0 0 1.25rem; padding: .75rem 0 1rem; border-bottom: 1px solid var(--line); }
+.sidebar-navigation-wrapper > .workspace-compact > span { grid-column: 1 / -1; margin: 0 0 .25rem .5rem; font-size: .75rem; color: var(--text-muted); }
+.sidebar-navigation-wrapper > .workspace-compact button { min-width: 0; min-height: 44px; gap: .375rem; padding: .5rem; justify-content: center; font-size: .8125rem; white-space: normal; }
+.sidebar-navigation-wrapper > .workspace-compact button > svg:last-child { display: none; }
+.sidebar-navigation a.nav-item { width: 100%; text-decoration: none; min-height: 44px; font-size: .875rem; line-height: 1.4; }
+.sidebar-navigation .nav-item > span { display: inline; }
+.sidebar-navigation-heading { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; color: var(--text-muted); font-size: .75rem; letter-spacing: 0; text-transform: none; }
+.brand-logo-full { max-width: 13rem; }
+.sidebar .brand-block { padding-bottom: .5rem; }
+.topbar { gap: .75rem; min-height: 4.25rem; padding: .625rem 1.5rem; background: var(--surface); backdrop-filter: none; }
+.topbar-context { font-size: .9375rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.topbar > .navigation-collapse-button { flex-shrink: 0; width: 44px; min-width: 44px; min-height: 44px; }
+.topbar-home-link { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; flex-shrink: 0; min-width: 44px; min-height: 44px; padding: .5rem .625rem; border-radius: var(--radius-control, 8px); color: var(--text); font-size: .875rem; font-weight: 600; text-decoration: none; }
+.topbar-home-link:hover { background: var(--surface-hover, var(--surface-muted)); color: var(--teal-strong); }
+.academic-year-selector { margin-left: auto; flex-shrink: 0; }
+.topbar .academic-year-selector select { font-size: .875rem; min-height: var(--control-height); }
+.topbar .user-menu-trigger { min-height: var(--control-height); }
+.topbar .display-settings-trigger { gap: .5rem; padding: .625rem .75rem; white-space: nowrap; font-size: .875rem; }
+.topbar .user-chip { flex-shrink: 0; }
+.content-frame { min-width: 0; scroll-margin-top: 5rem; }
+.content-frame:focus { outline: none; }
+.profile-overview { display: grid; gap: var(--layout-gap); }
+.profile-practice-tile { flex-wrap: wrap; }
+.profile-practice-tile > div { flex: 1 1 16rem; min-width: 0; }
+.profile-practice-tile > .button { max-width: 100%; white-space: normal; }
+.profile-list-controls > .workflow-filter-panel { flex: 1 1 100%; min-width: 0; margin: 0; }
+.profile-list-controls .workflow-filter-primary label { display: grid; gap: .375rem; min-width: 0; }
+.profile-list-controls .workflow-filter-primary label > span { font-size: .8125rem; color: var(--text-muted); }
+.profile-list-controls .workflow-filter-primary .record-filter-search { flex-grow: 1; flex-basis: 18rem; }
+.skip-link { position: fixed; top: .75rem; left: .75rem; z-index: 1000; transform: translateY(-200%); background: var(--surface); border: 2px solid var(--teal-strong); border-radius: 7px; color: var(--text); padding: .75rem 1rem; text-decoration: underline; }
+.skip-link:focus { transform: translateY(0); }
+.login-display-settings { margin-top: 1.25rem; justify-content: center; }
+@media (min-width: 761px) {
+  .app-shell:not(.app-shell-nav-collapsed) .sidebar { align-items: stretch; }
+  .app-shell:not(.app-shell-nav-collapsed) .sidebar-navigation { justify-items: stretch; }
+  .app-shell:not(.app-shell-nav-collapsed) .nav-item { width: 100%; justify-content: flex-start; padding: .625rem .75rem; gap: .625rem; }
+  .app-shell:not(.app-shell-nav-collapsed) .nav-item > span { display: inline; }
+  .app-shell:not(.app-shell-nav-collapsed) .brand-logo-full { display: block; }
+  .app-shell:not(.app-shell-nav-collapsed) .brand-logo-mark { display: none; }
+  .app-shell-nav-collapsed { grid-template-columns: 4.5rem minmax(0, 1fr); }
+  .app-shell-nav-collapsed .brand-logo-mark { width: 48px; height: 38px; object-fit: contain; }
+  .app-shell-nav-collapsed .sidebar-navigation .nav-item { width: 44px; padding-inline: 0; gap: 0; justify-content: center; }
+  .app-shell-nav-collapsed .sidebar-navigation .nav-item > span { display: none; }
+  .app-shell-nav-collapsed .sidebar-navigation-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); margin: 0; }
+  .app-shell-nav-collapsed .sidebar-navigation-wrapper > .workspace-compact { grid-template-columns: 1fr; padding-top: 0; }
+  .app-shell-nav-collapsed .sidebar-navigation-wrapper > .workspace-compact > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .app-shell-nav-collapsed .sidebar-navigation-wrapper > .workspace-compact button { font-size: 0; gap: 0; width: 44px; }
+  .app-shell-nav-collapsed .sidebar-navigation-wrapper > .workspace-compact button > svg:first-child { width: 20px; height: 20px; }
+}
+@media (max-width: 1050px) and (min-width: 761px) {
+  .app-shell:not(.app-shell-nav-collapsed) { grid-template-columns: 14rem minmax(0, 1fr); }
+  .topbar { flex-wrap: wrap; padding-inline: 1rem; }
+  .topbar-context { flex-basis: calc(100% - 10rem); }
+}
+@media (max-width: 760px) {
+  .app-shell, .app-shell.app-shell-nav-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { position: static; height: auto; padding: .75rem 1rem; gap: .5rem; overflow: visible; }
+  .sidebar .brand-block { padding: 0; }
+  .sidebar .brand-logo-full { display: block; width: min(9rem, 45vw); }
+  .sidebar .brand-logo-mark { display: none; }
+  .sidebar-navigation-wrapper > .workspace-compact { grid-template-columns: 1fr 1fr; margin-bottom: .75rem; }
+  .mobile-navigation-open .sidebar-navigation-wrapper { max-height: 70dvh; }
+  .sidebar-navigation-heading { font-size: .8125rem; }
+  .sidebar-navigation .sidebar-navigation-links { grid-template-columns: minmax(0, 1fr); }
+  .sidebar-navigation .nav-item { font-size: .9375rem; max-width: none; }
+  .topbar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .5rem; position: static; padding: .625rem 1rem; }
+  .topbar > .navigation-collapse-button, .topbar > .topbar-context { display: none; }
+  .topbar .topbar-home-link { grid-column: 1; grid-row: 1; }
+  .topbar-home-link > span { display: none; }
+  .topbar .academic-year-selector { margin: 0; min-width: 0; grid-column: 2; grid-row: 1; }
+  .topbar .academic-year-selector select { max-width: 100%; }
+  .topbar .display-settings-trigger { grid-column: 3; grid-row: 1; }
+  .topbar .user-menu { grid-column: 1 / -1; justify-self: end; min-width: 0; }
+  .topbar.topbar-with-year .user-menu { grid-row: 2; }
+  .topbar:not(.topbar-with-year) .user-menu { grid-column: 2; grid-row: 1; justify-self: end; max-width: 100%; }
+  .topbar .user-menu-trigger { max-width: 100%; }
+  .topbar .user-menu-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .content-frame { scroll-margin-top: 1rem; }
+}
+@media print { .sidebar, .topbar, .skip-link { display: none !important; } .app-shell { display: block; } }
+.staff-directory-search {
+  width: 100%;
+  min-width: 0;
+}
+dialog.account-password-dialog { width: min(30rem, calc(100vw - 2rem)); padding: 0; }
+.account-password-dialog .user-menu-dialog { margin: 0; max-width: none; padding: 1.5rem; border: 0; box-shadow: none; }
+.account-password-dialog .user-menu-dialog h2 { font-size: 1.25rem; }
+.account-password-dialog .user-menu-dialog label span { font-size: .875rem; }
+.account-password-dialog .user-menu-dialog input { min-height: var(--control-height); }

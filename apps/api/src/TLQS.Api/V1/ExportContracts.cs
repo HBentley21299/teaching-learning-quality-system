@@ -11,7 +11,8 @@ public sealed record ExportFilter(
     string? Status,
     string? RecordType,
     string? DeliveryAreaKey = null,
-    string? DimensionLabel = null)
+    string? DimensionLabel = null,
+    int? StatusLevel = null)
 {
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<Guid>? DashboardRecordIds { get; init; }
@@ -22,7 +23,13 @@ public sealed record ExportFilter(
 }
 
 public sealed record ExportSheet(string Name, IReadOnlyList<string> Columns, IReadOnlyList<IReadOnlyList<string?>> Rows, bool WasTruncated,
-    IReadOnlyList<string>? ColumnTypes = null);
+    IReadOnlyList<string>? ColumnTypes = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? SourceModuleKey {get;init;}
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? SourceSheetName {get;init;}
+}
 
 public sealed record ExportWorkbookData(
     string ModuleKey,

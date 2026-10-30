@@ -1,0 +1,13 @@
+# QA partial-record exit — 29 October 2026
+
+QA evidence keeps its existing autosave model: its server draft is created before the evidence editor opens, and draft edits autosave after 900 ms. A fully acknowledged draft remains saved when staff leave. Exit controls do not create another draft or remove existing evidence.
+
+The evidence editor now registers its actual draft-save callback and offers formal submission only for editable draft evidence. Formal submission uses the existing one-writer queue and normal validation. It flushes the latest answers with the acknowledged row version; a rejected submission retains those edits. The guard callback suppresses the usual evidence-list redirect so the original Home, back, area-switch or logout destination remains in control.
+
+The exit prompt explains that saved/autosaved evidence remains as a draft. “Discard unsaved changes” restores the queue's latest acknowledged snapshot and concurrency token without another save or removal. Pending save requests cannot be cancelled locally. The existing 900 ms autosave timer pauses while a navigation decision is open, preventing the discard decision from racing a newly scheduled autosave. Submitted-evidence corrections retain their separate audit-reason save flow and receive no formal-submit action.
+
+QA review setup remains an administrative save/publish workflow. Its guard can save through the existing create/update endpoint, returns a real success/failure result and retains rejected setup. It does not publish the review or redirect away from the requested exit destination. Required setup validation remains in place.
+
+The shell audit was read-only. Home, sidebar, workspace switching, staff/source links, browser-history acceptance and account logout follow existing navigation guards. App record/action close callbacks delegate editor decisions to their child workspaces; read-only detail closure does not discard editor state. The unprovisioned-account sign-out screen has no record editor mounted. No concrete shell loss gap was identified.
+
+Validation: `tests/admin-focused-panels.test.mjs` and `tests/qa-autosave-races.test.mjs` passed **58/58**, recorded in `.localappdata/local-run/qa-partial-exit-tests.log`. New cases use the actual evidence queue and component handlers to check timer suspension, acknowledged-draft preservation, cancellation without writes, queued formal submission, failed submission retention, draft-only capabilities and administrative setup-save recovery. API calls were deterministic stubs; no backend, application records or configuration were changed. The final collective TypeScript/build check belongs to the root integration pass.

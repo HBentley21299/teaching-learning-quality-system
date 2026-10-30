@@ -74,4 +74,26 @@ public sealed class WorkScrutinyResponseRulesTests
         WorkScrutinyResponseRules.Validate("sample_size", "number", "Learners", [], null);
         WorkScrutinyResponseRules.Validate("historic_rating", "single_select", "Rating", [], "Historical wording");
     }
+
+    [Theory]
+    [InlineData("multi_select", "[]")]
+    [InlineData("checkbox_group", "[]")]
+    [InlineData("multi_select", "[\"Digital | practical\"]")]
+    [InlineData("checkbox_group", "[\"Digital | practical\",\"Feedback\"]")]
+    public void CustomChoicesAcceptConfiguredJsonArraysWithoutSplittingOptionText(string type, string value) =>
+        WorkScrutinyResponseRules.Validate("custom_evidence", type, "Evidence", ["Digital | practical", "Feedback"], value);
+
+    [Theory]
+    [InlineData("multi_select", "Digital | practical")]
+    [InlineData("checkbox_group", "Feedback|Digital | practical")]
+    [InlineData("multi_select", "[\"Unknown\"]")]
+    [InlineData("checkbox_group", "[\"Feedback\",\"Feedback\"]")]
+    [InlineData("multi_select", "[5]")]
+    [InlineData("checkbox_group", "[null]")]
+    [InlineData("multi_select", "null")]
+    [InlineData("checkbox_group", "{}")]
+    [InlineData("multi_select", "\"Feedback\"")]
+    [InlineData("checkbox_group", "[")]
+    public void CustomChoicesRejectNonStringArraysUnknownAndRepeatedOptions(string type, string value) =>
+        Assert.Throws<WorkflowValidationException>(() => WorkScrutinyResponseRules.Validate("custom_evidence", type, "Evidence", ["Digital | practical", "Feedback"], value));
 }

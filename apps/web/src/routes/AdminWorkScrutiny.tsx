@@ -1,10 +1,15 @@
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
+import { LoadingState } from "../components/LoadingState";
 import { ArchiveRestore, ArrowLeft, Edit3, History, Save, Search, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CourseMultiSelect } from "../components/CourseMultiSelect";
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { WorkScrutinyResponseField } from "../components/WorkScrutinyCreateForm";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
+import { AdminListSort } from "../components/AdminListSort";
+import { distinctListValues, matchesListSearch, sortListRows } from "../services/listQuery";
+import { WorkflowFilters } from "../components/WorkflowFilters";
 import type {
   AdminWorkScrutinyAction,
   AdminWorkScrutinyRecord,
@@ -24,11 +29,20 @@ export function AdminWorkScrutiny() {
   const [courseIds, setCourseIds] = useState<string[]>([]);
   const [recordDate, setRecordDate] = useState("");
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [facultyFilter, setFacultyFilter] = useState("");
+  const [teamFilter, setTeamFilter] = useState("");
+  const [actionFilter, setActionFilter] = useState("");
+  const [sort, setSort] = useState("date-desc");
   const [recordState, setRecordState] = useState<"active" | "deleted" | "all">("active");
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [detailError, setDetailError] = useState("");
+  const [opening, setOpening] = useState(false);
+  const selectionSequence = useRef(0), listSequence = useRef(0);
   const usesCourseLevel = detail?.sections.some(section => section.fields.some(field => ["qualification_level", "course_level", "course_or_unit"].includes(field.fieldKey))) ?? false;
   const dirty = isEditing && detail !== null && (recordDate !== (detail.recordDate ?? "")
     || JSON.stringify([...courseIds].sort()) !== JSON.stringify([...detail.courseIds].sort())
@@ -37,41 +51,44 @@ export function AdminWorkScrutiny() {
     onDiscard: () => { setIsEditing(false); if (detail) { setResponses(Object.fromEntries(detail.sections.flatMap(section => section.fields.map(field => [field.id, field.value ?? ""])))); setCourseIds(detail.courseIds); setRecordDate(detail.recordDate ?? ""); } } });
 
   async function refreshRecords(nextMessage = "") {
+    const sequence = ++listSequence.current;
     setIsLoading(true);
+    setLoadError("");
     try {
-      setRecords(await api.adminWorkScrutinyRecords());
+      const next = await api.adminWorkScrutinyRecords();
+      if (sequence !== listSequence.current) return;
+      setRecords(next);
       setMessage(nextMessage);
     } catch {
-      setMessage("Work Scrutiny records could not be loaded from the API.");
+      if (sequence === listSequence.current) setLoadError("Work Scrutiny records could not be loaded. Check your connection and try again.");
     } finally {
-      setIsLoading(false);
+      if (sequence === listSequence.current) setIsLoading(false);
     }
   }
 
   useEffect(() => {
     void refreshRecords();
+    return () => { ++selectionSequence.current; ++listSequence.current; };
   }, []);
 
   const filteredRecords = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase();
-    return records.filter((record) =>
+    return sortListRows(records.filter((record) =>
       (recordState === "all"
         || (recordState === "deleted" ? Boolean(record.archivedAt) : !record.archivedAt))
-      && (!query || [
-        record.title,
-        record.summary ?? "",
-        record.orgUnitCode ?? "",
-        record.orgUnitName ?? "",
-        record.parentOrgUnitCode ?? "",
-        record.ownerDisplayName ?? ""
-      ].some((value) => value.toLocaleLowerCase().includes(query)))
-    );
-  }, [recordState, records, search]);
+      && (!statusFilter || record.submissionStatus === statusFilter)
+      && (!facultyFilter || record.parentOrgUnitCode === facultyFilter)
+      && (!teamFilter || record.orgUnitCode === teamFilter)
+      && (!actionFilter || (actionFilter === "open" ? record.openActionCount > 0 : record.openActionCount === 0))
+      && matchesListSearch(search, record.title, record.summary, record.orgUnitCode, record.orgUnitName, record.parentOrgUnitCode, record.ownerDisplayName, record.submissionStatus, record.recordDate)
+    ), record => sort.startsWith("team") ? record.orgUnitCode : sort.startsWith("creator") ? record.ownerDisplayName : sort.startsWith("title") ? record.title : sort.startsWith("actions") ? record.openActionCount : Date.parse(record.recordDate ?? record.createdAt), sort.endsWith("desc") ? "desc" : "asc", record => record.id);
+  }, [recordState, records, search, statusFilter, facultyFilter, teamFilter, actionFilter, sort]);
 
   async function openRecord(record: AdminWorkScrutinyRecord, afterSave = false) {
     if (!afterSave && !await confirmUnsavedNavigation()) return;
+    const sequence = ++selectionSequence.current;
     setSelectedRecord(record);
     setDetail(null);
+    setAudit([]); setActions([]); setCourses([]); setDetailError(""); setOpening(true);
     setIsEditing(false);
     setMessage("");
     try {
@@ -81,6 +98,7 @@ export function AdminWorkScrutiny() {
         api.adminWorkScrutinyActions(record.id),
         record.orgUnitId ? api.courses(record.orgUnitId) : Promise.resolve([])
       ]);
+      if (sequence !== selectionSequence.current) return;
       setDetail(nextDetail);
       setAudit(nextAudit);
       setActions(linkedActions);
@@ -89,8 +107,8 @@ export function AdminWorkScrutiny() {
       setCourseIds(nextDetail.courseIds);
       setRecordDate(nextDetail.recordDate ?? "");
     } catch {
-      setMessage("The Work Scrutiny record could not be opened.");
-    }
+      if (sequence === selectionSequence.current) setDetailError("This Work Scrutiny record could not be opened. Check your connection and try again.");
+    } finally { if (sequence === selectionSequence.current) setOpening(false); }
   }
 
   async function saveRecord() {
@@ -122,9 +140,8 @@ export function AdminWorkScrutiny() {
       }))),
       courseIds
     });
-    setIsSaving(false);
-
     if (!result.ok) {
+      setIsSaving(false);
       setMessage(result.message ?? "The Work Scrutiny record could not be updated.");
       return false;
     }
@@ -134,6 +151,7 @@ export function AdminWorkScrutiny() {
     await openRecord({ ...selectedRecord, recordDate }, true);
     setIsEditing(false);
     setMessage("Work Scrutiny record updated and audit history recorded.");
+    setIsSaving(false);
     return true;
   }
 
@@ -180,7 +198,7 @@ export function AdminWorkScrutiny() {
     return (
       <div className="route-stack">
         <div className="admin-record-editor-heading">
-          <Button icon={ArrowLeft} onClick={async () => { if (await confirmUnsavedNavigation()) { setSelectedRecord(null); setDetail(null); } }}>Back to records</Button>
+          <Button disabled={isSaving} icon={ArrowLeft} onClick={async () => { if (await confirmUnsavedNavigation()) { ++selectionSequence.current; setSelectedRecord(null); setDetail(null); } }}>Back to records</Button>
           {selectedRecord.archivedAt ? (
             <Button disabled={isSaving} icon={ArchiveRestore} onClick={() => void restoreRecord()} variant="primary">Restore record</Button>
           ) : (
@@ -189,7 +207,7 @@ export function AdminWorkScrutiny() {
         </div>
         {message ? <div className="notice-row" role="status">{message}</div> : null}
         {!detail ? (
-          <section className="panel"><p className="muted-copy">Loading Work Scrutiny record...</p></section>
+          <section className="panel">{opening ? <LoadingState label="Loading Work Scrutiny record" /> : null}{detailError ? <div className="notice-row" role="alert">{detailError}<Button onClick={() => void openRecord(selectedRecord)}>Try again</Button></div> : null}</section>
         ) : (
           <>
             <section className="panel">
@@ -306,11 +324,13 @@ export function AdminWorkScrutiny() {
         <div><p className="eyebrow">Audited record administration</p><h2>Work Scrutiny records</h2></div>
         <span>{filteredRecords.length} shown</span>
       </div>
-      <div className="filter-toolbar admin-work-scrutiny-filters">
+      <WorkflowFilters activeCount={[statusFilter, facultyFilter, teamFilter, actionFilter].filter(Boolean).length + Number(recordState !== "active")} hasQuery={Boolean(search)} onClear={() => { setSearch(""); setStatusFilter(""); setFacultyFilter(""); setTeamFilter(""); setActionFilter(""); setRecordState("active"); }} primary={<>
         <label className="search-box">
           <Search aria-hidden="true" size={16} />
-          <input onChange={(event) => setSearch(event.target.value)} placeholder="Search team, creator or course" value={search} />
+          <input aria-label="Search Work Scrutiny records" type="search" onChange={(event) => setSearch(event.target.value)} placeholder="Search team, creator or course" value={search} />
         </label>
+        <AdminListSort value={sort} onChange={setSort} options={[["date-desc","Scrutiny date: newest first"],["date-asc","Scrutiny date: oldest first"],["team-asc","Team: A–Z"],["creator-asc","Creator: A–Z"],["title-asc","Title: A–Z"],["actions-desc","Open actions: most first"]]} />
+      </>}>
         <label>
           <span>Record state</span>
           <select onChange={(event) => setRecordState(event.target.value as typeof recordState)} value={recordState}>
@@ -319,13 +339,18 @@ export function AdminWorkScrutiny() {
             <option value="all">All records</option>
           </select>
         </label>
-      </div>
+        <label><span>Submission status</span><select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="">All statuses</option>{distinctListValues(records.map(record => record.submissionStatus)).map(value => <option key={value}>{value}</option>)}</select></label>
+        <label><span>Faculty</span><select value={facultyFilter} onChange={event => setFacultyFilter(event.target.value)}><option value="">All faculties</option>{distinctListValues(records.map(record => record.parentOrgUnitCode)).map(value => <option key={value}>{value}</option>)}</select></label>
+        <label><span>Team</span><select value={teamFilter} onChange={event => setTeamFilter(event.target.value)}><option value="">All teams</option>{distinctListValues(records.map(record => record.orgUnitCode)).map(value => <option key={value}>{value}</option>)}</select></label>
+        <label><span>Linked actions</span><select value={actionFilter} onChange={event => setActionFilter(event.target.value)}><option value="">Any actions</option><option value="open">Has open actions</option><option value="none">No open actions</option></select></label>
+      </WorkflowFilters>
       {message ? <div className="notice-row" role="status">{message}</div> : null}
-      <div className="table-shell">
-        <table>
-          <thead><tr><th>Sub-team</th><th>Scrutiny date</th><th>Created by</th><th>Actions</th><th>Status</th><th><span className="sr-only">Manage</span></th></tr></thead>
+      {loadError ? <div className="notice-row" role="alert">{loadError}<Button disabled={isLoading} onClick={() => void refreshRecords()}>Try again</Button></div> : null}
+      <ScrollableTableRegion label="Work Scrutiny data">
+        <table aria-label="Work Scrutiny data">
+          <thead><tr><th scope="col">Sub-team</th><th scope="col">Scrutiny date</th><th scope="col">Created by</th><th scope="col">Actions</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Manage</span></th></tr></thead>
           <tbody>
-            {isLoading ? <tr><td colSpan={6}>Loading Work Scrutiny records...</td></tr> : filteredRecords.length === 0 ? <tr><td colSpan={6}>No records match these filters.</td></tr> : filteredRecords.map((record) => (
+            {isLoading ? <tr><td colSpan={6}><LoadingState label="Loading Work Scrutiny records" /></td></tr> : filteredRecords.length === 0 ? <tr><td colSpan={6}>No records match these filters.</td></tr> : filteredRecords.map((record) => (
               <tr key={record.id}>
                 <td><strong>{record.orgUnitCode ?? "Unassigned"}</strong><small className="table-subline">{record.orgUnitName ?? record.title}</small></td>
                 <td>{record.recordDate ? formatDate(record.recordDate) : "No date"}</td>
@@ -337,7 +362,7 @@ export function AdminWorkScrutiny() {
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollableTableRegion>
     </section>
   );
 }

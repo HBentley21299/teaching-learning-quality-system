@@ -1,4 +1,5 @@
 import type { AppRoute } from "./navigation";
+import { qaAdminSectionFromPath } from "./qaAdminNavigation";
 
 export type AppLocation = {
   route: AppRoute;
@@ -17,6 +18,8 @@ const routePaths: Record<AppRoute, string> = {
   team: "/my-team",
   admin: "/admin",
   learning: "/learning-walks",
+  digital: "/digital-learning-walks",
+  activate: "/activate-growth-reviews",
   liv: "/liv",
   als_learning: "/als-learning-walks",
   als_liv: "/als-liv",
@@ -73,7 +76,10 @@ export function parseAppLocation(pathname = window.location.pathname): AppLocati
     return { ...empty, route: "home" };
   }
 
-  const segments = normalized.split("/").filter(Boolean).map(decodeURIComponent);
+  const segments = normalized.split("/").filter(Boolean).map(segment => {
+    try { return decodeURIComponent(segment); }
+    catch { return "unavailable"; }
+  });
   if (segments[0] === "records" && segments[1]) {
     return { ...empty, route: "dashboard", sourceRecordId: segments[1], pendingRecordId: segments[1] };
   }
@@ -86,17 +92,20 @@ export function parseAppLocation(pathname = window.location.pathname): AppLocati
   if (segments[0] === "staff" && segments[1]) {
     return { ...empty, route: "profile", profileStaffId: segments[1] };
   }
+  if (qaAdminSectionFromPath(normalized) !== null) {
+    return { ...empty, route: "qa" };
+  }
   if (segments[0] === "admin") {
     return { ...empty, route: "admin", adminTab: segments[1] || "overview" };
-  }
-  if (segments[0] === "qa-hub" && segments[1] === "question-bank") {
-    return { ...empty, route: "admin", adminTab: "qa-reviews" };
   }
   if (segments[0] === "qa-hub") {
     return { ...empty, route: "qa" };
   }
   if (segments[0] === "uco-tla-reviews") {
     return { ...empty, route: "uco", sourceRecordId: segments[1] || "" };
+  }
+  if (segments[0] === "digital-learning-walks" || segments[0] === "activate-growth-reviews") {
+    return { ...empty, route: segments[0] === "digital-learning-walks" ? "digital" : "activate", sourceRecordId: segments[1] || "" };
   }
 
   return { ...empty, route: pathRoutes.get(normalized) ?? "dashboard" };

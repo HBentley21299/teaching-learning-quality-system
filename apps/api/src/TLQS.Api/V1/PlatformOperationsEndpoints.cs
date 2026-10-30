@@ -129,52 +129,57 @@ public static class PlatformOperationsEndpoints
 
         api.MapGet("/staff-profiles/{staffId:guid}/cpd", async (
             Guid staffId, string? academicYear, int page, int pageSize,
+            [AsParameters] ListQuery query,
             ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
             if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
             return Results.Ok(await store.GetStaffProfileCpdPageAsync(
-                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken));
+                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken, query));
         });
 
         api.MapGet("/staff-profiles/{staffId:guid}/coaching", async (
             Guid staffId, string? academicYear, int page, int pageSize,
+            [AsParameters] ListQuery query,
             ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
             if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
             return Results.Ok(await store.GetStaffProfileCoachingPageAsync(
-                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken));
+                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken, query));
         });
 
         api.MapGet("/staff-profiles/{staffId:guid}/liv", async (
             Guid staffId, string? academicYear, int page, int pageSize,
+            [AsParameters] ListQuery query,
             ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
             if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
             return Results.Ok(await store.GetStaffProfileLivPageAsync(
-                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, user, cancellationToken));
+                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, user, cancellationToken, query));
         });
 
         api.MapGet("/staff-profiles/{staffId:guid}/probation", async (
             Guid staffId, int page, int pageSize,
+            [AsParameters] ListQuery query,
             ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
             if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
             return Results.Ok(await store.GetStaffProfileProbationPageAsync(
-                staffId, page, pageSize, user, cancellationToken));
+                staffId, page, pageSize, user, cancellationToken, query));
         });
 
         api.MapGet("/staff-profiles/{staffId:guid}/actions", async (
             Guid staffId, string? academicYear, int page, int pageSize,
+            [AsParameters] ListQuery query,
             ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
             if (!await CanViewStaffProfileAsync(user, staffId, store, cancellationToken)) return Results.Forbid();
             return Results.Ok(await store.GetStaffProfileActionsPageAsync(
-                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, cancellationToken));
+                staffId, academicYear ?? SqlFoundationDataStore.GetCurrentAcademicYear(), page, pageSize, user, cancellationToken, query));
         });
 
         api.MapGet("/admin/messaging/settings", async (
@@ -338,6 +343,16 @@ public static class PlatformOperationsEndpoints
                 : Results.Forbid();
         });
 
+        api.MapGet("/admin/messaging/deliveries/page", async (
+            [AsParameters] ListQuery query, int? page, int? pageSize,
+            ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var user = await ResolveCurrentUserAsync(principal, store, cancellationToken);
+            return AdministrationAccessPolicy.CanManageMessaging(user)
+                ? Results.Ok(await store.GetMessageDeliveriesPageAsync(query, page ?? 1, pageSize ?? 25, cancellationToken))
+                : Results.Forbid();
+        });
+
         api.MapPost("/admin/messaging/deliveries/{deliveryId:guid}/retry", async (
             Guid deliveryId,
             RetryMessageRequest request,
@@ -377,6 +392,7 @@ public static class PlatformOperationsEndpoints
             string? recordType,
             string? deliveryAreaKey,
             string? dimensionLabel,
+            int? statusLevel,
             ClaimsPrincipal principal,
             SqlFoundationDataStore store,
             ExcelExportService exporter,
@@ -386,7 +402,7 @@ public static class PlatformOperationsEndpoints
             if (!CanCreateExport(user, moduleKey)) return Results.Forbid();
             var filter = new ExportFilter(
                 academicYear, facultyCode, teamCode, fromDate, toDate,
-                staffId, reviewerId, status, recordType, deliveryAreaKey, dimensionLabel);
+                staffId, reviewerId, status, recordType, deliveryAreaKey, dimensionLabel, statusLevel);
             var workbook = await store.GetDashboardExportAsync(moduleKey, filter, user, cancellationToken);
             var result = exporter.CreateWorkbook(workbook);
             await store.RecordExportAuditAsync(moduleKey, "xlsx", filter, user, cancellationToken);
@@ -406,6 +422,7 @@ public static class PlatformOperationsEndpoints
             string? recordType,
             string? deliveryAreaKey,
             string? dimensionLabel,
+            int? statusLevel,
             ClaimsPrincipal principal,
             SqlFoundationDataStore store,
             QaPdfReportService exporter,
@@ -415,7 +432,7 @@ public static class PlatformOperationsEndpoints
             if (!CanCreateExport(user, moduleKey)) return Results.Forbid();
             var filter = new ExportFilter(
                 academicYear, facultyCode, teamCode, fromDate, toDate,
-                staffId, reviewerId, status, recordType, deliveryAreaKey, dimensionLabel);
+                staffId, reviewerId, status, recordType, deliveryAreaKey, dimensionLabel, statusLevel);
             var report = await store.GetDashboardExportAsync(moduleKey, filter, user, cancellationToken, includeWorkbookEntries: false);
             var result = exporter.CreateDashboardReport(report);
             await store.RecordExportAuditAsync(moduleKey, "pdf", filter, user, cancellationToken);

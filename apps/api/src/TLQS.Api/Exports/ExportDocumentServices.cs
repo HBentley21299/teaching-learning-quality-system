@@ -17,6 +17,7 @@ public sealed class ExcelExportService
 {
     public GeneratedExport CreateWorkbook(ExportWorkbookData data)
     {
+        data = BusinessWorkbookExportBuilder.Build(data);
         using var stream = new MemoryStream();
         using (var document = SpreadsheetDocument.Create(stream, SpreadsheetDocumentType.Workbook, true))
         {
@@ -52,10 +53,16 @@ public sealed class ExcelExportService
             new string?[] { "From date", data.Filter.FromDate?.ToString("dd MMM yyyy") },
             new string?[] { "To date", data.Filter.ToDate?.ToString("dd MMM yyyy") },
             new string?[] { "Status", data.Filter.Status },
+            new string?[] { "Exact Elevate level", data.Filter.StatusLevel?.ToString(CultureInfo.InvariantCulture) },
             new string?[] { "Theme, focus or area", data.Filter.DimensionLabel },
             new string?[] { "Learning walk delivery area filter", data.Filter.DeliveryAreaKey == "__not_recorded__" ? "Not recorded" : data.Filter.DeliveryAreaKey },
             new string?[] { "Interactive row limit", SqlFoundationDataStore.InteractiveExportRowLimit.ToString() }
         };
+        rows.Add(new string?[] { "Workbook layout", "Form entries contains one row per source entry. Repeat items appear on linked detail tabs. Entry references link rows within this workbook; they are not database identifiers." });
+        rows.Add(new string?[] { "Dates and answers", "Date/time cells use UTC. Blank means no saved answer. N/A and Not seen retain their saved meanings. Form answers are literal text and are never executed as formulas." });
+        if (data.ModuleKey == "elevate-practice") rows.Add(new string?[] { "ELI staff cohort", DashboardSubmissionExportBuilder.EliScopeNote });
+        foreach (var sheet in data.Sheets)
+            rows.Add(new string?[] { $"{sheet.Name} rows", sheet.Rows.Count.ToString(CultureInfo.InvariantCulture) });
         foreach (var sheet in data.Sheets.Where(item => item.WasTruncated))
             rows.Add(new string?[] { $"{sheet.Name} warning", $"Results were limited to {SqlFoundationDataStore.InteractiveExportRowLimit:N0} rows. Narrow the filters and export again." });
         return new ExportSheet("Export Information", ["Property", "Value"], rows, false);
@@ -74,6 +81,10 @@ public sealed class ExcelExportService
         if (data.Rows.Any(row => row.Count > data.Columns.Count))
             throw new WorkflowValidationException($"The '{data.Name}' worksheet contains answers without matching column headings.");
         var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+        var frozenColumns = data.Columns.Count > 3 && data.Columns[0] == "Entry reference" ? 2 : 0;
+        var headings = ReadableHeadings(data.Columns);
+        var widths = data.Columns.Select((_,index) => ColumnWidth(data,index)).ToArray();
+        var headerLines = headings.Select((heading,index) => heading.Split('\n').Sum(line => Math.Max(1,Math.Ceiling(line.Length / Math.Max(12D,widths[index]-3D))))).DefaultIfEmpty(1D).Max();
         using (var writer = OpenXmlWriter.Create(worksheetPart))
         {
             writer.WriteStartElement(new S.Worksheet());
@@ -82,17 +93,18 @@ public sealed class ExcelExportService
                     new S.Pane
                     {
                         VerticalSplit = 1D,
-                        TopLeftCell = "A2",
-                        ActivePane = S.PaneValues.BottomLeft,
+                        HorizontalSplit = frozenColumns,
+                        TopLeftCell = frozenColumns > 0 ? "C2" : "A2",
+                        ActivePane = frozenColumns > 0 ? S.PaneValues.BottomRight : S.PaneValues.BottomLeft,
                         State = S.PaneStateValues.Frozen
                     })
                 { WorkbookViewId = 0U }));
             var columns = new S.Columns();
             for (uint index = 1; index <= data.Columns.Count; index++)
-                columns.Append(new S.Column { Min = index, Max = index, Width = ColumnWidth(data, (int)index - 1), CustomWidth = true });
+                columns.Append(new S.Column { Min = index, Max = index, Width = widths[index-1], CustomWidth = true });
             writer.WriteElement(columns);
             writer.WriteStartElement(new S.SheetData());
-            WriteRow(writer, ReadableHeadings(data.Columns), 1U);
+            WriteRow(writer, headings, 1U, rowHeight: Math.Min(400D,Math.Max(36D,headerLines*15D+10D)));
             foreach (var row in data.Rows) WriteRow(writer, row, 2U, data.ColumnTypes);
             writer.WriteEndElement();
             if (data.Columns.Count > 0)
@@ -125,9 +137,11 @@ public sealed class ExcelExportService
         }).ToArray();
     }
 
-    private static void WriteRow(OpenXmlWriter writer, IEnumerable<string?> values, uint styleIndex, IReadOnlyList<string>? columnTypes = null)
+    private static void WriteRow(OpenXmlWriter writer, IEnumerable<string?> values, uint styleIndex, IReadOnlyList<string>? columnTypes = null, double? rowHeight = null)
     {
-        writer.WriteStartElement(new S.Row());
+        var row = new S.Row();
+        if (rowHeight.HasValue) {row.Height=rowHeight.Value;row.CustomHeight=true;}
+        writer.WriteStartElement(row);
         var index = 0;
         foreach (var value in values)
         {
@@ -209,6 +223,14 @@ public sealed class ExcelExportService
     private static double ColumnWidth(ExportSheet sheet, int index)
     {
         var heading = sheet.Columns[index];
+        if (heading == "Entry reference") return 18D;
+        if (heading.Contains(" [",StringComparison.Ordinal)) return 42D;
+        if (sheet.ColumnTypes?.ElementAtOrDefault(index) == "number") return 16D;
+        if (sheet.ColumnTypes?.ElementAtOrDefault(index) == "date") return 17D;
+        if (sheet.ColumnTypes?.ElementAtOrDefault(index) == "datetime") return 23D;
+        if (heading is "Staff member" or "Name" or "Lecturer" or "Associated staff member" or "Submitted by" or "Reviewer" or "Coach or mentor") return 30D;
+        if (heading is "Title" or "Record title" or "Event title" or "Source entry") return 42D;
+        if (new[] {"Evidence","Reflection","Notes","Comment","Context","Description","Impact","Aims","Learner activity","Findings","Strength","Improvement","Recommendation","Narrative"}.Any(word=>heading.Contains(word,StringComparison.OrdinalIgnoreCase))) return 52D;
         if (heading is "Criterion" or "Detail") return 68D;
         if (heading is "Action" or "Team without submitted evidence") return 48D;
         if (heading is "Assigned to" or "Teams") return 38D;

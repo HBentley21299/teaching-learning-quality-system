@@ -1,3 +1,12 @@
+import { useFormContent } from "../services/formContent";
+import { WorkflowNarrativeField } from "../components/WorkflowNarrativeField";
+import { LoadingState } from "../components/LoadingState";
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
+import { focusWorkflowControl } from "../services/workflowExperience";
+import { dashboardActionState } from "../services/dashboardActionState";
+import { useWorkflowPagination, WorkflowPagination } from "../components/WorkflowPagination";
+import { WorkflowFeedback } from "../components/WorkflowFeedback";
+import { WorkflowFilters } from "../components/WorkflowFilters";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -24,6 +33,8 @@ import { Button } from "../design-system/Button";
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { useActionOwners } from "../components/useActionOwners";
 import { api } from "../services/api";
+import { distinctListValues, matchesListSearch, sortListRows } from "../services/listQuery";
+import { saveProbationActions } from "../services/saveProbationActions";
 import type {
   ActionOwnerOption,
   ActionSummary,
@@ -92,41 +103,61 @@ export function ProbationObservations({
   const [facultyFilter, setFacultyFilter] = useState("all");
   const [teamFilter, setTeamFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [reviewerFilter, setReviewerFilter] = useState("all");
+  const [observationFilter, setObservationFilter] = useState("all");
+  const [sort, setSort] = useState("staff");
   const [recordOwnershipView, setRecordOwnershipView] = useState<"mine" | "scope">("mine");
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const refreshRequest = useRef(0);
 
   const hasProbationPermission = user.permissions.includes("probation.submit") || user.permissions.includes("probation.manage");
   const canCreate = hasProbationPermission && Boolean(configuration?.canCreateCase);
+  const clearCreateNavigation = useUnsavedChanges({ label: "New probation case", dirty: isCreating && Boolean(subjectStaffId || teachingLearningReviewerId), saving: isCreating && isSaving,
+    submission: true, onSubmit: canCreate ? createCase : undefined, submitLabel: "Create probation case",
+    onDiscard: () => { setIsCreating(false); setSubjectStaffId(""); setTeachingLearningReviewerId(""); setStaffContext(null); } });
   const selectedCase = cases.find((item) => item.id === selectedCaseId) ?? null;
 
-  function openCase(item: ProbationCase) {
+  async function openCase(item: ProbationCase) {
+    if (!await confirmUnsavedNavigation()) return;
     setSelectedCaseId(item.id);
     setSelectedObservationNumber(item.currentObservationNumber);
     onRecordOpened?.(item.recordId);
+    if (typeof window !== "undefined") window.requestAnimationFrame(() => focusWorkflowControl("probation-case-heading"));
   }
-  const faculties = orgUnits.filter((unit) => unit.orgUnitType === "faculty" && unit.isActive);
-  const teams = orgUnits.filter((unit) => unit.orgUnitType === "team" && unit.isActive
-    && (facultyFilter === "all" || unit.parentOrgUnitId === facultyFilter));
+  // Case snapshots remain authoritative after a staff transfer or an area's retirement.
+  const caseArea = (item: ProbationCase) => orgUnits.find(unit => unit.id === item.orgUnitId);
+  const caseFacultyCode = (item: ProbationCase) => item.parentOrgUnitCode || (caseArea(item)?.orgUnitType === "faculty" ? item.orgUnitCode : orgUnits.find(unit => unit.id === caseArea(item)?.parentOrgUnitId)?.code);
+  const faculties = sortListRows(distinctListValues(cases.map(caseFacultyCode)).map(code => ({ code, name: orgUnits.find(unit => unit.code === code)?.name || code })), unit => unit.name);
+  const teams = sortListRows([...new Map(cases.filter(item => facultyFilter === "all" || caseFacultyCode(item) === facultyFilter).filter(item => item.orgUnitId && (item.parentOrgUnitCode || caseArea(item)?.orgUnitType !== "faculty")).map(item => [item.orgUnitId!, { id: item.orgUnitId!, code: item.orgUnitCode || "Unassigned", name: caseArea(item)?.name || item.orgUnitCode || "Unassigned" }])).values()], unit => unit.name);
+  const reviewers = sortListRows([...new Map(cases.flatMap(item => item.reviewers.map(reviewer => [reviewer.staffId, reviewer.displayName] as const))).entries()], entry => entry[1]);
 
   async function refresh(nextMessage = "") {
+    const request = ++refreshRequest.current;
+    setIsLoading(true);
     try {
       const [nextCases, nextConfiguration, nextLivRecords] = await Promise.all([
         api.probationCases(),
         api.probationConfiguration(),
         api.livRecords()
       ]);
+      if (request !== refreshRequest.current) return;
+      setLoadFailed(false);
       setCases(nextCases);
       setConfiguration(nextConfiguration);
       setLivConfiguration(nextConfiguration);
       setLivRecords(nextLivRecords);
       if (nextMessage) setMessage(nextMessage);
     } catch {
+      if (request !== refreshRequest.current) return;
+      setLoadFailed(true);
       setMessage("Probationary observations could not be loaded from the API.");
-    }
+    } finally { if (request === refreshRequest.current) setIsLoading(false); }
   }
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void refresh(); return () => { refreshRequest.current += 1; }; }, []);
   useEffect(() => {
     if (!initialSourceRecordId || cases.length === 0) return;
     const match = cases.find((item) => item.recordId === initialSourceRecordId
@@ -140,33 +171,41 @@ export function ProbationObservations({
     }
   }, [cases, initialSourceRecordId]);
   useEffect(() => {
+    let cancelled = false;
     setStaffContext(null);
     if (!subjectStaffId || !canCreate) return;
-    api.probationStaffContext(subjectStaffId).then(setStaffContext).catch(() => setStaffContext(null));
+    api.probationStaffContext(subjectStaffId).then(context => { if (!cancelled) setStaffContext(context); }).catch(() => { if (!cancelled) setStaffContext(null); });
+    return () => { cancelled = true; };
   }, [canCreate, subjectStaffId]);
 
-  const years = useMemo(() => [...new Set(cases.map((item) => item.academicYear))].sort().reverse(), [cases]);
-  const filteredCases = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase();
-    return cases.filter((item) => {
-      const staffMember = staff.find((candidate) => candidate.id === item.subjectStaffId);
-      const matchesSearch = !query || [item.subjectStaffName, item.orgUnitCode, item.parentOrgUnitCode, item.academicYear]
-        .some((value) => value?.toLocaleLowerCase().includes(query));
-      const matchesYear = yearFilter === "all" || item.academicYear === yearFilter;
-      const matchesFaculty = facultyFilter === "all" || staffMember?.orgUnitIds.includes(facultyFilter)
-        || item.orgUnitId === facultyFilter;
-      const matchesTeam = teamFilter === "all" || staffMember?.orgUnitIds.includes(teamFilter)
-        || item.orgUnitId === teamFilter;
-      const matchesStatus = statusFilter === "all" || item.status === statusFilter;
-      const matchesOwnership = recordOwnershipView === "scope" || item.isCreatedByCurrentUser;
-      return matchesSearch && matchesYear && matchesFaculty && matchesTeam && matchesStatus && matchesOwnership;
-    });
-  }, [cases, facultyFilter, recordOwnershipView, search, staff, statusFilter, teamFilter, yearFilter]);
+  const years = useMemo(() => distinctListValues(cases.map(item => item.academicYear)).reverse(), [cases]);
+  const filteredCases = sortListRows(cases.filter(item => {
+    const staffMember = staff.find(candidate => candidate.id === item.subjectStaffId);
+    return matchesListSearch(search, item.subjectStaffName, staffMember?.externalId, staffMember?.email, item.orgUnitCode,
+      item.parentOrgUnitCode, caseArea(item)?.name, item.academicYear, item.status.replaceAll("_", " "),
+      `Observation ${item.currentObservationNumber}`, item.reviewers.map(reviewer => reviewer.displayName))
+      && (yearFilter === "all" || item.academicYear === yearFilter)
+      && (facultyFilter === "all" || caseFacultyCode(item) === facultyFilter)
+      && (teamFilter === "all" || item.orgUnitId === teamFilter)
+      && (statusFilter === "all" || item.status === statusFilter)
+      && (reviewerFilter === "all" || item.reviewers.some(reviewer => reviewer.staffId === reviewerFilter))
+      && (observationFilter === "all" || String(item.currentObservationNumber) === observationFilter)
+      && (recordOwnershipView === "scope" || item.isCreatedByCurrentUser);
+  }), item => sort === "year" ? item.academicYear : sort === "status" ? item.status : sort === "observation" ? item.currentObservationNumber
+    : sort === "newest" || sort === "oldest" ? new Date(item.updatedAt || item.createdAt) : item.subjectStaffName,
+  sort === "newest" || sort === "year" ? "desc" : "asc", item => item.id);
 
+  const recordPage = useWorkflowPagination(filteredCases, JSON.stringify([recordOwnershipView, search, yearFilter, facultyFilter, teamFilter, statusFilter, reviewerFilter, observationFilter, sort]));
   const completionCounts = [1, 2, 3].map((number) => filteredCases.filter((item) => highestCompletedObservation(item) === number).length);
 
-  async function createCase() {
-    if (!subjectStaffId) return;
+  async function closeCreate() {
+    if (!await confirmUnsavedNavigation()) return;
+    setIsCreating(false); setSubjectStaffId(""); setTeachingLearningReviewerId(""); setStaffContext(null);
+    window.requestAnimationFrame(() => focusWorkflowControl("probation-create-trigger"));
+  }
+
+  async function createCase(): Promise<boolean> {
+    if (!canCreate || isSaving || !subjectStaffId) return false;
     setIsSaving(true);
     try {
       const staffMember = configuration?.eligibleStaff.find((item) => item.id === subjectStaffId);
@@ -178,14 +217,16 @@ export function ProbationObservations({
 
       if (!result.ok) {
         setMessage(result.message ?? "The probationary observation case could not be created.");
-        return;
+        return false;
       }
       setIsCreating(false);
+      clearCreateNavigation();
       setSubjectStaffId("");
       setTeachingLearningReviewerId("");
       setSelectedCaseId(result.data?.id ?? "");
       setSelectedObservationNumber(1);
       await refresh("Probationary observation case created.");
+      return true;
     } finally { setIsSaving(false); }
   }
 
@@ -200,7 +241,7 @@ export function ProbationObservations({
         selectedLivCycleId={selectedLivCycleId}
         record={selectedCase}
         staff={staff}
-        onBack={() => { setSelectedCaseId(""); setSelectedLivCycleId(""); onRecordClosed?.(); }}
+        onBack={() => { setSelectedCaseId(""); setSelectedLivCycleId(""); onRecordClosed?.(); window.requestAnimationFrame(() => focusWorkflowControl("probation-records-summary")); }}
         onChanged={async (nextMessage) => { await onActionsChanged?.(); await refresh(nextMessage); }}
         onObservationChange={(number) => { setSelectedObservationNumber(number); setSelectedLivCycleId(""); }}
         onLivCycleChange={setSelectedLivCycleId}
@@ -214,20 +255,22 @@ export function ProbationObservations({
     <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="route-stack probation-route">
       <div className="route-header">
         <div><p className="eyebrow">Staff probation observation process</p><h1>Probationary Observations</h1></div>
-        {canCreate ? <Button icon={FilePlus2} onClick={() => setIsCreating((value) => !value)} variant="primary">Create probation case</Button> : null}
+        {canCreate ? <Button id="probation-create-trigger" aria-expanded={isCreating} icon={FilePlus2} onClick={() => isCreating ? closeCreate() : setIsCreating(true)} variant="primary">Create probation case</Button> : null}
       </div>
-      {message ? <div className="notice-row" role="alert">{message}</div> : null}
+      <WorkflowFeedback message={message} />
+      {loadFailed ? <Button disabled={isLoading} onClick={() => void refresh()}>Retry loading observations</Button> : null}
+      {isLoading ? <LoadingState label="Loading probationary observations…" /> : null}
 
       {isCreating && configuration ? (
         <section className="panel probation-create-panel">
-          <div className="panel-heading"><div><h2>New probationary observation cycle</h2><span>Select a staff member within your permitted area. You will be assigned as lead reviewer automatically.</span></div><button className="icon-button" onClick={() => setIsCreating(false)} title="Close" type="button"><X size={16} /></button></div>
+          <div className="panel-heading"><div><h2>New probationary observation cycle</h2><span>Select a staff member within your permitted area. You will be assigned as lead reviewer automatically.</span></div><button className="icon-button" onClick={closeCreate} title="Close" type="button"><X size={16} /></button></div>
           <div className="form-grid form-grid-three">
             <label className="entry-field"><span>Staff member</span><StaffSearchSelect helperText="Search the staff available within your team, faculty or organisation scope." id="probation-subject" onChange={setSubjectStaffId} staff={configuration.eligibleStaff} value={subjectStaffId} /></label>
             <label className="entry-field"><span>Teaching and Learning reviewer <small>Optional</small></span><select onChange={(event) => setTeachingLearningReviewerId(event.target.value)} value={teachingLearningReviewerId}><option value="">No T&L reviewer</option>{configuration.teachingLearningReviewers.map((reviewer) => <option disabled={reviewer.staffId === user.staffId} key={reviewer.staffId} value={reviewer.staffId}>{reviewer.displayName}</option>)}</select></label>
             <div className="entry-field"><span>Lead reviewer</span><div className="probation-auto-reviewer"><strong>{user.displayName}</strong><small>Assigned from your signed-in account</small></div></div>
           </div>
           {staffContext ? <ProbationEliContext context={staffContext} /> : null}
-          <div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsCreating(false)}>Cancel</Button><Button disabled={isSaving || !subjectStaffId || Boolean(staffContext?.hasProbationCaseForAcademicYear)} icon={Plus} onClick={() => void createCase()} variant="primary">{isSaving ? "Creating..." : "Create cycle"}</Button></div>
+          <div className="toolbar toolbar-end"><Button icon={X} onClick={closeCreate}>Cancel</Button><Button disabled={isSaving || !subjectStaffId || Boolean(staffContext?.hasProbationCaseForAcademicYear)} icon={Plus} onClick={() => void createCase()} variant="primary">{isSaving ? "Creating..." : "Create cycle"}</Button></div>
         </section>
       ) : null}
 
@@ -237,19 +280,25 @@ export function ProbationObservations({
         { label: "Completed Observation 3", value: completionCounts[2], tone: "green" }
       ]} />
 
-      <details className="panel liv-v2-records">
-        <summary><span><strong>{recordOwnershipView === "mine" ? "My probationary observation records" : "Probationary observation records in scope"}</strong><small>{filteredCases.length} records in this view</small></span><span className="toolbar">{user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: yearFilter === "all" ? undefined : yearFilter }} moduleKey="probation" orgUnits={orgUnits} /> : null}<ChevronDown size={18} /></span></summary>
-        <div className="segmented-control record-ownership-switch" aria-label="Probation record ownership view"><button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My probation records</button><button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button></div>
-        <div className="filter-toolbar probation-filter-toolbar">
-          <label className="search-box"><Search size={16} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff or area" value={search} /></label>
-          <label><span>Academic year</span><select onChange={(event) => setYearFilter(event.target.value)} value={yearFilter}><option value="all">All years</option>{years.map((year) => <option key={year}>{year}</option>)}</select></label>
-          <label><span>Faculty</span><select onChange={(event) => { setFacultyFilter(event.target.value); setTeamFilter("all"); }} value={facultyFilter}><option value="all">All faculties</option>{faculties.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label>
+      <details className="panel liv-v2-records" open>
+        <summary id="probation-records-summary"><span><strong>{recordOwnershipView === "mine" ? "My probationary observation records" : "Probationary observation records in scope"}</strong><small>{filteredCases.length} records in this view</small></span><ChevronDown aria-hidden="true" size={18} /></summary>
+        <div className="toolbar toolbar-end">{user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: yearFilter === "all" ? undefined : yearFilter }} moduleKey="probation" orgUnits={orgUnits} /> : null}</div>
+        <div className="segmented-control record-ownership-switch" aria-label="Probation record ownership view"><button aria-pressed={recordOwnershipView === "mine"} className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My probation records</button><button aria-pressed={recordOwnershipView === "scope"} className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button></div>
+        <WorkflowFilters activeCount={[yearFilter, facultyFilter, teamFilter, statusFilter, reviewerFilter, observationFilter].filter(value => value !== "all").length} hasQuery={Boolean(search)} onClear={() => { setSearch(""); setYearFilter("all"); setFacultyFilter("all"); setTeamFilter("all"); setStatusFilter("all"); setReviewerFilter("all"); setObservationFilter("all"); setSort("staff"); }} primary={<>
+<label className="search-box"><Search size={16} /><input onChange={(event) => setSearch(event.target.value)} aria-label="Search probation cases" placeholder="Search staff, reviewer, area or observation" value={search} /></label>
+<label><span>Sort by</span><select aria-label="Sort probation cases" value={sort} onChange={event => setSort(event.target.value)}><option value="staff">Staff name</option><option value="newest">Last activity: newest first</option><option value="oldest">Last activity: oldest first</option><option value="year">Academic year: newest first</option><option value="observation">Current observation</option><option value="status">Status</option></select></label>
+</>}>
+<label><span>Academic year</span><select onChange={(event) => setYearFilter(event.target.value)} value={yearFilter}><option value="all">All years</option>{years.map((year) => <option key={year}>{year}</option>)}</select></label>
+          <label><span>Faculty</span><select onChange={(event) => { setFacultyFilter(event.target.value); setTeamFilter("all"); }} value={facultyFilter}><option value="all">All faculties</option>{faculties.map((unit) => <option key={unit.code} value={unit.code}>{unit.code} - {unit.name}</option>)}</select></label>
           <label><span>Team</span><select onChange={(event) => setTeamFilter(event.target.value)} value={teamFilter}><option value="all">All teams</option>{teams.map((unit) => <option key={unit.id} value={unit.id}>{unit.code} - {unit.name}</option>)}</select></label>
-          <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label>
-        </div>
-        <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty / team</th><th>Academic year</th><th>Progress</th><th>Reviewers</th><th>Open</th></tr></thead><tbody>
-          {filteredCases.length === 0 ? <tr><td colSpan={6}>{recordOwnershipView === "mine" ? "You have not created any probation records matching these filters." : "No probation records match these filters."}</td></tr> : filteredCases.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => openCase(item)} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
-        </tbody></table></div>
+          <label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option>{distinctListValues(cases.map(item => item.status)).map(status => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}</select></label>
+          <label><span>Reviewer</span><select value={reviewerFilter} onChange={event => setReviewerFilter(event.target.value)}><option value="all">All reviewers</option>{reviewers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+          <label><span>Current observation</span><select value={observationFilter} onChange={event => setObservationFilter(event.target.value)}><option value="all">All observations</option>{distinctListValues(cases.map(item => String(item.currentObservationNumber))).map(number => <option key={number} value={number}>Observation {number}</option>)}</select></label>
+</WorkflowFilters>
+        <ScrollableTableRegion label="Probationary observation records"><table><thead><tr><th scope="col">Staff member</th><th scope="col">Faculty / team</th><th scope="col">Academic year</th><th scope="col">Progress</th><th scope="col">Reviewers</th><th scope="col">Open</th></tr></thead><tbody>
+          {isLoading && filteredCases.length === 0 ? null : loadFailed && filteredCases.length === 0 ? <tr><td colSpan={6}>Records are temporarily unavailable. Use Retry loading observations above.</td></tr> : filteredCases.length === 0 ? <tr><td colSpan={6}>{recordOwnershipView === "mine" ? "You have not created any probation records matching these filters." : "No probation records match these filters."}</td></tr> : recordPage.items.map((item) => <tr key={item.id}><td><strong>{item.subjectStaffName}</strong></td><td>{[item.parentOrgUnitCode, item.orgUnitCode].filter(Boolean).join(" / ") || "Unassigned"}</td><td>{item.academicYear}</td><td><span className={`status-pill ${item.status === "completed" ? "status-complete" : "status-draft"}`}>{item.status === "completed" ? "Observation 3 complete" : `Observation ${item.currentObservationNumber}`}</span></td><td>{item.reviewers.map((reviewer) => reviewer.displayName).join(" and ")}</td><td><button className="icon-button" onClick={() => openCase(item)} title="Open probation case" type="button"><Eye size={16} /></button></td></tr>)}
+        </tbody></table></ScrollableTableRegion>
+        <WorkflowPagination {...recordPage} label="Probation records" />
       </details>
     </div></fieldset>
   );
@@ -291,7 +340,7 @@ function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRe
   }
 
   async function completeObservation() {
-    if (!observation || !window.confirm(`Complete Probation Observation ${observation.observationNumber}?`)) return;
+    if (!observation || !await confirmUnsavedNavigation() || !window.confirm(`Complete Probation Observation ${observation.observationNumber}?`)) return;
     setIsSaving(true);
     try {
       const result = await api.completeProbationObservation(record.id, observation.id);
@@ -308,10 +357,10 @@ function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRe
   return (
     <div className="route-stack probation-workspace">
       <div className="route-header probation-case-header">
-        <div><Button icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>Back to probation records</Button><p className="eyebrow">{record.academicYear} probation cycle</p><h1>{record.subjectStaffName}</h1></div>
+        <div><Button icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>Back to probation records</Button><p className="eyebrow">{record.academicYear} probation cycle</p><h1 id="probation-case-heading" tabIndex={-1}>{record.subjectStaffName}</h1></div>
         <div className="toolbar"><ExportWordButton recordId={record.recordId} /><Button disabled={!record.sourceElevateRecordId} icon={ClipboardCheck} onClick={() => record.sourceElevateRecordId && onOpenEliReport(record.subjectStaffId, record.sourceElevateRecordId)} variant="primary">{record.sourceElevateRecordId ? "Open ELI report" : "No submitted ELI report"}</Button></div>
       </div>
-      {message ? <div className="notice-row" role="alert">{message}</div> : null}
+      <WorkflowFeedback message={message} />
       <section className="panel probation-case-summary">
         <div><span>Teaching and Learning reviewer</span><strong>{record.reviewers.find((reviewer) => reviewer.reviewerRole === "teaching_learning")?.displayName ?? "Not assigned"}</strong></div>
         <div><span>Leader reviewer</span><strong>{record.reviewers.find((reviewer) => reviewer.reviewerRole === "leader")?.displayName ?? "Not assigned"}</strong></div>
@@ -321,7 +370,7 @@ function ProbationCaseWorkspace({ record, configuration, livConfiguration, livRe
       <div className="probation-observation-switcher" aria-label="Probation observation progress">
         {record.observations.map((item) => {
           const available = item.status !== "not_started" || item.observationNumber === record.currentObservationNumber;
-          return <button className={item.observationNumber === observation.observationNumber ? "is-active" : ""} disabled={!available} key={item.id} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onObservationChange(item.observationNumber); })} type="button"><span>{item.status === "completed" ? <CheckCircle2 size={18} /> : item.observationNumber}</span><strong>Observation {item.observationNumber}</strong><small>{item.observationNumber === 2 ? (item.observationType === "uco_tla" ? "UCO TLA" : "LIV") : "Probation template"} / {formatStatus(item.status)}</small></button>;
+          return <button aria-pressed={item.observationNumber === observation.observationNumber} className={item.observationNumber === observation.observationNumber ? "is-active" : ""} disabled={!available} key={item.id} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onObservationChange(item.observationNumber); })} type="button"><span>{item.status === "completed" ? <CheckCircle2 size={18} /> : item.observationNumber}</span><strong>Observation {item.observationNumber}</strong><small>{item.observationNumber === 2 ? (item.observationType === "uco_tla" ? "UCO TLA" : "LIV") : "Probation template"} / {formatStatus(item.status)}</small></button>;
         })}
       </div>
 
@@ -399,34 +448,43 @@ function ProbationStageEditor({ record, observation, stage, configuration, actio
 
   const baseline = useRef(JSON.stringify([form, visit]));
   const dirty = stage.canEdit && JSON.stringify([form, visit]) !== baseline.current;
+  const content = useFormContent("probation");
+  const isStageDraft = stage.canEdit && stage.stageType !== "actions" && stage.stageStatus === "in_progress";
   const clearNavigation = useUnsavedChanges({ label: `Probation ${stage.stageType.replaceAll("_", " ")}`, dirty, saving: isSaving,
-    onSave: () => stage.stageType === "visit_rubric" ? saveVisit() : saveStage(),
-    onDiscard: () => { const nextForm = stageToRequest(stage), nextVisit = visitToRequest(observation.visit, stage.stageStatus); baseline.current = JSON.stringify([nextForm, nextVisit]); setForm(nextForm); setVisit(nextVisit); } });
+    submission: isStageDraft,
+    onSave: () => stage.stageType === "visit_rubric" ? saveVisit(isStageDraft ? "in_progress" : visit.stageStatus) : saveStage(isStageDraft ? "in_progress" : form.stageStatus),
+    onSubmit: isStageDraft ? () => stage.stageType === "visit_rubric" ? saveVisit("completed") : saveStage("completed") : undefined,
+    submitLabel: "Complete stage",
+    onDiscard: () => { const [nextForm, nextVisit] = JSON.parse(baseline.current) as [SaveProbationStageRequest, SaveProbationVisitRequest]; setForm(nextForm); setVisit(nextVisit); } });
   useEffect(() => {
     if (dirty) return;
     const nextForm = stageToRequest(stage); const nextVisit = visitToRequest(observation.visit, stage.stageStatus);
     baseline.current = JSON.stringify([nextForm, nextVisit]); setForm(nextForm); setVisit(nextVisit);
   }, [observation.visit, stage]);
 
-  async function saveStage(): Promise<boolean> {
+  async function saveStage(stageStatus = form.stageStatus): Promise<boolean> {
+    if (!stage.canEdit || isSaving) return false;
+    const savedForm = { ...form, stageStatus };
     setIsSaving(true);
     try {
-      const result = await api.updateProbationStage(record.id, observation.id, stage.id, form);
+      const result = await api.updateProbationStage(record.id, observation.id, stage.id, savedForm);
 
       if (!result.ok) { setMessage(result.message ?? "The stage could not be saved."); return false; }
-      baseline.current = JSON.stringify([form, visit]); clearNavigation();
+      setForm(savedForm); baseline.current = JSON.stringify([savedForm, visit]); clearNavigation();
       await onChanged("Probation observation stage saved.");
       return true;
     } finally { setIsSaving(false); }
   }
 
-  async function saveVisit(): Promise<boolean> {
+  async function saveVisit(stageStatus = visit.stageStatus): Promise<boolean> {
+    if (!stage.canEdit || isSaving) return false;
+    const savedVisit = { ...visit, stageStatus };
     setIsSaving(true);
     try {
-      const result = await api.updateProbationVisit(record.id, observation.id, visit);
+      const result = await api.updateProbationVisit(record.id, observation.id, savedVisit);
 
       if (!result.ok) { setMessage(result.message ?? "The observation and rubric could not be saved."); return false; }
-      baseline.current = JSON.stringify([form, visit]); clearNavigation();
+      setVisit(savedVisit); baseline.current = JSON.stringify([form, savedVisit]); clearNavigation();
       await onChanged("Observation details, rubric and evidence saved.");
       return true;
     } finally { setIsSaving(false); }
@@ -438,10 +496,10 @@ function ProbationStageEditor({ record, observation, stage, configuration, actio
 
   return (
     <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="form-stack probation-stage-form">
-      {message ? <div className="notice-row" role="alert">{message}</div> : null}
-      {stage.stageType === "professional_discussion" ? <div className="form-stack"><label className="entry-field"><span>Context</span><textarea disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, contextText: event.target.value })} rows={3} value={form.contextText ?? ""} /></label><label className="entry-field"><span>Aims and intended outcomes</span><textarea disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, aimsText: event.target.value })} rows={3} value={form.aimsText ?? ""} /></label><label className="entry-field"><span>Planned learner activity</span><textarea disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, learnerActivityText: event.target.value })} rows={3} value={form.learnerActivityText ?? ""} /></label></div> : null}
+      <WorkflowFeedback message={message} />
+      {stage.stageType === "professional_discussion" ? <div className="form-stack"><WorkflowNarrativeField content={content.field("contextText", "Context")} disabled={!stage.canEdit} onChange={value => setForm({ ...form, contextText: value })} rows={3} value={form.contextText ?? ""} /><WorkflowNarrativeField content={content.field("aimsText", "Aims and intended outcomes")} disabled={!stage.canEdit} onChange={value => setForm({ ...form, aimsText: value })} rows={3} value={form.aimsText ?? ""} /><WorkflowNarrativeField content={content.field("learnerActivityText", "Planned learner activity")} disabled={!stage.canEdit} onChange={value => setForm({ ...form, learnerActivityText: value })} rows={3} value={form.learnerActivityText ?? ""} /></div> : null}
       {stage.stageType === "visit_rubric" ? <ProbationVisitEditor configuration={configuration} disabled={!stage.canEdit} value={visit} onChange={setVisit} /> : null}
-      {stage.stageType === "reflection_feedback" ? <div className="form-stack"><label className="entry-field"><span>Reflection and feedback</span><textarea disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, reflectionText: event.target.value })} rows={6} value={form.reflectionText ?? ""} /></label><fieldset className="checklist-field"><legend>Development opportunities</legend><div>{configuration.developmentOpportunities.map((option) => <label key={option.key}><input checked={form.developmentOpportunityKeys.includes(option.key)} disabled={!stage.canEdit} onChange={() => setForm({ ...form, developmentOpportunityKeys: toggleValue(form.developmentOpportunityKeys, option.key) })} type="checkbox" /><span>{option.name}</span></label>)}</div></fieldset></div> : null}
+      {stage.stageType === "reflection_feedback" ? <div className="form-stack"><WorkflowNarrativeField content={content.field("reflectionText", "Reflection and feedback")} disabled={!stage.canEdit} onChange={value => setForm({ ...form, reflectionText: value })} rows={6} value={form.reflectionText ?? ""} /><fieldset className="checklist-field"><legend>Development opportunities</legend><div>{configuration.developmentOpportunities.map((option) => <label key={option.key}><input checked={form.developmentOpportunityKeys.includes(option.key)} disabled={!stage.canEdit} onChange={() => setForm({ ...form, developmentOpportunityKeys: toggleValue(form.developmentOpportunityKeys, option.key) })} type="checkbox" /><span>{option.name}</span></label>)}</div></fieldset></div> : null}
       {stage.stageType === "next_observation" ? <label className="entry-field"><span>Agreed date of next probationary observation</span><input disabled={!stage.canEdit} onChange={(event) => setForm({ ...form, intendedNextObservationDate: event.target.value })} type="date" value={form.intendedNextObservationDate ?? ""} /></label> : null}
       {stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={(stage.stageType === "visit_rubric" ? visit.stageStatus : form.stageStatus) === "completed"} onChange={(event) => stage.stageType === "visit_rubric" ? setVisit({ ...visit, stageStatus: event.target.checked ? "completed" : "in_progress" }) : setForm({ ...form, stageStatus: event.target.checked ? "completed" : "in_progress" })} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void (stage.stageType === "visit_rubric" ? saveVisit() : saveStage())} variant="primary">{isSaving ? "Saving..." : "Save stage"}</Button></div> : <p className="muted-copy">This record is visible but read-only for your current access.</p>}
     </div></fieldset>
@@ -449,6 +507,7 @@ function ProbationStageEditor({ record, observation, stage, configuration, actio
 }
 
 function ProbationVisitEditor({ configuration, disabled, value, onChange }: { configuration: ProbationConfiguration; disabled: boolean; value: SaveProbationVisitRequest; onChange: (value: SaveProbationVisitRequest) => void }) {
+  const content = useFormContent("probation");
   const [retainedRatings, setRetainedRatings] = useState<Record<string, SaveProbationVisitRequest["ratings"][number]>>({});
 
   function selectRating(focusKey: string, descriptorId: string) {
@@ -499,7 +558,7 @@ function ProbationVisitEditor({ configuration, disabled, value, onChange }: { co
         <label className="entry-field"><span>Course group</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseGroup: event.target.value })} value={value.courseGroup ?? ""} /></label>
         <label className="entry-field"><span>Course level</span><input disabled={disabled} onChange={(event) => onChange({ ...value, courseLevel: event.target.value })} value={value.courseLevel ?? ""} /></label>
       </div>
-      <label className="entry-field"><span>Key points</span><textarea disabled={disabled} onChange={(event) => onChange({ ...value, keyPoints: event.target.value })} rows={5} value={value.keyPoints ?? ""} /></label>
+      <WorkflowNarrativeField content={content.field("keyPoints", "Key points")} disabled={disabled} onChange={nextValue => onChange({ ...value, keyPoints: nextValue })} rows={5} value={value.keyPoints ?? ""} />
       <section className="probation-rubric">
         <div className="panel-heading">
           <div>
@@ -529,7 +588,7 @@ function ProbationVisitEditor({ configuration, disabled, value, onChange }: { co
                 <>
                   <div className="probation-rubric-options">
                     {configuration.rubric.map((descriptor) => (
-                      <button className={selected?.descriptorId === descriptor.id ? "is-selected" : ""} disabled={disabled} key={descriptor.id} onClick={() => selectRating(focus.key, descriptor.id)} title={descriptor.meaning} type="button">
+                      <button aria-pressed={selected?.descriptorId === descriptor.id} className={selected?.descriptorId === descriptor.id ? "is-selected" : ""} disabled={disabled} key={descriptor.id} onClick={() => selectRating(focus.key, descriptor.id)} title={descriptor.meaning} type="button">
                         <i style={{ background: descriptor.colorHex }} />
                         <span>{descriptor.descriptor}</span>
                       </button>
@@ -537,8 +596,9 @@ function ProbationVisitEditor({ configuration, disabled, value, onChange }: { co
                   </div>
                   {selected ? (
                     <details className="probation-evidence-disclosure">
-                      <summary>Evidence of practice <small>Optional</small><ChevronDown size={16} /></summary>
-                      <textarea disabled={disabled} onChange={(event) => updateEvidence(focus.key, event.target.value)} placeholder="Add the evidence observed for this area" rows={3} value={selected.evidenceOfPractice ?? ""} />
+                      <summary>{content.field("evidenceOfPractice", "Evidence of practice").label} <small>Optional</small><ChevronDown size={16} /></summary>
+                      <textarea aria-describedby={content.field("evidenceOfPractice", "Evidence of practice").helpText ? `probation-evidence-${focus.key}-help` : undefined} aria-label={`${content.field("evidenceOfPractice", "Evidence of practice").label} for ${focus.name}`} disabled={disabled} onChange={(event) => updateEvidence(focus.key, event.target.value)} placeholder="Add the evidence observed for this area" rows={3} value={selected.evidenceOfPractice ?? ""} />
+                      {content.field("evidenceOfPractice", "Evidence of practice").helpText ? <small id={`probation-evidence-${focus.key}-help`}>{content.field("evidenceOfPractice", "Evidence of practice").helpText}</small> : null}
                     </details>
                   ) : null}
                 </>
@@ -561,39 +621,89 @@ function ProbationActions({ record, observation, stage, actions, staff, onChange
   const [stageComplete, setStageComplete] = useState(stage.stageStatus === "completed");
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const clearNavigation = useUnsavedChanges({ label: "Probation actions", saving: isSaving,
-    dirty: (isAdding && Boolean(actionTheme || title || dueDate || ownerId !== record.subjectStaffId)) || stageComplete !== (stage.stageStatus === "completed"),
-    onSave: async () => {
-      if (isAdding && (actionTheme || title || dueDate || ownerId !== record.subjectStaffId) && !await addAction()) return false;
-      return saveStage();
-    }, onDiscard: () => { setIsAdding(false); setActionTheme(""); setTitle(""); setDueDate(""); setOwnerId(record.subjectStaffId); setStageComplete(stage.stageStatus === "completed"); } });
+  const saving = useRef(false);
+  const savedStageComplete = useRef(stage.stageStatus === "completed");
+  const stageDirty = stageComplete !== savedStageComplete.current;
+  const hasActionDraft = isAdding && Boolean(actionTheme || title || dueDate || ownerId !== record.subjectStaffId);
+  useEffect(() => {
+    const complete = stage.stageStatus === "completed";
+    const previous = savedStageComplete.current;
+    setStageComplete(current => current === previous ? complete : current);
+    savedStageComplete.current = complete;
+  }, [stage.stageStatus]);
+  const clearActionNavigation = useUnsavedChanges({ label: "New probation action", saving: isSaving,
+    dirty: hasActionDraft, submission: true, onSubmit: stage.canEdit ? () => saveActions(false) : undefined, submitLabel: "Create action",
+    onDiscard: resetDraft });
+  const clearNavigation = useUnsavedChanges({ label: "Probation actions stage", saving: isSaving,
+    dirty: stageDirty, onSave: () => saveActions(true, false),
+    onDiscard: () => setStageComplete(savedStageComplete.current) });
   const permittedOwnerStaff = useMemo(() => {
     const permittedIds = new Set(ownerOptions.map((option) => option.staffId));
     return staff.filter((staffMember) => permittedIds.has(staffMember.id));
   }, [ownerOptions, staff]);
-  async function addAction(): Promise<boolean> {
-    if (!actionTheme.trim() || !title.trim() || !ownerId || !dueDate) { setMessage("Complete the action theme, description, owner and implementation date."); return false; }
-    setIsSaving(true);
-    try {
-      const result = await api.createAction({ sourceRecordId: record.recordId, sourceFormType: "probation_observation", sourceSubRecordType: "probation_observation", sourceSubRecordId: observation.id, sourceSubRecordKey: `observation_${observation.observationNumber}`, subjectStaffId: record.subjectStaffId, ownerStaffId: ownerId, actionTheme: actionTheme.trim(), title: title.trim(), dueDate, publishedToStaff: true, visibilitySetting: "staff_and_management" });
-
-      if (!result.ok) { setMessage(result.message ?? "The action could not be saved."); return false; }
-      setActionTheme(""); setTitle(""); setDueDate(""); setOwnerId(record.subjectStaffId); setIsAdding(false);
-      await onChanged("Probation action added to the central Action Engine.");
-      return true;
-    } finally { setIsSaving(false); }
+  function resetDraft() {
+    setActionTheme(""); setTitle(""); setDueDate(""); setOwnerId(record.subjectStaffId); setIsAdding(false);
   }
-  async function saveStage(): Promise<boolean> {
-    setIsSaving(true);
-    try {
-      const result = await api.updateProbationStage(record.id, observation.id, stage.id, { developmentOpportunityKeys: [], stageStatus: stageComplete ? "completed" : "in_progress" });
 
-      if (result.ok) { clearNavigation(); await onChanged("Actions stage saved."); }
-      else setMessage(result.message ?? "The action stage could not be saved.");
+  async function saveActions(includeStage: boolean, includeAction = true): Promise<boolean> {
+    if (saving.current || !stage.canEdit) return false;
+    const draft = includeAction && (!includeStage || hasActionDraft) ? { actionTheme, title, ownerStaffId: ownerId, dueDate } : undefined;
+    if (draft && (ownersLoading || ownersError || !ownerOptions.some(owner => owner.staffId === ownerId))) {
+      setMessage(ownersError || (ownersLoading ? "Wait for action owners to finish loading." : "Select an authorised action owner."));
+      return false;
+    }
+    saving.current = true;
+    setIsSaving(true); setMessage("");
+    let actionCreated = false;
+    try {
+      const result = await saveProbationActions(draft, {
+        createAction: value => api.createAction({ ...value, sourceRecordId: record.recordId, sourceFormType: "probation_observation", sourceSubRecordType: "probation_observation", sourceSubRecordId: observation.id, sourceSubRecordKey: `observation_${observation.observationNumber}`, subjectStaffId: record.subjectStaffId, publishedToStaff: true, visibilitySetting: "staff_and_management" }),
+        actionSaved: () => { actionCreated = true; resetDraft(); clearActionNavigation(); },
+        saveStage: includeStage ? async () => {
+          const saved = await api.updateProbationStage(record.id, observation.id, stage.id, { developmentOpportunityKeys: [], stageStatus: stageComplete ? "completed" : "in_progress" });
+          if (saved.ok) savedStageComplete.current = stageComplete;
+          return saved;
+        } : undefined
+      });
+      if (result.ok && (includeStage || !stageDirty)) clearNavigation();
+      if (!result.ok) setMessage(result.message ?? "The actions could not be saved. Your changes are still here.");
+      if (result.ok || actionCreated) await onChanged(result.ok && includeStage ? "Actions stage saved." : "Probation action created.");
       return result.ok;
-    } finally { setIsSaving(false); }
+    } finally { saving.current = false; setIsSaving(false); }
   }
-  return <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="probation-actions">{message ? <p role="alert">{message}</p> : null}{ownersLoading ? <p role="status">Loading action owners…</p> : ownersError ? <div role="alert">{ownersError}<Button onClick={() => void retryOwners()}>Retry action owners</Button></div> : null}<div className="liv-actions-heading"><div><h3>Observation actions</h3><span>{actions.length} linked to Observation {observation.observationNumber}</span></div>{stage.canEdit ? <Button icon={Plus} onClick={() => setIsAdding(true)} variant="primary">Add action</Button> : null}</div>{isAdding ? <div className="liv-action-editor"><label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`probation-action-theme-${observation.id}`} onChange={setActionTheme} sourceFormType="probation_observation" value={actionTheme} /></label><label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label><div className="form-grid form-grid-two"><div className="entry-field"><span>Owner <strong>Required</strong></span><StaffSearchSelect helperText="Type to find an authorised action owner." id={`probation-action-owner-${observation.id}`} onChange={setOwnerId} staff={permittedOwnerStaff} value={ownerId} /></div><label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div><div className="toolbar toolbar-end"><Button icon={X} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) setIsAdding(false); })}>Cancel</Button><Button disabled={isSaving || !actionTheme.trim() || !title.trim() || !ownerId || !dueDate} icon={Save} onClick={() => void addAction()} variant="primary">Create action</Button></div></div> : null}<div className="probation-action-list">{actions.length === 0 ? <p className="muted-copy">No actions have been added.</p> : actions.map((action) => <div key={action.id}><span className={`status-pill ${action.completedDate ? "status-complete" : "status-draft"}`}>{action.completedDate ? "Completed" : action.isOverdue ? "Overdue" : "Open"}</span><div><strong>{action.title}</strong><span>{action.actionTheme} / {action.ownerStaffName ?? "Unassigned"} / {formatDate(action.dueDate)}</span></div></div>)}</div>{stage.canEdit ? <div className="toolbar toolbar-end"><label className="compact-check"><input checked={stageComplete} onChange={(event) => setStageComplete(event.target.checked)} type="checkbox" /><span>Mark stage complete</span></label><Button disabled={isSaving} icon={Save} onClick={() => void saveStage()} variant="primary">Save stage</Button></div> : null}{!ownersLoading && !ownersError && ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No action owners are available within your scope.</small> : null}</div></fieldset>;
+  return (
+    <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="probation-actions">
+      {message ? <p role="alert">{message}</p> : null}
+      {ownersLoading ? <LoadingState label="Loading action owners…" size="inline" /> : ownersError ? <div role="alert">{ownersError}<Button onClick={() => void retryOwners()}>Retry action owners</Button></div> : null}
+      <div className="liv-actions-heading">
+        <div><h3>Observation actions</h3><span>{actions.length} linked to Observation {observation.observationNumber}</span></div>
+        {stage.canEdit ? <Button icon={Plus} onClick={() => setIsAdding(true)} variant="primary">Add action</Button> : null}
+      </div>
+      {isAdding ? <div className="liv-action-editor">
+        <label className="entry-field"><span>Action theme <strong>Required</strong></span><ActionThemeSelect id={`probation-action-theme-${observation.id}`} onChange={setActionTheme} sourceFormType="probation_observation" value={actionTheme} /></label>
+        <label className="entry-field"><span>Action <strong>Required</strong></span><textarea maxLength={300} onChange={(event) => setTitle(event.target.value)} rows={3} value={title} /></label>
+        <div className="form-grid form-grid-two">
+          <div className="entry-field"><label htmlFor={`probation-action-owner-${observation.id}`}>Owner <strong>Required</strong></label><StaffSearchSelect helperText="Type to find an authorised action owner." id={`probation-action-owner-${observation.id}`} onChange={setOwnerId} staff={permittedOwnerStaff} value={ownerId} /></div>
+          <label className="entry-field"><span>Date to be implemented by <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label>
+        </div>
+        <div className="toolbar toolbar-end">
+          <Button icon={X} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) resetDraft(); })}>Cancel</Button>
+          <Button disabled={isSaving || ownersLoading || Boolean(ownersError) || !actionTheme.trim() || !title.trim() || !ownerOptions.some(owner => owner.staffId === ownerId) || !dueDate} icon={Save} onClick={() => void saveActions(false)} variant="primary">Create action</Button>
+        </div>
+      </div> : null}
+      <div className="probation-action-list">
+        {actions.length === 0 ? <p className="muted-copy">No actions have been added.</p> : actions.map((action) => <div key={action.id}>
+          <span className={`status-pill ${dashboardActionState(action) === "complete" ? "status-complete" : "status-draft"}`}>{dashboardActionState(action) === "cancelled" ? "Cancelled" : dashboardActionState(action) === "complete" ? "Completed" : dashboardActionState(action) === "overdue" ? "Overdue" : action.statusKey === "extended" ? "Extended" : "Open"}</span>
+          <div><strong>{action.title}</strong><span>{action.actionTheme} / {action.ownerStaffName ?? "Unassigned"} / {formatDate(action.dueDate)}</span></div>
+        </div>)}
+      </div>
+      {stage.canEdit ? <div className="toolbar toolbar-end">
+        <label className="compact-check"><input checked={stageComplete} onChange={(event) => setStageComplete(event.target.checked)} type="checkbox" /><span>Mark stage complete</span></label>
+        <Button disabled={isSaving} icon={Save} onClick={() => void saveActions(true)} variant="primary">{isSaving ? "Saving..." : "Save stage"}</Button>
+      </div> : null}
+      {!ownersLoading && !ownersError && ownerOptions.length === 0 && staff.length > 0 ? <small className="muted-copy">No action owners are available within your scope.</small> : null}
+    </div></fieldset>
+  );
 }
 
 function ProbationEliContext({ context }: { context: ProbationStaffContext }) {

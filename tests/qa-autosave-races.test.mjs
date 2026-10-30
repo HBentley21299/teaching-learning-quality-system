@@ -71,3 +71,17 @@ test('disposing an editor suppresses late acknowledgement and further queued wri
   requests[0].response.resolve({ ok: true, data: { version: 'v2' } });
   assert.equal(await pending, false); assert.equal(states.length, count); assert.deepEqual(saved, []); assert.equal(requests.length, 1);
 });
+
+test('discard restores the acknowledged draft and version without deleting or saving it again', async () => {
+  const { queue, requests, states } = fixture();
+  queue.edit(value => ({ ...value, text: 'Already autosaved' })); const saved = queue.save(); await tick();
+  requests[0].response.resolve({ ok: true, data: { version: 'v2' } }); await saved;
+  queue.edit(value => ({ ...value, text: 'Latest unsaved edits' }));
+  assert.equal(queue.cancelUnsaved(), true);
+  assert.deepEqual(states.at(-1), { value: { text: 'Already autosaved', rowVersion: 'v2' }, dirty: false, busy: false, finalizing: false });
+  assert.equal(await queue.save(), true); assert.equal(requests.length, 1, 'discard does not write or remove the acknowledged draft');
+  queue.edit(value => ({ ...value, text: 'A later edit' })); const later = queue.save(); await tick();
+  assert.deepEqual(requests[1].value, { text: 'A later edit', rowVersion: 'v2' });
+  assert.equal(queue.cancelUnsaved(), false, 'an in-flight server write cannot be undone locally');
+  requests[1].response.resolve({ ok: true, data: { version: 'v3' } }); assert.equal(await later, true);
+});

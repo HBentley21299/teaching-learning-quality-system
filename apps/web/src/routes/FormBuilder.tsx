@@ -1,14 +1,17 @@
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import type { LearningWalkDeliveryArea } from "../services/learningWalkDeliveryAreas";
-import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowDown, ArrowUp, CheckCircle2, Copy, Eye, Plus, Save, Settings2, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Archive, ArrowDown, ArrowUp, Copy, Eye, Plus, Save, Settings2, Trash2 } from "lucide-react";
 import { Button } from "../design-system/Button";
+import { LoadingState } from "../components/LoadingState";
 import { api } from "../services/api";
-import type { CurrentUser, FormFieldDefinition, FormTemplateSummary, OrgUnitSummary } from "../services/types";
+import { writeAppPath } from "../app/history";
+import { distinctListValues, matchesListSearch, sortListRows } from "../services/listQuery";
+import type { CurrentUser, FormFieldDefinition, FormTemplateAdministration, FormTemplateSummary, OrgUnitSummary } from "../services/types";
 
 type EditableSection = { id: string; sectionKey: string; title: string; displayOrder: number; fields: EditableField[] };
-type EditableField = FormFieldDefinition & { fieldType: string };
-type TemplateEditor = { templateId: string; name: string; orgUnitId: string; sections: EditableSection[] };
+type EditableField = FormFieldDefinition & { fieldType: string; isProtected?: boolean };
+type TemplateEditor = { templateId: string; name: string; description?: string; orgUnitId: string; rowVersion?: string; sections: EditableSection[] };
 const fieldTypeOptions = [
   { value: "short_text", label: "Short text" }, { value: "long_text", label: "Long text" },
   { value: "number", label: "Number" }, { value: "date", label: "Date" },
@@ -25,6 +28,11 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
   const [deliveryAreas, setDeliveryAreas] = useState<LearningWalkDeliveryArea[]>([]);
   const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [templateStatus, setTemplateStatus] = useState("");
+  const [templateArea, setTemplateArea] = useState("");
+  const [templateSort, setTemplateSort] = useState("name");
+  const [templateDirection, setTemplateDirection] = useState<"asc" | "desc">("asc");
   const [editor, setEditor] = useState<TemplateEditor | null>(null);
   const [savedEditor, setSavedEditor] = useState<TemplateEditor | null>(null);
   const [newTemplateName, setNewTemplateName] = useState("");
@@ -35,10 +43,21 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
   const [isSaving, setIsSaving] = useState(false);
   const [reloadDefinition, setReloadDefinition] = useState(0);
   const [view, setView] = useState<"editor" | "preview">("editor");
+  const studioLoad = useRef(0);
   const canManageForms = user.permissions.includes("forms.manage");
   const availableTemplates = useMemo(() => templates.filter((template) => !moduleKey || template.moduleKey === moduleKey), [moduleKey, templates]);
   const selectedTemplate = availableTemplates.find((template) => template.id === selectedTemplateId)
     ?? availableTemplates.find((template) => template.status !== "Archived") ?? availableTemplates[0];
+  const visibleTemplates = sortListRows(availableTemplates.filter(template =>
+    matchesListSearch(templateSearch, template.name, template.templateKey, template.moduleName, template.status, template.version,
+      template.assignedOrgUnits.map(unit => [unit.code, unit.name]))
+    && (!templateStatus || template.status === templateStatus)
+    && (!templateArea || template.assignedOrgUnits.some(unit => unit.id === templateArea))),
+    template => templateSort === "status" ? template.status : templateSort === "module" ? template.moduleName
+      : templateSort === "version" ? template.version : templateSort === "submissions" ? template.submissionCount
+      : templateSort === "area" ? template.assignedOrgUnits.map(unit => unit.code).join(", ") : template.name,
+    templateDirection, template => template.id);
+  const templateAreas = [...new Map(availableTemplates.flatMap(template => template.assignedOrgUnits).map(unit => [unit.id, unit])).values()];
   const canEditSelected = Boolean(selectedTemplate?.isEditable && selectedTemplate.status === "Draft" && selectedTemplate.submissionCount === 0);
   const formDirty = Boolean(editor && savedEditor && JSON.stringify(editor) !== JSON.stringify(savedEditor));
   const contentDirty = formDirty;
@@ -49,6 +68,7 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
 
   useEffect(() => {
     if (canManageForms) void refreshStudio();
+    return () => { studioLoad.current++; };
     // Loading is explicitly refreshed after writes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManageForms]);
@@ -70,41 +90,52 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
     setSavedEditor(null);
     setLoadError("");
     if (!selectedTemplate || selectedTemplate.status === "Archived") return;
-    api.formDefinition(selectedTemplate.templateKey).then((definition) => {
-      if (cancelled) return;
-      const next = buildEditor(selectedTemplate, definition.sections);
-      setEditor(next);
-      setSavedEditor(next);
-    }).catch((error: unknown) => {
-      if (cancelled) return;
-      // The definition endpoint returns 404 for a genuinely empty draft because its query joins fields.
-      // No counts are exposed on FormTemplateSummary, so never convert other HTTP/network errors to blank forms.
-      if (error instanceof Error && /^404\b/.test(error.message) && selectedTemplate.moduleKey === "work_scrutiny"
-        && selectedTemplate.status === "Draft" && selectedTemplate.submissionCount === 0) {
-        const next = buildEditor(selectedTemplate, []);
-        setEditor(next);
-        setSavedEditor(next);
-      } else {
-        setLoadError("This form could not be loaded. Retry before making changes.");
+    const template = selectedTemplate;
+    async function loadDefinition() {
+      try {
+        let next: TemplateEditor;
+        if (template.moduleKey === "work_scrutiny") {
+          let definition = await api.formTemplateAdministration(template.id);
+          if (cancelled) return;
+          // Administration defaults to a pending draft. A published source must
+          // copy/preview the published version, not that separately edited draft.
+          if (template.status === "Published" && definition.status !== "Published") {
+            const published = definition.versions.find(version => version.status === "Published");
+            if (!published) throw new Error("The published source version is no longer available.");
+            definition = await api.formTemplateAdministration(template.id, published.id);
+            if (cancelled) return;
+          }
+          next = buildEditor({ ...template, name: definition.name }, definition.sections, definition.rowVersion, definition.description);
+        } else {
+          const definition = await api.formDefinition(template.templateKey);
+          if (cancelled) return;
+          next = buildEditor(template, definition.sections);
+        }
+        setEditor(next); setSavedEditor(next);
+      } catch {
+        if (!cancelled) setLoadError("This form could not be loaded. Retry before making changes.");
       }
-    });
+    }
+    void loadDefinition();
     return () => { cancelled = true; };
     // Summary refreshes should not replace an unsaved editor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplate?.id, selectedTemplate?.status, selectedTemplate?.version, reloadDefinition]);
 
   async function refreshStudio() {
+    const request = ++studioLoad.current;
     setIsLoading(true);
     try {
       const [nextTemplates, nextOrgUnits, nextLookups] = await Promise.all([api.formTemplates(), api.orgUnits(), api.lookups()]);
+      if (request !== studioLoad.current) return [] as FormTemplateSummary[];
       setTemplates(nextTemplates);
       setOrgUnits(nextOrgUnits.filter((unit) => unit.isActive));
       setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
       return nextTemplates;
     } catch {
-      setStudioStatus("Form templates could not be loaded from the API. Try reloading.");
+      if (request === studioLoad.current) setStudioStatus("Form templates could not be loaded from the API. Try reloading.");
       return [] as FormTemplateSummary[];
-    } finally { setIsLoading(false); }
+    } finally { if (request === studioLoad.current) setIsLoading(false); }
   }
 
   useEffect(() => {
@@ -125,7 +156,7 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
 
   function structureRequest(value: TemplateEditor) {
     return {
-      name: value.name.trim(), orgUnitId: value.orgUnitId || undefined,
+      name: value.name.trim(), description: value.description, orgUnitId: value.orgUnitId || undefined, rowVersion: value.rowVersion,
       sections: value.sections.map((section, sectionIndex) => ({
         sectionKey: section.sectionKey, title: section.title.trim(), displayOrder: sectionIndex + 1,
         fields: section.fields.map((field, fieldIndex) => ({
@@ -160,8 +191,12 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
       }
       let copyFailed = "";
       if (source) {
-        const result = await api.updateFormTemplateStructure(createdId, structureRequest({ ...source, name, orgUnitId: orgUnit.id }));
-        if (!result.ok) copyFailed = result.message ?? "The form content could not be copied.";
+        try {
+          const target = await api.formTemplateAdministration(createdId);
+          if (!target.rowVersion || target.status !== "Draft") throw new Error("The new draft is unavailable for copying.");
+          const result = await api.updateFormTemplateStructure(createdId, structureRequest({ ...copyToWorkScrutinyTarget(source, target), name, orgUnitId: orgUnit.id }));
+          if (!result.ok) copyFailed = result.message ?? "The form content could not be copied.";
+        } catch { copyFailed = "The new draft could not be loaded or its content could not be copied."; }
       }
       await refreshStudio();
       setSelectedTemplateId(createdId);
@@ -174,8 +209,12 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
     } finally { setIsSaving(false); }
   }
 
-  async function saveDraft(publish = false) {
+  async function saveDraft() {
     if (!editor || !selectedTemplate || !canEditSelected || isSaving) return false;
+    if (selectedTemplate.moduleKey === "work_scrutiny" && !editor.rowVersion) {
+      setStudioStatus("Reload this draft before saving. Its current version could not be verified.");
+      return false;
+    }
     if (editor.sections.some((section) => section.fields.length === 0)) {
       setStudioStatus("Each section needs at least one question. Add a question or remove the empty section before saving.");
       return false;
@@ -185,12 +224,7 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
       const result = await api.updateFormTemplateStructure(selectedTemplate.id, structureRequest(editor));
       if (!result.ok) { setStudioStatus(result.message ?? "The draft could not be saved. Nothing was published."); return false; }
       setSavedEditor(editor);
-      if (publish) {
-        const published = await api.publishFormTemplate(selectedTemplate.id);
-        setStudioStatus(published.ok
-          ? `${editor.name} published. This version is now protected; copy it to a new draft for future structural changes.`
-          : `Draft saved, but publication failed. ${published.message ?? "Check its sub-team allocation."}`);
-      } else setStudioStatus(`${editor.name} draft saved.`);
+      setStudioStatus(`${editor.name} draft saved. Open form versions to review and confirm publication.`);
       await refreshStudio();
       setReloadDefinition((value) => value + 1);
       if (!creationDirty) clearGuard();
@@ -215,9 +249,13 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
     if (canEditSelected && !isSaving) setEditor((current) => current ? { ...current, ...changes } : current);
   }
   function updateSection(id: string, changes: Partial<EditableSection>) {
+    const previous = editor?.sections.find(section => section.id === id);
+    if (changes.fields && previous?.fields.some(field => field.isProtected && !changes.fields!.some(next => next.id === field.id))) return;
     updateEditor({ sections: editor?.sections.map((section) => section.id === id ? { ...section, ...changes } : section) });
   }
   function updateField(sectionId: string, fieldId: string, changes: Partial<EditableField>) {
+    const previous = editor?.sections.find(section => section.id === sectionId)?.fields.find(field => field.id === fieldId);
+    if (previous?.isProtected && ("fieldType" in changes || "isRequired" in changes || "options" in changes || "fieldKey" in changes)) return;
     updateEditor({ sections: editor?.sections.map((section) => section.id === sectionId ? {
       ...section, fields: section.fields.map((field) => field.id === fieldId ? { ...field, ...changes } : field)
     } : section) });
@@ -238,7 +276,7 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
     if (editor) updateEditor({ sections: moveItem(editor.sections, index, direction) });
   }
   function removeSection(section: EditableSection) {
-    if (!editor || !window.confirm(`Remove “${section.title}” and its ${section.fields.length} questions from this draft?`)) return;
+    if (!editor || section.fields.some(field => field.isProtected) || !window.confirm(`Remove “${section.title}” and its ${section.fields.length} questions from this draft?`)) return;
     updateEditor({ sections: editor.sections.filter((item) => item.id !== section.id) });
   }
 
@@ -251,9 +289,19 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
       {dirty ? <div className="notice-row" role="status"><span>You have unsaved changes. Save your edits, create the new draft, or discard changes before switching forms.</span><Button disabled={isSaving} onClick={discardChanges}>Discard changes</Button></div> : null}
       <div className="form-studio-layout">
         <section className="panel form-template-picker">
+          <details className="template-find-options"><summary>Find or sort templates <span>{visibleTemplates.length} of {availableTemplates.length}</span></summary><div className="profile-list-controls" aria-label="Form template filters">
+            <label><span>Search templates</span><input type="search" value={templateSearch} onChange={event => setTemplateSearch(event.target.value)} placeholder="Name, key, module or area" /></label>
+            <label><span>Status</span><select value={templateStatus} onChange={event => setTemplateStatus(event.target.value)}><option value="">All statuses</option>{distinctListValues(availableTemplates.map(template => template.status)).map(status => <option key={status}>{status}</option>)}</select></label>
+            <label><span>Allocated area</span><select value={templateArea} onChange={event => setTemplateArea(event.target.value)}><option value="">All areas</option>{sortListRows(templateAreas, area => area.code).map(area => <option key={area.id} value={area.id}>{area.code} · {area.name}</option>)}</select></label>
+            <label><span>Sort by</span><select value={templateSort} onChange={event => setTemplateSort(event.target.value)}>{[["name","Name"],["status","Status"],["module","Module"],["area","Allocated area"],["version","Version"],["submissions","Submission count"]].map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+            <label><span>Direction</span><select value={templateDirection} onChange={event => setTemplateDirection(event.target.value as "asc" | "desc")}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+            <small>{visibleTemplates.length} matching templates</small>
+            {templateSearch || templateStatus || templateArea ? <Button onClick={() => { setTemplateSearch(""); setTemplateStatus(""); setTemplateArea(""); }}>Clear filters</Button> : null}
+          </div></details>
           <label className="studio-field"><span>Form template</span><select disabled={isSaving || isLoading} value={selectedTemplate?.id ?? ""} onChange={async (event) => { const next = event.target.value; if (!await confirmUnsavedNavigation()) return; setSelectedTemplateId(next); setStudioStatus(""); }}>
             {availableTemplates.length === 0 ? <option value="">{isLoading ? "Loading forms…" : "No form templates"}</option> : null}
-            {availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · {template.status}{template.assignedOrgUnits.length ? ` · ${template.assignedOrgUnits.map((unit) => unit.code).join(", ")}` : ""}</option>)}
+            {selectedTemplate && !visibleTemplates.some(template => template.id === selectedTemplate.id) ? <option value={selectedTemplate.id}>{selectedTemplate.name} · Current selection (outside filters)</option> : null}
+            {visibleTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · {template.status}{template.assignedOrgUnits.length ? ` · ${template.assignedOrgUnits.map((unit) => unit.code).join(", ")}` : ""}</option>)}
           </select></label>
           {(!moduleKey || moduleKey === "work_scrutiny") ? <details className="template-create-block"><summary>Create a Work Scrutiny draft</summary>
             <p className="muted-copy">Create a blank form or copy the selected Work Scrutiny questions. Controlled context, sample and actions are supplied automatically. Publishing a replacement requires archiving the previous template for that sub-team.</p>
@@ -264,18 +312,19 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
           </details> : null}
         </section>
         {loadError ? <section className="panel"><p role="alert">{loadError}</p><Button onClick={() => setReloadDefinition((value) => value + 1)}>Retry</Button></section> : null}
+        {isLoading ? <LoadingState label="Loading form templates" /> : null}
         {!selectedTemplate && !isLoading ? <section className="panel"><p>No templates are available for this form family.</p><Button onClick={() => void refreshStudio()}>Reload templates</Button></section> : null}
         {selectedTemplate?.status === "Archived" ? <section className="panel"><h2>{selectedTemplate.name}</h2><p>This template is archived. Existing submissions remain available in records and reporting.</p></section> : null}
-        {selectedTemplate && !editor && !loadError && selectedTemplate.status !== "Archived" ? <p className="muted-copy">Loading form content…</p> : null}
+        {selectedTemplate && !editor && !isLoading && !loadError && selectedTemplate.status !== "Archived" ? <LoadingState label="Loading form content" /> : null}
         {editor && selectedTemplate && editor.templateId === selectedTemplate.id ? <div className="form-studio-main">
           <section className="panel">
             <div className="panel-heading"><div><h2>{editor.name}</h2><span>{selectedTemplate.moduleName} · {selectedTemplate.status} · Version {selectedTemplate.version ?? "0.1"}</span></div><span>{editor.sections.length} sections · {countFields(editor.sections)} questions</span></div>
             <p className="muted-copy">{canEditSelected ? "Edit the wording, order and response options in this unused draft. Technical keys are protected automatically." : "This version is protected to preserve submissions and reporting. Use the associated choices and lists to customise available values."}</p>
             {selectedTemplate.moduleKey === "work_scrutiny" ? <div className="work-scrutiny-core-contract"><div><strong>Context</strong><span>Faculty, sub-team, date and reviewer</span></div><div><strong>Sample</strong><span>Course selection stays consistent</span></div><div><strong>Actions</strong><span>Owners, dates and reporting stay protected</span></div></div> : null}
             <div className="template-meta-grid"><label className="studio-field"><span>Form name</span><input disabled={controlsDisabled} onChange={(event) => updateEditor({ name: event.target.value })} value={editor.name} /></label>
-              {selectedTemplate.moduleKey === "work_scrutiny" ? <label className="studio-field"><span>Allocated sub-team</span><select disabled={controlsDisabled} onChange={(event) => updateEditor({ orgUnitId: event.target.value })} value={editor.orgUnitId}><option value="">Select sub-team</option>{allocatableOrgUnits.map((unit) => <option key={unit.id} value={unit.id}>{formatOrgUnitOption(unit)}</option>)}</select></label> : null}</div>
+              {selectedTemplate.moduleKey === "work_scrutiny" ? <label className="studio-field"><span>Allocated sub-team</span><select disabled={controlsDisabled} onChange={(event) => updateEditor({ orgUnitId: event.target.value })} value={editor.orgUnitId}><option value="">Select sub-team</option>{editor.orgUnitId && !allocatableOrgUnits.some(unit => unit.id === editor.orgUnitId) ? <option value={editor.orgUnitId}>{selectedTemplate.assignedOrgUnits.find(unit => unit.id === editor.orgUnitId)?.name ?? "Previously allocated sub-team"} (historical)</option> : null}{allocatableOrgUnits.map((unit) => <option key={unit.id} value={unit.id}>{formatOrgUnitOption(unit)}</option>)}</select></label> : null}</div>
             <div className="template-action-strip"><span className={canEditSelected ? "editable-label" : "locked-label"}>{canEditSelected ? "Unused draft · editable" : "Structure protected"}</span>
-              {canEditSelected ? <><Button disabled={isSaving} icon={Save} onClick={() => void saveDraft()}>Save draft</Button><Button disabled={isSaving || countFields(editor.sections) === 0} icon={CheckCircle2} onClick={() => void saveDraft(true)} variant="primary">Save and publish</Button></> : null}
+              {canEditSelected ? <><Button disabled={isSaving} icon={Save} onClick={() => void saveDraft()}>Save draft</Button><a className="button button-secondary" role="link" href={isSaving || dirty ? undefined : "/admin/work-scrutiny-templates"} aria-disabled={isSaving || dirty} title={dirty ? "Save or discard your changes before reviewing publication." : undefined} onClick={async event => { event.preventDefault(); if (isSaving || dirty || !await confirmUnsavedNavigation()) return; writeAppPath("/admin/work-scrutiny-templates"); }}>Review and publish in form versions</a></> : null}
               {selectedTemplate.isEditable ? <Button disabled={isSaving || dirty} icon={Archive} onClick={() => void archiveTemplate()}>Archive template</Button> : null}</div>
           </section>
           <div className="toolbar" role="group" aria-label="Form view"><button type="button" className={`button button-${view === "editor" ? "primary" : "secondary"}`} aria-pressed={view === "editor"} onClick={() => setView("editor")}><Settings2 size={16} aria-hidden="true" />Questions &amp; layout</button><button type="button" className={`button button-${view === "preview" ? "primary" : "secondary"}`} aria-pressed={view === "preview"} onClick={() => setView("preview")}><Eye size={16} aria-hidden="true" />Preview</button></div>
@@ -284,16 +333,17 @@ export function FormBuilder({ embedded = false, user, moduleKey, onDirtyChange }
               {editor.sections.length === 0 ? <p className="empty-row">Add a section, then add the questions it should contain.</p> : null}
               <div className="section-editor-list">{editor.sections.map((section, sectionIndex) => <div className="section-editor-row" key={section.id}>
                 <div className="section-title-row"><label className="studio-field"><span>Section {sectionIndex + 1} title</span><input disabled={controlsDisabled} onChange={(event) => updateSection(section.id, { title: event.target.value })} value={section.title} /></label>
-                  {canEditSelected ? <div className="toolbar"><Button disabled={isSaving || sectionIndex === 0} icon={ArrowUp} onClick={() => moveSection(sectionIndex, -1)} aria-label={`Move ${section.title} up`}>Up</Button><Button disabled={isSaving || sectionIndex === editor.sections.length - 1} icon={ArrowDown} onClick={() => moveSection(sectionIndex, 1)} aria-label={`Move ${section.title} down`}>Down</Button><Button disabled={isSaving} icon={Trash2} onClick={() => removeSection(section)}>Remove section</Button></div> : null}</div>
+                  {canEditSelected ? <div className="toolbar"><Button disabled={isSaving || sectionIndex === 0} icon={ArrowUp} onClick={() => moveSection(sectionIndex, -1)} aria-label={`Move ${section.title} up`}>Up</Button><Button disabled={isSaving || sectionIndex === editor.sections.length - 1} icon={ArrowDown} onClick={() => moveSection(sectionIndex, 1)} aria-label={`Move ${section.title} down`}>Down</Button><Button disabled={isSaving || section.fields.some(field => field.isProtected)} icon={Trash2} onClick={() => removeSection(section)}>Remove section</Button></div> : null}</div>
                 <div className="field-editor-list">{section.fields.map((field, fieldIndex) => <div className="field-editor-row" key={field.id}>
                   <label className="studio-field"><span>Question {fieldIndex + 1}</span><input disabled={controlsDisabled} onChange={(event) => updateField(section.id, field.id, { label: event.target.value })} value={field.label} /></label>
-                  <label className="studio-field"><span>Answer type</span><select disabled={controlsDisabled} value={field.fieldType} onChange={(event) => { const fieldType = event.target.value; updateField(section.id, field.id, { fieldType, options: usesConfiguredOptions(fieldType) ? field.options?.length ? field.options : defaultFieldOptions(fieldType) : [] }); }}>
+                  <label className="studio-field"><span>Answer type</span><select disabled={controlsDisabled || field.isProtected} value={field.fieldType} onChange={(event) => { const fieldType = event.target.value; updateField(section.id, field.id, { fieldType, options: usesConfiguredOptions(fieldType) ? field.options?.length ? field.options : defaultFieldOptions(fieldType) : [] }); }}>
                     {!fieldTypeOptions.some((option) => option.value === field.fieldType) ? <option value={field.fieldType}>{field.fieldType.replaceAll("_", " ")}</option> : null}{fieldTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-                  <label className="studio-check"><input checked={field.isRequired} disabled={controlsDisabled} onChange={(event) => updateField(section.id, field.id, { isRequired: event.target.checked })} type="checkbox" /><span>Required answer</span></label>
+                  <label className="studio-check"><input checked={field.isRequired} disabled={controlsDisabled || field.isProtected} onChange={(event) => updateField(section.id, field.id, { isRequired: event.target.checked })} type="checkbox" /><span>Required answer</span></label>
                   <label className="studio-field field-editor-help"><span>Guidance shown below the question</span><textarea disabled={controlsDisabled} rows={2} onChange={(event) => updateField(section.id, field.id, { helpText: event.target.value })} value={field.helpText ?? ""} /></label>
-                  {usesConfiguredOptions(field.fieldType) && (canEditSelected || Boolean(field.options?.length)) ? <label className="studio-field field-editor-options"><span>Response options · one per line</span><textarea disabled={controlsDisabled} rows={4} onChange={(event) => updateField(section.id, field.id, { options: event.target.value.split(/\r?\n/) })} value={(field.options ?? []).join("\n")} /><small>Use 2–20 distinct options. These choices belong to this template version.</small></label> : null}
+                  {usesConfiguredOptions(field.fieldType) && (canEditSelected || Boolean(field.options?.length)) ? <label className="studio-field field-editor-options"><span>Response options · one per line</span><textarea disabled={controlsDisabled || field.isProtected} rows={4} onChange={(event) => updateField(section.id, field.id, { options: event.target.value.split(/\r?\n/) })} value={(field.options ?? []).join("\n")} /><small>{field.isProtected ? "These choices support the workflow and are protected." : "Use 2–20 distinct options. These choices belong to this template version."}</small></label> : null}
+                  {field.isProtected ? <p className="muted-copy field-editor-help">Workflow question: wording, guidance and order can change. Its answer type, requirement and choices stay protected.</p> : null}
                   <details className="field-editor-help"><summary>Protected reference keys</summary><label className="studio-field"><span>Section key</span><input readOnly value={section.sectionKey} /></label><label className="studio-field"><span>Question key</span><input readOnly value={field.fieldKey} /></label></details>
-                  {canEditSelected ? <div className="toolbar field-editor-help"><Button disabled={isSaving || fieldIndex === 0} icon={ArrowUp} onClick={() => updateSection(section.id, { fields: moveItem(section.fields, fieldIndex, -1) })} aria-label={`Move ${field.label} up`}>Up</Button><Button disabled={isSaving || fieldIndex === section.fields.length - 1} icon={ArrowDown} onClick={() => updateSection(section.id, { fields: moveItem(section.fields, fieldIndex, 1) })} aria-label={`Move ${field.label} down`}>Down</Button><Button disabled={isSaving} icon={Trash2} onClick={() => updateSection(section.id, { fields: section.fields.filter((item) => item.id !== field.id) })}>Remove question</Button></div> : null}
+                  {canEditSelected ? <div className="toolbar field-editor-help"><Button disabled={isSaving || fieldIndex === 0} icon={ArrowUp} onClick={() => updateSection(section.id, { fields: moveItem(section.fields, fieldIndex, -1) })} aria-label={`Move ${field.label} up`}>Up</Button><Button disabled={isSaving || fieldIndex === section.fields.length - 1} icon={ArrowDown} onClick={() => updateSection(section.id, { fields: moveItem(section.fields, fieldIndex, 1) })} aria-label={`Move ${field.label} down`}>Down</Button><Button disabled={isSaving || field.isProtected} icon={Trash2} onClick={() => updateSection(section.id, { fields: section.fields.filter((item) => item.id !== field.id) })}>Remove question</Button></div> : null}
                 </div>)}{canEditSelected ? <Button disabled={isSaving} icon={Plus} onClick={() => addField(section)}>Add question</Button> : null}</div>
               </div>)}</div>
             </section> : <section className="panel preview-panel"><div className="panel-heading"><h2>Form preview</h2><span>{formDirty ? "Includes unsaved changes" : selectedTemplate.status}</span></div><p className="muted-copy">Preview of the configured questions. Staff selection, course samples and actions are supplied by the form workflow.</p><TemplatePreview deliveryAreas={deliveryAreas} cpdThemes={cpdThemes} orgUnits={orgUnits} sections={editor.sections} /></section>}
@@ -313,6 +363,24 @@ function copyableWorkScrutinyEditor(editor: TemplateEditor): TemplateEditor {
     .filter((section) => section.fields.length > 0) };
 }
 
+function copyToWorkScrutinyTarget(source: TemplateEditor, target: FormTemplateAdministration): TemplateEditor {
+  const coreKeys = new Set(["qualification_level", "course_level", "course_or_unit", "learning_walk_delivery_area"]);
+  const sections: EditableSection[] = target.sections
+    .map(section => ({ ...section, fields: section.fields.filter(field => field.isProtected).map(field => ({ ...field, options: [...(field.options ?? [])] })) }))
+    .filter(section => section.fields.length > 0);
+  for (const section of sections) for (const field of section.fields) coreKeys.add(field.fieldKey.toLowerCase());
+  // A copy keeps the new draft's workflow contract, even when an older source
+  // omits core questions or stores their aliases in a different section.
+  for (const section of source.sections) {
+    const fields = section.fields.filter(field => !field.isProtected && !coreKeys.has(field.fieldKey.toLowerCase()));
+    if (!fields.length) continue;
+    const existing = sections.find(item => item.sectionKey.toLowerCase() === section.sectionKey.toLowerCase());
+    if (existing) existing.fields.push(...fields);
+    else sections.push({ ...section, fields: [...fields] });
+  }
+  return { ...source, templateId: target.templateId, rowVersion: target.rowVersion, sections };
+}
+
 function createKey(prefix: string) { return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`; }
 function moveItem<T>(items: T[], index: number, direction: -1 | 1): T[] {
   const target = index + direction;
@@ -326,12 +394,14 @@ function buildEditor(template: FormTemplateSummary, sections: Array<{
   sectionKey: string;
   title: string;
   displayOrder: number;
-  fields: FormFieldDefinition[];
-}>): TemplateEditor {
+  fields: Array<FormFieldDefinition & { isProtected?: boolean }>;
+}>, rowVersion?: string, description?: string): TemplateEditor {
   return {
     templateId: template.id,
     name: template.name,
+    description,
     orgUnitId: template.assignedOrgUnits[0]?.id ?? "",
+    rowVersion,
     sections: sections
       .map((section) => ({
         id: section.id,
@@ -366,7 +436,7 @@ function TemplatePreview({
           <h3>{section.title}</h3>
           <div className="preview-field-grid">
             {section.fields.filter((field) => !["team_bulk_add", "selected_staff_list"].includes(field.fieldType)).map((field) => (
-              <label
+              <div role="group" aria-label={field.label}
                 className={isWidePreviewField(field.fieldType) ? "preview-field preview-field-wide" : "preview-field"}
                 key={field.id}
               >
@@ -376,7 +446,7 @@ function TemplatePreview({
                 </span>
                 {renderPreviewControl(field, orgUnits, cpdThemes, deliveryAreas)}
                 {field.helpText ? <small>{field.helpText}</small> : null}
-              </label>
+              </div>
             ))}
           </div>
         </div>
@@ -393,19 +463,19 @@ function renderPreviewControl(
 ) {
   field = { ...field, options: field.options?.map((option) => option.trim()).filter(Boolean) };
   if (field.fieldType === "learning_walk_delivery_area") {
-    return <select disabled defaultValue=""><option value="">Select delivery area</option>{deliveryAreas.map((area) => <option key={area.key} value={area.key}>{area.name}</option>)}</select>;
+    return <select aria-label={field.label} disabled defaultValue=""><option value="">Select delivery area</option>{deliveryAreas.map((area) => <option key={area.key} value={area.key}>{area.name}</option>)}</select>;
   }
   if (field.fieldType === "date") {
-    return <input disabled type="date" />;
+    return <input aria-label={field.label} disabled type="date" />;
   }
 
   if (field.fieldType === "datetime") {
-    return <input defaultValue={new Date().toISOString().slice(0, 16)} disabled type="datetime-local" />;
+    return <input aria-label={field.label} defaultValue={new Date().toISOString().slice(0, 16)} disabled type="datetime-local" />;
   }
 
   if (field.fieldType === "faculty_lookup") {
     return (
-      <select defaultValue="" disabled>
+      <select aria-label={field.label} defaultValue="" disabled>
         <option value="">Select faculty</option>
         {orgUnits
           .filter((orgUnit) => orgUnit.orgUnitType === "faculty")
@@ -420,7 +490,7 @@ function renderPreviewControl(
 
   if (field.fieldType === "team_lookup") {
     return (
-      <select defaultValue="" disabled>
+      <select aria-label={field.label} defaultValue="" disabled>
         <option value="">Select team or child code</option>
         {orgUnits
           .filter((orgUnit) => ["team", "faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType))
@@ -435,7 +505,7 @@ function renderPreviewControl(
 
   if (field.fieldType === "staff_lookup") {
     return (
-      <select defaultValue="" disabled>
+      <select aria-label={field.label} defaultValue="" disabled>
         <option value="">Select staff member</option>
       </select>
     );
@@ -444,8 +514,8 @@ function renderPreviewControl(
   if (field.fieldType === "staff_multi_select") {
     return (
       <div className="preview-cpd-participants">
-        <input disabled placeholder="Search by name, email or staff ID" />
-        <select defaultValue="" disabled>
+        <input aria-label={`Search ${field.label}`} disabled placeholder="Search by name, email or staff ID" />
+        <select aria-label={`Add a group to ${field.label}`} defaultValue="" disabled>
           <option value="">Add faculty or sub-team</option>
         </select>
       </div>
@@ -453,7 +523,7 @@ function renderPreviewControl(
   }
 
   if (field.fieldType === "auto_text") {
-    return <input readOnly value="Auto-filled by the form" />;
+    return <input aria-label={field.label} readOnly value="Auto-filled by the form" />;
   }
 
   if (field.fieldType === "checkbox_group") {
@@ -485,7 +555,7 @@ function renderPreviewControl(
   if (field.fieldType === "team_bulk_add") {
     return (
       <div className="preview-inline-action">
-        <select defaultValue="" disabled>
+        <select aria-label={field.label} defaultValue="" disabled>
           <option value="">Search faculty, department, curriculum area or team code</option>
           {orgUnits.map((orgUnit) => (
             <option key={orgUnit.id} value={orgUnit.id}>
@@ -514,16 +584,16 @@ function renderPreviewControl(
   }
 
   if (field.fieldType === "long_text") {
-    return <textarea disabled placeholder="Long text response" rows={4} />;
+    return <textarea aria-label={field.label} disabled placeholder="Long text response" rows={4} />;
   }
 
   if (field.fieldType === "number") {
-    return <input disabled placeholder="0" type="number" />;
+    return <input aria-label={field.label} disabled placeholder="0" type="number" />;
   }
 
   if (field.fieldType === "yes_no_partial") {
     return (
-      <select defaultValue="" disabled>
+      <select aria-label={field.label} defaultValue="" disabled>
         <option value="">Select answer</option>
         <option>Yes</option>
         <option>Partially</option>
@@ -534,7 +604,7 @@ function renderPreviewControl(
 
   if (field.fieldType === "single_select") {
     return (
-      <select defaultValue="" disabled>
+      <select aria-label={field.label} defaultValue="" disabled>
         <option value="">Select option</option>
         {(field.options ?? []).map((option) => <option key={option}>{option}</option>)}
       </select>
@@ -543,14 +613,14 @@ function renderPreviewControl(
 
   if (field.fieldType === "rubric_scale") {
     return (
-      <select defaultValue="" disabled>
+      <select aria-label={field.label} defaultValue="" disabled>
         <option value="">Select rubric level</option>
         {(field.options ?? []).map((option) => <option key={option}>{option}</option>)}
       </select>
     );
   }
 
-  return <input disabled placeholder="Short text response" />;
+  return <input aria-label={field.label} disabled placeholder="Short text response" />;
 }
 
 function countFields(sections: EditableSection[]) {

@@ -1,4 +1,12 @@
 import { LatestDashboardLoad, type DashboardLoadJob } from "../services/latestDashboardLoad";
+import { DashboardRequestCache } from "../services/dashboardRequestCache";
+import { dashboardDescriptions, dashboardLocation, dashboardNavigationGroup, readDashboardLocation, type DashboardSection } from "../app/dashboardNavigation";
+import { writeAppPath } from "../app/history";
+import { DashboardNavigator } from "../components/DashboardNavigator";
+import { LoadingState } from "../components/LoadingState";
+import { DashboardDataExplorer, ElevateStatusStaffExplorer } from "../components/DashboardDataExplorer";
+import { statusRowsFromStaff } from "../services/elevateStatusRoster";
+import { dashboardActionState, dashboardActionStates, isDashboardActionOpen, matchesDashboardActionState } from "../services/dashboardActionState";
 import { buildFormOutcomeGroups } from "../services/formOutcomeGroups";
 import { isUnavailableFacultySettings } from "../services/apiHttpError";
 import { excludedDashboardUnits } from "../services/dashboardFacultySelection";
@@ -25,17 +33,22 @@ import {
   UsersRound
 } from "lucide-react";
 import type { LucideProps } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { compareListValues, distinctListValues, matchesListSearch } from "../services/listQuery";
 import { CollapsibleSection, Pagination } from "../components/CollapsibleSection";
 import { DataTable } from "../components/DataTable";
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
 import { ElevateStatusBadgeImage } from "../components/ElevateStatusBadgeImage";
 import { EliSubmissionBreakdown } from "../components/EliSubmissionBreakdown";
 import { DashboardReportButton } from "../components/ExportButtons";
 import { Button } from "../design-system/Button";
 import { actionPath, recordPath, staffPath } from "../app/routing";
-import { api } from "../services/api";
+import { api, type ExportFilters } from "../services/api";
 import { dashboardVisibleUnitIds } from "../services/dashboardOrgVisibility";
 import { UcoTlaDashboard } from "./UcoTlaDashboard";
+import { ProcessReviewDashboard } from "./ProcessReviewDashboard";
+import { canAccessProcessReviews, isProcessReviewKey, processReviewKeys } from "../services/processReviewAccess";
+import type { ProcessReviewKey } from "../services/processReviewTypes";
 import { buildLearningWalkDeliveryAreas, deliveryAreaKey, deliveryAreaLabel } from "./learningWalkDeliveryAreas";
 import type {
   DashboardActionSummary as ActionSummary,
@@ -45,6 +58,7 @@ import type {
   DashboardDimensionFact,
   DashboardProcessConfiguration,
   ElevateStatusDashboardSummary,
+  ElevateStatusStaffSummary,
   ElevateStatusBadgeAssetSummary,
   LearningWalkThemeGroup,
   LivLifecycleDashboardSummary,
@@ -54,16 +68,17 @@ import type {
   EliSubmissionStaffSummary,
   UcoTlaAccessSummary
 } from "../services/types";
+import type { StaffSummary } from "../services/types";
 
 type DashboardProcessKey = DashboardProcessConfiguration["processKey"];
 type RecordProcessKey = ProcessDashboardRecordSummary["processKey"];
-type SortKey = "date_desc" | "date_asc" | "title" | "area" | "status";
 
 type DashboardProps = {
   academicYear: string;
   orgUnits: OrgUnitSummary[];
   ucoAccess: UcoTlaAccessSummary | null;
   user: CurrentUser;
+  staff?: StaffSummary[];
   onOpenAction: (actionId: string, staffId: string) => void;
   onOpenRecord: (recordId: string) => void;
   onOpenStaff: (staffId: string) => void;
@@ -132,7 +147,7 @@ type MetricDefinition = { label: string; value: string | number; detail: string;
 const detailPageSize = 25;
 
 const processDefinitions: ProcessDefinition[] = [
-  { key: "overview", label: "Executive overview", shortLabel: "Overview", singular: "record", icon: Sparkles, tone: "teal" },
+  { key: "overview", label: "College overview", shortLabel: "Overview", singular: "record", icon: BarChart3, tone: "teal" },
   { key: "learning_walk", label: "Learning Walks", shortLabel: "Learning Walks", singular: "learning walk", icon: BookOpenCheck, tone: "teal" },
   { key: "liv", label: "LIV", shortLabel: "LIV", singular: "LIV record", icon: Target, tone: "blue" },
   { key: "als_learning_walk", label: "ALS Learning Walks", shortLabel: "ALS Walks", singular: "ALS learning walk", icon: BookOpenCheck, tone: "teal" },
@@ -170,24 +185,34 @@ const fallbackConfiguration: DashboardConfiguration = {
   }))
 };
 
-export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenAction, onOpenRecord, onOpenStaff, onOpenUcoReview }: DashboardProps) {
-  const [actions, setActions] = useState<ActionSummary[]>([]);
-  const [processRecords, setProcessRecords] = useState<ProcessDashboardRecordSummary[]>([]);
+export function Dashboard({ academicYear, orgUnits, staff = [], ucoAccess, user, onOpenAction, onOpenRecord, onOpenStaff, onOpenUcoReview }: DashboardProps) {
+  const [initialView] = useState(() => readDashboardLocation(window.location.search));
+  const canViewReports = user.permissions.includes("reports.view_all") || user.permissions.includes("reports.view_scoped");
+  const canViewUco = ucoAccess?.canAccess === true;
+  const reviewDashboards = processReviewKeys.filter(key => canAccessProcessReviews(key, user.permissions));
+  const [dashboardArea, setDashboardArea] = useState<"leadership" | "uco" | ProcessReviewKey>(() =>
+    isProcessReviewKey(initialView.view) && reviewDashboards.includes(initialView.view) ? initialView.view
+      : initialView.view === "uco" && canViewUco ? "uco"
+      : canViewReports ? "leadership" : reviewDashboards[0] ?? "uco");
+  const [section, setSection] = useState<DashboardSection>(initialView.section);
+  const [statusLevelFilter, setStatusLevelFilter] = useState("all");
+  const [storedActions, setActions] = useState<ActionSummary[]>([]);
+  const [storedProcessRecords, setProcessRecords] = useState<ProcessDashboardRecordSummary[]>([]);
   const [configuration, setConfiguration] = useState<DashboardConfiguration>(fallbackConfiguration);
-  const [facts, setFacts] = useState<DashboardDimensionFact[]>([]);
-  const [elevateStatus, setElevateStatus] = useState<ElevateStatusDashboardSummary[]>([]);
-  const [elevateStatusLoadedYear, setElevateStatusLoadedYear] = useState<string | null>(null);
-  const [elevateStatusAssets, setElevateStatusAssets] = useState<ElevateStatusBadgeAssetSummary[]>([]);
-  const [staffParticipation, setStaffParticipation] = useState<StaffParticipationDashboardSummary[]>([]);
-  const [eliSubmissions, setEliSubmissions] = useState<EliSubmissionStaffSummary[]>([]);
-  const [cpdAttendance, setCpdAttendance] = useState<CpdAttendanceDashboardSummary[]>([]);
-  const [livLifecycle, setLivLifecycle] = useState<LivLifecycleDashboardSummary[]>([]);
-  const [learningWalkThemeGroups, setLearningWalkThemeGroups] = useState<LearningWalkThemeGroup[]>([]);
+  const [storedFacts, setFacts] = useState<DashboardDimensionFact[]>([]);
+  const [storedElevateStatus, setElevateStatus] = useState<ElevateStatusDashboardSummary[]>([]);
+  const [storedElevateStatusStaff, setElevateStatusStaff] = useState<ElevateStatusStaffSummary[]>([]);
+  const [storedElevateStatusAssets, setElevateStatusAssets] = useState<ElevateStatusBadgeAssetSummary[]>([]);
+  const [storedStaffParticipation, setStaffParticipation] = useState<StaffParticipationDashboardSummary[]>([]);
+  const [storedEliSubmissions, setEliSubmissions] = useState<EliSubmissionStaffSummary[]>([]);
+  const [storedCpdAttendance, setCpdAttendance] = useState<CpdAttendanceDashboardSummary[]>([]);
+  const [storedLivLifecycle, setLivLifecycle] = useState<LivLifecycleDashboardSummary[]>([]);
+  const [storedLearningWalkThemeGroups, setLearningWalkThemeGroups] = useState<LearningWalkThemeGroup[]>([]);
   const [datasetLoading, setDatasetLoading] = useState(true);
   const [facultySelectionsReady, setFacultySelectionsReady] = useState(false);
   const [facultySelections, setFacultySelections] = useState<{dashboardKey:string;excludedFacultyIds:string[]}[]>([]);
   const [facultySettingsMessage, setFacultySettingsMessage] = useState("");
-  const [selectedProcess, setSelectedProcess] = useState<DashboardProcessKey>("overview");
+  const [selectedProcess, setSelectedProcess] = useState<DashboardProcessKey>((initialView.view === "uco" || isProcessReviewKey(initialView.view) ? "overview" : initialView.view) as DashboardProcessKey);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [facultyFilter, setFacultyFilter] = useState("all");
@@ -196,22 +221,35 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
   const [dimensionFilter, setDimensionFilter] = useState("all");
   const [deliveryAreaFilter, setDeliveryAreaFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("date_desc");
-  const [detailPage, setDetailPage] = useState(1);
+  const [actionOwnerFilter, setActionOwnerFilter] = useState("all");
+  const [actionSourceFilter, setActionSourceFilter] = useState("all");
+  const [actionStateFilter, setActionStateFilter] = useState("all");
+  const [actionSortBy, setActionSortBy] = useState("dueDate");
+  const [actionSortDirection, setActionSortDirection] = useState<"asc" | "desc">("asc");
   const [actionDetailPage, setActionDetailPage] = useState(1);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [recordDetailExpanded, setRecordDetailExpanded] = useState(false);
-  const [actionDetailExpanded, setActionDetailExpanded] = useState(false);
   const [datasetFailures, setDatasetFailures] = useState<string[]>([]);
   const [loadedDatasetKey, setLoadedDatasetKey] = useState("");
-  const accessKey = JSON.stringify([user.staffId, user.permissions, user.scopes]);
+  const [settingsRevision, setSettingsRevision] = useState(0);
+  const requestCache = useRef(new DashboardRequestCache()).current;
+  const accessKey = JSON.stringify([user.userAccountId, user.staffId, user.isAdministrator, user.permissions, user.scopes]);
   const datasetKey = `${academicYear}:${selectedProcess}:${accessKey}`;
   const latestLoad = useRef(new LatestDashboardLoad());
   latestLoad.current.setScope(datasetKey);
-  const dataReady = loadedDatasetKey === datasetKey && !datasetLoading && datasetFailures.length === 0;
+  const dataReady = dashboardArea === "leadership" && loadedDatasetKey === datasetKey && !datasetLoading && datasetFailures.length === 0;
+  // Do not run the new dashboard's aggregations over the previous dashboard's potentially large arrays.
+  const actions = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedActions : [];
+  const processRecords = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedProcessRecords : [];
+  const facts = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedFacts : [];
+  const elevateStatus = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedElevateStatus : [];
+  const elevateStatusStaff = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedElevateStatusStaff : [];
+  const elevateStatusAssets = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedElevateStatusAssets : [];
+  const staffParticipation = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedStaffParticipation : [];
+  const eliSubmissions = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedEliSubmissions : [];
+  const cpdAttendance = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedCpdAttendance : [];
+  const livLifecycle = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedLivLifecycle : [];
+  const learningWalkThemeGroups = dashboardArea === "leadership" && loadedDatasetKey === datasetKey ? storedLearningWalkThemeGroups : [];
 
-  const canViewReports = user.permissions.includes("reports.view_all") || user.permissions.includes("reports.view_scoped");
-  const canViewUco = ucoAccess?.canAccess === true;
   const canViewAll = user.permissions.includes("reports.view_all");
   useEffect(() => {
     if (!canViewReports) return;
@@ -233,38 +271,41 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
       }
     });
     return () => { cancelled = true; };
-  }, [academicYear, canViewReports, accessKey]);
-  const [dashboardArea, setDashboardArea] = useState<"leadership" | "uco">(canViewReports ? "leadership" : "uco");
+  }, [academicYear, canViewReports, accessKey, settingsRevision]);
 
   useEffect(() => {
-    if (dashboardArea === "leadership" && !canViewReports && canViewUco) setDashboardArea("uco");
-    if (dashboardArea === "uco" && !canViewUco && canViewReports) setDashboardArea("leadership");
-  }, [canViewReports, canViewUco, dashboardArea]);
+    const available = dashboardArea === "leadership" ? canViewReports : dashboardArea === "uco" ? canViewUco : reviewDashboards.includes(dashboardArea);
+    if (!available) setDashboardArea(canViewReports ? "leadership" : canViewUco ? "uco" : reviewDashboards[0] ?? "leadership");
+  }, [canViewReports, canViewUco, dashboardArea, user.permissions]);
 
   async function loadDashboard(only?: string[]) {
     setDatasetLoading(true);
     const jobs: DashboardLoadJob[] = [];
-    function add<T,>(key: string, load: () => Promise<T>, apply: (value: T) => void) {
-      jobs.push({ key, load, apply: value => apply(value as T) });
+    function add<T,>(key: string, load: () => Promise<T>, apply: (value: T) => void, processSpecific = false) {
+      const cacheKey = JSON.stringify([academicYear, accessKey, key, processSpecific ? selectedProcess : "shared"]);
+      jobs.push({ key, load: () => requestCache.get(cacheKey, load), apply: value => apply(value as T) });
     }
     add("Dashboard settings", () => api.dashboardConfiguration(), setConfiguration);
-    add("Responses and outcomes", () => api.dashboardDimensions(academicYear, selectedProcess),
-      values => setFacts(values.filter(fact => academicYearForDate(fact.occurredOn) === academicYear)));
-    add("Actions", () => api.dashboardActions(academicYear, selectedProcess), setActions);
-    add("Submitted records", () => api.processDashboardRecords(academicYear, selectedProcess), setProcessRecords);
+    if (selectedProcess !== "elevate_status") {
+      add("Responses and outcomes", () => api.dashboardDimensions(academicYear, selectedProcess),
+        values => setFacts(values.filter(fact => academicYearForDate(fact.occurredOn) === academicYear)), true);
+      add("Actions", () => api.dashboardActions(academicYear, selectedProcess), setActions, true);
+      add("Submitted records", () => api.processDashboardRecords(academicYear, selectedProcess), setProcessRecords, true);
+    } else { setActions([]); setProcessRecords([]); setFacts([]); }
     if (selectedProcess === "elevate_status") {
       add("Elevate Status", () => api.elevateStatusDashboard(academicYear), rows => {
-        setElevateStatus(rows); setElevateStatusLoadedYear(academicYear);
+        setElevateStatus(rows);
       });
       add("Status badges", () => api.elevateStatusBadgeAssets(academicYear), setElevateStatusAssets);
+      add("Staff status register", () => api.elevateStatusStaffDashboard(academicYear), setElevateStatusStaff);
     } else if (!["overview", "actions"].includes(selectedProcess)) {
       add("Staff coverage", () => api.staffParticipationDashboard(academicYear), setStaffParticipation);
       if (selectedProcess === "eli") add("ELI submission breakdown", () => api.eliSubmissionsDashboard(academicYear), setEliSubmissions);
       if (selectedProcess === "cpd_event") add("CPD attendance", () => api.cpdAttendanceDashboard(academicYear), setCpdAttendance);
       if (selectedProcess === "liv" || selectedProcess === "als_liv")
-        add("LIV journey", () => api.livLifecycleDashboard(academicYear, selectedProcess), setLivLifecycle);
+        add("LIV journey", () => api.livLifecycleDashboard(academicYear, selectedProcess), setLivLifecycle, true);
       if (selectedProcess === "learning_walk" || selectedProcess === "als_learning_walk")
-        add("Learning walk themes", () => api.learningWalkThemes(selectedProcess), setLearningWalkThemeGroups);
+        add("Learning walk themes", () => api.learningWalkThemes(selectedProcess), setLearningWalkThemeGroups, true);
     }
     const failed = await latestLoad.current.run(only ? jobs.filter(job => only.includes(job.key)) : jobs);
     if (failed === null) return;
@@ -275,17 +316,37 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
   }
 
   useEffect(() => {
-    if (!canViewReports) return;
+    if (!canViewReports || dashboardArea !== "leadership") return;
     setDatasetFailures([]);
     void loadDashboard();
     return () => latestLoad.current.invalidate();
   // The batch is keyed by these values; filters apply to the loaded dataset locally.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasetKey, canViewReports]);
+  }, [datasetKey, canViewReports, dashboardArea]);
 
   const configuredProcesses = useMemo(() => configuration.processes
     .filter((item) => item.isEnabled && canAccessDashboardProcess(item.processKey, user.permissions))
     .sort((left, right) => left.displayOrder - right.displayOrder), [configuration, user.permissions]);
+  const destinations = [
+    ...(canViewReports ? configuredProcesses.map(item => ({ key: item.processKey, label: item.label || getProcessDefinition(item.processKey).label, group: dashboardNavigationGroup(item.processKey), description: dashboardDescriptions[item.processKey] ?? "Explore records and outcomes." })) : []),
+    ...(canViewUco ? [{ key: "uco", label: "UCO TLA Reviews", group: dashboardNavigationGroup("uco"), description: dashboardDescriptions.uco }] : []),
+    ...reviewDashboards.map(key => ({ key, label: key === "digital_learning_walk" ? "Digital Learning Walks" : "Activate+ Growth Reviews", group: dashboardNavigationGroup(key), description: dashboardDescriptions[key] }))
+  ];
+  const activeDestination = dashboardArea === "leadership" ? selectedProcess : dashboardArea;
+  const canViewQa = user.permissions.some(permission => permission.startsWith("qa_reviews.view_"));
+  const sectionOptions = isProcessReviewKey(dashboardArea) ? [{ key: "summary" as const, label: "Reviews & actions" }] : dashboardArea === "uco" ? [
+    { key: "summary" as const, label: "Summary" },
+    ...(ucoAccess?.canExport ? [{ key: "data" as const, label: "Form data" }] : [])
+  ] : [
+    { key: "summary" as const, label: "Summary" },
+    { key: "data" as const, label: selectedProcess === "elevate_status" ? "Staff register" : selectedProcess === "actions" ? "Action register" : "Form data" },
+    ...(selectedProcess === "eli" ? [{ key: "coverage" as const, label: "Staff submission coverage" }] : []),
+    ...(!["overview", "elevate_status", "actions"].includes(selectedProcess) ? [{ key: "actions" as const, label: "Linked actions" }] : [])
+  ];
+  const activeSection = sectionOptions.some(option => option.key === section) ? section : "summary";
+  useEffect(() => {
+    writeAppPath(dashboardLocation(activeDestination, activeSection), true);
+  }, [activeDestination, activeSection]);
 
   useEffect(() => {
     if (!configuredProcesses.some((item) => item.processKey === selectedProcess)) {
@@ -297,7 +358,7 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
   const selectedConfiguration = configuration.processes.find((item) => item.processKey === selectedProcess)
     ?? fallbackConfiguration.processes.find((item) => item.processKey === selectedProcess)!;
   const excludedUnits = useMemo(() => excludedDashboardUnits(orgUnits, facultySelections.find(item => item.dashboardKey === selectedProcess)?.excludedFacultyIds ?? []), [orgUnits, facultySelections, selectedProcess]);
-  const organisationOptions = useMemo(() => collectDashboardOrgOptions(orgUnits, user), [orgUnits, user]);
+  const organisationOptions = useMemo(() => collectDashboardOrgOptions(orgUnits, user, [...processRecords, ...elevateStatusStaff, ...staffParticipation, ...eliSubmissions, ...cpdAttendance, ...livLifecycle], actions), [orgUnits, user, processRecords, elevateStatusStaff, staffParticipation, eliSubmissions, cpdAttendance, livLifecycle, actions]);
   const selectedFaculty = organisationOptions.faculties.find((unit) => unit.id === facultyFilter);
   const teamOptions = organisationOptions.teams.filter((unit) => unit.facultyId === facultyFilter);
   const selectedTeam = teamOptions.find((unit) => unit.id === teamFilter);
@@ -318,25 +379,34 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
     && matchesOrganisation(fact.areaCode, fact.parentAreaCode, fact.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
   ), [excludedUnits, endDate, facts, reportableRecordIds, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id, startDate]);
 
-  const elevateStatusInScope = useMemo(() => elevateStatus.filter((row) =>
-    matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
-  ), [elevateStatus, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id]);
+  const elevateStatusStaffInScope = useMemo(() => elevateStatusStaff.filter(row =>
+    !excludedUnits.ids.has(row.orgUnitId ?? "") && !excludedUnits.codes.has(row.areaCode ?? "")
+    && matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
+    && (statusLevelFilter === "all" || row.currentLevel === Number(statusLevelFilter))
+  ), [elevateStatusStaff, excludedUnits, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id, statusLevelFilter]);
+  const elevateStatusInScope = useMemo(() => statusLevelFilter === "all" ? elevateStatus.filter((row) =>
+    !excludedUnits.ids.has(row.orgUnitId ?? "") && !excludedUnits.codes.has(row.areaCode ?? "")
+    && matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
+  ) : statusRowsFromStaff(elevateStatusStaffInScope), [elevateStatus, elevateStatusStaffInScope, excludedUnits, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id, statusLevelFilter]);
   const elevateStatusTotals = useMemo(() => aggregateElevateStatus(elevateStatusInScope), [elevateStatusInScope]);
   const staffParticipationInScope = useMemo(() => staffParticipation.filter((row) =>
     row.processKey === selectedProcess
+    && !excludedUnits.ids.has(row.orgUnitId ?? "") && !excludedUnits.codes.has(row.areaCode ?? "")
     && matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
-  ), [selectedFaculty?.code, selectedProcess, selectedTeam?.code, selectedTeam?.id, staffParticipation]);
+  ), [selectedFaculty?.code, selectedProcess, selectedTeam?.code, selectedTeam?.id, staffParticipation, excludedUnits]);
   const staffParticipationTotals = useMemo(() => aggregateStaffParticipation(staffParticipationInScope), [staffParticipationInScope]);
   const eliSubmissionsInScope = useMemo(() => eliSubmissions.filter(row =>
     !excludedUnits.ids.has(row.orgUnitId ?? "") && !excludedUnits.codes.has(row.areaCode ?? "")
     && matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
   ), [eliSubmissions, excludedUnits, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id]);
   const cpdAttendanceInScope = useMemo(() => cpdAttendance.filter((row) =>
-    matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
-  ), [cpdAttendance, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id]);
+    !excludedUnits.ids.has(row.orgUnitId ?? "") && !excludedUnits.codes.has(row.areaCode ?? "")
+    && matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
+  ), [cpdAttendance, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id, excludedUnits]);
   const livLifecycleInScope = useMemo(() => livLifecycle.filter((row) =>
-    matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
-  ), [livLifecycle, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id]);
+    !excludedUnits.ids.has(row.orgUnitId ?? "") && !excludedUnits.codes.has(row.areaCode ?? "")
+    && matchesOrganisation(row.areaCode, row.parentAreaCode, row.orgUnitId, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id)
+  ), [livLifecycle, selectedFaculty?.code, selectedTeam?.code, selectedTeam?.id, excludedUnits]);
   const livLifecycleTotals = useMemo(() => aggregateLivLifecycle(livLifecycleInScope), [livLifecycleInScope]);
 
   const isLearningWalkProcess = selectedProcess === "learning_walk" || selectedProcess === "als_learning_walk";
@@ -363,12 +433,12 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
   }), [excludedUnits, actions, deliveryAreaRecordIds, endDate, hasDeliveryAreaFilter, selectedFaculty, selectedProcess, selectedTeam, startDate]);
 
   const statusOptions = useMemo(() => selectedProcess === "elevate_status" ? [] : selectedProcess === "actions"
-    ? ["open", "overdue", "complete"]
+    ? dashboardActionStates
     : uniqueValues(processRecordsInScope.map((record) => record.status)), [processRecordsInScope, selectedProcess]);
   const dimensionOptions = useMemo(() => ["elevate_status", "overview"].includes(selectedProcess) ? [] : uniqueValues([
     ...processFactsInScope.filter((fact) => !fact.dimensionKey.endsWith("_statement_outcome")).map((fact) => fact.seriesLabel),
     ...processRecordsInScope.flatMap((record) => splitValues(record.theme)),
-    ...(["overview", "actions", "liv", "als_liv"].includes(selectedProcess) ? processActionsInScope.map((action) => action.actionTheme) : [])
+    ...processActionsInScope.map((action) => action.actionTheme)
   ]), [processActionsInScope, processFactsInScope, processRecordsInScope, selectedProcess]);
 
   const dimensionRecordIds = useMemo(() => new Set(
@@ -383,28 +453,35 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
     return matchesStatus && matchesDimension;
   }), [dimensionFilter, dimensionRecordIds, processRecordsInScope, statusFilter]);
 
+  const analysisRecordIds = useMemo(() => new Set(analysisRecords.map(record => record.id)), [analysisRecords]);
   const analysisActions = useMemo(() => processActionsInScope.filter((action) => {
-    const state = action.completedDate ? "complete" : action.isOverdue ? "overdue" : "open";
-    return (statusFilter === "all" || (["liv", "als_liv"].includes(selectedProcess) ? analysisRecords.some((record) => record.id === action.sourceRecordId) : statusFilter === state))
+    if (selectedProcess === "actions" || selectedProcess === "overview") return matchesDashboardActionState(action, statusFilter)
       && (dimensionFilter === "all" || action.actionTheme === dimensionFilter);
-  }), [analysisRecords, dimensionFilter, processActionsInScope, selectedProcess, statusFilter]);
-
-  const visibleRecords = useMemo(() => {
-    const query = searchTerm.trim().toLocaleLowerCase();
-    return [...analysisRecords].filter((record) => !query || [
-      record.title, record.areaCode, record.parentAreaCode, record.ownerDisplayName, record.submitterDisplayName,
-      record.subjectDisplayName, record.theme, record.detail, record.status, record.deliveryAreaName, record.deliveryAreaKey
-    ].some((value) => value?.toLocaleLowerCase().includes(query)))
-      .sort((left, right) => compareRecords(left, right, sortKey));
-  }, [analysisRecords, searchTerm, sortKey]);
+    return statusFilter === "all" && dimensionFilter === "all" || analysisRecordIds.has(action.sourceRecordId ?? "");
+  }), [analysisRecordIds, dimensionFilter, processActionsInScope, selectedProcess, statusFilter]);
+  const reportFilters: ExportFilters = useMemo(() => ({
+    academicYear,
+    facultyCode: selectedFaculty?.code,
+    teamCode: selectedTeam?.code,
+    fromDate: selectedProcess === "elevate_status" ? undefined : startDate || undefined,
+    toDate: selectedProcess === "elevate_status" ? undefined : endDate || undefined,
+    status: statusFilter === "all" ? undefined : statusFilter,
+    dimensionLabel: dimensionFilter === "all" ? undefined : dimensionFilter,
+    deliveryAreaKey: hasDeliveryAreaFilter ? deliveryAreaFilter : undefined,
+    statusLevel: selectedProcess === "elevate_status" && statusLevelFilter !== "all" ? statusLevelFilter : undefined
+  }), [academicYear, selectedFaculty?.code, selectedTeam?.code, selectedProcess, startDate, endDate, statusFilter, dimensionFilter, hasDeliveryAreaFilter, deliveryAreaFilter, statusLevelFilter]);
+  const loadRecordData = useCallback(() => requestCache.get(`form-data:${datasetKey}:${JSON.stringify(reportFilters)}`, () => api.dashboardRecordData(academicYear, selectedProcess, reportFilters)), [requestCache, datasetKey, reportFilters, academicYear, selectedProcess]);
 
   const visibleActions = useMemo(() => {
-    const query = searchTerm.trim().toLocaleLowerCase();
-    return analysisActions.filter((action) => !query || [
-      action.title, action.actionTheme, action.ownerStaffName, action.subjectStaffName,
-      action.facultyCode, action.teamCode
-    ].some((value) => value?.toLocaleLowerCase().includes(query)));
-  }, [analysisActions, searchTerm]);
+    const value = (action: ActionSummary) => actionSortBy === "status" ? formatLabel(dashboardActionState(action)) : actionSortBy === "source" ? formatLabel(action.sourceFormType ?? "standalone") : actionSortBy === "area" ? action.teamCode ?? action.facultyCode : ["createdAt", "dueDate", "completedDate"].includes(actionSortBy) ? action[actionSortBy as "createdAt"] ? new Date(action[actionSortBy as "createdAt"]!) : null : action[actionSortBy as "title"];
+    return analysisActions.filter(action => (actionOwnerFilter === "all" || (action.ownerStaffName ?? "Unassigned") === actionOwnerFilter)
+      && (actionSourceFilter === "all" || (action.sourceFormType ?? "standalone") === actionSourceFilter)
+      && matchesDashboardActionState(action, actionStateFilter)
+      && matchesListSearch(searchTerm, action.title, action.actionTheme, action.ownerStaffName, action.subjectStaffName, action.facultyCode, action.teamCode, formatLabel(action.sourceFormType ?? "standalone"), formatLabel(dashboardActionState(action)), formatDate(action.createdAt), formatDate(action.dueDate), action.completedDate ? formatDate(action.completedDate) : ""))
+      .sort((left, right) => compareListValues(value(left), value(right), actionSortDirection) || left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
+  }, [analysisActions, searchTerm, actionOwnerFilter, actionSourceFilter, actionStateFilter, actionSortBy, actionSortDirection]);
+  const actionOwners = useMemo(() => distinctListValues(analysisActions.map(action => action.ownerStaffName ?? "Unassigned")), [analysisActions]);
+  const actionSources = useMemo(() => distinctListValues(analysisActions.map(action => action.sourceFormType ?? "standalone")), [analysisActions]);
 
   const filteredFacts = useMemo(() => {
     const recordIds = new Set(analysisRecords.map((record) => record.id));
@@ -421,43 +498,42 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
   const trendGranularity = selectTrendGranularity(trendItems, startDate, endDate);
   const trendData = buildAdaptiveTrend(trendItems, trendGranularity, startDate, endDate);
   const processData = buildProcessBreakdown(dateAndAreaRecords, processActionsInScope);
-  const openActions = analysisActions.filter((action) => !action.completedDate);
-  const overdueActions = openActions.filter((action) => action.isOverdue);
-  const detailCount = selectedProcess === "actions" ? visibleActions.length : visibleRecords.length;
-  const detailTotalPages = Math.max(1, Math.ceil(detailCount / detailPageSize));
-  const detailStart = (detailPage - 1) * detailPageSize;
-  const detailActions = visibleActions.slice(detailStart, detailStart + detailPageSize);
-  const detailRecords = visibleRecords.slice(detailStart, detailStart + detailPageSize);
+  const openActions = analysisActions.filter(isDashboardActionOpen);
+  const overdueActions = openActions.filter((action) => dashboardActionState(action) === "overdue");
   const actionDetailTotalPages = Math.max(1, Math.ceil(visibleActions.length / detailPageSize));
   const actionDetailActions = visibleActions.slice((actionDetailPage - 1) * detailPageSize, actionDetailPage * detailPageSize);
 
-  useEffect(() => {
-    setDetailPage((current) => Math.min(current, detailTotalPages));
-  }, [detailTotalPages]);
 
   useEffect(() => {
     setActionDetailPage((current) => Math.min(current, actionDetailTotalPages));
   }, [actionDetailTotalPages]);
 
   useEffect(() => {
-    setDetailPage(1);
     setActionDetailPage(1);
-  }, [deliveryAreaFilter, dimensionFilter, endDate, facultyFilter, searchTerm, selectedProcess, sortKey, startDate, statusFilter, teamFilter]);
+  }, [deliveryAreaFilter, dimensionFilter, endDate, facultyFilter, searchTerm, selectedProcess, startDate, statusFilter, teamFilter, actionOwnerFilter, actionSourceFilter, actionStateFilter, actionSortBy, actionSortDirection]);
 
   async function refresh(only?: string[]) {
+    if (!only) { requestCache.clear(); setSettingsRevision(value => value + 1); }
     setIsRefreshing(true);
     await loadDashboard(only);
   }
 
   function clearFilters() {
+    setActionOwnerFilter("all"); setActionSourceFilter("all"); setActionStateFilter("all");
     setStartDate(""); setEndDate(""); setFacultyFilter("all"); setTeamFilter("all"); setStatusFilter("all");
-    setDimensionFilter("all"); setDeliveryAreaFilter("all"); setSearchTerm(""); setSortKey("date_desc");
+    setDimensionFilter("all"); setDeliveryAreaFilter("all"); setSearchTerm(""); setStatusLevelFilter("all");
   }
 
   function selectProcess(processKey: DashboardProcessKey) {
+    setActionOwnerFilter("all"); setActionSourceFilter("all"); setActionStateFilter("all");
     setSelectedProcess(processKey); setStatusFilter("all"); setDimensionFilter("all"); setDeliveryAreaFilter("all");
-    setSearchTerm(""); setSortKey("date_desc");
-    setRecordDetailExpanded(false); setActionDetailExpanded(false);
+    setSearchTerm("");
+    setSection(processKey === "elevate_status" ? "data" : "summary"); setStatusLevelFilter("all");
+  }
+  function selectDashboard(key: string) {
+    if (isProcessReviewKey(key)) { setDashboardArea(key); setSection("summary"); }
+    else if (key === "uco") { setDashboardArea("uco"); setSection("summary"); }
+    else { setDashboardArea("leadership"); selectProcess(key as DashboardProcessKey); }
   }
 
   function openOrganisationDetail(row: OrganisationPerformanceRow, detail: "records" | "actions") {
@@ -466,87 +542,84 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
     const team = row.parentCode ? organisationOptions.teams.find((option) => option.code === row.code && option.facultyId === faculty?.id) : undefined;
     setFacultyFilter(faculty?.id ?? "all");
     setTeamFilter(team?.id ?? "all");
-    setStatusFilter("all"); setDimensionFilter("all"); setSearchTerm(""); setDetailPage(1); setActionDetailPage(1);
-    if (detail === "records") setRecordDetailExpanded(true); else setActionDetailExpanded(true);
+    setStatusFilter("all"); setDimensionFilter("all"); setSearchTerm(""); setActionDetailPage(1);
+    setSection(detail === "records" ? "data" : "actions");
     window.setTimeout(() => document.getElementById(detail === "records" ? "dashboard-record-detail" : "dashboard-action-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
   }
 
-  if (!canViewReports && !canViewUco) {
+  const additionalFilterCount = [startDate, endDate,
+    selectedProcess !== "overview" && statusFilter !== "all" ? statusFilter : "",
+    selectedProcess !== "overview" && dimensionFilter !== "all" ? dimensionFilter : "",
+    isLearningWalkProcess && deliveryAreaFilter !== "all" ? deliveryAreaFilter : ""].filter(Boolean).length;
+  const invalidDateRange = selectedProcess !== "elevate_status" && Boolean(startDate && endDate && startDate > endDate);
+
+  if (!canViewReports && !canViewUco && reviewDashboards.length === 0) {
     return <div className="route-stack"><div className="route-header"><div><p className="eyebrow">Leadership intelligence</p><h1>Dashboard</h1></div></div><section className="panel dashboard-access-panel"><AlertTriangle size={20} aria-hidden="true" /><div><h2>Reporting access is not assigned</h2><p>Your actions and staff profile remain available from the main navigation.</p></div></section></div>;
+  }
+
+  if (isProcessReviewKey(dashboardArea) && reviewDashboards.includes(dashboardArea)) {
+    return <div className="route-stack intelligence-dashboard">
+      <DashboardNavigator items={destinations} activeKey={dashboardArea} onSelect={selectDashboard} canViewQa={canViewQa} />
+      <ProcessReviewDashboard key={`${dashboardArea}:${accessKey}`} processKey={dashboardArea} academicYear={academicYear} orgUnits={orgUnits} staff={staff} canExport={user.permissions.includes("exports.create")} onOpenRecord={onOpenRecord} onOpenAction={onOpenAction} />
+    </div>;
   }
 
   if (dashboardArea === "uco" && canViewUco && ucoAccess) {
     return <div className="route-stack intelligence-dashboard">
-      <DashboardAreaSwitch active="uco" canViewReports={canViewReports} onChange={setDashboardArea} />
-      <UcoTlaDashboard access={ucoAccess} academicYear={academicYear} onOpenReview={onOpenUcoReview} />
+      <DashboardNavigator items={destinations} activeKey="uco" onSelect={selectDashboard} canViewQa={canViewQa} />
+      <UcoTlaDashboard access={ucoAccess} academicYear={academicYear} onOpenReview={onOpenUcoReview} section={activeSection === "data" ? "data" : "summary"} onSectionChange={setSection} requestCache={requestCache} accessScope={accessKey} />
     </div>;
   }
 
-  if (!facultySelectionsReady) return <section className="panel"><h1>Dashboard</h1><p role="status">{facultySettingsMessage || "Loading dashboard dataset settings…"}</p><Button onClick={() => window.location.reload()}>Reload dashboard</Button></section>;
+  if (!facultySelectionsReady) return <section className="panel"><h1>Dashboard</h1>{facultySettingsMessage ? <><p role="alert">{facultySettingsMessage}</p><Button onClick={() => window.location.reload()}>Reload dashboard</Button></> : <LoadingState label="Loading dashboard settings" size="page" />}</section>;
 
   return (
     <div className="route-stack intelligence-dashboard">
-      {canViewUco ? <DashboardAreaSwitch active="leadership" canViewReports={canViewReports} onChange={setDashboardArea} /> : null}
+      <DashboardNavigator items={destinations} activeKey={selectedProcess} onSelect={selectDashboard} canViewQa={canViewQa} />
       <header className="intelligence-header">
         <div>
-          <p className="eyebrow">Leadership intelligence · {academicYear}</p>
-          <h1>{canViewAll ? "Organisation data" : "Teaching and learning performance"}</h1>
-          <p>Teaching and learning, professional development and delivery oversight across {canViewAll ? "the college" : formatScopeLabel(user)}.</p>
+          <p className="eyebrow">Reporting · {academicYear} · {canViewAll ? "College view" : formatScopeLabel(user)}</p>
+          <h1>{selectedConfiguration.label || selectedDefinition.label}</h1>
+          <p>{dashboardDescriptions[selectedProcess]}</p>
         </div>
         <div className="intelligence-header-actions">
-          <span className="intelligence-data-state"><i />{dataReady ? "Permission-scoped live data" : "Reporting data not ready"}</span>
-          {dataReady ? <DashboardReportButton moduleKey={dashboardExportModuleKey(selectedProcess)} filters={{
-            academicYear,
-            facultyCode: selectedFaculty?.code,
-            teamCode: selectedTeam?.code,
-            fromDate: selectedProcess === "elevate_status" ? undefined : startDate || undefined,
-            toDate: selectedProcess === "elevate_status" ? undefined : endDate || undefined,
-            status: statusFilter === "all" ? undefined : statusFilter,
-            dimensionLabel: dimensionFilter === "all" ? undefined : dimensionFilter,
-            deliveryAreaKey: hasDeliveryAreaFilter ? deliveryAreaFilter : undefined
-          }} /> : null}
+          <span className={`intelligence-data-state ${dataReady ? "is-ready" : datasetLoading ? "is-loading" : "is-unavailable"}`} role={datasetLoading ? undefined : "status"}><i aria-hidden="true" />{dataReady ? "Report ready" : datasetLoading ? "Loading report" : "Report unavailable"}</span>
+          {dataReady && !invalidDateRange && user.permissions.includes("exports.create") ? <DashboardReportButton moduleKey={dashboardExportModuleKey(selectedProcess)} filters={reportFilters} /> : null}
           <Button disabled={datasetLoading} icon={RefreshCw} onClick={() => void refresh()}>{isRefreshing ? "Refreshing" : "Refresh"}</Button>
         </div>
       </header>
 
       {facultySettingsMessage ? <div className="intelligence-warning" role="status"><AlertTriangle size={16} />{facultySettingsMessage}</div> : null}
 
-      <nav className="intelligence-process-nav" aria-label="Dashboard views">
-        {configuredProcesses.map((item) => {
-          const definition = getProcessDefinition(item.processKey);
-          const Icon = definition.icon;
-          const count = !dataReady ? null : item.processKey === "overview"
-            ? dateAndAreaRecords.length
-            : item.processKey === "actions" ? (selectedProcess === "actions" ? processActionsInScope.length : null)
-              : item.processKey === "elevate_status" ? (selectedProcess === "elevate_status" && elevateStatusLoadedYear === academicYear ? elevateStatusTotals.staffCount : null)
-                : dateAndAreaRecords.filter((record) => record.processKey === item.processKey).length;
-          return <button aria-pressed={selectedProcess === item.processKey} key={item.processKey} onClick={() => selectProcess(item.processKey)} type="button"><Icon size={17} /><span>{item.label || definition.shortLabel}</span>{count !== null ? <strong>{count}</strong> : null}</button>;
-        })}
-      </nav>
-
-      {!dataReady ? <section className="panel" aria-live="polite">
+      {!dataReady ? <section className="panel">
         <h2>{selectedConfiguration.label || selectedDefinition.label}</h2>
-        {datasetLoading || loadedDatasetKey !== datasetKey ? <p role="status">Loading {academicYear} reporting data…</p> : <>
+        {datasetLoading || loadedDatasetKey !== datasetKey ? <LoadingState label="Loading reporting data" detail={`Retrieving records for ${academicYear}.`} /> : <>
           <p role="alert">This view could not be loaded completely. Unavailable data is not counted as zero.</p>
           <ul>{datasetFailures.map(name => <li key={name}>{name} unavailable</li>)}</ul>
           <Button disabled={isRefreshing} onClick={() => void refresh(datasetFailures)}>Retry unavailable data</Button>
         </>}
       </section> : <>
       <section className="panel intelligence-filter-panel">
-        <div className="intelligence-filter-heading"><div><span>Current view</span><strong>{selectedConfiguration.label || selectedDefinition.label}</strong></div><small>{selectedProcess === "liv" ? "The LIV journey uses academic year and organisation area; record detail also uses date, status and action theme filters" : isStaffCoverageProcess(selectedProcess) ? "Staff coverage uses academic year and organisation area; record visuals also use the remaining filters" : "All visuals and exports use these filters"}</small></div>
-        <div className={`intelligence-filter-grid${selectedProcess === "overview" ? " intelligence-filter-grid-overview" : selectedProcess === "elevate_status" ? " intelligence-filter-grid-status" : ""}`}>
-          {selectedProcess !== "elevate_status" ? <><label><span>From</span><input onChange={(event) => setStartDate(event.target.value)} type="date" value={startDate} /></label>
-          <label><span>To</span><input onChange={(event) => setEndDate(event.target.value)} type="date" value={endDate} /></label></> : null}
+        <div className="intelligence-filter-heading"><div><strong>Report filters</strong></div><small>{selectedProcess === "liv" || selectedProcess === "als_liv" ? "The LIV journey uses the academic year, faculty and team. Other filters apply to record details and Excel." : isStaffCoverageProcess(selectedProcess) ? "Staff coverage uses the academic year, faculty and team. Other filters apply to record activity and Excel." : "These filters apply to the summary, records and Excel."}</small></div>
+        <div className={`intelligence-filter-grid reporting-scope-primary${selectedProcess === "elevate_status" ? " is-staff-status" : ""}`}>
           <label><span>Faculty</span><select onChange={(event) => { setFacultyFilter(event.target.value); setTeamFilter("all"); }} value={facultyFilter}><option value="all">All permitted faculties</option>{organisationOptions.faculties.map((faculty) => <option key={faculty.id} value={faculty.id}>{faculty.code} · {faculty.name}</option>)}</select></label>
           <label><span>Team</span><select disabled={facultyFilter === "all" || teamOptions.length === 0} onChange={(event) => setTeamFilter(event.target.value)} value={teamFilter}><option value="all">{facultyFilter === "all" ? "Select a faculty first" : teamOptions.length ? "All teams in faculty" : "No teams available"}</option>{teamOptions.map((team) => <option key={team.id} value={team.id}>{team.code} · {team.name}</option>)}</select></label>
-          {!["elevate_status", "overview"].includes(selectedProcess) ? <><label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option>{statusOptions.map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label>
-          <label><span>Theme, focus or area</span><select onChange={(event) => setDimensionFilter(event.target.value)} value={dimensionFilter}><option value="all">All recorded dimensions</option>{dimensionOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label></> : selectedProcess === "elevate_status" ? <div className="elevate-status-filter-note"><span>Measurement</span><strong>{academicYear} · at or above each level</strong></div> : null}
-          {isLearningWalkProcess ? <label><span>Learning walk delivery area</span><select onChange={(event) => setDeliveryAreaFilter(event.target.value)} value={deliveryAreaFilter}><option value="all">All delivery areas</option>{deliveryAreaOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}{deliveryAreaFilter !== "all" && !deliveryAreaOptions.some((option) => option.key === deliveryAreaFilter) ? <option value={deliveryAreaFilter}>Selected area — no records in scope</option> : null}</select></label> : null}
-          <Button icon={RotateCcw} onClick={clearFilters} variant="secondary">Reset</Button>
+          {selectedProcess === "elevate_status" ? <label><span>Highest achieved level</span><select aria-label="Dashboard Elevate level" value={statusLevelFilter} onChange={event => setStatusLevelFilter(event.target.value)}><option value="all">All staff levels</option><option value="0">No level yet</option>{elevateLevelDefinitions.map(level => <option key={level.level} value={String(level.level)}>Level {level.level} · {level.name}</option>)}</select></label> : null}
+          <Button icon={RotateCcw} onClick={clearFilters} variant="secondary">Clear filters</Button>
         </div>
+        {selectedProcess !== "elevate_status" ? <details className="reporting-scope-more"><summary>More filters{additionalFilterCount ? <span className="reporting-filter-count">{additionalFilterCount} active</span> : null}</summary><div className="intelligence-filter-grid reporting-scope-secondary">
+          <label><span>From</span><input aria-label="Report start date" aria-invalid={invalidDateRange || undefined} aria-describedby={invalidDateRange ? "report-date-error" : undefined} max={endDate || undefined} onChange={(event) => setStartDate(event.target.value)} type="date" value={startDate} /></label>
+          <label><span>To</span><input aria-label="Report end date" aria-invalid={invalidDateRange || undefined} aria-describedby={invalidDateRange ? "report-date-error" : undefined} min={startDate || undefined} onChange={(event) => setEndDate(event.target.value)} type="date" value={endDate} /></label>
+          {selectedProcess !== "overview" ? <><label><span>Status</span><select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="all">All statuses</option>{statusOptions.map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label><label><span>Theme, focus or area</span><select onChange={(event) => setDimensionFilter(event.target.value)} value={dimensionFilter}><option value="all">All recorded themes and areas</option>{dimensionOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label></> : null}
+          {isLearningWalkProcess ? <label><span>Learning walk delivery area</span><select onChange={(event) => setDeliveryAreaFilter(event.target.value)} value={deliveryAreaFilter}><option value="all">All delivery areas</option>{deliveryAreaOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}{deliveryAreaFilter !== "all" && !deliveryAreaOptions.some((option) => option.key === deliveryAreaFilter) ? <option value={deliveryAreaFilter}>Selected area — no records in scope</option> : null}</select></label> : null}
+        </div></details> : null}
       </section>
 
-      {selectedProcess === "overview" ? (
+      {invalidDateRange ? <div className="reporting-date-error" role="alert"><p id="report-date-error">The end date must be on or after the start date. Choose a valid range to show the report.</p><Button onClick={() => { setStartDate(""); setEndDate(""); }}>Clear dates</Button></div> : null}
+      <div className="reporting-results" hidden={invalidDateRange}>
+      <nav className="dashboard-section-tabs" aria-label="Report sections">{sectionOptions.map(option => <button type="button" key={option.key} aria-current={activeSection === option.key ? "page" : undefined} onClick={() => setSection(option.key)}>{option.label}{option.key === "data" ? <span>{selectedProcess === "elevate_status" ? elevateStatusStaffInScope.length : selectedProcess === "actions" ? analysisActions.length : analysisRecords.length}</span> : option.key === "actions" ? <span>{analysisActions.length}</span> : null}</button>)}</nav>
+
+      {activeSection === "summary" ? <>{selectedProcess === "overview" ? (
         <ExecutiveOverview
           actions={processActionsInScope}
           facts={dateAndAreaFacts}
@@ -576,54 +649,34 @@ export function Dashboard({ academicYear, orgUnits, ucoAccess, user, onOpenActio
           trendData={trendData}
           trendGranularity={trendGranularity}
         />
-      )}
+      )}</> : null}
 
-      {selectedProcess === "eli" ? <EliSubmissionBreakdown academicYear={academicYear} rows={eliSubmissionsInScope} onOpenStaff={onOpenStaff} onOpenRecord={onOpenRecord} /> : null}
+      {selectedProcess === "eli" && activeSection === "coverage" ? <EliSubmissionBreakdown academicYear={academicYear} rows={eliSubmissionsInScope} onOpenStaff={onOpenStaff} onOpenRecord={onOpenRecord} /> : null}
 
-      {!["elevate_status", "overview"].includes(selectedProcess) ? <div id="dashboard-record-detail"><CollapsibleSection
-        className="intelligence-record-panel"
-        count={selectedProcess === "actions" ? visibleActions.length : visibleRecords.length}
-        defaultExpanded={recordDetailExpanded}
-        isEmpty={(selectedProcess === "actions" ? visibleActions.length : visibleRecords.length) === 0}
-        emptyMessage={`No ${selectedDefinition.label.toLocaleLowerCase()} match the current filters.`}
-        persistState={false}
-        onExpandedChange={setRecordDetailExpanded}
-        statusSummary={`${detailCount} matching · opens the source record`}
-        storageKey={`leadership-dashboard-records-${selectedProcess}`}
-        title={selectedProcess === "overview" ? "All teaching and learning records" : `${selectedDefinition.label} detail`}
-      >
-        <div className="dashboard-record-heading"><div className="dashboard-record-tools"><label className="search-box dashboard-record-search"><Search size={16} /><input aria-label="Search dashboard detail" onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search current view" value={searchTerm} /></label>{selectedProcess !== "actions" ? <label className="record-sort-field"><span>Sort by</span><select onChange={(event) => setSortKey(event.target.value as SortKey)} value={sortKey}><option value="date_desc">Newest first</option><option value="date_asc">Oldest first</option><option value="title">Title</option><option value="area">Area</option><option value="status">Status</option></select></label> : null}</div></div>
-        {selectedProcess === "actions"
-          ? <ActionDetailTable actions={detailActions} onOpenAction={onOpenAction} />
-          : <RecordDetailTable onOpenRecord={onOpenRecord} records={detailRecords} showDeliveryArea={isLearningWalkProcess} showStaff={["eli", "liv", "als_liv", "coaching_session", "probation_case"].includes(selectedProcess)} />}
-        <Pagination onPageChange={setDetailPage} page={detailPage} totalPages={detailTotalPages} />
-      </CollapsibleSection></div> : null}
-      {!["elevate_status", "overview", "actions"].includes(selectedProcess) ? <div id="dashboard-action-detail"><CollapsibleSection
+      {activeSection === "data" && selectedProcess === "elevate_status" ? <ElevateStatusStaffExplorer rows={elevateStatusStaffInScope} academicYear={academicYear} onOpenStaff={onOpenStaff} levelFilter={statusLevelFilter} onLevelFilterChange={setStatusLevelFilter} /> : null}
+      {activeSection === "data" && selectedProcess !== "elevate_status" ? <div id="dashboard-record-detail"><DashboardDataExplorer key={`${academicYear}:${selectedProcess}`} processKey={selectedProcess} academicYear={academicYear} filters={reportFilters} loadData={loadRecordData} records={selectedProcess === "actions" ? undefined : analysisRecords} onOpenRecord={onOpenRecord} onOpenEntry={selectedProcess === "actions" ? id => onOpenAction(id, analysisActions.find(action => action.id === id)?.ownerStaffId ?? "") : undefined} onOpenStaff={onOpenStaff} /></div> : null}
+
+      {activeSection === "actions" && !["elevate_status", "overview", "actions"].includes(selectedProcess) ? <div id="dashboard-action-detail"><CollapsibleSection
         className="intelligence-record-panel"
         count={visibleActions.length}
-        defaultExpanded={actionDetailExpanded}
+        defaultExpanded
         isEmpty={visibleActions.length === 0}
         emptyMessage={`No actions linked to ${selectedDefinition.label.toLocaleLowerCase()} match the current filters.`}
         persistState={false}
-        onExpandedChange={setActionDetailExpanded}
         statusSummary={`${visibleActions.length} matching · opens the action record`}
         storageKey={`leadership-dashboard-actions-${selectedProcess}`}
         title={`${selectedDefinition.label} action detail`}
       >
+        <label className="search-box dashboard-record-search"><Search size={16} aria-hidden="true" /><input aria-label="Search linked actions" placeholder="Find an action, owner, associated person or theme" value={searchTerm} onChange={event => { setSearchTerm(event.target.value); setActionDetailPage(1); }} /></label>
+        <div className="dashboard-explorer-toolbar"><label className="dashboard-explorer-filter"><span>Owner</span><select aria-label="Linked action owner" value={actionOwnerFilter} onChange={event => setActionOwnerFilter(event.target.value)}><option value="all">All recorded owners</option>{actionOwners.map(value => <option key={value} value={value}>{value}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Source</span><select aria-label="Linked action source" value={actionSourceFilter} onChange={event => setActionSourceFilter(event.target.value)}><option value="all">All recorded sources</option>{actionSources.map(value => <option key={value} value={value}>{formatLabel(value)}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Action status</span><select aria-label="Linked action status" value={actionStateFilter} onChange={event => setActionStateFilter(event.target.value)}><option value="all">All action statuses</option>{dashboardActionStates.map(value => <option key={value} value={value}>{formatLabel(value)}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Sort by</span><select aria-label="Sort linked actions by" value={actionSortBy} onChange={event => setActionSortBy(event.target.value)}>{[["title", "Action"], ["actionTheme", "Theme"], ["ownerStaffName", "Owner"], ["subjectStaffName", "Associated staff"], ["source", "Source"], ["area", "Area"], ["createdAt", "Raised"], ["dueDate", "Due"], ["completedDate", "Completed"], ["status", "Status"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Order</span><select aria-label="Linked action sort order" value={actionSortDirection} onChange={event => setActionSortDirection(event.target.value as "asc" | "desc")}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label></div>
+        <p className="dashboard-explorer-scope-note">Action search, owner, source, action status and sorting refine this table. Excel uses the dashboard filters above.</p>
         <ActionDetailTable actions={actionDetailActions} onOpenAction={onOpenAction} />
         <Pagination onPageChange={setActionDetailPage} page={actionDetailPage} totalPages={actionDetailTotalPages} />
       </CollapsibleSection></div> : null}
+      </div>
       </>}
     </div>
   );
-}
-
-function DashboardAreaSwitch({ active, canViewReports, onChange }: { active: "leadership" | "uco"; canViewReports: boolean; onChange: (area: "leadership" | "uco") => void }) {
-  if (!canViewReports) return null;
-  return <nav aria-label="Dashboard areas" className="dashboard-area-switch">
-    <button aria-pressed={active === "leadership"} className={active === "leadership" ? "is-active" : ""} onClick={() => onChange("leadership")} type="button">College dashboard</button>
-    <button aria-pressed={active === "uco"} className={active === "uco" ? "is-active" : ""} onClick={() => onChange("uco")} type="button">UCO TLA Reviews</button>
-  </nav>;
 }
 
 function ExecutiveOverview({ records, facts, actions, trendData, trendGranularity, processData }: {
@@ -635,20 +688,21 @@ function ExecutiveOverview({ records, facts, actions, trendData, trendGranularit
   const teams = new Set(records.filter((record) => record.areaCode && record.parentAreaCode && record.areaCode !== record.parentAreaCode).map((record) => record.areaCode)).size;
   const peopleReached = records.reduce((total, record) => total + (record.processKey === "cpd_event" ? record.participantCount : record.subjectDisplayName ? 1 : 0), 0);
   const topFocus = buildFocusFrequency(facts)[0];
+  const activeProcesses = processData.filter((item) => item.value > 0).length;
 
   return <>
     <section className="intelligence-briefing panel">
-      <div><span className="intelligence-section-label"><ShieldCheck size={15} />Executive briefing</span><h2>{records.length ? `${records.length} teaching and learning records.` : "No teaching and learning records have been recorded for this view yet."}</h2><p>{teams} teams represented · {peopleReached} staff interactions or CPD attendances · {actionPosition.inProgress} actions in progress.</p></div>
-      <div className="intelligence-briefing-signal"><span>Most visible focus</span><strong>{topFocus?.label ?? "Insufficient data"}</strong><small>{topFocus ? `${topFocus.value} recorded instances` : "Focus data will appear as forms are completed"}</small></div>
+      <div><span className="intelligence-section-label"><ShieldCheck aria-hidden="true" size={15} />At a glance</span><h2>{records.length ? `${records.length} teaching and learning ${records.length === 1 ? "record" : "records"}` : "No teaching and learning records in this view yet"}</h2><p>{teams} {teams === 1 ? "team" : "teams"} represented · {peopleReached} staff {peopleReached === 1 ? "interaction or CPD attendance" : "interactions or CPD attendances"} · {actionPosition.inProgress} {actionPosition.inProgress === 1 ? "action" : "actions"} in progress.</p></div>
+      <div className="intelligence-briefing-signal"><span>Most visible focus</span><strong>{topFocus?.label ?? "Insufficient data"}</strong><small>{topFocus ? `${topFocus.value} recorded ${topFocus.value === 1 ? "instance" : "instances"}` : "Focus data will appear as forms are completed"}</small></div>
     </section>
     <div className="intelligence-kpi-grid">
-      <MetricCard label="Recorded activity" value={records.length} detail={`${processData.filter((item) => item.value > 0).length} active processes`} tone="teal" />
+      <MetricCard label="Recorded activity" value={records.length} detail={`${activeProcesses} active ${activeProcesses === 1 ? "process" : "processes"}`} tone="teal" />
       <MetricCard label="Teams represented" value={teams} detail="Across the permitted scope" tone="blue" />
-      <MetricCard label="Completed or submitted activity" value={completedRecords} detail={`${completedRecords} of ${records.length} records submitted, completed or closed`} tone="violet" />
+      <MetricCard label="Completed or submitted activity" value={completedRecords} detail={`${completedRecords} of ${records.length} ${records.length === 1 ? "record" : "records"} submitted, completed or closed`} tone="violet" />
       <MetricCard label="Action completion" value={actionPosition.total ? `${actionPosition.completionRate}%` : "—"} detail={`${actionPosition.inProgress} in progress · ${actionPosition.overdue} overdue`} tone={actionPosition.overdue ? "amber" : "green"} />
     </div>
     <div className="intelligence-chart-grid intelligence-chart-grid-wide intelligence-executive-grid">
-      <TrendChart title="Activity trajectory" subtitle={`${formatTrendGranularity(trendGranularity)} completed and in-progress records`} data={trendData} />
+      <TrendChart title="Activity over time" subtitle={`${formatTrendGranularity(trendGranularity)} completed and in-progress records`} data={trendData} />
       <SummaryList title="Process mix" subtitle="All teaching and learning processes in the current view" data={processData} />
     </div>
     <div className="intelligence-executive-assurance"><ActionRecords actions={actions} /></div>
@@ -708,13 +762,17 @@ function ElevateStatusOverview({ academicYear, assets, configuration, rows, tota
 
 function ElevateStatusOrganisationView({ rows, facultyNames }: { rows: ElevateStatusDashboardSummary[]; facultyNames: Map<string, string> }) {
   const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState("name");
+  const [direction, setDirection] = useState<"asc" | "desc">("asc");
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const groups = groupElevateStatusRows(rows, facultyNames).filter((group) => !normalizedQuery
-    || [group.code, group.name, ...group.rows.flatMap((row) => [row.areaCode, row.areaName])].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery)));
+  const value = (row: ElevateStatusDashboardSummary, name: string) => sortBy === "name" ? name : sortBy === "code" ? row.areaCode : sortBy === "staff" ? row.staffCount : sortBy.startsWith("rate-") ? row.staffCount ? elevateStatusLevelCount(row, Number(sortBy.slice(5))) / row.staffCount : null : elevateStatusLevelCount(row, Number(sortBy.slice(6)));
+  const groups = groupElevateStatusRows(rows, facultyNames).filter(group => matchesListSearch(query, group.code, group.name, group.rows.map(row => [row.areaCode, row.areaName, row.staffCount, ...elevateLevelDefinitions.map(level => elevateStatusLevelCount(row, level.level))])))
+    .sort((left, right) => compareListValues(value(left.total, left.name), value(right.total, right.name), direction) || left.name.localeCompare(right.name));
   return <section className="panel organisation-performance-card elevate-status-organisation-card">
     <div className="organisation-performance-heading"><div className="intelligence-card-heading"><div><h3>Faculty and team view</h3><span>Faculties expand to show cumulative Elevate Status attainment for each team</span></div><Building2 size={18} /></div><label className="search-box organisation-performance-search"><Search size={15} /><input aria-label="Filter Elevate Status faculty and team results" onChange={(event) => setQuery(event.target.value)} placeholder="Find a faculty or team" value={query} /></label></div>
+    <div className="dashboard-explorer-toolbar"><label className="dashboard-explorer-filter"><span>Sort by</span><select aria-label="Sort Elevate faculty results by" value={sortBy} onChange={event => setSortBy(event.target.value)}><option value="name">Faculty / team name</option><option value="code">Organisation code</option><option value="staff">Staff in year</option>{elevateLevelDefinitions.flatMap(level => [<option key={`count-${level.level}`} value={`count-${level.level}`}>Level {level.level}+ staff</option>, <option key={`rate-${level.level}`} value={`rate-${level.level}`}>Level {level.level}+ percentage</option>])}</select></label><label className="dashboard-explorer-filter"><span>Order</span><select aria-label="Elevate faculty sort order" value={direction} onChange={event => setDirection(event.target.value as "asc" | "desc")}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label></div>
     <p className="organisation-performance-note">Every percentage uses staff employed in the academic year within that faculty or team. Higher levels remain included in each lower-level threshold.</p>
-    {groups.length ? <div className="organisation-performance-groups elevate-status-organisation-groups">{groups.map((group) => <details key={group.code} open={normalizedQuery ? true : undefined}><summary><ElevateStatusOrganisationLine isFaculty name={group.name} row={group.total} /></summary><div className="organisation-team-list">{group.rows.filter((row) => row.areaCode !== group.code && row.parentAreaCode && row.parentAreaCode !== row.areaCode).map((row) => <ElevateStatusOrganisationLine key={row.orgUnitId ?? row.areaCode} name={row.areaName ?? row.areaCode ?? "Unassigned"} row={row} />)}</div></details>)}</div> : <EmptyChart message="No faculty or team data match this view." />}
+    {groups.length ? <div className="organisation-performance-groups elevate-status-organisation-groups">{groups.map((group) => <details key={group.code} open={normalizedQuery ? true : undefined}><summary><ElevateStatusOrganisationLine isFaculty name={group.name} row={group.total} /></summary><div className="organisation-team-list">{group.rows.filter((row) => row.areaCode !== group.code && row.parentAreaCode && row.parentAreaCode !== row.areaCode).sort((left, right) => compareListValues(value(left, left.areaName ?? left.areaCode ?? ""), value(right, right.areaName ?? right.areaCode ?? ""), direction)).map((row) => <ElevateStatusOrganisationLine key={row.orgUnitId ?? row.areaCode} name={row.areaName ?? row.areaCode ?? "Unassigned"} row={row} />)}</div></details>)}</div> : <EmptyChart message="No faculty or team data match this view." />}
   </section>;
 }
 
@@ -754,9 +812,9 @@ function ProcessOverview({ definition, configuration, records, actions, cpdAtten
   const briefing = buildProcessBriefing(definition.key, records, facts, actions, livLifecycle);
 
   return <>
-    <div className="intelligence-section-title"><div><span>{definition.shortLabel}</span><h2>Teaching and learning position</h2></div><p>Every measure below is calculated from existing structured form data. Narrative notes are not scored.</p></div>
+    <div className="intelligence-section-title"><div><h2>Summary</h2></div><p>Figures use the selected report filters. Written comments remain available in form data.</p></div>
     <section className="intelligence-briefing panel intelligence-process-briefing">
-      <div><span className="intelligence-section-label"><ShieldCheck size={15} />{isLiv ? `Completed ${isAlsLiv ? "ALS LIVs" : "LIVs"}` : "Leadership reading"}</span><h2>{briefing.headline}</h2><p>{briefing.detail}</p></div>
+      <div><span className="intelligence-section-label"><ShieldCheck aria-hidden="true" size={15} />{isLiv ? `Completed ${isAlsLiv ? "ALS LIVs" : "LIVs"}` : "At a glance"}</span><h2>{briefing.headline}</h2><p>{briefing.detail}</p></div>
       <div className="intelligence-briefing-signal"><span>{briefing.signalLabel}</span><strong>{briefing.signalValue}</strong><small>{briefing.signalDetail}</small></div>
     </section>
     <div className="intelligence-kpi-grid">
@@ -790,9 +848,9 @@ function LegacyProcessOverview({ definition, configuration, records, actions, tr
   const average = scoreCount ? scored.reduce((total, record) => total + record.scoreTotal, 0) / scoreCount : 0;
   const complete = records.filter((record) => ["completed", "submitted", "closed"].includes(record.status)).length;
   const areas = new Set(records.map((record) => record.areaCode).filter(Boolean)).size;
-  const open = actions.filter((action) => !action.completedDate);
+  const open = actions.filter(isDashboardActionOpen);
   const totalItems = definition.key === "actions" ? actions.length : records.length;
-  const completedItems = definition.key === "actions" ? actions.filter((action) => action.completedDate).length : complete;
+  const completedItems = definition.key === "actions" ? actions.filter((action) => dashboardActionState(action) === "complete").length : complete;
   return <>
     <div className="intelligence-section-title"><div><span>{definition.shortLabel}</span><h2>Performance and outcomes</h2></div><p>Structured answers are aggregated; narrative notes are excluded from dashboard analysis.</p></div>
     <div className="intelligence-kpi-grid">
@@ -842,7 +900,7 @@ function OutcomeMatrix({ rows }: { rows: OutcomeRow[] }) {
   return <section className="panel intelligence-chart-card intelligence-outcome-matrix-card">
     <div className="intelligence-card-heading"><div><h3>Practice outcome matrix</h3><span>All configured areas with response volume, distribution and Secure practice or above</span></div><Target size={18} /></div>
     <div className="outcome-scale-legend" aria-label="Outcome scale"><span>1 Emerging</span><span>2 Developing</span><span>3 Secure</span><span>4 Strong</span><span>5 Exceptional</span></div>
-    <div className="table-scroll"><table className="outcome-matrix-table"><thead><tr><th>Area</th><th>Rated</th><th>Outcome distribution</th><th>Secure+</th><th>Mean</th></tr></thead><tbody>{rows.map((row) => <tr key={row.label}><td><strong>{row.label}</strong><NeutralOutcomes row={row} /></td><td>{row.responseCount}</td><td><div className="outcome-distribution" aria-label={`${row.label}: ${row.distribution.map((count, index) => `${count} at level ${index + 1}`).join(", ")}`} role="img">{row.distribution.map((count, index) => <i className={`outcome-level-${index + 1}`} key={index} style={{ width: `${row.responseCount ? (count / row.responseCount) * 100 : 0}%` }} title={`Level ${index + 1}: ${count}`} />)}</div></td><td><strong>{percentage(row.secureOrAboveCount, row.responseCount)}%</strong><span>{row.secureOrAboveCount} of {row.responseCount}</span></td><td><strong>{row.average.toFixed(1)}</strong><span>of 5</span></td></tr>)}</tbody></table></div>
+    <ScrollableTableRegion className="table-scroll" label="Practice outcome comparison"><table className="outcome-matrix-table"><thead><tr><th>Area</th><th>Rated</th><th>Outcome distribution</th><th>Secure+</th><th>Mean</th></tr></thead><tbody>{rows.map((row) => <tr key={row.label}><td><strong>{row.label}</strong><NeutralOutcomes row={row} /></td><td>{row.responseCount}</td><td><div className="outcome-distribution" aria-label={`${row.label}: ${row.distribution.map((count, index) => `${count} at level ${index + 1}`).join(", ")}`} role="img">{row.distribution.map((count, index) => <i className={`outcome-level-${index + 1}`} key={index} style={{ width: `${row.responseCount ? (count / row.responseCount) * 100 : 0}%` }} title={`Level ${index + 1}: ${count}`} />)}</div></td><td><strong>{percentage(row.secureOrAboveCount, row.responseCount)}%</strong><span>{row.secureOrAboveCount} of {row.responseCount}</span></td><td><strong>{row.average.toFixed(1)}</strong><span>of 5</span></td></tr>)}</tbody></table></ScrollableTableRegion>
   </section>;
 }
 
@@ -856,12 +914,12 @@ function OutcomeDrilldown({ groups, title = "Practice outcomes", subtitle = "The
       {groups.map((group) => <details key={group.key}>
         <summary>
           <div className="outcome-drilldown-title"><ChevronDown aria-hidden="true" size={17} /><span><strong>{group.label}</strong><NeutralOutcomes row={group.summary} /><small>{group.children.length} {childNoun}{group.children.length === 1 ? "" : "s"} · select to drill down</small></span></div>
-          <strong>{group.summary.responseCount}</strong>
+          <span className="outcome-drilldown-metric outcome-drilldown-rated"><span className="outcome-drilldown-metric-label">Rated</span><strong>{group.summary.responseCount}</strong></span>
           <OutcomeDistribution row={group.summary} />
-          <span className="outcome-drilldown-metric"><strong>{group.summary.responseCount ? `${percentage(group.summary.secureOrAboveCount, group.summary.responseCount)}%` : "—"}</strong><small>{group.summary.responseCount ? `${group.summary.secureOrAboveCount} of ${group.summary.responseCount}` : "No ratings"}</small></span>
-          <span className="outcome-drilldown-metric"><strong>{group.summary.responseCount ? group.summary.average.toFixed(1) : "—"}</strong><small>{group.summary.responseCount ? "of 5" : "No ratings"}</small></span>
+          <span className="outcome-drilldown-metric outcome-drilldown-secure"><span className="outcome-drilldown-metric-label">Secure+</span><strong>{group.summary.responseCount ? `${percentage(group.summary.secureOrAboveCount, group.summary.responseCount)}%` : "—"}</strong><small>{group.summary.responseCount ? `${group.summary.secureOrAboveCount} of ${group.summary.responseCount}` : "No ratings"}</small></span>
+          <span className="outcome-drilldown-metric outcome-drilldown-mean"><span className="outcome-drilldown-metric-label">Mean</span><strong>{group.summary.responseCount ? group.summary.average.toFixed(1) : "—"}</strong><small>{group.summary.responseCount ? "of 5" : "No ratings"}</small></span>
         </summary>
-        <div className="table-scroll"><table className="outcome-matrix-table outcome-drilldown-table"><thead><tr><th>{childLabel}</th><th>Rated</th><th>Outcome distribution</th><th>Secure+</th><th>Mean</th></tr></thead><tbody>{group.children.map((row, index) => <tr className={row.responseCount ? "" : "is-unrated"} key={`${row.label}:${index}`}><td><span className="outcome-rank">{row.responseCount ? index + 1 : "—"}</span><strong>{row.label}</strong><NeutralOutcomes row={row} /></td><td>{row.responseCount || "—"}</td><td>{row.responseCount ? <OutcomeDistribution row={row} /> : <span>No ratings in this view</span>}</td><td><strong>{row.responseCount ? `${percentage(row.secureOrAboveCount, row.responseCount)}%` : "—"}</strong><span>{row.responseCount ? `${row.secureOrAboveCount} of ${row.responseCount}` : "No ratings"}</span></td><td><strong>{row.responseCount ? row.average.toFixed(1) : "—"}</strong><span>{row.responseCount ? "of 5" : "No ratings"}</span></td></tr>)}</tbody></table></div>
+        <ScrollableTableRegion className="table-scroll" label={`${group.label} ${childLabel.toLocaleLowerCase()} outcomes`}><table className="outcome-matrix-table outcome-drilldown-table"><thead><tr><th>{childLabel}</th><th>Rated</th><th>Outcome distribution</th><th>Secure+</th><th>Mean</th></tr></thead><tbody>{group.children.map((row, index) => <tr className={row.responseCount ? "" : "is-unrated"} key={`${row.label}:${index}`}><td><span className="outcome-rank">{row.responseCount ? index + 1 : "—"}</span><strong>{row.label}</strong><NeutralOutcomes row={row} /></td><td>{row.responseCount || "—"}</td><td>{row.responseCount ? <OutcomeDistribution row={row} /> : <span>No ratings in this view</span>}</td><td><strong>{row.responseCount ? `${percentage(row.secureOrAboveCount, row.responseCount)}%` : "—"}</strong><span>{row.responseCount ? `${row.secureOrAboveCount} of ${row.responseCount}` : "No ratings"}</span></td><td><strong>{row.responseCount ? row.average.toFixed(1) : "—"}</strong><span>{row.responseCount ? "of 5" : "No ratings"}</span></td></tr>)}</tbody></table></ScrollableTableRegion>
       </details>)}
     </div>
   </section>;
@@ -917,13 +975,20 @@ function CpdAttendanceRankings({ attendance, participation, facultyNames, onOpen
 
 function OrganisationPerformance({ processKey, rows, facultyNames, onOpenDetail }: { processKey: DashboardProcessKey; rows: OrganisationPerformanceRow[]; facultyNames: Map<string, string>; onOpenDetail: (row: OrganisationPerformanceRow, detail: "records" | "actions") => void }) {
   const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState("name");
+  const [direction, setDirection] = useState<"asc" | "desc">("asc");
+  const [attention, setAttention] = useState("all");
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const filteredRows = rows.filter((row) => !normalizedQuery || [row.code, row.name, row.parentCode].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery)));
-  const groups = groupOrganisationPerformanceRows(filteredRows, facultyNames);
+  const filteredRows = rows.filter(row => matchesListSearch(query, row.code, row.name, row.parentCode, row.recordCount, row.completedCount, row.openActionCount, row.overdueActionCount, row.participatingStaffCount, row.activeStaffCount)
+    && (attention === "all" || attention === "overdue" && row.overdueActionCount > 0 || attention === "open" && row.openActionCount > 0 || attention === "coverage" && row.activeStaffCount > row.participatingStaffCount || attention === "no_activity" && row.recordCount === 0));
+  const value = (row: OrganisationPerformanceRow) => sortBy === "activity" ? processKey === "liv" || processKey === "als_liv" ? row.livRequestedCount ? row.livVisitedCount / row.livRequestedCount : null : row.activeStaffCount ? row.participatingStaffCount / row.activeStaffCount : row.recordCount : sortBy === "outcome" ? row.ratingCount ? row.secureOrAboveCount / row.ratingCount : row.recordCount ? row.completedCount / row.recordCount : null : row[sortBy as "name"];
+  const compare = (left: OrganisationPerformanceRow, right: OrganisationPerformanceRow) => compareListValues(value(left), value(right), direction) || left.name.localeCompare(right.name);
+  const groups = groupOrganisationPerformanceRows(filteredRows, facultyNames).sort((left, right) => compare(left.total, right.total));
   return <section className="panel organisation-performance-card">
     <div className="organisation-performance-heading"><div className="intelligence-card-heading"><div><h3>Faculty and team view</h3><span>Faculties expand to the complete team picture; no areas are silently omitted</span></div><Building2 size={18} /></div><label className="search-box organisation-performance-search"><Search size={15} /><input aria-label="Filter faculty and team results" onChange={(event) => setQuery(event.target.value)} placeholder="Find a faculty or team" value={query} /></label></div>
-    <p className="organisation-performance-note">Record measures use the organisation saved on each record. Staff denominators use employment dates for the selected year and the staff member’s current primary organisation assignment.</p>
-    {groups.length ? <div className="organisation-performance-groups">{groups.map((group) => <details key={group.code} open={normalizedQuery ? true : undefined}><summary><OrganisationPerformanceLine isFaculty onOpenDetail={onOpenDetail} processKey={processKey} row={group.total} /></summary><div className="organisation-team-list">{group.rows.filter((row) => row.code !== group.code || row.parentCode).map((row) => <OrganisationPerformanceLine key={`${group.code}-${row.code}`} onOpenDetail={onOpenDetail} processKey={processKey} row={row} />)}</div></details>)}</div> : <EmptyChart message="No organisation data match the current filters." />}
+    <div className="dashboard-explorer-toolbar"><label className="dashboard-explorer-filter"><span>Show areas</span><select aria-label="Faculty performance attention" value={attention} onChange={event => setAttention(event.target.value)}><option value="all">All areas</option><option value="overdue">With overdue actions</option><option value="open">With open actions</option><option value="coverage">With staff coverage gaps</option><option value="no_activity">No recorded activity</option></select></label><label className="dashboard-explorer-filter"><span>Sort by</span><select aria-label="Sort faculty performance by" value={sortBy} onChange={event => setSortBy(event.target.value)}>{[["name", "Faculty / team name"], ["code", "Organisation code"], ["activity", "Activity / coverage"], ["outcome", "Outcome percentage"], ["recordCount", "Detailed records"], ["completedCount", "Completed records"], ["openActionCount", "Open actions"], ["overdueActionCount", "Overdue actions"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Order</span><select aria-label="Faculty performance sort order" value={direction} onChange={event => setDirection(event.target.value as "asc" | "desc")}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label></div>
+    <p className="organisation-performance-note">Record measures use the organisation saved on each record. Staff denominators use employment dates for the selected year and the staff member’s current primary organisation assignment. Area search, attention filters and sorting refine this comparison only.</p>
+    {groups.length ? <div className="organisation-performance-groups">{groups.map((group) => <details key={group.code} open={normalizedQuery || attention !== "all" ? true : undefined}><summary><OrganisationPerformanceLine isFaculty onOpenDetail={onOpenDetail} processKey={processKey} row={group.total} /></summary><div className="organisation-team-list">{group.rows.filter((row) => row.code !== group.code || row.parentCode).sort(compare).map((row) => <OrganisationPerformanceLine key={`${group.code}-${row.code}`} onOpenDetail={onOpenDetail} processKey={processKey} row={row} />)}</div></details>)}</div> : <EmptyChart message="No organisation data match the current filters." />}
   </section>;
 }
 
@@ -942,20 +1007,20 @@ function OrganisationPerformanceLine({ processKey, row, onOpenDetail, isFaculty 
 }
 
 function MetricCard({ label, value, detail, tone }: { label: string; value: string | number; detail: string; tone: string }) {
-  return <section className={`intelligence-metric intelligence-metric-${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></section>;
+  return <dl className={`intelligence-metric intelligence-metric-${tone}`}><dt>{label}</dt><dd>{value}<small>{detail}</small></dd></dl>;
 }
 
 function TrendChart({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
-  const values = data.length ? data : [{ label: "No data", value: 0 }];
+  const values = data;
   const max = Math.max(...values.map((item) => item.value), 1);
+  const ticks = [...new Set([0, Math.ceil(max / 2), max])];
   const points = values.map((item, index) => {
-    const x = values.length === 1 ? 50 : 8 + (index / (values.length - 1)) * 84;
-    const y = 82 - (item.value / max) * 62;
+    const x = values.length === 1 ? 330 : 44 + (index / (values.length - 1)) * 576;
+    const y = 156 - (item.value / max) * 132;
     return { ...item, x, y };
   });
-  const line = points.length === 1 ? `42,${points[0].y} 58,${points[0].y}` : points.map((point) => `${point.x},${point.y}`).join(" ");
-  const area = points.length === 1 ? `42,86 42,${points[0].y} 58,${points[0].y} 58,86` : `8,86 ${line} ${points.at(-1)?.x ?? 92},86`;
-  return <section className="panel intelligence-chart-card intelligence-trend-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><Activity size={18} /></div>{data.length ? <><svg aria-label={`${title}. ${data.map((item) => `${item.label}: ${item.value}`).join(", ")}`} role="img" viewBox="0 0 100 100" preserveAspectRatio="none"><defs><linearGradient id={`trend-${title.replaceAll(" ", "-")}`} x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="var(--accent)" stopOpacity=".32"/><stop offset="1" stopColor="var(--accent)" stopOpacity="0"/></linearGradient></defs><polygon fill={`url(#trend-${title.replaceAll(" ", "-")})`} points={area}/><polyline fill="none" points={line}/>{points.map((point) => <circle cx={point.x} cy={point.y} key={point.label} r="1.5"><title>{point.label}: {point.value}</title></circle>)}</svg><div className="intelligence-chart-axis">{points.map((point) => <span key={point.label}>{point.label}</span>)}</div></> : <EmptyChart />}</section>;
+  const line = points.length === 1 ? `318,${points[0].y} 342,${points[0].y}` : points.map((point) => `${point.x},${point.y}`).join(" ");
+  return <section className="panel intelligence-chart-card intelligence-trend-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><Activity aria-hidden="true" size={18} /></div>{data.length ? <><svg className="reporting-trend-plot" aria-label={`${title}: ${data.length} ${data.length === 1 ? "period" : "periods"}. Exact values are available in View chart data below.`} role="img" viewBox="0 0 640 180">{ticks.map(tick => <g key={tick} className="reporting-trend-grid"><line x1="44" x2="620" y1={156 - tick / max * 132} y2={156 - tick / max * 132} /><text x="34" y={160 - tick / max * 132} textAnchor="end">{tick.toLocaleString()}</text></g>)}<polyline fill="none" points={line} />{points.map(point => <circle cx={point.x} cy={point.y} key={point.label} r="4"><title>{`${point.label}: ${point.value}`}</title></circle>)}</svg><div className="intelligence-chart-axis reporting-trend-axis">{points.filter((_, index) => index === 0 || index === Math.floor((points.length - 1) / 2) || index === points.length - 1).map(point => <span key={point.label}>{point.label}</span>)}</div><details className="reporting-chart-data"><summary>View chart data</summary><ScrollableTableRegion label={`${title} chart data`}><table><caption className="sr-only">{title}: every period and record count</caption><thead><tr><th scope="col">Period</th><th scope="col">Records</th></tr></thead><tbody>{data.map(item => <tr key={item.label}><td>{item.label}</td><td>{item.value.toLocaleString()}</td></tr>)}</tbody></table></ScrollableTableRegion></details></> : <EmptyChart />}</section>;
 }
 
 function SummaryList({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
@@ -964,7 +1029,7 @@ function SummaryList({ title, subtitle, data }: { title: string; subtitle: strin
 
 function RankedBars({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
   const visible = data; const max = Math.max(...visible.map((item) => item.value), 1);
-  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><BarChart3 size={18} /></div>{visible.length ? <div className="intelligence-ranked-bars">{visible.map((item) => <div key={item.label}><span title={item.label}>{item.label}</span><div><i style={{ width: `${Math.max(4, (item.value / max) * 100)}%` }}/></div><strong>{item.value}</strong></div>)}</div> : <EmptyChart />}</section>;
+  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><BarChart3 size={18} /></div>{visible.length ? <div className="intelligence-ranked-bars">{visible.map((item) => <div key={item.label}><span title={item.label}>{item.label}</span><div><i style={{ width: `${item.value > 0 ? Math.max(2, (item.value / max) * 100) : 0}%` }}/></div><strong>{item.value}</strong></div>)}</div> : <EmptyChart />}</section>;
 }
 
 function PercentageBars({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
@@ -974,13 +1039,13 @@ function PercentageBars({ title, subtitle, data }: { title: string; subtitle: st
 
 function OutcomeProfile({ data }: { data: ChartDatum[] }) {
   const visible = data;
-  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>Focus and outcome profile</h3><span>Average score by configured focus, pillar or practice area</span></div><Target size={18} /></div>{visible.length ? <div className="intelligence-outcome-list">{visible.map((item) => <div key={item.label}><div><strong>{item.label}</strong><span>{item.secondary}</span></div><div className="intelligence-five-scale"><i style={{ width: `${Math.max(3, (item.value / 5) * 100)}%` }}/></div><b>{item.value.toFixed(1)}</b></div>)}</div> : <EmptyChart message="No structured outcome data in this view." />}</section>;
+  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>Focus and outcome profile</h3><span>Average score by configured focus, pillar or practice area</span></div><Target size={18} /></div>{visible.length ? <div className="intelligence-outcome-list">{visible.map((item) => <div key={item.label}><div><strong>{item.label}</strong><span>{item.secondary}</span></div><div className="intelligence-five-scale"><i style={{ width: `${Math.max(0, Math.min(100, (item.value / 5) * 100))}%` }}/></div><b>{item.value.toFixed(1)}</b></div>)}</div> : <EmptyChart message="No structured outcome data in this view." />}</section>;
 }
 
 function DonutChart({ title, subtitle, data }: { title: string; subtitle: string; data: ChartDatum[] }) {
   const visible = data; const total = visible.reduce((sum, item) => sum + item.value, 0);
   let cursor = 0;
-  const gradient = visible.length ? visible.map((item, index) => { const start = cursor; cursor += (item.value / total) * 100; return `var(--chart-${(index % 6) + 1}) ${start}% ${cursor}%`; }).join(",") : "var(--panel-border) 0 100%";
+  const gradient = total > 0 ? visible.map((item, index) => { const start = cursor; cursor += (item.value / total) * 100; return `var(--chart-${(index % 6) + 1}) ${start}% ${cursor}%`; }).join(",") : "var(--surface-muted) 0 100%";
   return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>{title}</h3><span>{subtitle}</span></div><Target size={18} /></div>{visible.length ? <div className="intelligence-donut-layout"><div className="intelligence-donut" style={{ background: `conic-gradient(${gradient})` }}><span><strong>{total}</strong><small>responses</small></span></div><div className="intelligence-donut-legend">{visible.map((item, index) => <div key={item.label}><i style={{ background: `var(--chart-${(index % 6) + 1})` }}/><span>{item.label}</span><strong>{item.value}</strong></div>)}</div></div> : <EmptyChart />}</section>;
 }
 
@@ -993,23 +1058,24 @@ function ActionRecords({ actions }: { actions: ActionSummary[] }) {
       <div><b>{position.inProgress}</b><span>in progress</span></div>
       <div className={position.overdue ? "is-risk" : ""}><b>{position.overdue}</b><span>overdue</span></div>
       <div><b>{position.dueSoon}</b><span>due in 14 days</span></div>
-      <div><b>{position.dueDateCompliance === undefined ? "—" : `${position.dueDateCompliance}%`}</b><span>due-date compliance</span><small>{position.dueDated ? `${position.compliantDueDated} of ${position.dueDated} within deadline` : "No implementation dates"}</small></div>
+      <div><b>{position.dueDateCompliance === undefined ? "—" : `${position.dueDateCompliance}%`}</b><span>due-date compliance</span><small>{position.dueDated ? `${position.compliantDueDated} of ${position.dueDated} within deadline` : "No dates available for compliance"}</small>{position.missingCompletionDates ? <small>Completion date not recorded: {position.missingCompletionDates}</small> : null}</div>
     </div> : <EmptyChart message="No action records are linked to this view." />}
   </section>;
 }
 
 function buildActionPosition(actions: ActionSummary[]) {
-  const reportable = actions.filter((action) => !action.isDeleted && action.statusKey !== "cancelled");
-  const completed = reportable.filter((action) => Boolean(action.completedDate) || action.statusKey === "complete");
-  const active = reportable.filter((action) => !action.completedDate && action.statusKey !== "complete");
-  const overdue = active.filter((action) => action.isOverdue);
-  const inProgress = active.filter((action) => !action.isOverdue);
+  const reportable = actions.filter((action) => !action.isDeleted && dashboardActionState(action) !== "cancelled");
+  const completed = reportable.filter((action) => dashboardActionState(action) === "complete");
+  const active = reportable.filter(isDashboardActionOpen);
+  const overdue = active.filter((action) => dashboardActionState(action) === "overdue");
+  const inProgress = active.filter((action) => dashboardActionState(action) === "open");
   const today = new Date().toISOString().slice(0, 10);
   const dueSoonLimit = new Date();
   dueSoonLimit.setDate(dueSoonLimit.getDate() + 14);
   const dueSoonDate = dueSoonLimit.toISOString().slice(0, 10);
   const dueSoon = inProgress.filter((action) => action.dueDate && action.dueDate >= today && action.dueDate <= dueSoonDate).length;
-  const dueDated = reportable.filter((action) => action.dueDate);
+  const missingCompletionDates = completed.filter((action) => !action.completedDate).length;
+  const dueDated = reportable.filter((action) => action.dueDate && !(dashboardActionState(action) === "complete" && !action.completedDate));
   const compliantDueDated = dueDated.filter((action) => action.completedDate
     ? action.completedDate <= action.dueDate!
     : !action.isOverdue).length;
@@ -1021,6 +1087,7 @@ function buildActionPosition(actions: ActionSummary[]) {
     dueSoon,
     dueDated: dueDated.length,
     compliantDueDated,
+    missingCompletionDates,
     completionRate: reportable.length ? percentage(completed.length, reportable.length) : 0,
     dueDateCompliance: dueDated.length ? percentage(compliantDueDated, dueDated.length) : undefined
   };
@@ -1031,22 +1098,7 @@ function EmptyChart({ message = "No data in the current view." }: { message?: st
 function LearningWalkDeliveryAreas({ records }: { records: ProcessDashboardRecordSummary[] }) {
   const groups = buildLearningWalkDeliveryAreas(records);
   const maximum = Math.max(...groups.map((group) => group.value), 1);
-  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>Learning walk delivery areas</h3><span>Each walk counts once. Older walks without an area appear as Not recorded. Group wording follows the latest recorded label.</span></div><BarChart3 size={18} /></div>{groups.length ? <div className="intelligence-ranked-bars">{groups.map((group) => <div key={group.key}><span title={group.label}>{group.label}</span><div><i style={{ width: `${Math.max(4, (group.value / maximum) * 100)}%` }} /></div><strong>{group.value}</strong></div>)}</div> : <EmptyChart message="No learning walks match the current filters." />}</section>;
-}
-
-function RecordDetailTable({ records, onOpenRecord, showDeliveryArea = false, showStaff = false }: { records: ProcessDashboardRecordSummary[]; onOpenRecord: (recordId: string) => void; showDeliveryArea?: boolean; showStaff?: boolean }) {
-  return <DataTable rows={records} rowKey={(record) => record.id} columns={[
-    { key: "process", header: "Process", render: (record) => getProcessDefinition(record.processKey).shortLabel },
-    { key: "title", header: "Record", render: (record) => <a className="dashboard-detail-link" href={recordPath(record.id)} onClick={(event) => { event.preventDefault(); onOpenRecord(record.id); }}>{record.title}<ArrowUpRight aria-hidden="true" size={14} /></a> },
-    { key: "submitter", header: "Submitted by", render: (record) => record.submitterDisplayName ?? "Not recorded" },
-    ...(showStaff ? [{ key: "staff", header: "Staff member", render: (record: ProcessDashboardRecordSummary) => record.subjectDisplayName ?? "Not recorded" }] : []),
-    { key: "date", header: "Date", render: (record) => formatDate(getRecordDate(record)) },
-    { key: "area", header: "Area", render: (record) => formatArea(record) },
-    ...(showDeliveryArea ? [{ key: "delivery-area", header: "Delivery area", render: (record: ProcessDashboardRecordSummary) => deliveryAreaLabel(record) }] : []),
-    { key: "focus", header: "Theme / focus", render: (record) => formatRecordFocus(record) },
-    ...(!showDeliveryArea ? [{ key: "measure", header: "Outcome / activity", render: (record: ProcessDashboardRecordSummary) => formatRecordMeasure(record) }] : []),
-    { key: "status", header: "Status", render: (record) => <span className="status-pill">{formatLabel(record.status)}</span> }
-  ]}/>;
+  return <section className="panel intelligence-chart-card"><div className="intelligence-card-heading"><div><h3>Learning walk delivery areas</h3><span>Each walk counts once. Older walks without an area appear as Not recorded. Group wording follows the latest recorded label.</span></div><BarChart3 size={18} /></div>{groups.length ? <div className="intelligence-ranked-bars">{groups.map((group) => <div key={group.key}><span title={group.label}>{group.label}</span><div><i style={{ width: `${group.value > 0 ? Math.max(2, (group.value / maximum) * 100) : 0}%` }} /></div><strong>{group.value}</strong></div>)}</div> : <EmptyChart message="No learning walks match the current filters." />}</section>;
 }
 
 function ActionDetailTable({ actions, onOpenAction }: { actions: ActionSummary[]; onOpenAction: (actionId: string, staffId: string) => void }) {
@@ -1054,9 +1106,13 @@ function ActionDetailTable({ actions, onOpenAction }: { actions: ActionSummary[]
     { key: "theme", header: "Theme", render: (action) => action.actionTheme },
     { key: "title", header: "Action", render: (action) => <a className="dashboard-detail-link" href={actionPath(action.id)} onClick={(event) => { event.preventDefault(); onOpenAction(action.id, action.ownerStaffId); }}>{action.title}<ArrowUpRight aria-hidden="true" size={14} /></a> },
     { key: "owner", header: "Owner", render: (action) => action.ownerStaffName ?? "Unassigned" },
+    { key: "staff", header: "Associated staff", render: (action) => action.subjectStaffName ?? "Not recorded" },
+    { key: "source", header: "Source", render: (action) => formatLabel(action.sourceFormType ?? "standalone") },
     { key: "area", header: "Area", render: (action) => action.teamCode ?? action.facultyCode ?? "Unassigned" },
+    { key: "created", header: "Raised", render: (action) => formatDate(action.createdAt) },
     { key: "due", header: "Due", render: (action) => formatDate(action.dueDate) },
-    { key: "status", header: "Status", render: (action) => <span className={`status-pill ${action.isOverdue && !action.completedDate ? "status-risk" : ""}`}>{action.completedDate ? "Complete" : action.isOverdue ? "Overdue" : "Open"}</span> }
+    { key: "completed", header: "Completed", render: (action) => action.completedDate ? formatDate(action.completedDate) : "—" },
+    { key: "status", header: "Status", render: (action) => <span className={`status-pill ${dashboardActionState(action) === "overdue" ? "status-risk" : ""}`}>{formatLabel(dashboardActionState(action))}</span> }
   ]}/>;
 }
 
@@ -1089,7 +1145,7 @@ function buildAdaptiveTrend(items: Array<{ date: string }>, granularity: TrendGr
       if (!counts.has(cursor)) counts.set(cursor, 0);
     }
   }
-  return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)).slice(granularity === "month" ? -10 : undefined).map(([key, value]) => ({
+  return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => ({
     label: granularity === "day" ? formatTrendDate(key) : granularity === "week" ? `w/c ${formatTrendDate(key)}` : formatMonth(key),
     value
   }));
@@ -1281,8 +1337,8 @@ function buildProcessMetrics(
   const numericFacts = facts.filter((fact) => !fact.dimensionKey.endsWith("_statement_outcome") && fact.numericValue !== undefined && fact.numericValue !== null);
   const secure = numericFacts.filter((fact) => Number(fact.numericValue) >= 3).length;
   const complete = records.filter((record) => isCompletedStatus(record.status)).length;
-  const openActions = actions.filter((action) => !action.completedDate);
-  const overdueActions = openActions.filter((action) => action.isOverdue);
+  const openActions = actions.filter(isDashboardActionOpen);
+  const overdueActions = openActions.filter((action) => dashboardActionState(action) === "overdue");
   const coverage = staffParticipation && staffParticipation.activeStaffCount
     ? percentage(staffParticipation.participatingStaffCount, staffParticipation.activeStaffCount)
     : undefined;
@@ -1349,7 +1405,7 @@ function buildProcessMetrics(
     ];
   }
   if (processKey === "actions") {
-    const completeActions = actions.filter((action) => action.completedDate).length;
+    const completeActions = actions.filter((action) => dashboardActionState(action) === "complete").length;
     return [
       { label: "Actions raised", value: actions.length, detail: `${completeActions} completed`, tone: "teal" },
       { label: "Open actions", value: openActions.length, detail: `${actions.length ? percentage(openActions.length, actions.length) : 0}% of actions`, tone: "blue" },
@@ -1382,7 +1438,7 @@ function buildProbationObservationCounts(records: ProcessDashboardRecordSummary[
 function buildProcessBriefing(processKey: DashboardProcessKey, records: ProcessDashboardRecordSummary[], facts: DashboardDimensionFact[], actions: ActionSummary[], liv: LivLifecycleTotals) {
   const outcomes = buildOutcomeRows(facts.filter((fact) => !fact.dimensionKey.endsWith("_statement_outcome")));
   const priority = outcomes[0];
-  const overdue = actions.filter((action) => !action.completedDate && action.isOverdue).length;
+  const overdue = actions.filter((action) => dashboardActionState(action) === "overdue").length;
   if (processKey === "liv" || processKey === "als_liv") {
     const scheduledConversion = liv.requestedCount ? percentage(liv.scheduledCount, liv.requestedCount) : 0;
     const isAlsLiv = processKey === "als_liv";
@@ -1454,8 +1510,8 @@ function buildOrganisationPerformanceRows(
   for (const action of actions) {
     const code = action.teamCode ?? action.facultyCode;
     const row = ensure(code, code, action.teamCode ? action.facultyCode : undefined);
-    if (!action.completedDate) row.openActionCount += 1;
-    if (!action.completedDate && action.isOverdue) row.overdueActionCount += 1;
+    if (isDashboardActionOpen(action)) row.openActionCount += 1;
+    if (dashboardActionState(action) === "overdue") row.overdueActionCount += 1;
   }
   for (const item of participation) {
     const row = ensure(item.areaCode ?? item.parentAreaCode, item.areaName, item.parentAreaCode);
@@ -1647,10 +1703,6 @@ function matchesOrganisation(areaCode?: string, parentAreaCode?: string, orgUnit
 function splitValues(value?: string) { return value?.split("|").map((item) => item.trim()).filter(Boolean) ?? []; }
 function uniqueValues(values: string[]) { return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right)); }
 function getRecordDate(record: ProcessDashboardRecordSummary) { return record.recordDate ?? record.createdAt.slice(0, 10); }
-function compareRecords(left: ProcessDashboardRecordSummary, right: ProcessDashboardRecordSummary, sort: SortKey) { if (sort === "date_asc") return getRecordDate(left).localeCompare(getRecordDate(right)); if (sort === "title") return left.title.localeCompare(right.title); if (sort === "area") return (left.areaCode ?? "").localeCompare(right.areaCode ?? ""); if (sort === "status") return left.status.localeCompare(right.status); return getRecordDate(right).localeCompare(getRecordDate(left)); }
-function formatArea(record: ProcessDashboardRecordSummary) { return record.parentAreaCode && record.areaCode && record.parentAreaCode !== record.areaCode ? `${record.parentAreaCode} / ${record.areaCode}` : record.areaCode ?? "Unassigned"; }
-function formatRecordFocus(record: ProcessDashboardRecordSummary) { return splitValues(record.theme).join(", ") || record.detail || record.summary || "Not recorded"; }
-function formatRecordMeasure(record: ProcessDashboardRecordSummary) { if (record.processKey === "cpd_event") return `${record.participantCount} participants · ${formatDuration(record.learningMinutes)}`; if (record.scoreCount) return `${(record.scoreTotal / record.scoreCount).toFixed(1)} / ${record.scoreMaximum}`; if (record.processKey === "probation_case") return record.sampleSize ? `Observation ${record.sampleSize}` : "Started"; if (record.processKey === "liv" || record.processKey === "als_liv") return `${record.sampleSize} visits`; if (record.processKey === "work_scrutiny") return `${record.sampleSize} sampled`; return "—"; }
 function formatDuration(minutes: number) { const hours = Math.floor(minutes / 60); const remainder = minutes % 60; return hours ? `${hours}h${remainder ? ` ${remainder}m` : ""}` : `${remainder}m`; }
 function formatLabel(value: string) { return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase()); }
 function formatDate(value?: string) { return value ? new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${value.slice(0, 10)}T00:00:00`)) : "No date"; }
@@ -1658,9 +1710,11 @@ function formatMonth(value: string) { return new Intl.DateTimeFormat("en-GB", { 
 function academicYearForDate(value: string) { const date = new Date(value); const year = date.getFullYear(); const start = date.getMonth() >= 7 ? year : year - 1; return `${start}/${String(start + 1).slice(-2)}`; }
 function formatScopeLabel(user: CurrentUser) { const count = user.scopes.filter((scope) => scope.scopeType === "assigned_org_units").length; return count ? `${count} assigned organisation area${count === 1 ? "" : "s"}` : "your permitted records"; }
 
-function collectDashboardOrgOptions(orgUnits: OrgUnitSummary[], user: CurrentUser) {
+function collectDashboardOrgOptions(orgUnits: OrgUnitSummary[], user: CurrentUser, historicalRows: { orgUnitId?: string | null; areaCode?: string | null; parentAreaCode?: string | null }[] = [], historicalActions: ActionSummary[] = []) {
   const includedIds = dashboardVisibleUnitIds(orgUnits);
-  const active = orgUnits.filter((unit) => unit.isActive && includedIds.has(unit.id)
+  const referencedIds = new Set(historicalRows.map(row => row.orgUnitId).filter(Boolean));
+  const referencedCodes = new Set([...historicalRows.flatMap(row => [row.areaCode, row.parentAreaCode]), ...historicalActions.flatMap(action => [action.facultyCode, action.teamCode])].filter(Boolean));
+  const active = orgUnits.filter((unit) => (unit.isActive || referencedIds.has(unit.id) || referencedCodes.has(unit.code)) && includedIds.has(unit.id)
     && ["faculty", "team", "faculty_child_code", "faculty_child"].includes(unit.orgUnitType));
   const byId = new Map(active.map((unit) => [unit.id, unit]));
   const permitted = new Set(user.permissions.includes("reports.view_all")

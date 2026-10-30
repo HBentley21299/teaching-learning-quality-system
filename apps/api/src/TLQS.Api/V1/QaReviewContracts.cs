@@ -7,7 +7,7 @@ public sealed record SaveQaOutcomeLabelsRequest(string Below, string At, string 
 public sealed record QaNotSeenSetting(Guid TemplateId, string ActivityName, string TemplateName, bool AllowsNotSeen, byte[] RowVersion);
 public sealed record SaveQaNotSeenSettingRequest(bool AllowsNotSeen, byte[]? RowVersion);
 public sealed record QaFormAccessSetting(Guid TemplateId, string ActivityName, string TemplateName, bool RestrictQaStaff, IReadOnlyList<Guid> StaffIds, byte[] RowVersion);
-public sealed record QaFormAccessStaff(Guid StaffId, string DisplayName, string Email);
+public sealed record QaFormAccessStaff(Guid StaffId, string DisplayName, string Email, bool IsEligibleQaStaff);
 public sealed record QaFormAccessSettings(IReadOnlyList<QaFormAccessSetting> Forms, IReadOnlyList<QaFormAccessStaff> Staff);
 public sealed record SaveQaFormAccessSettingRequest(bool RestrictQaStaff, IReadOnlyList<Guid> StaffIds, byte[]? RowVersion);
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Search } from "lucide-react";
+import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { confirmUnsavedNavigation } from "../components/UnsavedChangesGuard";
 import { StaffProfilePanel, type StaffProfileRecordLinkHandler } from "../features/StaffProfilePanel";
 import type { CurrentUser, StaffSummary } from "../services/types";
@@ -35,14 +35,14 @@ export function StaffProfileWorkspace({
     : staff.filter((staffMember) => staffMember.id === (user.staffId ?? currentUserStaff?.id));
 
   const [selectedStaffId, setSelectedStaffId] = useState(
-    accessibleStaff.some((staffMember) => staffMember.id === initialStaffId)
-      ? initialStaffId
+    initialStaffId
+      ? accessibleStaff.some((staffMember) => staffMember.id === initialStaffId) || initialStaffId === user.staffId ? initialStaffId : ""
       : user.staffId ?? currentUserStaff?.id ?? accessibleStaff[0]?.id ?? ""
   );
 
   useEffect(() => {
-    if (initialStaffId && accessibleStaff.some((staffMember) => staffMember.id === initialStaffId)) {
-      setSelectedStaffId(initialStaffId);
+    if (initialStaffId) {
+      setSelectedStaffId(accessibleStaff.some((staffMember) => staffMember.id === initialStaffId) || initialStaffId === user.staffId ? initialStaffId : "");
     } else if (!initialStaffId) {
       setSelectedStaffId(user.staffId ?? currentUserStaff?.id ?? accessibleStaff[0]?.id ?? "");
     }
@@ -57,24 +57,19 @@ export function StaffProfileWorkspace({
         </div>
         {canViewAllProfiles || canViewScopedProfiles ? (
           <div className="toolbar">
-            <div className="search-box staff-profile-selector">
-              <Search size={16} aria-hidden="true" />
-              <select
-                aria-label="Select staff profile"
-                onChange={async (event) => {
-                  const next = event.target.value;
+            <div className="staff-profile-selector">
+              <StaffSearchSelect
+                id="profile-staff-selector"
+                label="Select staff profile"
+                staff={accessibleStaff}
+                onChange={async (next) => {
+                  if (!next || next === selectedStaffId) return;
                   if (!await confirmUnsavedNavigation()) return;
                   setSelectedStaffId(next);
                   onStaffChanged?.(next);
                 }}
                 value={selectedStaffId}
-              >
-                {accessibleStaff.map((staffMember) => (
-                  <option key={staffMember.id} value={staffMember.id}>
-                    {staffMember.displayName} · {staffMember.email}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           </div>
         ) : null}
@@ -82,7 +77,7 @@ export function StaffProfileWorkspace({
 
       {selectedStaffId ? (
         <StaffProfilePanel
-          key={`${selectedStaffId}:${initialElevateRecordId}`}
+          key={`${selectedStaffId}:${academicYear}:${initialElevateRecordId}`}
           elevateRecordId={initialElevateRecordId}
           academicYear={academicYear}
           openElevateResult={Boolean(initialElevateRecordId)}
@@ -93,7 +88,7 @@ export function StaffProfileWorkspace({
         />
       ) : (
         <section className="panel">
-          <p className="muted-copy">No Staff Profile is available for this account.</p>
+          <p className="muted-copy">{initialStaffId ? "This staff profile is unavailable in your directory. Choose another staff member, or retry loading the directory if a connection error is shown." : "No Staff Profile is available for this account."}</p>
         </section>
       )}
     </div>

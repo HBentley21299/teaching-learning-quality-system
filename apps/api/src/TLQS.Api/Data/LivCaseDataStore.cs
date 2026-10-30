@@ -493,6 +493,12 @@ public sealed partial class SqlFoundationDataStore
         CancellationToken cancellationToken,
         string processKey = "liv")
     {
+        // Keep the legacy status endpoint inside the same cycle-completion rules.
+        if (action == "close")
+        {
+            var completed = await CompleteLivCycleAsync(livId, false, currentUser, cancellationToken, processKey);
+            return completed is null ? FormSubmissionUpdateResult.NotFound : FormSubmissionUpdateResult.Saved;
+        }
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 

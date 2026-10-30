@@ -84,19 +84,26 @@ public sealed partial class SqlFoundationDataStore
                 (SELECT COUNT(*) FROM quality.actions action_row
                  LEFT JOIN core.records record_row ON record_row.id = action_row.source_record_id
                  WHERE (action_row.subject_staff_id = @staffId OR action_row.owner_staff_id = @staffId)
+                   AND EXISTS (SELECT 1 FROM quality.fn_liv_action_access(action_row.id, @currentUserAccountId))
                    AND action_row.archived_at IS NULL AND action_row.completed_date IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM core.lookup_values status_row WHERE status_row.id=action_row.status_lookup_value_id AND status_row.value_key IN (N'cancelled',N'complete'))
                    AND ((record_row.id IS NOT NULL AND record_row.academic_year_key = @academicYear)
                      OR (record_row.id IS NULL AND CONVERT(date, action_row.created_at) BETWEEN @startDate AND @endDate))),
                 (SELECT COUNT(*) FROM quality.actions action_row
                  LEFT JOIN core.records record_row ON record_row.id = action_row.source_record_id
                  WHERE (action_row.subject_staff_id = @staffId OR action_row.owner_staff_id = @staffId)
-                   AND action_row.archived_at IS NULL AND action_row.completed_date IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM quality.fn_liv_action_access(action_row.id, @currentUserAccountId))
+                   AND action_row.archived_at IS NULL
+                   AND (action_row.completed_date IS NOT NULL OR EXISTS (SELECT 1 FROM core.lookup_values status_row WHERE status_row.id=action_row.status_lookup_value_id AND status_row.value_key=N'complete'))
+                   AND NOT EXISTS (SELECT 1 FROM core.lookup_values status_row WHERE status_row.id=action_row.status_lookup_value_id AND status_row.value_key=N'cancelled')
                    AND ((record_row.id IS NOT NULL AND record_row.academic_year_key = @academicYear)
                      OR (record_row.id IS NULL AND CONVERT(date, action_row.created_at) BETWEEN @startDate AND @endDate))),
                 (SELECT COUNT(*) FROM quality.actions action_row
                  LEFT JOIN core.records record_row ON record_row.id = action_row.source_record_id
                  WHERE (action_row.subject_staff_id = @staffId OR action_row.owner_staff_id = @staffId)
+                   AND EXISTS (SELECT 1 FROM quality.fn_liv_action_access(action_row.id, @currentUserAccountId))
                    AND action_row.archived_at IS NULL AND action_row.completed_date IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM core.lookup_values status_row WHERE status_row.id=action_row.status_lookup_value_id AND status_row.value_key IN (N'cancelled',N'complete'))
                    AND action_row.due_date < CONVERT(date, sysutcdatetime())
                    AND ((record_row.id IS NOT NULL AND record_row.academic_year_key = @academicYear)
                      OR (record_row.id IS NULL AND CONVERT(date, action_row.created_at) BETWEEN @startDate AND @endDate))),
@@ -220,221 +227,77 @@ public sealed partial class SqlFoundationDataStore
     }
 
     public async Task<PagedResult<StaffCpdRecordSummary>> GetStaffProfileCpdPageAsync(
-        Guid staffId, string academicYear, int page, int pageSize, CancellationToken cancellationToken)
+        Guid staffId, string academicYear, int page, int pageSize, CancellationToken cancellationToken, ListQuery? query = null)
     {
         (page, pageSize) = NormalizePage(page, pageSize);
         var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
-        var total = await CountAsync(
-            """
-            SELECT COUNT(*) FROM cpd.cpd_attendance attendance
-            JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
-            WHERE attendance.staff_id = @staffId AND attendance.archived_at IS NULL
-              AND attendance.attendance_status = N'Attended' AND event_row.event_date BETWEEN @startDate AND @endDate;
-            """, staffId, academicYear, startDate, endDate, cancellationToken);
-        var items = await QueryAsync(
-            """
-            SELECT event_row.id, event_row.record_id, event_row.event_title, event_row.event_date, themes.response_text, event_row.duration_minutes,
-                   CASE WHEN template_info.template_key = N'cpd_core' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END,
-                   CASE WHEN template_info.template_key = N'cpd_mandatory' THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END
-            FROM cpd.cpd_attendance attendance
-            JOIN cpd.cpd_events event_row ON event_row.id = attendance.cpd_event_id AND event_row.archived_at IS NULL
-            OUTER APPLY (SELECT TOP (1) response.response_text FROM forms.form_submissions submission
-                         JOIN forms.form_responses response ON response.form_submission_id = submission.id AND response.archived_at IS NULL
-                         JOIN forms.form_fields field_row ON field_row.id = response.form_field_id AND field_row.field_key = N'cpd_themes'
-                         WHERE submission.record_id = event_row.record_id AND submission.archived_at IS NULL) themes
-            OUTER APPLY (SELECT TOP (1) template.template_key FROM forms.form_submissions submission
-                         JOIN forms.form_template_versions version_row ON version_row.id = submission.form_template_version_id
-                         JOIN forms.form_templates template ON template.id = version_row.form_template_id
-                         WHERE submission.record_id = event_row.record_id AND submission.archived_at IS NULL ORDER BY submission.created_at DESC) template_info
-            WHERE attendance.staff_id = @staffId AND attendance.archived_at IS NULL
-              AND attendance.attendance_status = N'Attended' AND event_row.event_date BETWEEN @startDate AND @endDate
-            ORDER BY event_row.event_date DESC, event_row.id OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
-            """,
-            command => AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize),
-            reader => new StaffCpdRecordSummary(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), DateOnly.FromDateTime(reader.GetDateTime(3)), GetStringOrNull(reader, 4), GetIntOrNull(reader, 5), reader.GetBoolean(6), reader.GetBoolean(7)),
-            cancellationToken);
-        return CreatePage(items, page, pageSize, total);
+        return await QueryStaffProfilePageAsync<StaffCpdRecordSummary>(StaffProfileListSources.Cpd,
+            ProfileSortColumns(("date", "EventDate"), ("eventDate", "EventDate"), ("title", "Title"), ("type", "FilterType"), ("themes", "Themes"), ("duration", "DurationMinutes"), ("durationMinutes", "DurationMinutes")),
+            "EventDate DESC", query, page, pageSize,
+            command => AddProfileListParameters(command, staffId, academicYear, startDate, endDate), cancellationToken);
     }
 
     public async Task<PagedResult<StaffProfileCoachingSummary>> GetStaffProfileCoachingPageAsync(
-        Guid staffId, string academicYear, int page, int pageSize, CancellationToken cancellationToken)
+        Guid staffId, string academicYear, int page, int pageSize, CancellationToken cancellationToken, ListQuery? query = null)
     {
         (page, pageSize) = NormalizePage(page, pageSize);
         var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
-        var total = await CountAsync(
-            "SELECT COUNT(*) FROM quality.coaching_sessions WHERE staff_id=@staffId AND archived_at IS NULL AND session_date BETWEEN @startDate AND @endDate;",
-            staffId, academicYear, startDate, endDate, cancellationToken);
-        var items = await QueryAsync(
-            """
-            SELECT session.id, session.record_id, cycle.cycle_number, session.session_number, session.session_date,
-                   session.session_type, session.status, coach.display_name, focus.display_name, session.specific_session_focus
-            FROM quality.coaching_sessions session
-            JOIN quality.coaching_cycles cycle ON cycle.id = session.cycle_id AND cycle.archived_at IS NULL
-            JOIN people.staff coach ON coach.id = session.coach_staff_id
-            LEFT JOIN core.lookup_values focus ON focus.id = session.primary_focus_lookup_value_id
-            WHERE session.staff_id=@staffId AND session.archived_at IS NULL AND session.session_date BETWEEN @startDate AND @endDate
-            ORDER BY session.session_date DESC, cycle.cycle_number DESC, session.session_number DESC
-            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
-            """,
-            command => AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize),
-            reader => new StaffProfileCoachingSummary(
-                reader.GetGuid(0), reader.GetGuid(1), reader.GetInt32(2), reader.GetInt32(3),
-                DateOnly.FromDateTime(reader.GetDateTime(4)), reader.GetString(5), reader.GetString(6), reader.GetString(7),
-                GetStringOrNull(reader, 8), GetStringOrNull(reader, 9)),
-            cancellationToken);
-        return CreatePage(items, page, pageSize, total);
+        return await QueryStaffProfilePageAsync<StaffProfileCoachingSummary>(StaffProfileListSources.Coaching,
+            ProfileSortColumns(("date", "SessionDate"), ("sessionDate", "SessionDate"), ("person", "CoachName"), ("coachName", "CoachName"), ("type", "SessionType"), ("sessionType", "SessionType"), ("status", "Status"), ("focus", "COALESCE(PrimaryFocus, SpecificSessionFocus)"), ("primaryFocus", "PrimaryFocus"), ("specificSessionFocus", "SpecificSessionFocus"), ("cycle", "CycleNumber"), ("cycleNumber", "CycleNumber"), ("session", "SessionNumber"), ("sessionNumber", "SessionNumber")),
+            "SessionDate DESC, CycleNumber DESC, SessionNumber DESC", query, page, pageSize,
+            command => AddProfileListParameters(command, staffId, academicYear, startDate, endDate), cancellationToken);
     }
 
     public async Task<PagedResult<StaffProfileLivSummary>> GetStaffProfileLivPageAsync(
-        Guid staffId, string academicYear, int page, int pageSize, CurrentUser currentUser, CancellationToken cancellationToken)
+        Guid staffId, string academicYear, int page, int pageSize, CurrentUser currentUser, CancellationToken cancellationToken, ListQuery? query = null)
     {
         (page, pageSize) = NormalizePage(page, pageSize);
         var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
-        const string whereClause = """
-            liv.subject_staff_id = @staffId
-            AND liv.archived_at IS NULL
-            AND record_row.archived_at IS NULL
-            AND record_row.academic_year_key = @academicYear
-            AND (
-                liv.subject_staff_id = @currentStaffId
-                OR (liv.process_key = N'liv' AND @canViewStandardLiv = 1)
-                OR (liv.process_key = N'als_liv' AND @canViewAlsLiv = 1)
-            )
-            """;
-        var countRows = await QueryAsync(
-            $"SELECT COUNT(*) FROM quality.liv_records liv JOIN core.records record_row ON record_row.id=liv.record_id WHERE {whereClause};",
-            command => AddLivProfileParameters(command, staffId, academicYear, startDate, endDate, currentUser),
-            reader => reader.GetInt32(0),
-            cancellationToken);
-        var total = countRows[0];
-        var items = await QueryAsync(
-            $"""
-            SELECT liv.id, liv.record_id, record_row.title, record_row.record_date,
-                   reviewer.display_name, parent.code, area.code, liv.current_stage,
-                   liv.status, liv.created_at, liv.updated_at, liv.process_key
-            FROM quality.liv_records liv
-            JOIN core.records record_row ON record_row.id = liv.record_id
-            LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
-            LEFT JOIN org.org_units area ON area.id = liv.org_unit_id
-            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id AND parent.org_unit_type = N'faculty'
-            WHERE {whereClause}
-            ORDER BY COALESCE(liv.updated_at, liv.created_at) DESC, liv.id
-            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
-            """,
-            command =>
-            {
-                AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize);
-                AddLivProfileAccessParameters(command, currentUser);
-            },
-            reader => new StaffProfileLivSummary(
-                reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), GetDateOnlyOrNull(reader, 3),
-                GetStringOrNull(reader, 4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6),
-                GetStringOrNull(reader, 7) ?? "case_created", reader.GetString(8),
-                reader.GetFieldValue<DateTimeOffset>(9), GetDateTimeOffsetOrNull(reader, 10), reader.GetString(11)),
-            cancellationToken);
-        return CreatePage(items, page, pageSize, total);
+        return await QueryStaffProfilePageAsync<StaffProfileLivSummary>(StaffProfileListSources.Liv,
+            ProfileSortColumns(("date", "RecordDate"), ("recordDate", "RecordDate"), ("title", "Title"), ("person", "ReviewerName"), ("reviewerName", "ReviewerName"), ("type", "ProcessKey"), ("processKey", "ProcessKey"), ("status", "Status"), ("stage", "CurrentStage"), ("currentStage", "CurrentStage"), ("area", "OrgUnitCode"), ("orgUnitCode", "OrgUnitCode"), ("parentOrgUnitCode", "ParentOrgUnitCode"), ("updated", "COALESCE(UpdatedAt, CreatedAt)"), ("updatedAt", "UpdatedAt"), ("createdAt", "CreatedAt")),
+            "COALESCE(UpdatedAt, CreatedAt) DESC", query, page, pageSize,
+            command => AddLivProfileParameters(command, staffId, academicYear, startDate, endDate, currentUser), cancellationToken);
     }
 
     public async Task<PagedResult<StaffProfileProbationSummary>> GetStaffProfileProbationPageAsync(
-        Guid staffId, int page, int pageSize, CurrentUser currentUser, CancellationToken cancellationToken)
+        Guid staffId, int page, int pageSize, CurrentUser currentUser, CancellationToken cancellationToken, ListQuery? query = null)
     {
         (page, pageSize) = NormalizePage(page, pageSize);
-        var canViewAll = currentUser.HasPermission(PermissionKeys.ProbationManage)
-            || currentUser.HasPermission(PermissionKeys.ReportsViewAll);
-        var canViewScoped = currentUser.HasPermission(PermissionKeys.ProbationSubmit)
-            || currentUser.HasPermission(PermissionKeys.ReportsViewScoped);
-        const string whereClause = """
-            probation.subject_staff_id = @staffId
-            AND probation.archived_at IS NULL
-            AND (
-                @canViewAll = 1
-                OR probation.subject_staff_id = @currentStaffId
-                OR probation.created_by_user_account_id = @currentUserAccountId
-                OR EXISTS (
-                    SELECT 1 FROM quality.probation_case_reviewers reviewer
-                    WHERE reviewer.probation_case_id = probation.id AND reviewer.staff_id = @currentStaffId
-                )
-                OR (@canViewScoped = 1 AND (
-                    EXISTS (SELECT 1 FROM org.fn_visible_staff(@currentUserAccountId) visible WHERE visible.staff_id = probation.subject_staff_id)
-                    OR EXISTS (SELECT 1 FROM org.fn_visible_org_units(@currentUserAccountId) visible WHERE visible.org_unit_id = probation.org_unit_id)
-                ))
-            )
-            """;
-        var totalRows = await QueryAsync(
-            $"SELECT COUNT(*) FROM quality.probation_cases probation WHERE {whereClause};",
-            command => AddProbationProfileParameters(command, staffId, currentUser, canViewAll, canViewScoped),
-            reader => reader.GetInt32(0),
-            cancellationToken);
-        var items = await QueryAsync(
-            $"""
-            SELECT probation.id, probation.record_id, record_row.title, probation.academic_year,
-                   probation.status, probation.current_observation_number, parent.code, area.code,
-                   probation.created_at, probation.updated_at
-            FROM quality.probation_cases probation
-            JOIN core.records record_row ON record_row.id = probation.record_id AND record_row.archived_at IS NULL
-            LEFT JOIN org.org_units area ON area.id = probation.org_unit_id
-            LEFT JOIN org.org_units parent ON parent.id = area.parent_org_unit_id AND parent.org_unit_type = N'faculty'
-            WHERE {whereClause}
-            ORDER BY COALESCE(probation.updated_at, probation.created_at) DESC, probation.id
-            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
-            """,
-            command =>
-            {
-                AddProbationProfileParameters(command, staffId, currentUser, canViewAll, canViewScoped);
-                command.Parameters.AddWithValue("@offset", (page - 1) * pageSize);
-                command.Parameters.AddWithValue("@pageSize", pageSize);
-            },
-            reader => new StaffProfileProbationSummary(
-                reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3),
-                reader.GetString(4), reader.GetByte(5), GetStringOrNull(reader, 6), GetStringOrNull(reader, 7),
-                reader.GetFieldValue<DateTimeOffset>(8), GetDateTimeOffsetOrNull(reader, 9)),
-            cancellationToken);
-        return CreatePage(items, page, pageSize, totalRows[0]);
+        var canViewAll = currentUser.HasPermission(PermissionKeys.ProbationManage) || currentUser.HasPermission(PermissionKeys.ReportsViewAll);
+        var canViewScoped = currentUser.HasPermission(PermissionKeys.ProbationSubmit) || currentUser.HasPermission(PermissionKeys.ReportsViewScoped);
+        return await QueryStaffProfilePageAsync<StaffProfileProbationSummary>(StaffProfileListSources.Probation,
+            ProfileSortColumns(("date", "CreatedAt"), ("createdAt", "CreatedAt"), ("title", "Title"), ("type", "AcademicYear"), ("academicYear", "AcademicYear"), ("status", "Status"), ("observation", "CurrentObservationNumber"), ("currentObservationNumber", "CurrentObservationNumber"), ("area", "OrgUnitCode"), ("orgUnitCode", "OrgUnitCode"), ("parentOrgUnitCode", "ParentOrgUnitCode"), ("updated", "COALESCE(UpdatedAt, CreatedAt)"), ("updatedAt", "UpdatedAt")),
+            "COALESCE(UpdatedAt, CreatedAt) DESC", query, page, pageSize,
+            command => AddProbationProfileParameters(command, staffId, currentUser, canViewAll, canViewScoped), cancellationToken);
     }
 
     public async Task<PagedResult<StaffProfileActionSummary>> GetStaffProfileActionsPageAsync(
-        Guid staffId, string academicYear, int page, int pageSize, CancellationToken cancellationToken)
+        Guid staffId, string academicYear, int page, int pageSize, CurrentUser currentUser, CancellationToken cancellationToken, ListQuery? query = null)
     {
         (page, pageSize) = NormalizePage(page, pageSize);
         var (startDate, endDate) = await GetAcademicYearBoundsAsync(academicYear, cancellationToken);
-        const string whereClause = """
-            (action_row.subject_staff_id = @staffId OR action_row.owner_staff_id = @staffId)
-            AND action_row.archived_at IS NULL
-            AND ((record_row.id IS NOT NULL AND record_row.academic_year_key = @academicYear)
-              OR (record_row.id IS NULL AND CONVERT(date, action_row.created_at) BETWEEN @startDate AND @endDate))
-            """;
-        var total = await CountAsync(
-            $"SELECT COUNT(*) FROM quality.actions action_row LEFT JOIN core.records record_row ON record_row.id=action_row.source_record_id WHERE {whereClause};",
-            staffId, academicYear, startDate, endDate, cancellationToken);
-        var items = await QueryAsync(
-            $"""
-            SELECT action_row.id, action_row.title, action_row.detail, action_row.created_at, action_row.source_record_id,
-                   record_row.title, record_row.record_type, module.name, owner.display_name, status_value.value_key,
-                   action_row.due_date, action_row.completed_date
-            FROM quality.actions action_row
-            JOIN people.staff owner ON owner.id = action_row.owner_staff_id
-            LEFT JOIN core.records record_row ON record_row.id = action_row.source_record_id
-            LEFT JOIN core.modules module ON module.id = record_row.module_id
-            LEFT JOIN core.lookup_values status_value ON status_value.id = action_row.status_lookup_value_id
-            WHERE {whereClause}
-            ORDER BY CASE WHEN action_row.completed_date IS NULL THEN 0 ELSE 1 END, action_row.due_date, action_row.created_at DESC
-            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
-            """,
-            command => AddPageParameters(command, staffId, academicYear, startDate, endDate, page, pageSize),
-            reader =>
+        return await QueryStaffProfilePageAsync<StaffProfileActionSummary>(StaffProfileListSources.Actions,
+            ProfileSortColumns(("date", "CreatedAt"), ("createdAt", "CreatedAt"), ("title", "Title"), ("person", "OwnerName"), ("ownerName", "OwnerName"), ("type", "FilterType"), ("sourceRecordType", "SourceRecordType"), ("status", "FilterStatus"), ("statusKey", "FilterStatus"), ("due", "DueDate"), ("dueDate", "DueDate"), ("completed", "CompletedDate"), ("completedDate", "CompletedDate"), ("source", "SourceRecordTitle"), ("sourceRecordTitle", "SourceRecordTitle"), ("sourceModuleName", "SourceModuleName")),
+            "CASE WHEN FilterStatus IN (N'open',N'overdue') THEN 0 ELSE 1 END, CASE WHEN DueDate IS NULL THEN 1 ELSE 0 END, DueDate, CreatedAt DESC", query, page, pageSize,
+            command =>
             {
-                var dueDate = GetDateOnlyOrNull(reader, 10);
-                var completedDate = GetDateOnlyOrNull(reader, 11);
-                return new StaffProfileActionSummary(
-                    reader.GetGuid(0), reader.GetString(1), GetStringOrNull(reader, 2), reader.GetFieldValue<DateTimeOffset>(3),
-                    GetGuidOrNull(reader, 4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6), GetStringOrNull(reader, 7),
-                    reader.GetString(8), GetStringOrNull(reader, 9), dueDate, completedDate,
-                    dueDate.HasValue && completedDate is null && dueDate.Value < DateOnly.FromDateTime(DateTime.UtcNow));
+                AddProfileListParameters(command, staffId, academicYear, startDate, endDate);
+                command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
             }, cancellationToken);
-        return CreatePage(items, page, pageSize, total);
     }
 
-    private async Task<int> CountAsync(string sql, Guid staffId, string academicYear, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
+    private static IReadOnlyDictionary<string, string> ProfileSortColumns(params (string Key, string Column)[] columns) =>
+        columns.ToDictionary(column => column.Key, column => column.Column, StringComparer.OrdinalIgnoreCase);
+
+    private static void AddProfileListParameters(Microsoft.Data.SqlClient.SqlCommand command, Guid staffId, string academicYear, DateOnly startDate, DateOnly endDate)
+    {
+        command.Parameters.AddWithValue("@staffId", staffId);
+        command.Parameters.AddWithValue("@academicYear", academicYear);
+        command.Parameters.AddWithValue("@startDate", startDate.ToDateTime(TimeOnly.MinValue));
+        command.Parameters.AddWithValue("@endDate", endDate.ToDateTime(TimeOnly.MinValue));
+    }
+
+    private async Task<int> CountAsync(string sql, Guid staffId, string academicYear, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken, CurrentUser? currentUser = null)
     {
         var rows = await QueryAsync(sql, command =>
         {
@@ -442,6 +305,7 @@ public sealed partial class SqlFoundationDataStore
             command.Parameters.AddWithValue("@academicYear", academicYear);
             command.Parameters.AddWithValue("@startDate", startDate.ToDateTime(TimeOnly.MinValue));
             command.Parameters.AddWithValue("@endDate", endDate.ToDateTime(TimeOnly.MinValue));
+            if (currentUser is not null) command.Parameters.AddWithValue("@currentUserAccountId", ToDbValue(currentUser.UserAccountId));
         }, reader => reader.GetInt32(0), cancellationToken);
         return rows[0];
     }

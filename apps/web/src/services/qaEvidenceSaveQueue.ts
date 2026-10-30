@@ -4,6 +4,7 @@ type SaveResult<R> = { ok: boolean; data?: R; message?: string };
 /** One writer per evidence item. Edits made during a request become the next snapshot. */
 export class QaEvidenceSaveQueue<T extends Versioned, R> {
   private value: T;
+  private savedValue: T;
   private revision = 0;
   private savedRevision = 0;
   private pending: Promise<boolean> | null = null;
@@ -26,6 +27,7 @@ export class QaEvidenceSaveQueue<T extends Versioned, R> {
     failed: (message: string) => void;
   }) {
     this.value = options.initial;
+    this.savedValue = options.initial;
     this.send = options.send;
     this.version = options.version;
     this.changed = options.changed;
@@ -41,6 +43,15 @@ export class QaEvidenceSaveQueue<T extends Versioned, R> {
   }
 
   dispose() { this.disposed = true; }
+
+  /** Drop only local edits. Acknowledged draft saves remain on the server. */
+  cancelUnsaved(): boolean {
+    if (this.disposed || this.pending || this.finalizing || this.submitted) return false;
+    this.value = this.savedValue;
+    this.savedRevision = this.revision;
+    this.notify();
+    return true;
+  }
 
   save(submit = false): Promise<boolean> {
     if (this.disposed || this.submitted) return Promise.resolve(false);
@@ -75,6 +86,7 @@ export class QaEvidenceSaveQueue<T extends Versioned, R> {
         return false;
       }
       this.savedRevision = revision;
+      this.savedValue = { ...snapshot, rowVersion: this.version(result.data) };
       // Carry the new concurrency token forward without replacing edits made while awaiting the server.
       this.value = { ...this.value, rowVersion: this.version(result.data) };
       this.saved(result.data);

@@ -1,29 +1,25 @@
-import type { ComponentType, MouseEventHandler } from "react";
-import type { LucideProps } from "lucide-react";
+import type { ButtonHTMLAttributes, ComponentType, ReactNode, Ref } from "react";
+import { LoaderCircle, type LucideProps } from "lucide-react";
 
-type ButtonProps = {
-  children: string;
-  disabled?: boolean;
+export type ButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
+  children: ReactNode;
   icon?: ComponentType<LucideProps>;
   variant?: "primary" | "secondary" | "quiet" | "danger";
-  onClick?: MouseEventHandler<HTMLButtonElement>;
-  title?: string;
-  "aria-label"?: string;
-  "aria-pressed"?: boolean;
+  /** Prevent duplicate submissions while preserving a clear busy state. */
+  busy?: boolean;
+  ref?: Ref<HTMLButtonElement>;
 };
 
-export function Button({ children, disabled = false, icon: Icon, variant = "secondary", onClick, title, "aria-label": ariaLabel, "aria-pressed": ariaPressed }: ButtonProps) {
+export function Button({ children, disabled = false, icon: Icon, variant = "secondary", busy = false, className = "", type = "button", ...props }: ButtonProps) {
   return (
     <button
-      className={`button button-${variant}`}
-      aria-label={ariaLabel}
-      aria-pressed={ariaPressed}
-      disabled={disabled}
-      onClick={onClick}
-      title={title ?? children}
-      type="button"
+      {...props}
+      className={`button button-${variant} ${className}`.trim()}
+      aria-busy={busy || props["aria-busy"] || undefined}
+      disabled={disabled || busy}
+      type={type}
     >
-      {Icon ? <Icon aria-hidden="true" size={16} /> : null}
+      {busy ? <LoaderCircle aria-hidden="true" className="button-busy-icon" size={17} /> : Icon ? <Icon aria-hidden="true" size={17} /> : null}
       <span>{children}</span>
     </button>
   );

@@ -74,6 +74,7 @@ public static class FormEntryExportBuilder
             {
                 foreach (var property in element.EnumerateObject())
                 {
+                    if (BusinessWorkbookExportBuilder.IsInternalStructuredProperty(property.Name)) continue;
                     var child = original.ToArray();
                     child[key] = $"{identity}/{Uri.EscapeDataString(property.Name)}";
                     child[label] = $"{title} - {property.Name}";
@@ -110,7 +111,7 @@ public static class FormEntryExportBuilder
             {
                 foreach (var metadata in new[] { "Submission ID", "Form template", "Form version" })
                 {
-                    var metadataIndex = Index(child, metadata);
+                    var metadataIndex = metadata=="Form template" && Index(child,"Form template name")>=0 ? Index(child,"Form template name") : Index(child, metadata);
                     if (metadataIndex < 0 || columns.Contains(metadata)) continue;
                     columns.Add(metadata);
                     types.Add("text");
@@ -182,7 +183,7 @@ public static class FormEntryExportBuilder
     private static string Describe(JsonElement element) => element.ValueKind switch
     {
         JsonValueKind.Array => string.Join("\n", element.EnumerateArray().Select(Describe)),
-        JsonValueKind.Object => string.Join("; ", element.EnumerateObject().Select(property => $"{property.Name}: {Describe(property.Value)}")),
+        JsonValueKind.Object => BusinessWorkbookExportBuilder.DisplayValue(element.GetRawText()) ?? "",
         JsonValueKind.Null => "",
         _ => element.ToString()
     };

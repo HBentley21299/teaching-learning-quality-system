@@ -1,9 +1,18 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useFormContent } from "../services/formContent";
+import { WorkflowNarrativeField } from "../components/WorkflowNarrativeField";
+import { LoadingState } from "../components/LoadingState";
+import { focusWorkflowControl } from "../services/workflowExperience";
+import { useWorkflowPagination, WorkflowPagination } from "../components/WorkflowPagination";
+import { WorkflowFeedback } from "../components/WorkflowFeedback";
+import { WorkflowFilters } from "../components/WorkflowFilters";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, ClipboardCheck, Eye, FilePlus2, MessageSquareText, Plus, RotateCcw, Save, Search, Send, ShieldCheck, X } from "lucide-react";
 import { ExportExcelButton, ExportWordButton } from "../components/ExportButtons";
 import { Button } from "../design-system/Button";
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { api } from "../services/api";
+import { distinctListValues, sortListRows } from "../services/listQuery";
+import { selectUcoReviews } from "../services/workflowListQueries";
 import type {
   CreateUcoTlaReviewRequest,
   SaveUcoTlaObserverSectionRequest,
@@ -98,46 +107,79 @@ export function UcoTlaReviews({
   const [isSaving, setIsSaving] = useState(false);
   const [reviewSearch, setReviewSearch] = useState("");
   const [reviewStatus, setReviewStatus] = useState("all");
+  const [reviewObserver, setReviewObserver] = useState("all");
+  const [reviewCourse, setReviewCourse] = useState("all");
+  const [reviewFollowUp, setReviewFollowUp] = useState("all");
+  const [reviewSort, setReviewSort] = useState("newest");
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadingLabel, setLoadingLabel] = useState("Loading UCO TLA reviews…");
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadRequest = useRef(0);
+  const clearCreateNavigation = useUnsavedChanges({ label: "New UCO review", dirty: isCreating && Boolean(create.lecturerStaffId || create.observerStaffId), saving: isSaving,
+    submission: true, onSubmit: access?.canCreate ? createReview : undefined, submitLabel: "Create review",
+    onDiscard: () => { setCreate({ ...emptyCreate, academicYear }); setIsCreating(false); } });
 
   async function refresh(nextSelectedId = selectedId) {
+    const request = ++loadRequest.current;
+    setLoadingLabel("Loading UCO TLA reviews…");
+    setIsLoading(true);
     try {
       const nextDashboard = await api.ucoTlaDashboard(academicYear);
+      if (request !== loadRequest.current) return;
       setDashboard(nextDashboard);
       if (nextSelectedId) {
         const nextDetail = await api.ucoTlaReview(nextSelectedId);
+        if (request !== loadRequest.current) return;
         setDetail(nextDetail);
         setSelectedId(nextSelectedId);
       }
+      setLoadFailed(false);
     } catch {
+      if (request !== loadRequest.current) return;
+      setLoadFailed(true);
       setMessage("UCO TLA Reviews could not be loaded from the API.");
-    }
+    } finally { if (request === loadRequest.current) setIsLoading(false); }
   }
 
-  useEffect(() => { if (access?.canAccess) void refresh(initialRecordId); }, [access?.canAccess, academicYear]);
+  useEffect(() => {
+    setDetail(null); setDashboard(null); setSelectedId("");
+    if (access?.canAccess) void refresh(initialRecordId);
+    return () => { loadRequest.current += 1; };
+  }, [access?.canAccess, academicYear]);
   useEffect(() => {
     if (!initialRecordId || initialRecordId === selectedId) return;
     void openReview(initialRecordId);
   }, [initialRecordId]);
 
   async function openReview(recordId: string) {
+    if (!await confirmUnsavedNavigation()) return;
+    const request = ++loadRequest.current;
+    setLoadingLabel("Opening the UCO TLA review…");
+    setIsLoading(true);
     setMessage("");
     try {
       const next = await api.ucoTlaReview(recordId);
+      if (request !== loadRequest.current) return;
       setDetail(next);
       setSelectedId(recordId);
       onRecordOpened?.(recordId);
+      if (typeof window !== "undefined") window.requestAnimationFrame(() => focusWorkflowControl("uco-review-heading"));
     } catch {
+      if (request !== loadRequest.current) return;
       setMessage("That UCO TLA Review could not be opened, or you no longer have access.");
-    }
+    } finally { if (request === loadRequest.current) setIsLoading(false); }
   }
 
   function closeReview() {
+    loadRequest.current += 1; setIsLoading(false);
     setDetail(null);
     setSelectedId("");
     onRecordClosed?.();
+    window.requestAnimationFrame(() => focusWorkflowControl("uco-register-heading"));
   }
 
-  async function createReview() {
+  async function createReview(): Promise<boolean> {
+    if (!access?.canCreate || isSaving || !canCreate(create)) return false;
     setIsSaving(true);
     try {
       setMessage("");
@@ -148,22 +190,31 @@ export function UcoTlaReviews({
 
       if (!result.ok || !result.data) {
         setMessage(result.message ?? "The review could not be created.");
-        return;
+        return false;
       }
+      clearCreateNavigation();
       setCreate({ ...emptyCreate, academicYear });
       setIsCreating(false);
       await refresh(result.data.recordId);
       onRecordOpened?.(result.data.recordId);
+      return true;
     } finally { setIsSaving(false); }
   }
 
-  if (!access) return <div className="route-stack"><p className="muted-copy">Checking UCO review access...</p></div>;
+  const reviews = dashboard?.reviews ?? [];
+  const observers = sortListRows([...new Map(reviews.map(review => [review.observerStaffId, review.observerName])).entries()], entry => entry[1]);
+  const filteredReviews = selectUcoReviews(reviews, { search: reviewSearch, status: reviewStatus, observer: reviewObserver, course: reviewCourse, followUp: reviewFollowUp, sort: reviewSort });
+  const recordPage = useWorkflowPagination(filteredReviews, JSON.stringify([academicYear, reviewSearch, reviewStatus, reviewObserver, reviewCourse, reviewFollowUp, reviewSort]));
+  if (!access) return <div className="route-stack"><LoadingState label="Checking UCO review access…" size="page" /></div>;
   if (!access.canAccess) return <section className="access-denied-panel"><ShieldCheck size={22} /><div><h1>UCO TLA Reviews</h1><p>You do not have a UCO review assignment or coordinator access.</p></div></section>;
   if (detail) return (
     <UcoTlaReviewWorkspace
+      key={detail.review.recordId}
       access={access}
       detail={detail}
       isSaving={isSaving}
+      isLoading={isLoading}
+      loadingLabel={loadingLabel}
       message={message}
       onActionsChanged={onActionsChanged}
       onBack={closeReview}
@@ -178,52 +229,58 @@ export function UcoTlaReviews({
     />
   );
 
-  const reviews = dashboard?.reviews ?? [];
-  const query = reviewSearch.trim().toLowerCase();
-  const filteredReviews = reviews.filter((review) =>
-    (reviewStatus === "all" || review.workflowStatus === reviewStatus)
-    && (!query || `${review.lecturerName} ${review.observerName} ${review.courseTitle} ${review.moduleTitle}`.toLowerCase().includes(query))
-  );
+
   return (
     <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="route-stack uco-tla-route">
       <section className="route-hero">
         <div><p className="eyebrow">University Centre Oldham</p><h1>Teaching, Learning and Assessment Reviews</h1><p>Narrative reviews with authenticated lecturer and observer sign-off.</p></div>
         <div className="toolbar">
           {access.canExport ? <ExportExcelButton filters={{ academicYear }} moduleKey="uco-tla-reviews" /> : null}
-          {access.canCreate ? <Button icon={FilePlus2} onClick={() => { setCreate({ ...emptyCreate, academicYear }); setIsCreating(true); }} variant="primary">Create review</Button> : null}
+          {access.canCreate ? <Button id="uco-create-trigger" aria-expanded={isCreating} icon={FilePlus2} onClick={() => { if (!isCreating) { setCreate({ ...emptyCreate, academicYear }); setIsCreating(true); } }} variant="primary">Create review</Button> : null}
         </div>
       </section>
 
-      {message ? <div className="api-error-banner" role="status"><span>{message}</span><button onClick={() => setMessage("")} type="button">Dismiss</button></div> : null}
+      <WorkflowFeedback message={message} onDismiss={() => setMessage("")} />
+      {loadFailed ? <Button disabled={isLoading} onClick={() => void refresh()}>Retry loading reviews</Button> : null}
+      {isLoading ? <LoadingState label={loadingLabel} /> : null}
       {isCreating ? (
         <section className="panel uco-create-card">
           <div className="panel-heading"><div><h2>Create a UCO TLA Review</h2><span>Assign the review for {academicYear}. The observer will complete session and attendance details inside the review.</span></div></div>
+          {access.ucoStaff.length === 0 ? <p className="muted-copy">No UCO staff are available to select. Ask your administrator to check UCO staff access before creating a review.</p> : null}
           <div className="form-grid form-grid-two">
             <StaffSelect label="Lecturer" options={access.ucoStaff} value={create.lecturerStaffId} onChange={(value) => setCreate({ ...create, lecturerStaffId: value })} />
             <StaffSelect label="Observer" options={access.ucoStaff} value={create.observerStaffId} onChange={(value) => setCreate({ ...create, observerStaffId: value })} />
           </div>
-          <div className="toolbar toolbar-end"><Button icon={X} onClick={() => setIsCreating(false)}>Cancel</Button><Button disabled={isSaving || !canCreate(create)} icon={Plus} onClick={() => void createReview()} variant="primary">{isSaving ? "Creating..." : "Create review"}</Button></div>
+          <div className="toolbar toolbar-end"><Button icon={X} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) { setIsCreating(false); clearCreateNavigation(); window.requestAnimationFrame(() => focusWorkflowControl("uco-create-trigger")); } })}>Cancel</Button><Button busy={isSaving} disabled={!canCreate(create)} icon={Plus} onClick={() => void createReview()} variant="primary">{isSaving ? "Creating…" : "Create review"}</Button></div>
         </section>
       ) : null}
 
       <section className="panel">
-        <div className="panel-heading"><div><h2>{access.canManage ? "UCO review register" : "Reviews in my view"}</h2><span>{filteredReviews.length} of {reviews.length} reviews in {academicYear || "the current academic year"}</span></div></div>
-        <div className="filter-toolbar uco-dashboard-filter">
-          <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setReviewSearch(event.target.value)} placeholder="Search lecturer, observer, course or module" value={reviewSearch} /></label>
-          <label><span>Workflow stage</span><select onChange={(event) => setReviewStatus(event.target.value)} value={reviewStatus}><option value="all">All stages</option><option value="observer_draft">Observer review</option><option value="awaiting_lecturer">With lecturer</option><option value="awaiting_finalisation">Final sign-off</option><option value="completed">Complete</option></select></label>
-        </div>
+        <div className="panel-heading"><div><h2 id="uco-register-heading" tabIndex={-1}>{access.canManage ? "UCO review register" : "Reviews in my view"}</h2><span>{filteredReviews.length} of {reviews.length} reviews in {academicYear || "the current academic year"}</span></div></div>
+        <WorkflowFilters activeCount={[reviewStatus, reviewObserver, reviewCourse, reviewFollowUp].filter(value => value !== "all").length} hasQuery={Boolean(reviewSearch)} onClear={() => { setReviewSearch(""); setReviewStatus("all"); setReviewObserver("all"); setReviewCourse("all"); setReviewFollowUp("all"); setReviewSort("newest"); }} primary={<>
+<label className="search-box"><Search size={16} aria-hidden="true" /><input aria-label="Search UCO reviews" onChange={(event) => setReviewSearch(event.target.value)} placeholder="Search people, course, module or stage" value={reviewSearch} /></label>
+<label><span>Sort by</span><select aria-label="Sort UCO reviews" onChange={event => setReviewSort(event.target.value)} value={reviewSort}><option value="newest">Observation: newest first</option><option value="oldest">Observation: oldest first</option><option value="lecturer">Lecturer name</option><option value="observer">Observer name</option><option value="course">Course</option><option value="status">Workflow stage</option></select></label>
+</>}>
+<label><span>Workflow stage</span><select onChange={(event) => setReviewStatus(event.target.value)} value={reviewStatus}><option value="all">All stages</option>{distinctListValues(reviews.map(review => review.workflowStatus)).map(status => <option key={status} value={status}>{humanStatus(status)}</option>)}</select></label>
+          <label><span>Observer</span><select onChange={event => setReviewObserver(event.target.value)} value={reviewObserver}><option value="all">All observers</option>{observers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+          <label><span>Course</span><select onChange={event => setReviewCourse(event.target.value)} value={reviewCourse}><option value="all">All courses</option>{distinctListValues(reviews.map(review => review.courseTitle)).map(course => <option key={course}>{course}</option>)}</select></label>
+          <label><span>Follow-up</span><select onChange={event => setReviewFollowUp(event.target.value)} value={reviewFollowUp}><option value="all">All follow-up statuses</option>{distinctListValues(reviews.map(review => review.followUpStatus || "not_scheduled")).map(status => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}</select></label>
+</WorkflowFilters>
         <div className="uco-review-list">
-          {filteredReviews.length === 0 ? <p className="muted-copy">No UCO TLA Reviews match these filters.</p> : filteredReviews.map((review) => <ReviewRow key={review.recordId} review={review} onOpen={() => void openReview(review.recordId)} />)}
+          {isLoading && filteredReviews.length === 0 ? null : loadFailed && filteredReviews.length === 0 ? <p className="muted-copy">Reviews are temporarily unavailable. Use Retry loading reviews above.</p> : filteredReviews.length === 0 ? <p className="muted-copy">{reviews.length ? "No UCO TLA Reviews match these filters." : `No UCO TLA Reviews have been created for ${academicYear} yet.`}</p> : recordPage.items.map((review) => <ReviewRow key={review.recordId} review={review} onOpen={() => void openReview(review.recordId)} />)}
         </div>
+        <WorkflowPagination {...recordPage} label="UCO reviews" />
       </section>
     </div></fieldset>
   );
 }
 
-function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsChanged, onBack, onChanged, onOpenReview, setIsSaving, setMessage }: {
+function UcoTlaReviewWorkspace({ access, detail, isSaving, isLoading, loadingLabel, message, onActionsChanged, onBack, onChanged, onOpenReview, setIsSaving, setMessage }: {
   access: UcoTlaAccessSummary;
   detail: UcoTlaReviewDetail;
   isSaving: boolean;
+  isLoading: boolean;
+  loadingLabel: string;
   message: string;
   onActionsChanged?: () => Promise<void>;
   onBack: () => void;
@@ -232,6 +289,7 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
   setIsSaving: (value: boolean) => void;
   setMessage: (value: string) => void;
 }) {
+  const content = useFormContent("uco");
   const [form, setForm] = useState(() => formFromDetail(detail));
   const [reopenReason, setReopenReason] = useState("");
   const [reflection, setReflection] = useState(detail.responses.lecturer_reflection ?? "");
@@ -252,14 +310,24 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
   });
 
   const baseline = useRef({ form: JSON.stringify(form), reflection, discussionAt, followUp: JSON.stringify(managedFollowUp), linkedReview: JSON.stringify(linkedReview) });
-  const dirty = JSON.stringify(form) !== baseline.current.form || reflection !== baseline.current.reflection
-    || discussionAt !== baseline.current.discussionAt || JSON.stringify(managedFollowUp) !== baseline.current.followUp
-    || JSON.stringify(linkedReview) !== baseline.current.linkedReview || Boolean(reopenReason);
-  const hasOtherChanges = reflection !== baseline.current.reflection || discussionAt !== baseline.current.discussionAt
-    || JSON.stringify(managedFollowUp) !== baseline.current.followUp || JSON.stringify(linkedReview) !== baseline.current.linkedReview || Boolean(reopenReason);
-  const clearNavigation = useUnsavedChanges({ label: "UCO review", dirty, saving: isSaving,
-    onSave: detail.review.capabilities.canEditObserverSection && !hasOtherChanges ? () => saveObserver() : undefined,
-    onDiscard: () => { setForm(formFromDetail(detail)); setReflection(detail.responses.lecturer_reflection ?? ""); setDiscussionAt(toLocalInput(detail.review.professionalDiscussionAt)); setManagedFollowUp(followUpFromDetail(detail)); setLinkedReview(JSON.parse(baseline.current.linkedReview)); setReopenReason(""); } });
+  const operationInFlight = useRef(false);
+  const caps = detail.review.capabilities;
+  const observerDraft = caps.canEditObserverSection && detail.review.workflowStatus === "observer_draft";
+  const discussionDirty = discussionAt !== baseline.current.discussionAt;
+  const followUpDirty = JSON.stringify(managedFollowUp) !== baseline.current.followUp;
+  const linkedDirty = JSON.stringify(linkedReview) !== baseline.current.linkedReview;
+  const clearObserverNavigation = useUnsavedChanges({ label: "UCO observer review", dirty: JSON.stringify(form) !== baseline.current.form, saving: isSaving,
+    submission: observerDraft, onSave: observerDraft ? () => saveObserver() : undefined,
+    onSubmit: observerDraft ? sendToLecturer : undefined, submitLabel: "Send to lecturer",
+    onDiscard: () => setForm(JSON.parse(baseline.current.form) as SaveUcoTlaObserverSectionRequest) });
+  const clearReflectionNavigation = useUnsavedChanges({ label: "UCO lecturer reflection", dirty: reflection !== baseline.current.reflection, saving: isSaving,
+    submission: caps.canReflect, onSubmit: caps.canReflect && Boolean(detail.review.professionalDiscussionAt) ? acknowledgeReview : undefined,
+    submitLabel: "Acknowledge review", discardMessage: "Cancelling discards the unsaved reflection. It does not acknowledge the review; work saved earlier is retained.",
+    onDiscard: () => setReflection(baseline.current.reflection) });
+  useUnsavedChanges({ label: "UCO review management", dirty: discussionDirty || followUpDirty || linkedDirty || Boolean(reopenReason), saving: isSaving,
+    onSave: !linkedDirty && !reopenReason && discussionDirty !== followUpDirty
+      ? discussionDirty && caps.canRecordProfessionalDiscussion ? saveDiscussion : followUpDirty && caps.canManageFollowUp ? saveFollowUp : undefined : undefined,
+    onDiscard: () => { setDiscussionAt(toLocalInput(detail.review.professionalDiscussionAt)); setManagedFollowUp(followUpFromDetail(detail)); setLinkedReview(JSON.parse(baseline.current.linkedReview)); setReopenReason(""); } });
   useEffect(() => {
     const nextForm = formFromDetail(detail), nextReflection = detail.responses.lecturer_reflection ?? "",
       nextDiscussion = toLocalInput(detail.review.professionalDiscussionAt), nextFollowUp = followUpFromDetail(detail);
@@ -271,6 +339,8 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
   }, [detail.review.rowVersion]);
 
   async function run(request: () => ReturnType<typeof api.submitUcoTlaReview>, success: string) {
+    if (isSaving || operationInFlight.current) return false;
+    operationInFlight.current = true;
     setIsSaving(true);
     try {
       setMessage("");
@@ -282,16 +352,60 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
       }
       await onChanged(result.data, success);
       return true;
-    } finally { setIsSaving(false); }
+    } catch { setMessage("The review could not be updated. Your changes are still here. Try again."); return false; }
+    finally { operationInFlight.current = false; setIsSaving(false); }
   }
 
   async function saveObserver(sectionKey?: string, isSectionComplete?: boolean) {
-    const saved = await run(() => api.updateUcoTlaReview(detail.review.recordId, {
-      ...form,
-      sectionKey,
-      isSectionComplete
-    }), sectionKey ? `${sectionTitle(sectionKey)} saved.` : "Review changes saved.");
-    if (saved) { baseline.current.form = JSON.stringify(form); if (!hasOtherChanges) clearNavigation(); }
+    if (!observerDraft || isSaving) return false;
+    let persisted: UcoTlaReviewDetail | undefined;
+    const saved = await run(async () => {
+      const result = await api.updateUcoTlaReview(detail.review.recordId, { ...form, sectionKey, isSectionComplete });
+      persisted = result.data; return result;
+    }, sectionKey ? `${sectionTitle(sectionKey)} saved.` : "Review changes saved.");
+    if (saved && persisted) { const next = formFromDetail(persisted); baseline.current.form = JSON.stringify(next); setForm(next); clearObserverNavigation(); }
+    return saved;
+  }
+
+  async function sendToLecturer() {
+    if (!observerDraft || isSaving) return false;
+    let persisted: UcoTlaReviewDetail | undefined;
+    const sent = await run(async () => {
+      const saved = await api.updateUcoTlaReview(detail.review.recordId, form);
+      if (!saved.ok || !saved.data) return saved;
+      persisted = saved.data;
+      const result = await api.submitUcoTlaReview(detail.review.recordId, saved.data.review.rowVersion);
+      if (result.ok && result.data) persisted = result.data;
+      return result;
+    }, "Review sent to the lecturer.");
+    // A rejected submission may follow a successful draft save. Retain the
+    // answers and that new token so a retry cannot reuse the old draft version.
+    if (persisted) { const next = formFromDetail(persisted); setForm(next); if (sent) { baseline.current.form = JSON.stringify(next); clearObserverNavigation(); } }
+    return sent;
+  }
+
+  async function acknowledgeReview() {
+    if (!caps.canReflect || isSaving || !reflection.trim() || !detail.review.professionalDiscussionAt) {
+      setMessage("Enter your reflection and wait for the professional discussion to be recorded before acknowledging the review."); return false;
+    }
+    const saved = await run(() => api.acknowledgeUcoTlaReview(detail.review.recordId, reflection, detail.review.rowVersion), "Lecturer acknowledgement recorded.");
+    if (saved) { baseline.current.reflection = reflection; clearReflectionNavigation(); }
+    return saved;
+  }
+
+  async function saveDiscussion() {
+    if (!caps.canRecordProfessionalDiscussion || isSaving || !discussionAt) { setMessage("Enter the professional discussion date and time before saving."); return false; }
+    const saved = await run(() => api.saveUcoTlaDiscussion(detail.review.recordId, fromLocalInput(discussionAt), detail.review.rowVersion), "Professional discussion date saved.");
+    if (saved) baseline.current.discussionAt = discussionAt;
+    return saved;
+  }
+
+  async function saveFollowUp() {
+    if (!caps.canManageFollowUp || isSaving || !managedFollowUp.scheduledAt || (managedFollowUp.status === "completed" && !managedFollowUp.outcomeNotes.trim())) {
+      setMessage("Enter the follow-up date and any required outcome notes before saving."); return false;
+    }
+    const saved = await run(() => api.saveUcoTlaFollowUp(detail.review.recordId, { followUpType: managedFollowUp.followUpType, scheduledAt: fromLocalInput(managedFollowUp.scheduledAt), status: managedFollowUp.status, outcomeNotes: managedFollowUp.outcomeNotes || undefined, rowVersion: detail.followUp?.rowVersion }), "Follow-up details saved.");
+    if (saved) baseline.current.followUp = JSON.stringify(managedFollowUp);
     return saved;
   }
 
@@ -312,7 +426,6 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
     } finally { setIsSaving(false); }
   }
 
-  const caps = detail.review.capabilities;
   const requiredEvidenceKeys = evidenceSections.flatMap((section) => section.fields.map(([key]) => key)).filter(requiredNarrative);
   const completedRequiredEvidence = requiredEvidenceKeys.filter((key) => form.responses[key]?.trim()).length;
   const firstIncompleteEvidence = evidenceSections.findIndex((section) => section.fields.some(([key]) => requiredNarrative(key) && !form.responses[key]?.trim()));
@@ -330,11 +443,12 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
   return (
     <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="route-stack uco-tla-route">
       <section className="route-hero">
-        <div><button className="quiet-link" onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })} type="button"><ArrowLeft size={16} />Back to reviews</button><p className="eyebrow">{detail.review.academicYear} / {humanStatus(detail.review.workflowStatus)}</p><h1>{detail.review.lecturerName}</h1><p>{sessionLabel(detail.review.courseTitle, detail.review.moduleTitle)}</p></div>
+        <div><button className="quiet-link" onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })} type="button"><ArrowLeft size={16} />Back to reviews</button><p className="eyebrow">{detail.review.academicYear} / {humanStatus(detail.review.workflowStatus)}</p><h1 id="uco-review-heading" tabIndex={-1}>{detail.review.lecturerName}</h1><p>{sessionLabel(detail.review.courseTitle, detail.review.moduleTitle)}</p></div>
         <div className="toolbar">{caps.canViewCompletedReport ? <ExportWordButton recordId={detail.review.recordId} /> : null}{caps.canReopen ? <Button disabled={isSaving || !reopenReason.trim()} icon={RotateCcw} onClick={() => void run(() => api.reopenUcoTlaReview(detail.review.recordId, reopenReason, detail.review.rowVersion), "Review reopened; section completion and sign-off must be repeated.")}>Reopen</Button> : null}</div>
       </section>
       {caps.canReopen ? <label className="entry-field"><span>Reason for reopening</span><input onChange={(event) => setReopenReason(event.target.value)} value={reopenReason} /></label> : null}
-      {message ? <div className="api-error-banner" role="status"><span>{message}</span><button onClick={() => setMessage("")} type="button">Dismiss</button></div> : null}
+      <WorkflowFeedback message={message} onDismiss={() => setMessage("")} />
+      {isLoading ? <LoadingState label={loadingLabel} /> : null}
 
       <UcoWorkflowMap status={detail.review.workflowStatus} />
       <section className="uco-next-step" role="status">
@@ -369,30 +483,31 @@ function UcoTlaReviewWorkspace({ access, detail, isSaving, message, onActionsCha
             {evidenceSections.map((section, index) => {
               const progress = evidenceProgress(section.fields, form.responses);
               const isComplete = Boolean(detail.sectionCompletion[section.key]);
-              return <ReviewSectionPanel defaultOpen={caps.canEditObserverSection && Boolean(detail.sectionCompletion.session_details) && index === firstIncompleteEvidence} description={"description" in section ? section.description : undefined} footer={sectionActions(section.key, progress.complete)} key={section.title} number={index + 2} summary={isComplete ? "Complete" : progress.label} summaryComplete={isComplete} title={section.title}><div className="form-stack">{section.fields.map(([key, label]) => <label className="entry-field" key={key}><span>{label}{requiredNarrative(key) ? <strong> Required</strong> : null}</span><textarea disabled={!caps.canEditObserverSection} onChange={(event) => setForm({ ...form, responses: { ...form.responses, [key]: event.target.value } })} rows={4} value={form.responses[key] ?? ""} /></label>)}</div></ReviewSectionPanel>;
+              return <ReviewSectionPanel defaultOpen={caps.canEditObserverSection && Boolean(detail.sectionCompletion.session_details) && index === firstIncompleteEvidence} description={"description" in section ? section.description : undefined} footer={sectionActions(section.key, progress.complete)} key={section.title} number={index + 2} summary={isComplete ? "Complete" : progress.label} summaryComplete={isComplete} title={section.title}><div className="form-stack">{section.fields.map(([key, label]) => <WorkflowNarrativeField key={key} content={content.field(key, label)} requiredLabel={requiredNarrative(key)} aria-required={requiredNarrative(key) || undefined} disabled={!caps.canEditObserverSection} onChange={value => setForm({ ...form, responses: { ...form.responses, [key]: value } })} rows={4} value={form.responses[key] ?? ""} />)}</div></ReviewSectionPanel>;
             })}
             <ActionPlanEditor access={access} disabled={!caps.canEditObserverSection} footer={sectionActions("action_plan", actionPlanComplete(form.actionPlan))} isSectionComplete={Boolean(detail.sectionCompletion.action_plan)} number={6} onChange={(actionPlan) => setForm({ ...form, actionPlan })} value={form.actionPlan} />
             {caps.canEditObserverSection ? <ReviewSectionPanel description="Essential findings must include a tracked essential action and a checkpoint 8–12 weeks after the discussion." footer={sectionActions("discussion_follow_up")} number={7} summary={detail.sectionCompletion.discussion_follow_up ? "Complete" : "Complete when reviewed"} summaryComplete={Boolean(detail.sectionCompletion.discussion_follow_up)} title="Professional discussion and follow-up"><div className="form-grid form-grid-three"><Input label="Professional discussion" type="datetime-local" value={toLocalInput(form.professionalDiscussionAt)} onChange={(value) => setForm({ ...form, professionalDiscussionAt: fromLocalInput(value) || undefined })} /><label className="entry-field"><span>Follow-up type</span><select onChange={(event) => setForm({ ...form, followUp: { ...(form.followUp ?? emptyFollowUp()), followUpType: event.target.value as "discussion" | "observation" } })} value={form.followUp?.followUpType ?? "discussion"}><option value="discussion">Professional discussion</option><option value="observation">Further observation</option></select></label><Input label="Follow-up date/time" type="datetime-local" value={toLocalInput(form.followUp?.scheduledAt)} onChange={(value) => setForm({ ...form, followUp: { ...(form.followUp ?? emptyFollowUp()), scheduledAt: fromLocalInput(value) } })} /></div></ReviewSectionPanel> : null}
           </div>
-          {caps.canEditObserverSection ? <div className="uco-form-actions"><span>Section buttons save progress as you work. Sending the review makes the findings visible to the lecturer for discussion and reflection.</span><div className="toolbar toolbar-end"><Button disabled={isSaving} icon={Save} onClick={() => void saveObserver()}>{isSaving ? "Saving..." : "Save all changes"}</Button><Button disabled={isSaving} icon={Send} onClick={() => void run(async () => { const saved = await api.updateUcoTlaReview(detail.review.recordId, form); return saved.ok && saved.data ? api.submitUcoTlaReview(detail.review.recordId, saved.data.review.rowVersion) : saved; }, "Review sent to the lecturer.")} variant="primary">Send to lecturer</Button></div></div> : null}
+          {caps.canEditObserverSection ? <div className="uco-form-actions"><span>Section buttons save progress as you work. Sending the review makes the findings visible to the lecturer for discussion and reflection.</span><div className="toolbar toolbar-end"><Button disabled={isSaving} icon={Save} onClick={() => void saveObserver()}>{isSaving ? "Saving..." : "Save all changes"}</Button><Button disabled={isSaving} icon={Send} onClick={() => void sendToLecturer()} variant="primary">Send to lecturer</Button></div></div> : null}
         </>
       ) : null}
 
-      {caps.canRecordProfessionalDiscussion ? <section className="panel"><div className="panel-heading"><div><h2>Professional discussion</h2><span>Record when the observer's completed review was discussed with the lecturer.</span></div></div><div className="form-grid form-grid-two"><Input label="Discussion date/time" type="datetime-local" value={discussionAt} onChange={setDiscussionAt} /></div><div className="toolbar toolbar-end"><Button disabled={isSaving || !discussionAt} icon={Save} onClick={() => void run(() => api.saveUcoTlaDiscussion(detail.review.recordId, fromLocalInput(discussionAt), detail.review.rowVersion), "Professional discussion date saved.")} variant="primary">Save discussion</Button></div></section> : null}
+      {caps.canRecordProfessionalDiscussion ? <section className="panel"><div className="panel-heading"><div><h2>Professional discussion</h2><span>Record when the observer's completed review was discussed with the lecturer.</span></div></div><div className="form-grid form-grid-two"><Input label="Discussion date/time" type="datetime-local" value={discussionAt} onChange={setDiscussionAt} /></div><div className="toolbar toolbar-end"><Button disabled={isSaving || !discussionAt} icon={Save} onClick={() => void saveDiscussion()} variant="primary">Save discussion</Button></div></section> : null}
 
-      {caps.canReflect ? <section className="panel"><div className="panel-heading"><div><h2>Lecturer reflection and acknowledgement</h2><span>Your authenticated account name and timestamp replace the handwritten signature.</span></div></div><label className="entry-field"><span>Reflection on observation and professional discussion <strong>Required</strong></span><textarea onChange={(event) => setReflection(event.target.value)} rows={7} value={reflection} /></label><div className="toolbar toolbar-end"><Button disabled={isSaving || !reflection.trim() || !detail.review.professionalDiscussionAt} icon={CheckCircle2} onClick={() => void run(() => api.acknowledgeUcoTlaReview(detail.review.recordId, reflection, detail.review.rowVersion), "Lecturer acknowledgement recorded.")} variant="primary">Acknowledge review</Button></div></section> : null}
+      {caps.canReflect ? <section className="panel"><div className="panel-heading"><div><h2>Lecturer reflection and acknowledgement</h2><span>Your authenticated account name and timestamp replace the handwritten signature.</span></div></div><WorkflowNarrativeField content={content.field("lecturer_reflection", "Reflection on observation and professional discussion")} requiredLabel aria-required="true" onChange={setReflection} rows={7} value={reflection} /><div className="toolbar toolbar-end"><Button disabled={isSaving || !reflection.trim() || !detail.review.professionalDiscussionAt} icon={CheckCircle2} onClick={() => void acknowledgeReview()} variant="primary">Acknowledge review</Button></div></section> : null}
 
       {caps.canFinalise ? <section className="panel"><div className="panel-heading"><div><h2>Observer final sign-off</h2><span>Finalising locks the findings, creates the linked central actions and completes any linked probation Observation 2.</span></div></div><div className="toolbar toolbar-end"><Button disabled={isSaving} icon={ClipboardCheck} onClick={() => void run(async () => { const result = await api.finaliseUcoTlaReview(detail.review.recordId, detail.review.rowVersion); if (result.ok) await onActionsChanged?.(); return result; }, "UCO TLA Review completed and actions created.")} variant="primary">Final sign-off</Button></div></section> : null}
 
       <SignOffSummary detail={detail} />
 
-      {caps.canManageFollowUp ? <section className="panel"><div className="panel-heading"><div><h2>Follow-up management</h2><span>Track a discussion checkpoint here, or create a separately linked UCO observation.</span></div></div><div className="form-grid form-grid-three"><label className="entry-field"><span>Follow-up type</span><select onChange={(event) => setManagedFollowUp({ ...managedFollowUp, followUpType: event.target.value as UcoTlaFollowUp["followUpType"] })} value={managedFollowUp.followUpType}><option value="discussion">Professional discussion</option><option value="observation">Further observation</option></select></label><Input label="Scheduled date/time" type="datetime-local" value={managedFollowUp.scheduledAt} onChange={(scheduledAt) => setManagedFollowUp({ ...managedFollowUp, scheduledAt })} /><label className="entry-field"><span>Status</span><select onChange={(event) => setManagedFollowUp({ ...managedFollowUp, status: event.target.value as UcoTlaFollowUp["status"] })} value={managedFollowUp.status}><option value="scheduled">Scheduled</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label></div><label className="entry-field"><span>Outcome notes{managedFollowUp.status === "completed" ? <strong> Required</strong> : null}</span><textarea onChange={(event) => setManagedFollowUp({ ...managedFollowUp, outcomeNotes: event.target.value })} rows={4} value={managedFollowUp.outcomeNotes} /></label><div className="toolbar toolbar-end"><Button disabled={isSaving || !managedFollowUp.scheduledAt || (managedFollowUp.status === "completed" && !managedFollowUp.outcomeNotes.trim())} icon={Save} onClick={() => void run(() => api.saveUcoTlaFollowUp(detail.review.recordId, { followUpType: managedFollowUp.followUpType, scheduledAt: fromLocalInput(managedFollowUp.scheduledAt), status: managedFollowUp.status, outcomeNotes: managedFollowUp.outcomeNotes || undefined, rowVersion: detail.followUp?.rowVersion }), "Follow-up details saved.")} variant="primary">Save follow-up</Button></div>
+      {caps.canManageFollowUp ? <section className="panel"><div className="panel-heading"><div><h2>Follow-up management</h2><span>Track a discussion checkpoint here, or create a separately linked UCO observation.</span></div></div><div className="form-grid form-grid-three"><label className="entry-field"><span>Follow-up type</span><select onChange={(event) => setManagedFollowUp({ ...managedFollowUp, followUpType: event.target.value as UcoTlaFollowUp["followUpType"] })} value={managedFollowUp.followUpType}><option value="discussion">Professional discussion</option><option value="observation">Further observation</option></select></label><Input label="Scheduled date/time" type="datetime-local" value={managedFollowUp.scheduledAt} onChange={(scheduledAt) => setManagedFollowUp({ ...managedFollowUp, scheduledAt })} /><label className="entry-field"><span>Status</span><select onChange={(event) => setManagedFollowUp({ ...managedFollowUp, status: event.target.value as UcoTlaFollowUp["status"] })} value={managedFollowUp.status}><option value="scheduled">Scheduled</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label></div><label className="entry-field"><span>Outcome notes{managedFollowUp.status === "completed" ? <strong> Required</strong> : null}</span><textarea onChange={(event) => setManagedFollowUp({ ...managedFollowUp, outcomeNotes: event.target.value })} rows={4} value={managedFollowUp.outcomeNotes} /></label><div className="toolbar toolbar-end"><Button disabled={isSaving || !managedFollowUp.scheduledAt || (managedFollowUp.status === "completed" && !managedFollowUp.outcomeNotes.trim())} icon={Save} onClick={() => void saveFollowUp()} variant="primary">Save follow-up</Button></div>
       {detail.followUp?.linkedReviewRecordId ? <div className="uco-linked-review"><div><strong>Linked UCO observation</strong><p className="muted-copy">A subsequent review has been created for this follow-up.</p></div><Button onClick={() => void onOpenReview(detail.followUp!.linkedReviewRecordId!)}>Open linked review</Button></div> : caps.canCreateLinkedReview && managedFollowUp.followUpType === "observation" && detail.followUp ? <div className="uco-linked-review-form"><h3>Create linked observation</h3><div className="form-grid form-grid-three"><StaffSelect label="Observer" options={access.ucoStaff} value={linkedReview.observerStaffId} onChange={(observerStaffId) => setLinkedReview({ ...linkedReview, observerStaffId })} /><Input label="Observation date/time" type="datetime-local" value={linkedReview.observationAt} onChange={(observationAt) => setLinkedReview({ ...linkedReview, observationAt })} /><Input label="Session type" value={linkedReview.sessionType} onChange={(sessionType) => setLinkedReview({ ...linkedReview, sessionType })} /><Input label="Course title" value={linkedReview.courseTitle} onChange={(courseTitle) => setLinkedReview({ ...linkedReview, courseTitle })} /><Input label="Module title" value={linkedReview.moduleTitle} onChange={(moduleTitle) => setLinkedReview({ ...linkedReview, moduleTitle })} /><Input label="Level" value={linkedReview.courseLevel} onChange={(courseLevel) => setLinkedReview({ ...linkedReview, courseLevel })} /></div><div className="toolbar toolbar-end"><Button disabled={isSaving || !canCreateLinkedReview(linkedReview, detail.review.lecturerStaffId)} icon={FilePlus2} onClick={() => void createLinkedReview()} variant="primary">Create linked review</Button></div></div> : null}</section> : null}
     </div></fieldset>
   );
 }
 
 function ActionPlanEditor({ access, disabled, footer, isSectionComplete, number, onChange, value }: { access: UcoTlaAccessSummary; disabled: boolean; footer?: ReactNode; isSectionComplete: boolean; number: number; onChange: (value: UcoTlaActionPlan[]) => void; value: UcoTlaActionPlan[] }) {
+  const content = useFormContent("uco");
   function add() {
     if (value.length >= 3) return;
     onChange([...value, { displayOrder: value.length + 1, actionType: "advisable", target: "", achievementMethod: "", ownerStaffId: "", dueDate: "" }]);
@@ -404,7 +519,7 @@ function ActionPlanEditor({ access, disabled, footer, isSectionComplete, number,
     onChange(value.filter((_, actionIndex) => actionIndex !== index).map((action, actionIndex) => ({ ...action, displayOrder: actionIndex + 1 })));
   }
   const completeActions = value.filter((action) => action.target.trim() && action.achievementMethod.trim() && action.ownerStaffId && action.dueDate).length;
-  return <ReviewSectionPanel description="Up to three targets. Completion creates matching central actions without duplicates." footer={footer} number={number} summary={isSectionComplete ? "Complete" : value.length === 0 ? "No actions added" : `${completeActions}/${value.length} actions complete`} summaryComplete={isSectionComplete} title="Action plan for development">{!disabled && value.length < 3 ? <div className="toolbar toolbar-end uco-add-action"><Button icon={Plus} onClick={add}>Add action</Button></div> : null}<div className="uco-action-plan">{value.length === 0 ? <p className="muted-copy">No structured development actions have been added.</p> : value.map((action, index) => <div className="uco-action-row" key={action.id ?? index}><div className="uco-action-row-heading"><strong>Action {index + 1}</strong>{!disabled && !action.centralActionId ? <button aria-label={`Remove action ${index + 1}`} onClick={() => remove(index)} type="button"><X size={16} /></button> : null}</div><div className="form-grid form-grid-three"><label className="entry-field"><span>Type</span><select disabled={disabled} onChange={(event) => update(index, { actionType: event.target.value as UcoTlaActionPlan["actionType"] })} value={action.actionType}><option value="essential">Essential</option><option value="advisable">Advisable</option><option value="good_practice">Sharing good practice</option></select></label><Input disabled={disabled} label="Target" value={action.target} onChange={(target) => update(index, { target })} /><Input disabled={disabled} label="Due date" type="date" value={action.dueDate} onChange={(dueDate) => update(index, { dueDate })} /><label className="entry-field"><span>Owner</span><select disabled={disabled} onChange={(event) => update(index, { ownerStaffId: event.target.value })} value={action.ownerStaffId}><option value="">Select owner</option>{access.ucoStaff.map((staff) => <option key={staff.staffId} value={staff.staffId}>{staff.displayName}</option>)}</select></label><label className="entry-field uco-method-field"><span>How it will be achieved and checked</span><textarea disabled={disabled} onChange={(event) => update(index, { achievementMethod: event.target.value })} rows={3} value={action.achievementMethod} /></label></div>{action.centralActionId ? <small className="muted-copy">Central action created</small> : null}</div>)}</div></ReviewSectionPanel>;
+  return <ReviewSectionPanel description="Up to three targets. Completion creates matching central actions without duplicates." footer={footer} number={number} summary={isSectionComplete ? "Complete" : value.length === 0 ? "No actions added" : `${completeActions}/${value.length} actions complete`} summaryComplete={isSectionComplete} title="Action plan for development">{!disabled && value.length < 3 ? <div className="toolbar toolbar-end uco-add-action"><Button icon={Plus} onClick={add}>Add action</Button></div> : null}<div className="uco-action-plan">{value.length === 0 ? <p className="muted-copy">No structured development actions have been added.</p> : value.map((action, index) => <div className="uco-action-row" key={action.id ?? index}><div className="uco-action-row-heading"><strong>Action {index + 1}</strong>{!disabled && !action.centralActionId ? <button aria-label={`Remove action ${index + 1}`} onClick={() => remove(index)} type="button"><X size={16} /></button> : null}</div><div className="form-grid form-grid-three"><label className="entry-field"><span>Type</span><select disabled={disabled} onChange={(event) => update(index, { actionType: event.target.value as UcoTlaActionPlan["actionType"] })} value={action.actionType}><option value="essential">Essential</option><option value="advisable">Advisable</option><option value="good_practice">Sharing good practice</option></select></label><Input disabled={disabled} label={content.field("target", "Target").label} helpText={content.field("target", "Target").helpText} value={action.target} onChange={(target) => update(index, { target })} /><Input disabled={disabled} label="Due date" type="date" value={action.dueDate} onChange={(dueDate) => update(index, { dueDate })} /><label className="entry-field"><span>Owner</span><select disabled={disabled} onChange={(event) => update(index, { ownerStaffId: event.target.value })} value={action.ownerStaffId}><option value="">Select owner</option>{access.ucoStaff.map((staff) => <option key={staff.staffId} value={staff.staffId}>{staff.displayName}</option>)}</select></label><WorkflowNarrativeField className="entry-field uco-method-field" content={content.field("achievementMethod", "How it will be achieved and checked")} disabled={disabled} onChange={value => update(index, { achievementMethod: value })} rows={3} value={action.achievementMethod} /></div>{action.centralActionId ? <small className="muted-copy">Central action created</small> : null}</div>)}</div></ReviewSectionPanel>;
 }
 
 function ReviewSectionPanel({ children, defaultOpen = false, description, footer, number, summary, summaryComplete = false, title }: { children: ReactNode; defaultOpen?: boolean; description?: string; footer?: ReactNode; number: number; summary: string; summaryComplete?: boolean; title: string }) {
@@ -477,8 +592,9 @@ function StaffSelect({ label, onChange, options, value }: { label: string; onCha
   return <label className="entry-field"><span>{label}</span><select onChange={(event) => onChange(event.target.value)} value={value}><option value="">Select {label.toLowerCase()}</option>{options.map((option) => <option key={option.staffId} value={option.staffId}>{option.displayName}</option>)}</select></label>;
 }
 
-function Input({ disabled = false, label, onChange, type = "text", value }: { disabled?: boolean; label: string; onChange: (value: string) => void; type?: string; value: string }) {
-  return <label className="entry-field"><span>{label}</span><input disabled={disabled} onChange={(event) => onChange(event.target.value)} type={type} value={value} /></label>;
+function Input({ disabled = false, label, helpText, onChange, type = "text", value }: { disabled?: boolean; label: string; helpText?: string; onChange: (value: string) => void; type?: string; value: string }) {
+  const helpId = useId();
+  return <label className="entry-field"><span>{label}</span><input disabled={disabled} aria-describedby={helpText ? helpId : undefined} onChange={(event) => onChange(event.target.value)} type={type} value={value} />{helpText ? <small id={helpId}>{helpText}</small> : null}</label>;
 }
 
 function NumberInput({ label, onChange, value }: { label: string; onChange: (value: number | undefined) => void; value?: number }) {

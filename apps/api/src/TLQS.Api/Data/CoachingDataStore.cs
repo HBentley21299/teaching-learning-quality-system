@@ -252,9 +252,11 @@ public sealed partial class SqlFoundationDataStore
                            THEN 1
                        ELSE 0
                    END),
-                   CONVERT(bit, CASE WHEN session.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END)
+                   CONVERT(bit, CASE WHEN session.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END),
+                   source_record.academic_year_key
             FROM quality.coaching_sessions session
             JOIN quality.coaching_cycles cycle ON cycle.id = session.cycle_id
+            JOIN core.records source_record ON source_record.id = session.record_id
             JOIN people.staff staff ON staff.id = session.staff_id
             JOIN people.staff coach ON coach.id = session.coach_staff_id
             LEFT JOIN core.lookup_values primary_focus ON primary_focus.id = session.primary_focus_lookup_value_id
@@ -289,7 +291,8 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetFieldValue<DateTimeOffset>(13),
                 GetDateTimeOffsetOrNull(reader, 14),
                 reader.GetBoolean(15),
-                reader.GetBoolean(16)),
+                reader.GetBoolean(16),
+                GetStringOrNull(reader, 17)),
             cancellationToken);
 
     public async Task<CoachingSessionDetail?> GetCoachingSessionAsync(

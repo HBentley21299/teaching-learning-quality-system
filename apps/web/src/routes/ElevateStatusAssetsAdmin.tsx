@@ -1,7 +1,8 @@
 import { Image as ImageIcon, RotateCcw, Upload } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ElevateStatusBadgeImage, invalidateElevateStatusBadgeCache } from "../components/ElevateStatusBadgeImage";
 import { Button } from "../design-system/Button";
+import { LoadingState } from "../components/LoadingState";
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { api } from "../services/api";
 import type { AcademicYearSummary, ElevateStatusBadgeAssetSummary } from "../services/types";
@@ -16,6 +17,10 @@ export function ElevateStatusAssetsAdmin() {
   const [selectedFiles, setSelectedFiles] = useState<Record<number, File | undefined>>({});
   const [busyLevel, setBusyLevel] = useState<number>();
   const [status, setStatus] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [yearsAttempt, setYearsAttempt] = useState(0), [assetsAttempt, setAssetsAttempt] = useState(0);
+  const [loadingYears, setLoadingYears] = useState(true), [loadingAssets, setLoadingAssets] = useState(false);
+  const assetScope = useRef(0), fileChecks = useRef<Record<number, number>>({});
   const clearUnsaved = useUnsavedChanges({ label: "Badge artwork", dirty: Object.values(selectedFiles).some(Boolean), saving: busyLevel !== undefined,
     onDiscard: () => setSelectedFiles({}), onSave: async () => {
       for (const level of Object.keys(selectedFiles).map(Number)) if (selectedFiles[level] && !await upload(level)) return false;
@@ -24,29 +29,38 @@ export function ElevateStatusAssetsAdmin() {
 
   useEffect(() => {
     let cancelled = false;
+    setLoadingYears(true); setLoadError("");
     void api.academicYears()
       .then((years) => {
         if (cancelled) return;
         setAcademicYears(years);
         setAcademicYear(years.find((year) => year.isCurrent)?.academicYear ?? years[0]?.academicYear ?? "");
       })
-      .catch(() => { if (!cancelled) setStatus("Academic years could not be loaded."); });
+      .catch(() => { if (!cancelled) setLoadError("Academic years could not be loaded. Try again."); })
+      .finally(() => { if (!cancelled) setLoadingYears(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [yearsAttempt]);
 
   useEffect(() => {
     if (!academicYear) return;
     let cancelled = false;
+    ++assetScope.current;
+    setAssets([]); setLoadingAssets(true); setLoadError("");
     setStatus("");
     setSelectedFiles({});
     void api.elevateStatusBadgeAssets(academicYear)
       .then((nextAssets) => { if (!cancelled) setAssets(nextAssets); })
-      .catch(() => { if (!cancelled) setStatus("Elevate Status artwork could not be loaded."); });
+      .catch(() => { if (!cancelled) setLoadError("Badge artwork could not be loaded for this academic year. Try again."); })
+      .finally(() => { if (!cancelled) setLoadingAssets(false); });
     return () => { cancelled = true; };
-  }, [academicYear]);
+  }, [academicYear, assetsAttempt]);
 
   async function chooseFile(levelNumber: number, file?: File) {
+    const scope = assetScope.current, check = (fileChecks.current[levelNumber] ?? 0) + 1;
+    fileChecks.current[levelNumber] = check;
+    const isCurrent = () => scope === assetScope.current && fileChecks.current[levelNumber] === check;
     setStatus("");
+    setSelectedFiles((current) => ({ ...current, [levelNumber]: undefined }));
     if (!file) {
       setSelectedFiles((current) => ({ ...current, [levelNumber]: undefined }));
       return;
@@ -65,9 +79,10 @@ export function ElevateStatusAssetsAdmin() {
       image.close();
       if (!isRenderable) throw new Error("Image has no displayable dimensions.");
     } catch {
-      setStatus("That file could not be rendered as an image. Choose another PNG, JPEG or WebP file.");
+      if (isCurrent()) setStatus("That file could not be rendered as an image. Choose another PNG, JPEG or WebP file.");
       return;
     }
+    if (!isCurrent()) return;
     setSelectedFiles((current) => ({ ...current, [levelNumber]: file }));
   }
 
@@ -114,11 +129,14 @@ export function ElevateStatusAssetsAdmin() {
         </div>
         <label className="entry-field elevate-status-year-select">
           <span>Academic year</span>
-          <select disabled={busyLevel !== undefined} onChange={async (event) => { const next = event.target.value; if (await confirmUnsavedNavigation()) setAcademicYear(next); }} value={academicYear}>
+          <select disabled={busyLevel !== undefined || loadingYears} onChange={async (event) => { const next = event.target.value; if (await confirmUnsavedNavigation()) setAcademicYear(next); }} value={academicYear}>
             {academicYears.map((year) => <option key={year.academicYear} value={year.academicYear}>{year.academicYear}{year.isCurrent ? " (current)" : ""}</option>)}
           </select>
         </label>
       </div>
+
+      {loadingYears || loadingAssets ? <LoadingState label={`Loading ${loadingYears ? "academic years" : "badge artwork"}`} /> : null}
+      {loadError ? <div className="notice-row" role="alert">{loadError}<Button disabled={loadingYears || loadingAssets} onClick={() => academicYear ? setAssetsAttempt(value => value + 1) : setYearsAttempt(value => value + 1)}>Try again</Button></div> : null}
 
       <div className="elevate-status-asset-grid">
         {assets.map((asset) => (

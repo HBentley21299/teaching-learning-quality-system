@@ -20,6 +20,17 @@ public sealed partial class SqlFoundationDataStore
           AND role.role_key = N'qa_staff' AND role.is_active = 1 AND role.archived_at IS NULL
         """;
 
+    private static readonly string QaFormAccessStaffDirectorySql = """
+        SELECT staff.id, staff.display_name, staff.email, eligibility.is_eligible
+        FROM people.staff staff
+        CROSS APPLY (SELECT CAST(CASE WHEN EXISTS (
+        """ + ActiveQaStaffSql + """
+        ) THEN 1 ELSE 0 END AS bit) is_eligible) eligibility
+        WHERE eligibility.is_eligible = 1
+           OR EXISTS (SELECT 1 FROM qa.activity_template_staff member WHERE member.staff_id = staff.id)
+        ORDER BY staff.display_name, staff.id;
+        """;
+
     public async Task<QaFormAccessSettings> GetQaFormAccessSettingsAsync(CurrentUser user, CancellationToken token)
     {
         if (!QaReviewPolicy.CanManage(user)) throw new UnauthorizedAccessException("QA review management permission is required.");
@@ -31,14 +42,8 @@ public sealed partial class SqlFoundationDataStore
             """, reader => new QaFormAccessSetting(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3), [], reader.GetFieldValue<byte[]>(4)), token);
         var members = await QueryAsync("SELECT activity_template_id, staff_id FROM qa.activity_template_staff;",
             reader => (TemplateId: reader.GetGuid(0), StaffId: reader.GetGuid(1)), token);
-        var staff = await QueryAsync("""
-            SELECT staff.id, staff.display_name, staff.email
-            FROM people.staff staff
-            WHERE EXISTS (
-            """ + ActiveQaStaffSql + """
-            ) OR EXISTS (SELECT 1 FROM qa.activity_template_staff member WHERE member.staff_id = staff.id)
-            ORDER BY staff.display_name, staff.id;
-            """, reader => new QaFormAccessStaff(reader.GetGuid(0), reader.GetString(1), GetStringOrNull(reader, 2) ?? ""), token);
+        var staff = await QueryAsync(QaFormAccessStaffDirectorySql,
+            reader => new QaFormAccessStaff(reader.GetGuid(0), reader.GetString(1), GetStringOrNull(reader, 2) ?? "", reader.GetBoolean(3)), token);
         return new QaFormAccessSettings(templates.Select(form => form with { StaffIds = members.Where(member => member.TemplateId == form.TemplateId).Select(member => member.StaffId).ToArray() }).ToArray(), staff);
     }
 

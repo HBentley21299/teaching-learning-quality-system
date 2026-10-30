@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useFormContent } from "../services/formContent";
+import { WorkflowNarrativeField, WorkflowTextField } from "../components/WorkflowNarrativeField";
+import { LoadingState } from "../components/LoadingState";
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
+import { useWorkflowPagination, WorkflowPagination } from "../components/WorkflowPagination";
+import { WorkflowFeedback } from "../components/WorkflowFeedback";
+import { WorkflowFilters } from "../components/WorkflowFilters";
+import { focusWorkflowControl } from "../services/workflowExperience";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   ArrowLeft,
@@ -17,6 +25,8 @@ import { Button } from "../design-system/Button";
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { ExportExcelButton } from "../components/ExportButtons";
 import { api } from "../services/api";
+import { distinctListValues, sortListRows } from "../services/listQuery";
+import { selectPracticeStaff } from "../services/workflowListQueries";
 import type {
   AdminSaveElevatePracticeAssessmentRequest,
   CurrentUser,
@@ -51,9 +61,12 @@ export function ElevatePractice({
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [reload, setReload] = useState(0);
+  const [showMissingRatings, setShowMissingRatings] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setIsLoading(true); setMessage("");
     api.elevatePracticeMe()
       .then((result) => {
         if (!cancelled) {
@@ -68,10 +81,21 @@ export function ElevatePractice({
         if (!cancelled) setIsLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [reload]);
 
   async function save(submit: boolean): Promise<boolean> {
-    if (!workspace || !draft) return false;
+    if (!workspace || !draft || isSaving) return false;
+    if (submit) {
+      const firstUnfinished = workspace.areas.findIndex(area => area.statements.some(statement => !draft.ratings[statement.id]));
+      if (firstUnfinished >= 0) {
+        setStep(firstUnfinished);
+        setShowMissingRatings(true);
+        setMessage(`Choose a response for every statement in ${workspace.areas[firstUnfinished].name} before submitting. You can save a draft at any time.`);
+        const missing = workspace.areas[firstUnfinished].statements.find(statement => !draft.ratings[statement.id]);
+        if (missing) window.requestAnimationFrame(() => focusWorkflowControl(`practice-statement-${missing.id}`));
+        return false;
+      }
+    }
     if (submit && !window.confirm("Submit this assessment for programme leader validation? Your responses will be locked unless returned for amendments.")) return false;
 
     setIsSaving(true);
@@ -92,8 +116,10 @@ export function ElevatePractice({
   }
 
   const clearNavigation = useUnsavedChanges({ label: "Elevate Learning and Innovation assessment", dirty: Boolean(workspace && draft && workspace.status !== "submitted" && JSON.stringify(draft) !== JSON.stringify(createDraft(workspace))),
+    submission: Boolean(workspace && workspace.status !== "submitted"), submitLabel: "Submit for validation",
+    onSubmit: workspace?.canEdit && workspace.status !== "submitted" ? () => save(true) : undefined,
     saving: isSaving, onSave: () => save(false), onDiscard: () => { if (workspace) setDraft(createDraft(workspace)); } });
-  if (isLoading) return <p className="muted-copy">Loading Elevate Learning and Innovation...</p>;
+  if (isLoading) return <LoadingState label="Loading Elevate Learning and Innovation…" size="page" />;
 
   return (
     <div className="route-stack">
@@ -103,19 +129,21 @@ export function ElevatePractice({
           {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear: workspace?.academicYear }} moduleKey="elevate-practice" /> : null}
           {canReview ? (
             <div className="segmented-control" aria-label="Elevate Learning and Innovation view">
-              <button className={view === "assessment" ? "is-active" : ""} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) setView("assessment"); })} type="button">My assessment</button>
-              <button className={view === "validation" ? "is-active" : ""} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) setView("validation"); })} type="button">Programme leader validation</button>
-              {isAdmin ? <button className={view === "progress" ? "is-active" : ""} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) setView("progress"); })} type="button">Completion overview</button> : null}
+              <button aria-pressed={view === "assessment"} className={view === "assessment" ? "is-active" : ""} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) setView("assessment"); })} type="button">My assessment</button>
+              <button aria-pressed={view === "validation"} className={view === "validation" ? "is-active" : ""} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) setView("validation"); })} type="button">Programme leader validation</button>
+              {isAdmin ? <button aria-pressed={view === "progress"} className={view === "progress" ? "is-active" : ""} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) setView("progress"); })} type="button">Completion overview</button> : null}
             </div>
           ) : null}
         </div>
       </div>
-      {message ? <div className="notice-row" role="alert">{message}</div> : null}
+      <WorkflowFeedback message={message} />
+      {!workspace ? <Button onClick={() => setReload(value => value + 1)}>Try loading again</Button> : null}
       {view === "validation" && canReview ? <ElevatePracticeValidationView /> : view === "progress" && isAdmin ? <ElevatePracticeProgressView /> : workspace && draft ? (
         workspace.status === "submitted" ? <ElevatePracticeResult workspace={workspace} /> : (
           <><ValidationHistory workspace={workspace} /><AssessmentEditor
             draft={draft}
             isSaving={isSaving}
+            showMissingRatings={showMissingRatings}
             onChange={setDraft}
             onSave={() => void save(false)}
             onStepChange={setStep}
@@ -204,7 +232,7 @@ export function ElevatePracticeAdminEditor({ assessmentId, onBack, onDeleted }: 
   }
 
   if (!workspace || !draft) {
-    return <section className="panel"><Button icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>Back to records</Button><p className="muted-copy">{message || "Loading record..."}</p></section>;
+    return <section className="panel"><Button icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>Back to records</Button>{message ? <WorkflowFeedback message={message} tone="error" /> : <LoadingState label="Loading Elevate Learning and Innovation record…" />}</section>;
   }
 
   return (
@@ -223,7 +251,7 @@ export function ElevatePracticeAdminEditor({ assessmentId, onBack, onDeleted }: 
           </div>
         </div>
       ) : null}
-      {message ? <div className="notice-row" role="alert">{message}</div> : null}
+      <WorkflowFeedback message={message} />
       <section className="panel"><label className="entry-field"><span>Reason for changes <strong>Required</strong></span><textarea value={editReason} onChange={(event) => setEditReason(event.target.value)} rows={2} maxLength={2000} /></label><p className="muted-copy">Changes are recorded in the audit history and a submitted assessment will need validation again.</p></section>
       <AssessmentEditor
         adminStatus={status}
@@ -263,7 +291,8 @@ function AssessmentEditor({
   onSubmit,
   adminStatus,
   onAdminStatusChange,
-  submittedCorrection = false
+  submittedCorrection = false,
+  showMissingRatings = false
 }: {
   workspace: ElevatePracticeWorkspace;
   draft: PracticeDraft;
@@ -276,6 +305,7 @@ function AssessmentEditor({
   adminStatus?: "draft" | "submitted";
   onAdminStatusChange?: (status: "draft" | "submitted") => void;
   submittedCorrection?: boolean;
+  showMissingRatings?: boolean;
 }) {
   const livStep = workspace.areas.length;
   const activeArea = step < workspace.areas.length ? workspace.areas[step] : null;
@@ -301,16 +331,16 @@ function AssessmentEditor({
       </section>
       <section className="practice-progress-band" aria-label="Assessment progress">
         <div><strong>{completed}/{totalStatements}</strong><span>statements rated</span></div>
-        <div className="practice-progress-track"><span style={{ width: `${percentage}%` }} /></div><span>{percentage}%</span>
+        <div className="practice-progress-track" role="progressbar" aria-label="Statements rated" aria-valuemin={0} aria-valuemax={totalStatements} aria-valuenow={completed} aria-valuetext={`${completed} of ${totalStatements} statements rated`}><span style={{ width: `${percentage}%` }} /></div><span>{percentage}%</span>
       </section>
       <div className="practice-editor-layout">
         <aside className="practice-step-list" aria-label="Assessment sections">
           {workspace.areas.map((area, index) => (
-            <button className={step === index ? "is-active" : ""} key={area.areaKey} onClick={() => onStepChange(index)} type="button">
+            <button aria-current={step === index ? "step" : undefined} className={step === index ? "is-active" : ""} key={area.areaKey} onClick={() => onStepChange(index)} type="button">
               <span>{index + 1}</span><strong>{area.name}</strong>{area.statements.every((statement) => draft.ratings[statement.id]) ? <Check size={15} aria-label="Complete" /> : null}
             </button>
           ))}
-          <button className={step === livStep ? "is-active" : ""} onClick={() => onStepChange(livStep)} type="button"><span>{livStep + 1}</span><strong>LIV Information</strong></button>
+          <button aria-current={step === livStep ? "step" : undefined} className={step === livStep ? "is-active" : ""} onClick={() => onStepChange(livStep)} type="button"><span>{livStep + 1}</span><strong>LIV Information</strong></button>
         </aside>
         <div className="practice-editor-content">
           {activeArea ? (
@@ -332,7 +362,7 @@ function AssessmentEditor({
                 {activeArea.statements.map((statement, index) => (
                   <div className="practice-statement" key={statement.id}>
                     <p><span>{index + 1}</span>{statement.text}</p>
-                    <div className="likert-control" role="group" aria-label={`Response for ${statement.text}`}>
+                    <div id={`practice-statement-${statement.id}`} tabIndex={-1} className="likert-control" role="group" aria-label={`Response for ${statement.text}`} aria-invalid={showMissingRatings && !draft.ratings[statement.id] || undefined} aria-describedby={showMissingRatings && !draft.ratings[statement.id] ? `practice-statement-${statement.id}-error` : undefined}>
                       {workspace.ratingScale.filter((rating) => rating.isActive).map((rating) => (
                         <button
                           aria-pressed={draft.ratings[statement.id] === rating.id}
@@ -347,6 +377,7 @@ function AssessmentEditor({
                         </button>
                       ))}
                     </div>
+                    {showMissingRatings && !draft.ratings[statement.id] ? <small className="workflow-field-error" id={`practice-statement-${statement.id}-error`}>Choose one response for this statement.</small> : null}
                   </div>
                 ))}
               </div>
@@ -383,6 +414,7 @@ function LivInformationEditor({ information, onChange, ratings, workspace }: {
   ratings: Record<string, string>;
   workspace: ElevatePracticeWorkspace;
 }) {
+  const content = useFormContent("practice");
   const secondaryOther = information.secondaryFocusKey === "other";
   const recommendedAreas = recommendedLivAreas(workspace, ratings);
   const preferredMonthOptions = livPreferredMonthOptions(workspace.academicYear);
@@ -405,36 +437,36 @@ function LivInformationEditor({ information, onChange, ratings, workspace }: {
         <label className="entry-field"><span>Primary focus</span><select onChange={(event) => onChange({ primaryFocusKey: event.target.value })} value={information.primaryFocusKey ?? ""}><option value="">Select primary focus</option>{workspace.livInformation.focusOptions.filter((option) => option.key !== "other").map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
         <label className="entry-field"><span>Secondary focus <small>Optional</small></span><select onChange={(event) => onChange({ secondaryFocusKey: event.target.value, secondaryFocusOther: event.target.value === "other" ? information.secondaryFocusOther : "" })} value={information.secondaryFocusKey ?? ""}><option value="">No secondary focus</option>{workspace.livInformation.focusOptions.map((option) => <option key={option.key} value={option.key}>{option.name}</option>)}</select></label>
       </div>
-      {secondaryOther ? <label className="entry-field"><span>Other secondary focus</span><input onChange={(event) => onChange({ secondaryFocusOther: event.target.value })} value={information.secondaryFocusOther ?? ""} /></label> : null}
-      <label className="entry-field"><span>What would you like to achieve through your LIV?</span>
-        <div className="practice-liv-guidance">
-          <p>Have you considered a specific area of your practice you would like to develop, test or receive feedback on?</p>
-          <p>Think about:</p>
-          <ul><li>What you want to improve or explore</li><li>Why this matters for your learners</li><li>What you would like the observer to focus on</li><li>What success or improvement might look like</li></ul>
-          <p>Include any particular strategies, approaches or learner groups you would like the LIV to consider.</p>
-        </div>
-        <textarea onChange={(event) => onChange({ desiredOutcome: event.target.value })} rows={8} value={information.desiredOutcome ?? ""} />
-      </label>
+      {secondaryOther ? <WorkflowTextField content={content.field("secondaryFocusOther", "Other secondary focus")} onChange={value => onChange({ secondaryFocusOther: value })} value={information.secondaryFocusOther ?? ""} /> : null}
+      <WorkflowNarrativeField content={content.field("desiredOutcome", "What would you like to achieve through your LIV?", "Have you considered a specific area of your practice you would like to develop, test or receive feedback on?\n\nThink about:\n• What you want to improve or explore\n• Why this matters for your learners\n• What you would like the observer to focus on\n• What success or improvement might look like\n\nInclude any particular strategies, approaches or learner groups you would like the LIV to consider.")} onChange={value => onChange({ desiredOutcome: value })} rows={8} value={information.desiredOutcome ?? ""} />
     </div>
   );
 }
 
-function ElevatePracticeProgressView() {
+export function ElevatePracticeProgressView() {
   const [records, setRecords] = useState<ElevatePracticeProgress[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [faculty, setFaculty] = useState("all");
+  const [team, setTeam] = useState("all");
+  const [sort, setSort] = useState("staff");
   const [resultStaffId, setResultStaffId] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [reload, setReload] = useState(0);
 
-  useEffect(() => { api.elevatePracticeProgress().then(setRecords).finally(() => setIsLoading(false)); }, []);
-  const faculties = useMemo(() => Array.from(new Map(records.filter((record) => record.facultyCode).map((record) => [record.facultyCode, record.facultyName])).entries()), [records]);
-  const filtered = records.filter((record) => {
-    const query = search.trim().toLowerCase();
-    return (status === "all" || record.status === status)
-      && (faculty === "all" || record.facultyCode === faculty)
-      && (!query || `${record.staffName} ${record.externalId} ${record.email}`.toLowerCase().includes(query));
-  });
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true); setLoadError("");
+    api.elevatePracticeProgress().then(result => { if (!cancelled) setRecords(result); })
+      .catch(() => { if (!cancelled) setLoadError("Completion data could not be loaded. Try again."); })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, [reload]);
+  const faculties = sortListRows([...new Map(records.map(record => [record.facultyCode || "unassigned", record.facultyName || "Unassigned"])).entries()], entry => entry[1]);
+  const teams = sortListRows([...new Map(records.filter(record => faculty === "all" || (record.facultyCode || "unassigned") === faculty).map(record => [record.teamCode || "unassigned", record.teamName || "Unassigned"])).entries()], entry => entry[1]);
+  const filtered = selectPracticeStaff(records, { search, status, faculty, team, sort });
+  const recordPage = useWorkflowPagination(filtered, JSON.stringify([search, status, faculty, team, sort]));
   if (resultStaffId) return <ElevatePracticeResultPage onBack={() => setResultStaffId("")} staffId={resultStaffId} />;
 
   return (
@@ -447,27 +479,38 @@ function ElevatePracticeProgressView() {
       </section>
       <section className="panel">
         <div className="panel-heading"><h2>Completion overview</h2><span>{records[0]?.academicYear ?? "Current academic year"}</span></div>
-        <div className="filter-toolbar">
-          <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff" value={search} /></label>
-          <label><span>Status</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="all">All statuses</option><option value="not_started">Not started</option><option value="draft">Draft</option><option value="submitted">Submitted</option></select></label>
-          <label><span>Faculty</span><select onChange={(event) => setFaculty(event.target.value)} value={faculty}><option value="all">All faculties</option>{faculties.map(([code, name]) => <option key={code} value={code}>{code} - {name}</option>)}</select></label>
-        </div>
-        <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty</th><th>Team</th><th>Status</th><th>Last activity</th><th>View</th></tr></thead><tbody>
-          {isLoading ? <tr><td colSpan={6}>Loading completion data...</td></tr> : filtered.length === 0 ? <tr><td colSpan={6}>No staff match these filters.</td></tr> : filtered.map((record) => (
+        <WorkflowFeedback message={loadError} tone="error" />
+        {isLoading ? <LoadingState label="Loading assessment completion…" /> : null}
+        {loadError ? <Button disabled={isLoading} onClick={() => setReload(value => value + 1)}>Retry loading completion data</Button> : null}
+        <WorkflowFilters activeCount={[status, faculty, team].filter(value => value !== "all").length} hasQuery={Boolean(search)} onClear={() => { setSearch(""); setStatus("all"); setFaculty("all"); setTeam("all"); setSort("staff"); }} primary={<>
+<label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setSearch(event.target.value)} aria-label="Search assessment completion" placeholder="Search staff, email, faculty or team" value={search} /></label>
+<PracticeListSort value={sort} onChange={setSort} />
+</>}>
+<label><span>Status</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="all">All statuses</option>{Array.from(new Set(records.map(record => record.status))).map(value => <option key={value} value={value}>{practiceStatusLabel(value)}</option>)}</select></label>
+          <label><span>Faculty</span><select onChange={(event) => { setFaculty(event.target.value); setTeam("all"); }} value={faculty}><option value="all">All faculties</option>{faculties.map(([code, name]) => <option key={code} value={code}>{code === "unassigned" ? name : `${code} - ${name}`}</option>)}</select></label>
+          <label><span>Team</span><select value={team} onChange={event => setTeam(event.target.value)}><option value="all">All teams</option>{teams.map(([code, name]) => <option key={code} value={code}>{code === "unassigned" ? name : `${code} - ${name}`}</option>)}</select></label>
+</WorkflowFilters>
+        <ScrollableTableRegion label="ELI completion"><table><thead><tr><th scope="col">Staff member</th><th scope="col">Faculty</th><th scope="col">Team</th><th scope="col">Status</th><th scope="col">Last activity</th><th scope="col">View</th></tr></thead><tbody>
+          {isLoading && records.length === 0 ? null : loadError && records.length === 0 ? <tr><td colSpan={6}>Completion data is temporarily unavailable. Use Retry loading completion data above.</td></tr> : filtered.length === 0 ? <tr><td colSpan={6}>No staff match these filters.</td></tr> : recordPage.items.map((record) => (
             <tr key={record.staffId}><td><strong>{record.staffName}</strong><small className="table-subline">{record.externalId}</small></td><td>{record.facultyCode ?? "Unassigned"}</td><td>{record.teamCode ?? "Unassigned"}</td><td><span className={`status-pill ${practiceStatusClass(record.status)}`}>{practiceStatusLabel(record.status)}</span></td><td>{record.submittedAt ? formatDate(record.submittedAt) : record.updatedAt ? formatDate(record.updatedAt) : "No activity"}</td><td>{record.status === "submitted" ? <button className="icon-button" onClick={() => setResultStaffId(record.staffId)} title="View submitted result" type="button"><Eye size={16} aria-hidden="true" /></button> : "-"}</td></tr>
           ))}
-        </tbody></table></div>
+        </tbody></table></ScrollableTableRegion>
+        <WorkflowPagination {...recordPage} label="Assessment completion" />
       </section>
     </>
   );
 }
 
-function ElevatePracticeValidationView() {
+export function ElevatePracticeValidationView() {
   const [records, setRecords] = useState<ElevatePracticeValidationProgress[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [faculty, setFaculty] = useState("all");
+  const [team, setTeam] = useState("all");
+  const [reviewer, setReviewer] = useState("all");
+  const [sort, setSort] = useState("staff");
   const [selected, setSelected] = useState<ElevatePracticeValidationProgress | null>(null);
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
@@ -480,9 +523,12 @@ function ElevatePracticeValidationView() {
       .finally(() => { if (!cancelled) setIsLoading(false); });
     return () => { cancelled = true; };
   }, [refresh]);
+
+  const faculties = sortListRows([...new Map(records.map(record => [record.facultyCode || "unassigned", record.facultyName || "Unassigned"])).entries()], entry => entry[1]);
+  const teams = sortListRows([...new Map(records.filter(record => faculty === "all" || (record.facultyCode || "unassigned") === faculty).map(record => [record.teamCode || "unassigned", record.teamName || "Unassigned"])).entries()], entry => entry[1]);
+  const filtered = selectPracticeStaff(records, { search, status, faculty, team, reviewer, sort }, true);
+  const recordPage = useWorkflowPagination(filtered, JSON.stringify([search, status, faculty, team, reviewer, sort]));
   if (selected) return <ElevatePracticeResultPage staffId={selected.staffId} recordId={selected.recordId} backLabel="Back to validation overview" onBack={() => { setSelected(null); setRefresh((value) => value + 1); }} />;
-  const filtered = records.filter((record) => (status === "all" || record.validationStatus === status)
-    && (!search.trim() || `${record.staffName} ${record.externalId} ${record.facultyName} ${record.teamName}`.toLowerCase().includes(search.trim().toLowerCase())));
   return <>
     <section className="kpi-strip" aria-label="Programme leader validation summary">
       <div className="kpi"><span>Staff in your scope</span><strong>{records.length}</strong></div>
@@ -492,22 +538,33 @@ function ElevatePracticeValidationView() {
     </section>
     <section className="panel">
       <div className="panel-heading"><div><h2>Programme leader validation</h2><p className="muted-copy">Review each response, validate the result or return it with feedback. Changes and decisions are tracked.</p></div><Button disabled={isLoading} onClick={() => setRefresh((value) => value + 1)}>Refresh</Button></div>
-      {message ? <div className="notice-row" role="alert">{message}</div> : null}
-      <div className="filter-toolbar">
-        <label className="search-box"><Search size={16} aria-hidden="true" /><input aria-label="Search validation staff" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search staff, faculty or team" /></label>
-        <label><span>Validation status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="pending">Awaiting validation</option><option value="returned">Returned for amendments</option><option value="validated">Validated</option><option value="draft">Not yet submitted</option></select></label>
-      </div>
-      <div className="table-shell"><table><thead><tr><th>Staff member</th><th>Faculty / team</th><th>Validation</th><th>Last review</th><th>Open</th></tr></thead><tbody>
-        {isLoading ? <tr><td colSpan={5}>Loading validation progress...</td></tr> : filtered.length === 0 ? <tr><td colSpan={5}>No staff match these filters.</td></tr> : filtered.map((record) => <tr key={record.staffId}>
+      <WorkflowFeedback message={message} />
+      {isLoading ? <LoadingState label="Loading programme leader validation…" /> : null}
+      <WorkflowFilters activeCount={[status, faculty, team, reviewer].filter(value => value !== "all").length} hasQuery={Boolean(search)} onClear={() => { setSearch(""); setStatus("all"); setFaculty("all"); setTeam("all"); setReviewer("all"); setSort("staff"); }} primary={<>
+<label className="search-box"><Search size={16} aria-hidden="true" /><input aria-label="Search validation staff" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search staff, faculty or team" /></label>
+<PracticeListSort value={sort} onChange={setSort} validation />
+</>}>
+<label><span>Validation status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option>{distinctListValues(records.map(record => record.validationStatus)).map(value => <option key={value} value={value}>{validationStatusLabel(value)}</option>)}</select></label>
+        <label><span>Faculty</span><select value={faculty} onChange={event => { setFaculty(event.target.value); setTeam("all"); }}><option value="all">All faculties</option>{faculties.map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select></label>
+        <label><span>Team</span><select value={team} onChange={event => setTeam(event.target.value)}><option value="all">All teams</option>{teams.map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select></label>
+        <label><span>Reviewer</span><select value={reviewer} onChange={event => setReviewer(event.target.value)}><option value="all">All reviewers</option>{distinctListValues(records.map(record => record.reviewedByName || "not_reviewed")).map(name => <option key={name} value={name}>{name === "not_reviewed" ? "Not reviewed" : name}</option>)}</select></label>
+</WorkflowFilters>
+      <ScrollableTableRegion label="ELI validation"><table><thead><tr><th scope="col">Staff member</th><th scope="col">Faculty / team</th><th scope="col">Validation</th><th scope="col">Last review</th><th scope="col">Open</th></tr></thead><tbody>
+        {isLoading && records.length === 0 ? null : message && records.length === 0 ? <tr><td colSpan={5}>Validation progress is temporarily unavailable. Use Refresh above to try again.</td></tr> : filtered.length === 0 ? <tr><td colSpan={5}>No staff match these filters.</td></tr> : recordPage.items.map((record) => <tr key={record.staffId}>
           <td><strong>{record.staffName}</strong><small className="table-subline">{record.externalId}</small></td>
           <td>{record.facultyName ?? "Unassigned"}<small className="table-subline">{record.teamName ?? "Unassigned"}</small></td>
           <td><span className={`status-pill ${validationStatusClass(record.validationStatus)}`}>{validationStatusLabel(record.validationStatus)}</span>{record.feedback ? <small className="table-subline">{record.feedback}</small> : null}</td>
           <td>{record.reviewedByName ?? "Not reviewed"}{record.reviewedAt ? <small className="table-subline">{formatDate(record.reviewedAt)}</small> : null}</td>
           <td>{record.assessmentId && (record.status === "submitted" || record.validationStatus === "returned") ? <Button icon={Eye} onClick={() => setSelected(record)}>Review</Button> : practiceStatusLabel(record.status)}</td>
         </tr>)}
-      </tbody></table></div>
+      </tbody></table></ScrollableTableRegion>
+      <WorkflowPagination {...recordPage} label="Assessment validation" />
     </section>
   </>;
+}
+
+function PracticeListSort({ value, onChange, validation = false }: { value: string; onChange: (value: string) => void; validation?: boolean }) {
+  return <label><span>Sort by</span><select aria-label={validation ? "Sort validation staff" : "Sort completion staff"} value={value} onChange={event => onChange(event.target.value)}><option value="staff">Staff name</option><option value="faculty">Faculty</option><option value="team">Team</option><option value="status">Status</option>{validation ? <option value="reviewer">Reviewer</option> : null}<option value="newest">{validation ? "Review" : "Activity"}: newest first</option><option value="oldest">{validation ? "Review" : "Activity"}: oldest first</option></select></label>;
 }
 
 export function ElevatePracticeResultPage({ staffId, recordId, onBack, backLabel = "Back to Staff Profile" }: { staffId: string; recordId?: string; onBack: () => void; backLabel?: string }) {
@@ -524,7 +581,7 @@ export function ElevatePracticeResultPage({ staffId, recordId, onBack, backLabel
       .catch(() => { if (!cancelled) setMessage("The Elevate Learning and Innovation result could not be loaded."); });
     return () => { cancelled = true; };
   }, [recordId, staffId]);
-  if (!workspace) return <section className="panel"><Button icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>{backLabel}</Button><p className="muted-copy">{message || "Loading assessment result..."}</p></section>;
+  if (!workspace) return <section className="panel"><Button icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>{backLabel}</Button>{message ? <WorkflowFeedback message={message} tone="error" /> : <LoadingState label="Loading assessment result…" />}</section>;
   if (isEditing && workspace.canEdit && workspace.assessmentId) {
     return <ElevatePracticeProfileEditor onBack={() => setIsEditing(false)} onSaved={(result) => { setWorkspace(result); setIsEditing(false); }} staffId={workspace.staffId} workspace={workspace} />;
   }
@@ -562,7 +619,7 @@ function ElevatePracticeProfileEditor({ staffId, workspace, onBack, onSaved }: {
     } finally { setIsSaving(false); }
   }
 
-  return <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="route-stack"><div><Button disabled={isSaving} icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>Back to report</Button></div>{message ? <div className="notice-row" role="alert">{message}</div> : null}<section className="panel practice-validation-panel"><h2>Edit with the staff member</h2><p>Review the responses together on this device. Saving records who made the changes and returns the result to awaiting validation.</p><label className="entry-field"><span>Reason for changes <strong>Required</strong></span><textarea value={editReason} onChange={(event) => setEditReason(event.target.value)} rows={3} maxLength={2000} /></label><label className="practice-validation-confirm"><input type="checkbox" checked={staffPresent} onChange={(event) => setStaffPresent(event.target.checked)} /><span>The staff member is present and we have reviewed these changes together.</span></label></section><AssessmentEditor submittedCorrection draft={draft} isSaving={isSaving} onChange={setDraft} onSave={() => void save()} onStepChange={setStep} onSubmit={() => void save()} step={step} workspace={workspace} /></div></fieldset>;
+  return <fieldset disabled={isSaving} style={{ display: "contents" }}><div className="route-stack"><div><Button disabled={isSaving} icon={ArrowLeft} onClick={() => void confirmUnsavedNavigation().then(leave => { if (leave) onBack(); })}>Back to report</Button></div><WorkflowFeedback message={message} /><section className="panel practice-validation-panel"><h2>Edit with the staff member</h2><p>Review the responses together on this device. Saving records who made the changes and returns the result to awaiting validation.</p><label className="entry-field"><span>Reason for changes <strong>Required</strong></span><textarea value={editReason} onChange={(event) => setEditReason(event.target.value)} rows={3} maxLength={2000} /></label><label className="practice-validation-confirm"><input type="checkbox" checked={staffPresent} onChange={(event) => setStaffPresent(event.target.checked)} /><span>The staff member is present and we have reviewed these changes together.</span></label></section><AssessmentEditor submittedCorrection draft={draft} isSaving={isSaving} onChange={setDraft} onSave={() => void save()} onStepChange={setStep} onSubmit={() => void save()} step={step} workspace={workspace} /></div></fieldset>;
 }
 
 function ElevatePracticeResult({ workspace, onBack, onEdit, onWorkspaceChange, backLabel = "Back to Staff Profile" }: { workspace: ElevatePracticeWorkspace; onBack?: () => void; onEdit?: () => void; onWorkspaceChange?: (workspace: ElevatePracticeWorkspace) => void; backLabel?: string }) {
@@ -652,7 +709,7 @@ function ValidationHistory({ workspace, onWorkspaceChange }: { workspace: Elevat
     {validation.reviewedByName ? <p className="muted-copy">Last reviewed by {validation.reviewedByName}{validation.reviewedAt ? ` · ${formatDate(validation.reviewedAt)}` : ""}</p> : null}
     {validation.feedback ? <div className="practice-validation-feedback"><strong>{validation.status === "returned" ? "Amendments requested" : "Review feedback"}</strong><p>{validation.feedback}</p></div> : null}
     {validation.status === "returned" ? <p>The assessment is unlocked for the staff member to amend and resubmit for validation.</p> : validation.status === "pending" ? <p>Submitted responses are awaiting programme leader validation.</p> : null}
-    {message ? <div className="notice-row" role="status">{message}</div> : null}
+    <WorkflowFeedback message={message} />
     {canDecide ? <>
       <label className="entry-field"><span>Review notes <small>Required when returning for amendments</small></span><textarea rows={4} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Identify the statements to discuss or amend, and explain why." /></label>
       <label className="practice-validation-confirm"><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} /><span>I have reviewed every statement and the overall result with the available evidence.</span></label>

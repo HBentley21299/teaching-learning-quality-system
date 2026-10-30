@@ -1,12 +1,20 @@
-import { useUnsavedChanges, confirmUnsavedNavigation } from "../components/UnsavedChangesGuard";
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
+import { LoadingState } from "../components/LoadingState";
+import { useUnsavedChanges, confirmUnsavedNavigation, useNavigationDecisionPending } from "../components/UnsavedChangesGuard";
 import { writeAppPath } from "../app/history";
+import { accessibleQaAdminSections, qaAdminPath, qaAdminSectionFromPath } from "../app/qaAdminNavigation";
+import { QaAdminCentre } from "./QaAdminCentre";
 import { QaEvidenceSaveQueue } from "../services/qaEvidenceSaveQueue";
 import { QaOutcomeLabelsContext, defaultQaOutcomeLabels, useQaOutcomeLabels, qaCombinedOutcomeLabel } from "../services/qaOutcomeLabels";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Accessibility, AlertTriangle, Archive, ArrowLeft, Building2, CalendarRange, Check, CheckCircle2, ChevronDown, ClipboardCheck, ClipboardList, Eye, FileCheck2, FileSearch, FileSpreadsheet, FileText, Footprints, ListChecks, MapPin, MessageCircle, Monitor, Plus, RotateCcw, Search, ShieldCheck, Target, Users, X } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Accessibility, AlertTriangle, Archive, ArrowLeft, Building2, CalendarRange, Check, CheckCircle2, ClipboardCheck, ClipboardList, Eye, FileCheck2, FileSearch, Footprints, ListChecks, MapPin, MessageCircle, Monitor, Plus, RotateCcw, Search, ShieldCheck, Target, Users, X } from "lucide-react";
 import { CollapsibleSection } from "../components/CollapsibleSection";
+import { QaDashboardDataExplorer } from "../components/QaDashboardDataExplorer";
 import { Button } from "../design-system/Button";
+import { ReportButton } from "../components/ExportButtons";
 import { api } from "../services/api";
+import { AdminListSort } from "../components/AdminListSort";
+import { distinctListValues, matchesListSearch, sortListRows } from "../services/listQuery";
 import { dashboardVisibleUnitIds } from "../services/dashboardOrgVisibility";
 import { learningWalkDeliveryChoices, type LearningWalkDeliveryArea } from "../services/learningWalkDeliveryAreas";
 import type {
@@ -39,6 +47,7 @@ type QaHubProps = {
 
 type QaPage =
   | { kind: "list" }
+  | { kind: "admin"; section: string }
   | { kind: "actions" }
   | { kind: "new" }
   | { kind: "review"; id: string; section: "configuration" | "evidence" | "dashboard" | "actions" }
@@ -93,6 +102,8 @@ function questionSetKeys(question: QaQuestionSummary) {
 }
 
 function pageFromPath(pathname = window.location.pathname): QaPage {
+  const adminSection = qaAdminSectionFromPath(pathname);
+  if (adminSection !== null) return { kind: "admin", section: adminSection };
   const parts = pathname.split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[1] === "actions") return { kind: "actions" };
   if (parts[1] === "evidence" && parts[2]) return { kind: "evidence", id: parts[2] };
@@ -111,62 +122,83 @@ export function QaHub({ user, orgUnits, staff, academicYears, onReturnToElevate 
   const [activities, setActivities] = useState<QaActivityTypeSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const summarySequence = useRef(0);
+  const canAdminister = accessibleQaAdminSections(user.permissions, user.isAdministrator === true).length > 0;
   const navigate = useCallback(async (path: string) => {
     if (!await confirmUnsavedNavigation()) return;
     writeAppPath(path);
     setPage(pageFromPath(path));
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "auto" });
+    window.requestAnimationFrame(() => document.getElementById("main-content")?.focus({ preventScroll: true }));
   }, []);
 
   const refreshSummary = useCallback(async () => {
+    const sequence = ++summarySequence.current;
     setError("");
     try {
       const [nextSummary, nextActivities, nextLabels] = await Promise.all([api.qaHubSummary(), api.qaActivityTypes(), api.qaOutcomeLabels()]);
+      if (sequence !== summarySequence.current) return;
       setOutcomeLabels(nextLabels.labels);
       setSummary(nextSummary);
       setActivities(nextActivities);
     } catch {
-      setError("QA Hub could not be loaded, or this account is outside the permitted QA scope.");
+      if (sequence === summarySequence.current) setError("QA Hub could not be loaded. Check your connection and review access, then try again.");
     } finally {
-      setIsLoading(false);
+      if (sequence === summarySequence.current) setIsLoading(false);
     }
   }, []);
 
-  useEffect(() => { void refreshSummary(); }, [refreshSummary]);
+  useEffect(() => { void refreshSummary(); return () => { ++summarySequence.current; }; }, [refreshSummary]);
+  useEffect(() => {
+    if (page.kind === "admin") writeAppPath(qaAdminPath(page.section), true);
+  }, [page]);
+  const previousPageKind = useRef(page.kind);
+  useEffect(() => {
+    if (previousPageKind.current === "admin" && page.kind !== "admin") void refreshSummary();
+    previousPageKind.current = page.kind;
+  }, [page.kind, refreshSummary]);
   useEffect(() => {
     const accepted = (event: Event) => {
       const pathname = (event as CustomEvent<{ pathname: string }>).detail.pathname;
-      if (pathname.startsWith("/qa-hub")) setPage(pageFromPath(pathname));
+      if (pathname.startsWith("/qa-hub") || qaAdminSectionFromPath(pathname) !== null) setPage(pageFromPath(pathname));
     };
     window.addEventListener("app:navigation-accepted", accepted);
     return () => window.removeEventListener("app:navigation-accepted", accepted);
   }, []);
 
-  if (isLoading) return <div className="route-stack"><p className="muted-copy">Loading QA Hub…</p></div>;
+  const workspaceNavigation = <nav aria-label="QA Hub workspace" className="segmented-control qa-hub-tabs">
+    {summary?.canAccessHub ? <button aria-current={page.kind !== "actions" && page.kind !== "admin" ? "page" : undefined} className={page.kind !== "actions" && page.kind !== "admin" ? "is-active" : ""} onClick={() => void navigate("/qa-hub/reviews")} type="button">Reviews</button> : null}
+    {summary?.canAccessHub && summary.canMonitorActions ? <button aria-current={page.kind === "actions" ? "page" : undefined} className={page.kind === "actions" ? "is-active" : ""} onClick={() => void navigate("/qa-hub/actions")} type="button">Action monitoring</button> : null}
+    {canAdminister ? <button aria-current={page.kind === "admin" ? "page" : undefined} className={page.kind === "admin" ? "is-active" : ""} onClick={() => void navigate(qaAdminPath())} type="button">Administration</button> : null}
+  </nav>;
+
+  // Managing reference lists or reporting does not grant access to QA reviews.
+  // Render authorised settings independently of the review-summary access check.
+  if (page.kind === "admin") return <div className="route-stack qa-hub">{workspaceNavigation}<QaAdminCentre user={user} initialSection={page.section} onNavigate={navigate} canManageReviews={summary?.canManageReviews} canAccessReviews={summary?.canAccessHub} /></div>;
+  if (isLoading) return <LoadingState label="Loading QA Hub" size="page" />;
   if (error || !summary?.canAccessHub) return (
     <section className="access-denied-panel">
       <AlertTriangle size={22} aria-hidden="true" />
       <div><h1>QA Hub unavailable</h1><p>{error || "No active or historical QA Review is assigned to this account."}</p></div>
       <Button onClick={onReturnToElevate} variant="primary">Return to i-Elevate</Button>
+      {error ? <Button onClick={() => { setIsLoading(true); void refreshSummary(); }}>Try again</Button> : null}
+      {canAdminister ? <Button onClick={() => void navigate(qaAdminPath())}>Open QA administration</Button> : null}
     </section>
   );
 
   return (
     <QaOutcomeLabelsContext.Provider value={outcomeLabels}><div className="route-stack qa-hub">
-      <nav aria-label="QA Hub workspace" className="segmented-control qa-hub-tabs">
-        <button aria-pressed={page.kind !== "actions"} className={page.kind !== "actions" ? "is-active" : ""} onClick={() => navigate("/qa-hub/reviews")} type="button">Reviews</button>
-        {summary.canMonitorActions ? <button aria-pressed={page.kind === "actions"} className={page.kind === "actions" ? "is-active" : ""} onClick={() => navigate("/qa-hub/actions")} type="button">Action monitoring</button> : null}
-      </nav>
+      {workspaceNavigation}
       {page.kind === "review" && summary.reviews.length > 1 ? <label className="qa-review-switcher"><span>Current review</span><select aria-label="Switch QA review" value={page.id} onChange={(event) => { const review = summary.reviews.find((item) => item.id === event.target.value); if (review) navigate(qaReviewPath(review)); }}>{summary.reviews.map((review) => <option key={review.id} value={review.id}>{review.title} · {qaStatusLabel(review.status)} · {review.academicYear}</option>)}</select></label> : null}
       {page.kind === "list" ? <QaReviewList onNavigate={navigate} summary={summary} /> : null}
       {page.kind === "actions" && summary.canMonitorActions ? <QaAdminActions onNavigate={navigate} reviews={summary.reviews} /> : null}
-      {page.kind === "actions" && !summary.canMonitorActions ? <section className="access-denied-panel"><AlertTriangle size={22} /><div><h1>Action monitoring unavailable</h1><p>This college-wide view is restricted to Administrators.</p></div><Button onClick={() => navigate("/qa-hub/reviews")} variant="primary">Return to reviews</Button></section> : null}
+      {page.kind === "actions" && !summary.canMonitorActions ? <section className="access-denied-panel"><AlertTriangle size={22}  aria-hidden="true"/><div><h1>Action monitoring unavailable</h1><p>This college-wide view is restricted to Administrators.</p></div><Button onClick={() => navigate("/qa-hub/reviews")} variant="primary">Return to reviews</Button></section> : null}
       {page.kind === "new" && summary.canManageReviews ? (
         <QaReviewEditor
           academicYears={academicYears}
           activities={activities}
           onCancel={() => navigate("/qa-hub")}
-          onSaved={(id) => { void refreshSummary(); navigate(`/qa-hub/reviews/${id}/evidence`); }}
+          onSaved={(id, navigateAfterSave = true) => { void refreshSummary(); if (navigateAfterSave) void navigate(`/qa-hub/reviews/${id}/evidence`); }}
           orgUnits={orgUnits}
           staff={staff}
           user={user}
@@ -195,11 +227,14 @@ export function QaHub({ user, orgUnits, staff, academicYears, onReturnToElevate 
 function QaReviewList({ summary, onNavigate }: { summary: QaHubSummary; onNavigate: (path: string) => void }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("active");
-  const reviews = summary.reviews.filter((review) => {
+  const [year, setYear] = useState("");
+  const [owner, setOwner] = useState("");
+  const [sort, setSort] = useState("closing-desc");
+  const reviews = sortListRows(summary.reviews.filter((review) => {
     const statusMatches = status === "all" || status === "active" && review.status !== "archived" || status === "open" && review.status === "reopened" || review.status === status;
-    const queryMatches = !query || `${review.title} ${review.theme} ${review.ownerName}`.toLowerCase().includes(query.toLowerCase());
-    return statusMatches && queryMatches;
-  });
+    const queryMatches = matchesListSearch(query, review.title, review.theme, review.ownerName, review.academicYear, review.status, review.closingDate);
+    return statusMatches && queryMatches && (!year || review.academicYear === year) && (!owner || review.ownerName === owner);
+  }), review => sort.startsWith("title") ? review.title : sort.startsWith("owner") ? review.ownerName : sort.startsWith("status") ? review.status : Date.parse(review.closingDate), sort.endsWith("desc") ? "desc" : "asc", review => review.id);
   return (
     <>
       <section className="route-header qa-heading">
@@ -215,6 +250,9 @@ function QaReviewList({ summary, onNavigate }: { summary: QaHubSummary; onNaviga
         <div className="filter-toolbar qa-filter-toolbar">
           <label className="search-box"><Search size={16} aria-hidden="true" /><input aria-label="Search reviews" onChange={(event) => setQuery(event.target.value)} placeholder="Search title, theme or owner" value={query} /></label>
           <label className="qa-filter-field"><span>Status</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="active">Current and historical</option><option value="draft">Draft</option><option value="open">Open</option><option value="reopened">Reopened</option><option value="closed">Closed</option><option value="archived">Archived</option><option value="all">All</option></select></label>
+          <label className="qa-filter-field"><span>Academic year</span><select value={year} onChange={event => setYear(event.target.value)}><option value="">All years</option>{distinctListValues(summary.reviews.map(review => review.academicYear)).reverse().map(value => <option key={value}>{value}</option>)}</select></label>
+          <label className="qa-filter-field"><span>Owner</span><select value={owner} onChange={event => setOwner(event.target.value)}><option value="">All owners</option>{distinctListValues(summary.reviews.map(review => review.ownerName)).map(value => <option key={value}>{value}</option>)}</select></label>
+          <AdminListSort value={sort} onChange={setSort} options={[["closing-desc","Closing date: newest first"],["closing-asc","Closing date: oldest first"],["title-asc","Review: A–Z"],["owner-asc","Owner: A–Z"],["status-asc","Status: A–Z"]]} />
         </div>
         {reviews.length === 0 ? <p className="empty-state">No QA Reviews match these filters.</p> : (
           <div className="qa-review-cards">
@@ -242,6 +280,7 @@ function QaAdminActions({ reviews, onNavigate }: { reviews: QaHubSummary["review
   const [facultyId, setFacultyId] = useState("");
   const [teamId, setTeamId] = useState("");
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("due-asc");
   const [message, setMessage] = useState("");
   const load = useCallback(async () => {
     try {
@@ -254,14 +293,14 @@ function QaAdminActions({ reviews, onNavigate }: { reviews: QaHubSummary["review
   useEffect(() => { void load(); }, [load]);
   const faculties = Array.from(new Map(groups.filter((group) => group.facultyOrgUnitId).map((group) => [group.facultyOrgUnitId!, group.facultyName])).entries());
   const teamOptions = Array.from(new Map(groups.flatMap((group) => group.teamOrgUnitIds.map((id, index) => [id, group.teamNames[index]] as const))).entries());
-  const visible = groups.filter((group) => {
+  const visible = sortListRows(groups.filter((group) => {
     if (status === "active" && group.status !== "open" && group.status !== "overdue") return false;
     if (status !== "active" && status !== "all" && group.status !== status) return false;
     if (reviewId && group.reviewId !== reviewId) return false;
     if (facultyId && group.facultyOrgUnitId !== facultyId) return false;
     if (teamId && !group.teamOrgUnitIds.includes(teamId)) return false;
-    return !query || `${group.title} ${group.detail ?? ""} ${group.reviewTitle} ${group.facultyName} ${group.teamNames.join(" ")}`.toLowerCase().includes(query.toLowerCase());
-  });
+    return matchesListSearch(query, group.title, group.detail, group.reviewTitle, group.facultyName, group.teamNames, group.creatorName, group.status, group.dueDate, group.closeNote, group.assignments.map(assignment => [assignment.staffName, assignment.sourceOrgUnitName, assignment.assignmentRole, assignment.status]));
+  }), group => sort.startsWith("title") ? group.title : sort.startsWith("review") ? group.reviewTitle : sort.startsWith("status") ? group.status : Date.parse(group.dueDate), sort.endsWith("desc") ? "desc" : "asc", group => group.id);
   async function review(group: QaActionGroupSummary) {
     const result = await api.reviewQaActionGroup(group.id, group.rowVersion);
     if (!result.ok) { setMessage(result.message ?? "The QA action could not be reviewed."); return; }
@@ -276,18 +315,19 @@ function QaAdminActions({ reviews, onNavigate }: { reviews: QaHubSummary["review
   const overdueCount = groups.filter((group) => group.status === "overdue").length;
   return (
     <div className="route-stack">
-      <section className="route-header qa-heading"><div><p className="eyebrow">Quality improvement follow-up</p><h1>QA action monitoring</h1><p>Create, review and close permission-scoped actions from completed QA Reviews.</p></div>{reviewOptions.length ? <Button icon={Plus} onClick={() => setIsCreating((current) => !current)} variant="primary">{isCreating ? "Hide action form" : "Action"}</Button> : null}</section>
-      {message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16} />{message}</div> : null}
+      <section className="route-header qa-heading"><div><p className="eyebrow">Quality improvement follow-up</p><h1>QA action monitoring</h1><p>Create, review and close permission-scoped actions from completed QA Reviews.</p></div>{reviewOptions.length ? <Button icon={Plus} onClick={async () => { if (!isCreating || await confirmUnsavedNavigation()) setIsCreating((current) => !current); }} variant="primary">{isCreating ? "Hide action form" : "Action"}</Button> : null}</section>
+      {message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16}  aria-hidden="true"/>{message}</div> : null}
       {isCreating && reviewOptions.length ? <QaMonitoringActionCreator onCreated={async () => { await load(); setIsCreating(false); }} reviewOptions={reviewOptions} /> : null}
       <section className="qa-kpi-grid"><article className="stat-card"><span>Active action groups</span><strong>{openCount}</strong></article><article className="stat-card"><span>Overdue</span><strong>{overdueCount}</strong></article><article className="stat-card"><span>Assignments</span><strong>{groups.reduce((total, group) => total + group.assignments.length, 0)}</strong></article><article className="stat-card"><span>Completed or closed</span><strong>{groups.length - openCount}</strong></article></section>
       <section className="panel qa-action-monitor-filters">
-        <label className="search-box"><Search size={16} /><input aria-label="Search QA actions" onChange={(event) => setQuery(event.target.value)} placeholder="Search action, review or scope" value={query} /></label>
+        <label className="search-box"><Search size={16}  aria-hidden="true"/><input aria-label="Search QA actions" onChange={(event) => setQuery(event.target.value)} placeholder="Search action, review or scope" value={query} /></label>
         <label><span>Status</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="active">Open and overdue</option><option value="open">Open</option><option value="overdue">Overdue</option><option value="reviewed">Reviewed</option><option value="closed">Closed</option><option value="all">All</option></select></label>
         <label><span>Review</span><select onChange={(event) => setReviewId(event.target.value)} value={reviewId}><option value="">All reviews</option>{reviews.map((review) => <option key={review.id} value={review.id}>{review.title}</option>)}</select></label>
         <label><span>Faculty</span><select onChange={(event) => { setFacultyId(event.target.value); setTeamId(""); }} value={facultyId}><option value="">All faculties</option>{faculties.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
         <label><span>Team</span><select onChange={(event) => setTeamId(event.target.value)} value={teamId}><option value="">All teams</option>{teamOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+        <AdminListSort value={sort} onChange={setSort} options={[["due-asc","Due date: soonest first"],["due-desc","Due date: latest first"],["title-asc","Action: A–Z"],["review-asc","Review: A–Z"],["status-asc","Status: A–Z"]]} />
       </section>
-      <QaActionGroupCards groups={visible} onClose={close} onOpenReview={(id) => onNavigate(`/qa-hub/reviews/${id}/dashboard`)} onReview={review} />
+      <QaActionGroupCards filterable={false} groups={visible} onClose={close} onOpenReview={(id) => onNavigate(`/qa-hub/reviews/${id}/dashboard`)} onReview={review} />
     </div>
   );
 }
@@ -298,7 +338,7 @@ function QaMonitoringActionCreator({ reviewOptions, onCreated }: { reviewOptions
   if (!options) return null;
   return (
     <div className="route-stack qa-monitoring-action-create">
-      <section className="panel qa-action-review-picker"><label className="entry-field"><span>QA Review <strong>Required</strong></span><select onChange={(event) => setReviewId(event.target.value)} value={options.reviewId}>{reviewOptions.map((item) => <option key={item.reviewId} value={item.reviewId}>{item.reviewTitle}</option>)}</select></label><p>Only reviews that include your permitted faculty or team are available.</p></section>
+      <section className="panel qa-action-review-picker"><label className="entry-field"><span>QA Review <strong>Required</strong></span><select onChange={async (event) => { const next = event.target.value; if (await confirmUnsavedNavigation()) setReviewId(next); }} value={options.reviewId}>{reviewOptions.map((item) => <option key={item.reviewId} value={item.reviewId}>{item.reviewTitle}</option>)}</select></label><p>Only reviews that include your permitted faculty or team are available.</p></section>
       <QaActionCreator key={options.reviewId} onCreated={onCreated} options={options} reviewId={options.reviewId} />
     </div>
   );
@@ -308,7 +348,7 @@ type ReviewEditorProps = Omit<QaHubProps, "onReturnToElevate"> & {
   activities: QaActivityTypeSummary[];
   existing?: QaReviewDetail;
   onCancel: () => void;
-  onSaved: (id: string) => void;
+  onSaved: (id: string, navigateAfterSave?: boolean) => void;
 };
 
 function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, existing, onCancel, onSaved }: ReviewEditorProps) {
@@ -340,16 +380,24 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const clearNavigation = useQaNavigationGuard(dirty, saving);
+  const saveInFlight = useRef(false);
+  const clearNavigation = useQaNavigationGuard(dirty, saving, () => save(false));
   const [questionError, setQuestionError] = useState("");
+  const [questionAttempt, setQuestionAttempt] = useState(0);
+  const [setupSearch, setSetupSearch] = useState("");
+  const [setupSort, setSetupSort] = useState("configured");
+  const [scopeSearch, setScopeSearch] = useState("");
 
   useEffect(() => {
     if (published) { setQuestionsLoaded(true); return; }
+    let cancelled = false;
+    setQuestionsLoaded(false); setQuestionError("");
     void api.qaQuestions(undefined, false)
-      .then(setQuestions)
-      .catch(() => setQuestionError("Activity questions could not be loaded. Reload this page before editing review activities."))
-      .finally(() => setQuestionsLoaded(true));
-  }, [published]);
+      .then(next => { if (!cancelled) setQuestions(next); })
+      .catch(() => { if (!cancelled) setQuestionError("Activity questions could not be loaded. Your setup is still here; try loading them again."); })
+      .finally(() => { if (!cancelled) setQuestionsLoaded(true); });
+    return () => { cancelled = true; };
+  }, [published, questionAttempt]);
 
   const selectedQuestionSets = useMemo(() => parseQuestionSets(form.questionTag), [form.questionTag]);
   const questionSets = useMemo(() => Array.from(new Set(["general", ...questions.flatMap(questionSetKeys)]))
@@ -471,19 +519,26 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
     }]);
   }
 
-  async function save() {
-    if (saving || !setupReady) return;
+  async function save(navigateAfterSave = true): Promise<boolean> {
+    if (saveInFlight.current) return false;
+    if (!setupReady) { setMessage("Complete the required review details, teams and activity criteria before saving."); return false; }
+    saveInFlight.current = true;
     setSaving(true);
     setMessage("");
-    const result = existing ? await api.updateQaReview(existing.review.id, form) : await api.createQaReview(form);
-    setSaving(false);
-    if (!result.ok) {
-      setMessage(result.message ?? "The review could not be saved.");
-      return;
+    try {
+      const result = existing ? await api.updateQaReview(existing.review.id, form) : await api.createQaReview(form);
+      if (!result.ok) { setMessage(result.message ?? "The review could not be saved."); return false; }
+      setDirty(false);
+      clearNavigation();
+      onSaved(existing?.review.id ?? (result.data as { id: string }).id, navigateAfterSave);
+      return true;
+    } catch {
+      setMessage("The review could not be saved. Your setup is still here; try again.");
+      return false;
+    } finally {
+      saveInFlight.current = false;
+      setSaving(false);
     }
-    setDirty(false);
-    clearNavigation();
-    onSaved(existing?.review.id ?? (result.data as { id: string }).id);
   }
 
   return (
@@ -496,8 +551,8 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
           <p>{published ? "Update review details or allocate more faculties and teams. Existing responses and published questions are retained." : "Set up the review, save a draft, then publish when it is ready for evidence."}</p>
         </div>
       </section>
-      {message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16} />{message}</div> : null}
-      {questionError ? <div className="api-error-banner" role="alert">{questionError}</div> : null}
+      {message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16}  aria-hidden="true"/>{message}</div> : null}
+      {questionError ? <div className="api-error-banner" role="alert">{questionError}<Button onClick={() => setQuestionAttempt(value => value + 1)}>Try again</Button></div> : null}
       {published ? <div className="notice-row">This review is {existing!.review.status}. You can extend its allocation; existing teams, activities and questions stay in place so evidence and reporting remain consistent.</div> : null}
       <div className="qa-builder-layout">
         <div className="route-stack">
@@ -535,8 +590,9 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
               <div><h2>Faculty and team scope</h2><p>Select a faculty to include all its current teams, then uncheck any that are not relevant.</p></div>
               <Building2 size={20} aria-hidden="true" />
             </div>
+            <label className="entry-field"><span>Find a faculty or team</span><input type="search" value={scopeSearch} onChange={event => setScopeSearch(event.target.value)} /></label>
             <div className="qa-faculty-grid">
-              {faculties.map((faculty) => {
+              {faculties.filter(faculty => matchesListSearch(scopeSearch, faculty.name, faculty.code, activeTeams.filter(team => team.parentOrgUnitId === faculty.id).map(team => [team.name, team.code]))).map((faculty) => {
                 const selected = selectedFacultyIds.includes(faculty.id);
                 const teamCount = activeTeams.filter((team) => team.parentOrgUnitId === faculty.id).length;
                 return (
@@ -560,7 +616,7 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
                     <article className="qa-team-group" key={facultyId}>
                       <header><div><strong>{faculty?.name}</strong><span>{selectedCount} of {facultyTeams.length} teams selected</span></div><Button onClick={() => setAllFacultyTeams(facultyId, !allSelected)} variant="quiet">{allSelected ? published ? "Clear new selections" : "Clear teams" : "Select all teams"}</Button></header>
                       <div className="qa-team-list">
-                        {facultyTeams.map((team) => <label key={team.id}><input disabled={published && existingTeamIds.includes(team.id)} checked={form.teamOrgUnitIds.includes(team.id)} onChange={() => toggleTeam(team.id)} type="checkbox" /><span><strong>{team.name}</strong><small>{team.code}{published && existingTeamIds.includes(team.id) ? " · Already allocated" : ""}</small></span></label>)}
+                        {facultyTeams.filter(team => matchesListSearch(scopeSearch, team.name, team.code, faculty?.name, faculty?.code)).map((team) => <label key={team.id}><input disabled={published && existingTeamIds.includes(team.id)} checked={form.teamOrgUnitIds.includes(team.id)} onChange={() => toggleTeam(team.id)} type="checkbox" /><span><strong>{team.name}</strong><small>{team.code}{published && existingTeamIds.includes(team.id) ? " · Already allocated" : ""}</small></span></label>)}
                       </div>
                     </article>
                   );
@@ -580,7 +636,8 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
               const selected = form.activities.find((item) => item.activityTypeId === activity.id);
               return <button aria-pressed={Boolean(selected)} className={selected ? "qa-activity-option is-selected" : "qa-activity-option"} disabled={!questionsLoaded} key={activity.id} onClick={() => toggleActivity(activity)} type="button"><span className="qa-select-indicator">{selected ? <Check size={15} aria-hidden="true" /> : <ListChecks size={15} aria-hidden="true" />}</span><span><strong>{activity.name}</strong><small>{selected ? `${selected.questionIds.length} criteria selected` : activity.description}</small></span></button>;
             })}</div>
-            {!questionsLoaded ? <p className="muted-copy">Loading activity criteria…</p> : null}
+            {!questionsLoaded ? <LoadingState label="Loading activity criteria" /> : null}
+<div className="filter-toolbar"><label className="entry-field"><span>Find a review criterion</span><input type="search" value={setupSearch} onChange={event => setSetupSearch(event.target.value)} placeholder="Question, guidance, theme or activity" /></label><AdminListSort value={setupSort} onChange={setSetupSort} options={[["configured","Configured question order"],["question-asc","Question: A–Z"],["question-desc","Question: Z–A"]]} /></div>
             <div className="qa-selected-activity-config">{form.activities.map((selected) => {
               const activity = activities.find((item) => item.id === selected.activityTypeId);
               const activityQuestions = taggedQuestions(selected.activityTypeId);
@@ -591,7 +648,7 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
                   <label><span>Question template</span><select onChange={(event) => update("activities", form.activities.map((item) => item.activityTypeId === selected.activityTypeId ? { ...item, templateId: event.target.value } : item))} value={selected.templateId}>{activity?.templates.filter((template) => template.isActive).map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
                   <div className="qa-activity-question-toolbar"><div><strong>Questions included</strong><span>Uncheck any criteria that are not needed for this activity.</span></div><Button disabled={activityQuestions.length === 0} onClick={() => setAllActivityQuestions(selected.activityTypeId, !allSelected)} variant="quiet">{allSelected ? "Clear all" : "Select all"}</Button></div>
                   {activityQuestions.length === 0 ? <p className="empty-state">No active questions match this question set.</p> : (
-                    <div className="qa-question-select-list">{activityQuestions.map((question) => (
+                    <div className="qa-question-select-list">{sortListRows(activityQuestions.filter(question => matchesListSearch(setupSearch, question.questionText, question.guidance, question.themeOrWeek, question.questionTag, activity?.name)), question => setupSort === "configured" ? question.displayOrder : question.questionText, setupSort.endsWith("desc") ? "desc" : "asc", question => question.id).map((question) => (
                       <label className="qa-question-choice" key={question.id}>
                         <input checked={selected.questionIds.includes(question.id)} onChange={() => toggleActivityQuestion(selected.activityTypeId, question.id)} type="checkbox" />
                         <span><span className="qa-question-choice-heading"><span className="qa-question-tag">{questionSetKeys(question).map((questionSet) => questionSetLabels.get(questionSet) ?? formatQuestionTag(questionSet)).join(" / ")}</span><strong>{question.questionText}</strong></span>{question.guidance ? <small>{question.guidance}</small> : null}</span>
@@ -624,51 +681,33 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
 }
 
 function QaReportMenu({ reviewId, facultyOrgUnitId, teamOrgUnitId }: { reviewId: string; facultyOrgUnitId?: string; teamOrgUnitId?: string }) {
-  const [open, setOpen] = useState(false);
-  const [working, setWorking] = useState<"pdf" | "xlsx" | "">("");
-  const [feedback, setFeedback] = useState("");
-
-  async function download(format: "pdf" | "xlsx") {
-    setOpen(false);
-    setWorking(format);
-    setFeedback("");
-    const result = await api.exportQaReview(reviewId, format, facultyOrgUnitId, teamOrgUnitId);
-    setWorking("");
-    setFeedback(result.ok ? `${format === "pdf" ? "PDF" : "Excel"} report download started.` : result.message ?? "The report could not be generated.");
-  }
-
-  return (
-    <div className="qa-report-menu">
-      <button aria-expanded={open} aria-haspopup="menu" className="button button-secondary qa-report-trigger" disabled={Boolean(working)} onClick={() => setOpen((value) => !value)} type="button">
-        <FileText aria-hidden="true" size={16} />
-        <span>{working ? "Preparing report…" : "Report"}</span>
-        <ChevronDown aria-hidden="true" size={15} />
-      </button>
-      {open ? (
-        <>
-          <button aria-label="Close report menu" className="qa-report-menu-backdrop" onClick={() => setOpen(false)} type="button" />
-          <div className="qa-report-menu-list" role="menu">
-            <button onClick={() => void download("pdf")} role="menuitem" type="button"><FileText aria-hidden="true" size={18} /><span><strong>PDF report</strong><small>Dashboard view with every criterion expanded</small></span></button>
-            <button onClick={() => void download("xlsx")} role="menuitem" type="button"><FileSpreadsheet aria-hidden="true" size={18} /><span><strong>Excel report</strong><small>Dashboard tables, criteria, coverage and actions</small></span></button>
-            {facultyOrgUnitId || teamOrgUnitId ? <p>Uses the current dashboard filters.</p> : null}
-          </div>
-        </>
-      ) : null}
-      {feedback ? <span className="qa-report-feedback" role="status">{feedback}</span> : null}
-    </div>
-  );
+  return <ReportButton scopeKey={JSON.stringify([reviewId, facultyOrgUnitId, teamOrgUnitId])}
+    downloadReport={format => api.exportQaReview(reviewId, format, facultyOrgUnitId, teamOrgUnitId)}
+    triggerLabel="Report" pdfLabel="PDF report" pdfDescription="Dashboard view with every criterion expanded"
+    excelLabel="Excel report" excelDescription="Submitted form fields, criteria, findings and actions"
+    hint={facultyOrgUnitId || teamOrgUnitId ? "Uses the current dashboard filters." : "Includes submitted evidence in this review."} />;
 }
 
 function QaReviewWorkspace({
   id, section, user, orgUnits, staff, academicYears, activities, onNavigate, onRefreshSummary
 }: Omit<QaHubProps, "onReturnToElevate"> & { id: string; section: "configuration" | "evidence" | "dashboard" | "actions"; activities: QaActivityTypeSummary[]; onNavigate: (path: string) => void; onRefreshSummary: () => Promise<void> }) {
   const [detail, setDetail] = useState<QaReviewDetail | null>(null);
-  const [dashboard, setDashboard] = useState<QaDashboardSummary | null>(null);
+  const [loadedDashboard, setLoadedDashboard] = useState<{ scope: string; value: QaDashboardSummary } | null>(null);
   const [dashboardFacultyId, setDashboardFacultyId] = useState("");
   const [dashboardTeamId, setDashboardTeamId] = useState("");
+  const dashboardRequestScope = JSON.stringify([id, section, dashboardFacultyId, dashboardTeamId]);
+  const activeDashboardScope = useRef(dashboardRequestScope);
+  activeDashboardScope.current = dashboardRequestScope;
+  const dashboard = loadedDashboard?.scope === dashboardRequestScope ? loadedDashboard.value : null;
+  const [dashboardView, setDashboardView] = useState<"summary" | "data">("summary");
   const [actionGroups, setActionGroups] = useState<QaActionGroupSummary[]>([]);
   const [actionOptions, setActionOptions] = useState<QaReviewActionOptions | null>(null);
   const [newEvidenceActivityId, setNewEvidenceActivityId] = useState<string | null>(null);
+  const [evidenceQuery, setEvidenceQuery] = useState("");
+  const [evidenceActivity, setEvidenceActivity] = useState("");
+  const [evidenceTeam, setEvidenceTeam] = useState("");
+  const [evidenceReviewer, setEvidenceReviewer] = useState("");
+  const [evidenceSort, setEvidenceSort] = useState("date-desc");
   const [message, setMessage] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [transitionAction, setTransitionAction] = useState<"open" | "close" | "reopen" | "archive" | null>(null);
@@ -679,31 +718,35 @@ function QaReviewWorkspace({
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
     setMessage("");
-    setDashboard(null);
+    setLoadedDashboard(null);
     try {
       const review = await api.qaReview(id);
-      if (sequence !== loadSequence.current) return;
+      if (sequence !== loadSequence.current || activeDashboardScope.current !== dashboardRequestScope) return;
       setDetail(review);
       if (section === "dashboard") {
         const next = await api.qaDashboard(id, dashboardFacultyId || undefined, dashboardTeamId || undefined);
-        if (sequence === loadSequence.current) setDashboard(next);
+        if (sequence === loadSequence.current && activeDashboardScope.current === dashboardRequestScope) setLoadedDashboard({ scope: dashboardRequestScope, value: next });
       }
       if (section === "actions") {
         const [groups, options] = await Promise.all([api.qaReviewActions(id), review.review.capabilities.canManageActions ? api.qaReviewActionOptions(id) : Promise.resolve(null)]);
-        if (sequence === loadSequence.current) { setActionGroups(groups); setActionOptions(options); }
+        if (sequence === loadSequence.current && activeDashboardScope.current === dashboardRequestScope) { setActionGroups(groups); setActionOptions(options); }
       }
-    } catch { if (sequence === loadSequence.current) setMessage("This QA Review could not be loaded. Check your connection and review access, then retry."); }
+    } catch { if (sequence === loadSequence.current && activeDashboardScope.current === dashboardRequestScope) setMessage("This QA Review could not be loaded. Check your connection and review access, then retry."); }
   }, [dashboardFacultyId, dashboardTeamId, id, section]);
   useEffect(() => { void load(); return () => { ++loadSequence.current; }; }, [load]);
-  if (message) return <section className="access-denied-panel"><AlertTriangle size={22} /><div><h1>Review unavailable</h1><p>{message}</p></div><Button onClick={() => void load()} variant="primary">Retry</Button><Button onClick={() => onNavigate("/qa-hub")}>All reviews</Button></section>;
-  if (!detail) return <p className="muted-copy">Loading review…</p>;
-  if (section === "actions" && !detail.review.capabilities.canManageActions) return <section className="access-denied-panel"><AlertTriangle size={22} /><div><h1>Review actions unavailable</h1><p>This review tab is restricted to Administrators and the review owner. Your scoped actions remain available in Action monitoring.</p></div><Button onClick={() => onNavigate(`/qa-hub/reviews/${id}/dashboard`)} variant="primary">Open dashboard</Button></section>;
+  if (message) return <section className="access-denied-panel"><AlertTriangle size={22}  aria-hidden="true"/><div><h1>Review unavailable</h1><p>{message}</p></div><Button onClick={() => void load()} variant="primary">Retry</Button><Button onClick={() => onNavigate("/qa-hub")}>All reviews</Button></section>;
+  if (!detail) return <LoadingState label="Loading review" size="page" />;
+  if (section === "actions" && !detail.review.capabilities.canManageActions) return <section className="access-denied-panel"><AlertTriangle size={22}  aria-hidden="true"/><div><h1>Review actions unavailable</h1><p>This review tab is restricted to Administrators and the review owner. Your scoped actions remain available in Action monitoring.</p></div><Button onClick={() => onNavigate(`/qa-hub/reviews/${id}/dashboard`)} variant="primary">Open dashboard</Button></section>;
   if (section === "configuration" && detail.review.capabilities.canConfigure) return (
-    <QaReviewEditor academicYears={academicYears} activities={activities} existing={detail} onCancel={() => onNavigate(`/qa-hub/reviews/${id}/evidence`)} onSaved={() => { void onRefreshSummary(); onNavigate(`/qa-hub/reviews/${id}/evidence`); }} orgUnits={orgUnits} staff={staff} user={user} />
+    <QaReviewEditor academicYears={academicYears} activities={activities} existing={detail} onCancel={() => onNavigate(`/qa-hub/reviews/${id}/evidence`)} onSaved={(_id, navigateAfterSave = true) => { void onRefreshSummary(); if (navigateAfterSave) onNavigate(`/qa-hub/reviews/${id}/evidence`); }} orgUnits={orgUnits} staff={staff} user={user} />
   );
   const review = detail.review;
-  const draftEvidence = detail.evidence.filter((item) => item.status === "draft");
-  const submittedEvidence = detail.evidence.filter((item) => item.status === "submitted");
+  const visibleEvidence = sortListRows(detail.evidence.filter(item => (!evidenceActivity || item.activityName === evidenceActivity)
+    && (!evidenceTeam || item.teamName === evidenceTeam) && (!evidenceReviewer || item.reviewerName === evidenceReviewer)
+    && matchesListSearch(evidenceQuery, item.activityName, item.teamName, item.deliveryAreaName, item.reviewerName, item.activityAt, item.status)),
+    item => evidenceSort.startsWith("reviewer") ? item.reviewerName : evidenceSort.startsWith("team") ? item.teamName : evidenceSort.startsWith("activity") ? item.activityName : Date.parse(item.activityAt), evidenceSort.endsWith("desc") ? "desc" : "asc", item => item.id);
+  const draftEvidence = visibleEvidence.filter((item) => item.status === "draft");
+  const submittedEvidence = visibleEvidence.filter((item) => item.status === "submitted");
   const dashboardOrgUnits = new Map(orgUnits.map((unit) => [unit.id, unit]));
   const includedDashboardOrgIds = dashboardVisibleUnitIds(orgUnits);
   const dashboardScope = detail.scope.filter((scope) => scope.scopeType === "team"
@@ -755,11 +798,12 @@ function QaReviewWorkspace({
                 return <button className="qa-evidence-tile" disabled={!review.capabilities.canSubmitEvidence || accessRestricted} key={activity.id} onClick={() => setNewEvidenceActivityId(activity.id)} type="button"><span className="qa-evidence-tile-icon"><Icon size={26} aria-hidden="true" /></span><span className="qa-evidence-tile-copy"><strong>{activity.name}</strong><small>{activity.questions.length} criteria</small></span><span className="qa-evidence-tile-stats"><span>{qaCount(submittedCount, "submission")}</span>{accessRestricted ? <span>Access restricted</span> : draftCount ? <span>{draftCount} draft{draftCount === 1 ? "" : "s"}</span> : <span>{review.capabilities.canSubmitEvidence ? "Start form" : "View submissions below"}</span>}</span></button>;
               })}</div>
             </section>
+            <section className="panel filter-toolbar" aria-label="Evidence filters"><label className="entry-field"><span>Find evidence</span><input type="search" value={evidenceQuery} onChange={event => setEvidenceQuery(event.target.value)} placeholder="Activity, team, reviewer or delivery area" /></label><label className="entry-field"><span>Activity</span><select value={evidenceActivity} onChange={event => setEvidenceActivity(event.target.value)}><option value="">All activities</option>{distinctListValues(detail.evidence.map(item => item.activityName)).map(value => <option key={value}>{value}</option>)}</select></label><label className="entry-field"><span>Team</span><select value={evidenceTeam} onChange={event => setEvidenceTeam(event.target.value)}><option value="">All teams</option>{distinctListValues(detail.evidence.map(item => item.teamName)).map(value => <option key={value}>{value}</option>)}</select></label><label className="entry-field"><span>Reviewer</span><select value={evidenceReviewer} onChange={event => setEvidenceReviewer(event.target.value)}><option value="">All reviewers</option>{distinctListValues(detail.evidence.map(item => item.reviewerName)).map(value => <option key={value}>{value}</option>)}</select></label><AdminListSort value={evidenceSort} onChange={setEvidenceSort} options={[["date-desc","Activity date: newest first"],["date-asc","Activity date: oldest first"],["reviewer-asc","Reviewer: A–Z"],["team-asc","Team: A–Z"],["activity-asc","Activity: A–Z"]]} /><span>{visibleEvidence.length} of {detail.evidence.length} evidence forms</span></section>
             <CollapsibleSection count={draftEvidence.length} defaultExpanded={false} emptyMessage="No drafts are saved for this review." isEmpty={draftEvidence.length === 0} statusSummary="Saved work in progress · excluded from dashboard data and reports" storageKey={`qa-review-${id}-drafts`} title="Drafts">
-              <div className="table-scroll"><table><thead><tr><th>Activity</th><th>Team</th><th>Delivery area</th><th>Reviewer</th><th>Date</th><th>Status</th><th>Responses</th></tr></thead><tbody>{draftEvidence.map((item) => <tr key={item.id} onClick={() => onNavigate(`/qa-hub/evidence/${item.id}`)}><td><button className="link-button" type="button">{item.activityName}</button></td><td>{item.teamName}</td><td>{item.deliveryAreaName ?? "Not selected"}</td><td>{item.reviewerName}</td><td>{new Date(item.activityAt).toLocaleDateString()}</td><td><span className="status-pill status-draft">Draft</span></td><td>{item.responseCount}</td></tr>)}</tbody></table></div>
+              <ScrollableTableRegion label="QA evidence"><table aria-label="QA evidence"><thead><tr><th scope="col">Activity</th><th scope="col">Team</th><th scope="col">Delivery area</th><th scope="col">Reviewer</th><th scope="col">Date</th><th scope="col">Status</th><th scope="col">Responses</th></tr></thead><tbody>{draftEvidence.map((item) => <tr key={item.id} onClick={() => onNavigate(`/qa-hub/evidence/${item.id}`)}><td><button className="link-button" type="button">{item.activityName}</button></td><td>{item.teamName}</td><td>{item.deliveryAreaName ?? "Not selected"}</td><td>{item.reviewerName}</td><td>{new Date(item.activityAt).toLocaleDateString()}</td><td><span className="status-pill status-draft">Draft</span></td><td>{item.responseCount}</td></tr>)}</tbody></table></ScrollableTableRegion>
             </CollapsibleSection>
             <CollapsibleSection count={submittedEvidence.length} defaultExpanded={!review.capabilities.canSubmitEvidence} emptyMessage="No evidence has been submitted for this review." isEmpty={submittedEvidence.length === 0} statusSummary="Submitted evidence included in dashboard data and reports" storageKey={`qa-review-${id}-recent-submissions`} title="Recent submissions">
-              <div className="table-scroll"><table><thead><tr><th>Activity</th><th>Team</th><th>Delivery area</th><th>Reviewer</th><th>Date</th><th>Status</th><th>Responses</th></tr></thead><tbody>{submittedEvidence.map((item) => <tr key={item.id} onClick={() => onNavigate(`/qa-hub/evidence/${item.id}`)}><td><button className="link-button" type="button">{item.activityName}</button></td><td>{item.teamName}</td><td>{item.deliveryAreaName ?? "Not recorded"}</td><td>{item.reviewerName}</td><td>{new Date(item.activityAt).toLocaleDateString()}</td><td><span className="status-pill status-submitted">Submitted</span></td><td>{item.responseCount}</td></tr>)}</tbody></table></div>
+              <ScrollableTableRegion label="QA evidence"><table aria-label="QA evidence"><thead><tr><th scope="col">Activity</th><th scope="col">Team</th><th scope="col">Delivery area</th><th scope="col">Reviewer</th><th scope="col">Date</th><th scope="col">Status</th><th scope="col">Responses</th></tr></thead><tbody>{submittedEvidence.map((item) => <tr key={item.id} onClick={() => onNavigate(`/qa-hub/evidence/${item.id}`)}><td><button className="link-button" type="button">{item.activityName}</button></td><td>{item.teamName}</td><td>{item.deliveryAreaName ?? "Not recorded"}</td><td>{item.reviewerName}</td><td>{new Date(item.activityAt).toLocaleDateString()}</td><td><span className="status-pill status-submitted">Submitted</span></td><td>{item.responseCount}</td></tr>)}</tbody></table></ScrollableTableRegion>
             </CollapsibleSection>
           </div>
         )
@@ -773,7 +817,8 @@ function QaReviewWorkspace({
               <label><span>Team</span><select onChange={(event) => setDashboardTeamId(event.target.value)} value={dashboardTeamId}><option value="">All teams</option>{dashboardTeams.map((team) => <option key={team.orgUnitId} value={team.orgUnitId}>{team.name}</option>)}</select></label>
             </div>
           </section>
-          {dashboard ? <QaDashboard dashboard={dashboard} /> : <p className="muted-copy">Loading dashboard…</p>}
+          {review.capabilities.canExport ? <nav className="dashboard-section-tabs" aria-label="QA dashboard content"><button type="button" className={dashboardView === "summary" ? "is-active" : ""} aria-pressed={dashboardView === "summary"} onClick={() => setDashboardView("summary")}>Summary</button><button type="button" className={dashboardView === "data" ? "is-active" : ""} aria-pressed={dashboardView === "data"} onClick={() => setDashboardView("data")}>Form data</button></nav> : null}
+          {dashboardView === "data" && review.capabilities.canExport ? <QaDashboardDataExplorer reviewId={id} academicYear={review.academicYear} facultyOrgUnitId={dashboardFacultyId || undefined} teamOrgUnitId={dashboardTeamId || undefined} onOpenEvidence={evidenceId => onNavigate(`/qa-hub/evidence/${evidenceId}`)} /> : dashboard ? <QaDashboard dashboard={dashboard} /> : <LoadingState label="Loading dashboard" />}
         </div>
       ) : null}
       {section === "actions" ? <QaReviewActions actionGroups={actionGroups} actionOptions={actionOptions} canCreate={review.capabilities.canManageActions} onChanged={load} reviewId={id} /> : null}
@@ -804,7 +849,7 @@ function QaReviewActions({
   return (
     <div className="route-stack">
       <section className="route-header qa-action-heading"><div><p className="eyebrow">Post-review improvement</p><h2>Review actions</h2><p>Actions are assigned to the Head of Faculty and to Programme Leaders for the selected teams. Each assignment also appears on that person&apos;s staff profile.</p></div></section>
-      {message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16} />{message}</div> : null}
+      {message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16}  aria-hidden="true"/>{message}</div> : null}
       {canCreate && actionOptions ? <QaActionCreator onCreated={onChanged} options={actionOptions} reviewId={reviewId} /> : null}
       <QaActionGroupCards groups={actionGroups} onClose={close} onReview={review} />
     </div>
@@ -821,6 +866,12 @@ function QaActionCreator({ reviewId, options, onCreated }: { reviewId: string; o
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [wholeReview, setWholeReview] = useState(false);
+  const initialScope = useRef({ facultyId, teamIds });
+  const dirty = Boolean(title || detail || dueDate || wholeReview || facultyId !== initialScope.current.facultyId || JSON.stringify(teamIds) !== JSON.stringify(initialScope.current.teamIds));
+  const clearGuard = useUnsavedChanges({ label: "QA action", dirty, saving, onSave: create, onDiscard: () => {
+    setTitle(""); setDetail(""); setDueDate(""); setWholeReview(false);
+    setFacultyId(initialScope.current.facultyId); setTeamIds(initialScope.current.teamIds);
+  } });
   function selectFaculty(nextFacultyId: string) {
     const nextFaculty = options.faculties.find((item) => item.facultyOrgUnitId === nextFacultyId);
     setFacultyId(nextFacultyId);
@@ -830,21 +881,26 @@ function QaActionCreator({ reviewId, options, onCreated }: { reviewId: string; o
     setTeamIds((current) => current.includes(teamId) ? current.filter((id) => id !== teamId) : [...current, teamId]);
   }
   async function create() {
-    if (!faculty || (!wholeReview && !faculty.headOfFaculty) || !teamIds.length || !title.trim() || !dueDate) return;
+    if (saving || !faculty || (!wholeReview && !faculty.headOfFaculty) || !teamIds.length || !title.trim() || !dueDate) return false;
     setSaving(true);
     setMessage("");
-    const result = await api.createQaReviewAction(reviewId, {
+    try {
+      const result = await api.createQaReviewAction(reviewId, {
       facultyOrgUnitId: wholeReview ? undefined : faculty.facultyOrgUnitId,
       teamOrgUnitIds: wholeReview ? options.faculties.flatMap((item) => item.teams.map((team) => team.teamOrgUnitId)) : teamIds,
       title: title.trim(),
       detail: detail.trim() || undefined,
       dueDate,
       wholeReview
-    });
-    setSaving(false);
-    if (!result.ok) { setMessage(result.message ?? "The QA action could not be created."); return; }
-    setTitle(""); setDetail(""); setDueDate(""); setWholeReview(false);
-    await onCreated();
+      });
+      if (!result.ok) { setMessage(result.message ?? "The QA action could not be created."); return false; }
+      initialScope.current = { facultyId, teamIds };
+      setTitle(""); setDetail(""); setDueDate(""); setWholeReview(false); clearGuard();
+      try { await onCreated(); }
+      catch { setMessage("The action was created. Reload the action list to see the latest entries."); }
+      return true;
+    } catch { setMessage("The QA action could not be created. Your changes are still here; try again."); return false; }
+    finally { setSaving(false); }
   }
   if (!faculty) return <section className="panel"><p className="empty-state">No review faculties are available for actions.</p></section>;
   const selectedFaculties = wholeReview ? options.faculties : [faculty];
@@ -853,30 +909,40 @@ function QaActionCreator({ reviewId, options, onCreated }: { reviewId: string; o
   return (
     <section className="panel qa-action-creator">
       <div className="section-heading"><div><p className="eyebrow">New action · {options.reviewTitle}</p><h2>{isPl ? "Add a team action" : "Assign a review action"}</h2><p>{isPl ? "Your programme team is applied automatically." : "Teams are selected automatically and can be unchecked when the action is narrower than the whole faculty."}</p></div><Target size={24} aria-hidden="true" /></div>
-      {message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16} />{message}</div> : null}
+      {message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16}  aria-hidden="true"/>{message}</div> : null}
+      <fieldset className="admin-dialog-fields" disabled={saving}>
       {options.canCreateWholeReview ? <button aria-pressed={wholeReview} className={`qa-whole-review-action${wholeReview ? " is-selected" : ""}`} onClick={() => setWholeReview((current) => !current)} type="button"><AlertTriangle size={20} aria-hidden="true" /><span><strong>Whole review action</strong><small>Assign to every Head of Faculty and Programme Leader involved in this review. Use only for a college-wide review priority.</small></span></button> : null}
       <div className="qa-action-scope-layout">
         <div className="route-stack">
           <label className="entry-field"><span>Faculty <strong>Required</strong></span><select disabled={wholeReview || isPl} onChange={(event) => selectFaculty(event.target.value)} value={faculty.facultyOrgUnitId}>{options.faculties.map((item) => <option key={item.facultyOrgUnitId} value={item.facultyOrgUnitId}>{item.facultyName}</option>)}</select></label>
           <fieldset className="qa-action-team-picker" disabled={wholeReview || isPl}><legend>Teams <strong>Required</strong></legend>{faculty.teams.map((team) => <label key={team.teamOrgUnitId}><input checked={teamIds.includes(team.teamOrgUnitId)} onChange={() => toggleTeam(team.teamOrgUnitId)} type="checkbox" /><span><strong>{team.teamName}</strong><small>{team.programmeLeader ? `Programme Leader: ${team.programmeLeader.displayName}` : "No Programme Leader assigned — HOF only"}</small></span></label>)}</fieldset>
         </div>
-        <aside className="qa-action-owner-preview"><p className="eyebrow">Automatic owners</p>{selectedFaculties.map((item) => item.headOfFaculty ? <div key={item.headOfFaculty.staffId}><ShieldCheck size={17} /><span><strong>{item.headOfFaculty.displayName}</strong><small>Head of Faculty · always assigned</small></span></div> : <div className="is-warning" key={item.facultyOrgUnitId}><AlertTriangle size={17} /><span><strong>{item.facultyName} needs a Head of Faculty</strong><small>Assign the faculty manager in Admin before creating this action.</small></span></div>)}{Array.from(selectedPls.entries()).map(([id, name]) => <div key={id}><Users size={17} /><span><strong>{name}</strong><small>Programme Leader</small></span></div>)}</aside>
+        <aside className="qa-action-owner-preview"><p className="eyebrow">Automatic owners</p>{selectedFaculties.map((item) => item.headOfFaculty ? <div key={item.headOfFaculty.staffId}><ShieldCheck size={17}  aria-hidden="true"/><span><strong>{item.headOfFaculty.displayName}</strong><small>Head of Faculty · always assigned</small></span></div> : <div className="is-warning" key={item.facultyOrgUnitId}><AlertTriangle size={17}  aria-hidden="true"/><span><strong>{item.facultyName} needs a Head of Faculty</strong><small>Assign the faculty manager in Admin before creating this action.</small></span></div>)}{Array.from(selectedPls.entries()).map(([id, name]) => <div key={id}><Users size={17}  aria-hidden="true"/><span><strong>{name}</strong><small>Programme Leader</small></span></div>)}</aside>
       </div>
       <div className="form-grid form-grid-two"><label className="entry-field entry-field-wide"><span>Action <strong>Required</strong></span><input maxLength={300} onChange={(event) => setTitle(event.target.value)} placeholder="What needs to improve?" value={title} /></label><label className="entry-field entry-field-wide"><span>Success measure or detail</span><textarea maxLength={2000} onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} /></label><label className="entry-field"><span>Due date <strong>Required</strong></span><input onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} /></label></div>
       <div className="toolbar toolbar-end"><Button disabled={saving || (!wholeReview && !faculty.headOfFaculty) || !teamIds.length || !title.trim() || !dueDate} icon={Plus} onClick={() => void create()} variant="primary">{saving ? "Creating action…" : wholeReview ? "Create whole review action" : `Create action for ${teamIds.length} team${teamIds.length === 1 ? "" : "s"}`}</Button></div>
+      </fieldset>
     </section>
   );
 }
 
-function QaActionGroupCards({ groups, onClose, onReview, onOpenReview }: { groups: QaActionGroupSummary[]; onClose: (group: QaActionGroupSummary) => Promise<void>; onReview: (group: QaActionGroupSummary) => Promise<void>; onOpenReview?: (reviewId: string) => void }) {
-  if (!groups.length) return <section className="panel"><p className="empty-state">No QA actions match this view.</p></section>;
+function QaActionGroupCards({ groups, onClose, onReview, onOpenReview, filterable = true }: { groups: QaActionGroupSummary[]; onClose: (group: QaActionGroupSummary) => Promise<void>; onReview: (group: QaActionGroupSummary) => Promise<void>; onOpenReview?: (reviewId: string) => void; filterable?: boolean }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("");
+  const [faculty, setFaculty] = useState("");
+  const [sort, setSort] = useState("due-asc");
+  const visible = filterable ? sortListRows(groups.filter(group => (!status || group.status === status) && (!faculty || group.facultyName === faculty)
+    && matchesListSearch(query, group.title, group.detail, group.reviewTitle, group.creatorName, group.facultyName, group.teamNames, group.status, group.dueDate, group.closeNote, group.assignments.map(assignment => [assignment.staffName, assignment.sourceOrgUnitName, assignment.status]))),
+    group => sort.startsWith("title") ? group.title : sort.startsWith("status") ? group.status : Date.parse(group.dueDate), sort.endsWith("desc") ? "desc" : "asc", group => group.id) : groups;
   return (
     <section className="qa-action-groups" aria-label="QA actions">
-      {groups.map((group) => <article className="panel qa-action-group" key={group.id}>
-        <div className="qa-action-group-heading"><div><span className={`status-pill status-${group.status}`}>{group.status[0].toUpperCase() + group.status.slice(1)}</span><h3>{group.title}</h3><p>{group.reviewTitle} · {group.facultyName} · created by {group.creatorName}</p></div><div className="qa-action-due"><CalendarRange size={17} /><span><small>Due</small><strong>{new Date(`${group.dueDate}T00:00:00`).toLocaleDateString()}</strong></span></div></div>
+      {filterable ? <div className="panel filter-toolbar"><label className="entry-field"><span>Find an action</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Action, owner, team or completion note" /></label><label className="entry-field"><span>Status</span><select value={status} onChange={event => setStatus(event.target.value)}><option value="">All statuses</option>{distinctListValues(groups.map(group => group.status)).map(value => <option key={value}>{value}</option>)}</select></label><label className="entry-field"><span>Faculty</span><select value={faculty} onChange={event => setFaculty(event.target.value)}><option value="">All faculties</option>{distinctListValues(groups.map(group => group.facultyName)).map(value => <option key={value}>{value}</option>)}</select></label><AdminListSort value={sort} onChange={setSort} options={[["due-asc","Due date: soonest first"],["due-desc","Due date: latest first"],["title-asc","Action: A–Z"],["status-asc","Status: A–Z"]]} /></div> : null}
+      {!visible.length ? <div className="panel empty-state">No QA actions match this view.</div> : null}
+      {visible.map((group) => <article className="panel qa-action-group" key={group.id}>
+        <div className="qa-action-group-heading"><div><span className={`status-pill status-${group.status}`}>{group.status[0].toUpperCase() + group.status.slice(1)}</span><h3>{group.title}</h3><p>{group.reviewTitle} · {group.facultyName} · created by {group.creatorName}</p></div><div className="qa-action-due"><CalendarRange size={17}  aria-hidden="true"/><span><small>Due</small><strong>{new Date(`${group.dueDate}T00:00:00`).toLocaleDateString()}</strong></span></div></div>
         {group.detail ? <p className="qa-action-detail">{group.detail}</p> : null}
         <div className="qa-action-team-tags">{group.teamNames.map((team) => <span key={team}>{team}</span>)}</div>
-        <div className="qa-action-assignees">{group.assignments.map((assignment) => <div key={assignment.actionId}><span className={assignment.completedDate || assignment.status === "complete" ? "is-complete" : ""}>{assignment.completedDate || assignment.status === "complete" ? <CheckCircle2 size={17} /> : <Users size={17} />}</span><p><strong>{assignment.staffName}</strong><small>{assignment.assignmentRole === "hof" ? "Head of Faculty" : "Programme Leader"} · {assignment.sourceOrgUnitName}</small></p><span className={`status-pill status-${assignment.completedDate || assignment.status === "complete" ? "complete" : "open"}`}>{assignment.completedDate || assignment.status === "complete" ? "Complete" : "Open"}</span></div>)}</div>
+        <div className="qa-action-assignees">{group.assignments.map((assignment) => <div key={assignment.actionId}><span className={assignment.completedDate || assignment.status === "complete" ? "is-complete" : ""}>{assignment.completedDate || assignment.status === "complete" ? <CheckCircle2 size={17}  aria-hidden="true"/> : <Users size={17}  aria-hidden="true"/>}</span><p><strong>{assignment.staffName}</strong><small>{assignment.assignmentRole === "hof" ? "Head of Faculty" : "Programme Leader"} · {assignment.sourceOrgUnitName}</small></p><span className={`status-pill status-${assignment.completedDate || assignment.status === "complete" ? "complete" : "open"}`}>{assignment.completedDate || assignment.status === "complete" ? "Complete" : "Open"}</span></div>)}</div>
         {group.closeNote ? <p className="qa-action-close-note"><strong>Completion note:</strong> {group.closeNote}</p> : null}
         <div className="toolbar toolbar-end">{onOpenReview ? <Button onClick={() => onOpenReview(group.reviewId)}>Open review</Button> : null}{group.canReview ? <Button icon={CheckCircle2} onClick={() => void onReview(group)} variant="primary">Review action</Button> : null}{group.canClose ? <Button icon={Check} onClick={() => void onClose(group)} variant="primary">Close action</Button> : null}</div>
       </article>)}
@@ -1015,7 +1081,7 @@ function QaNewEvidence({ activityId, detail, onCancel, onCreated }: { activityId
     onCreated(result.data!.evidence.id);
   }
   return (
-    <section className="panel qa-editor qa-new-evidence"><div className="section-heading"><div><p className="eyebrow">{activity.name}</p><h2>Choose review scope</h2><p>Select one team, or use All teams to apply this evidence submission to every team in the chosen faculty.</p></div></div>{message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16} />{message}</div> : null}<div className="qa-evidence-scope-picker">
+    <section className="panel qa-editor qa-new-evidence"><div className="section-heading"><div><p className="eyebrow">{activity.name}</p><h2>Choose review scope</h2><p>Select one team, or use All teams to apply this evidence submission to every team in the chosen faculty.</p></div></div>{message ? <div className="api-error-banner" role="alert"><AlertTriangle size={16}  aria-hidden="true"/>{message}</div> : null}<div className="qa-evidence-scope-picker">
       <label><span>Faculty</span><select onChange={(event) => facultyChanged(event.target.value)} value={facultyId}>{faculties.length > 1 ? <option value="all">All faculties</option> : null}{faculties.map((faculty) => <option key={faculty.id} value={faculty.id}>{faculty.name}</option>)}</select></label>
       <label><span>Team</span><select disabled={allTeams} onChange={(event) => setTeamId(event.target.value)} value={teamId}>{facultyTeams.map((team) => <option key={team.orgUnitId} value={team.orgUnitId}>{team.name}</option>)}</select></label>
       <button aria-pressed={allTeams} className="qa-all-teams-button" onClick={() => setAllTeams((current) => !current)} type="button"><Check size={17} aria-hidden="true" /><span><strong>All teams</strong><small>{facultyTeams.length} in selection</small></span></button>
@@ -1027,15 +1093,31 @@ function QaEvidenceEditor({ evidenceId, reviews, onNavigate, onSubmitted }: { ev
   const [detail, setDetail] = useState<QaEvidenceDetail | null>(null);
   const [deliveryAreas, setDeliveryAreas] = useState<LearningWalkDeliveryArea[]>([]);
   const [deliveryAreasLoaded, setDeliveryAreasLoaded] = useState(false);
+  const [deliveryAreaError, setDeliveryAreaError] = useState("");
+  const [deliveryAreaAttempt, setDeliveryAreaAttempt] = useState(0);
+  const [evidenceAttempt, setEvidenceAttempt] = useState(0);
   const [request, setRequest] = useState<SaveQaEvidenceRequest | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [finalizing, setFinalizing] = useState(false);
-  const clearNavigation = useQaNavigationGuard(dirty, saving, () => save(false));
   const queue = useRef<QaEvidenceSaveQueue<SaveQaEvidenceRequest, QaEvidenceDetail> | null>(null);
+  const navigationDecisionPending = useNavigationDecisionPending();
+  const canSubmitDraft = Boolean(detail?.evidence.canEdit && detail.evidence.status === "draft");
+  const clearNavigation = useUnsavedChanges({
+    label: "QA evidence", dirty, saving, submission: canSubmitDraft,
+    onSave: detail?.evidence.canEdit ? () => save(false) : undefined,
+    onSubmit: canSubmitDraft ? () => save(true, false, false) : undefined,
+    submitLabel: "Submit evidence",
+    discardLabel: "Discard unsaved changes",
+    discardMessage: detail?.evidence.status === "submitted"
+      ? "Previously saved submitted evidence is retained. Only corrections not yet saved will be discarded."
+      : "Evidence already saved or autosaved is retained as a draft. Only changes not yet saved will be discarded; this does not remove the evidence.",
+    onDiscard: () => { queue.current?.cancelUnsaved(); setMessage(""); }
+  });
   useEffect(() => {
     let cancelled = false;
+    setMessage("");
     void api.qaEvidence(evidenceId).then(next => {
       if (cancelled) return;
       const initial: SaveQaEvidenceRequest = {
@@ -1062,19 +1144,22 @@ function QaEvidenceEditor({ evidenceId, reviews, onNavigate, onSubmitted }: { ev
       setDetail(next); setRequest(initial); setDirty(false);
     }).catch(() => { if (!cancelled) setMessage("This evidence submission was not found, or it is outside your scope."); });
     return () => { cancelled = true; queue.current?.dispose(); queue.current = null; };
-  }, [evidenceId]);
+  }, [evidenceId, evidenceAttempt]);
   useEffect(() => {
-    api.learningWalkDeliveryAreas().then((areas) => { setDeliveryAreas(areas); setDeliveryAreasLoaded(true); })
-      .catch(() => setMessage("Delivery areas could not be loaded. Refresh before submitting evidence."));
-  }, []);
+    let cancelled = false;
+    setDeliveryAreaError(""); setDeliveryAreasLoaded(false);
+    api.learningWalkDeliveryAreas().then((areas) => { if (!cancelled) { setDeliveryAreas(areas); setDeliveryAreasLoaded(true); } })
+      .catch(() => { if (!cancelled) setDeliveryAreaError("Delivery areas could not be loaded. Your evidence is still here; try again before submitting."); });
+    return () => { cancelled = true; };
+  }, [deliveryAreaAttempt]);
   useEffect(() => {
-    if (!dirty || saving || message || !request || !detail?.evidence.canEdit || detail.evidence.status === "submitted") return;
+    if (navigationDecisionPending || !dirty || saving || message || !request || !detail?.evidence.canEdit || detail.evidence.status === "submitted") return;
     const timer = window.setTimeout(() => { void save(false, true); }, 900);
     return () => window.clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty, request, saving, message]);
-  if (message && !detail) return <section className="access-denied-panel"><AlertTriangle size={22} /><div><h1>Evidence unavailable</h1><p>{message}</p></div><Button onClick={() => onNavigate("/qa-hub")} variant="primary">Back to QA Hub</Button></section>;
-  if (!detail || !request) return <p className="muted-copy">Loading evidence…</p>;
+  }, [dirty, request, saving, message, navigationDecisionPending]);
+  if (message && !detail) return <section className="access-denied-panel"><AlertTriangle size={22}  aria-hidden="true"/><div><h1>Evidence unavailable</h1><p>{message}</p></div><Button onClick={() => setEvidenceAttempt(value => value + 1)}>Try again</Button><Button onClick={() => onNavigate("/qa-hub")} variant="primary">Back to QA Hub</Button></section>;
+  if (!detail || !request) return <LoadingState label="Loading evidence" size="page" />;
   function update<K extends keyof SaveQaEvidenceRequest>(key: K, value: SaveQaEvidenceRequest[K]) {
     queue.current?.edit(current => ({ ...current, [key]: value })); setMessage("");
   }
@@ -1082,8 +1167,9 @@ function QaEvidenceEditor({ evidenceId, reviews, onNavigate, onSubmitted }: { ev
     queue.current?.edit(current => ({ ...current, responses: current.responses.map((response, responseIndex) => responseIndex === index ? { ...response, ...patch } : response) }));
     setMessage("");
   }
-  async function save(submit: boolean, autosave = false): Promise<boolean> {
-    if (!request || !queue.current || finalizing) return false;
+  async function save(submit: boolean, autosave = false, navigateAfterSubmit = true): Promise<boolean> {
+    if (!request || !queue.current || finalizing || !detail?.evidence.canEdit || submit && detail.evidence.status !== "draft") return false;
+    if (autosave && navigationDecisionPending) return false;
     if (submit && (!deliveryAreasLoaded || !request.deliveryAreaKey) && detail?.evidence.status !== "submitted") {
       setMessage("Select a delivery area before submitting QA evidence."); return false;
     }
@@ -1098,7 +1184,7 @@ function QaEvidenceEditor({ evidenceId, reviews, onNavigate, onSubmitted }: { ev
     if (submit) {
       clearNavigation();
       void onSubmitted();
-      onNavigate(`/qa-hub/reviews/${detail!.evidence.reviewId}/evidence`);
+      if (navigateAfterSubmit) onNavigate(`/qa-hub/reviews/${detail!.evidence.reviewId}/evidence`);
     } else if (!autosave) {
       setMessage(detail!.evidence.status === "submitted" ? "Correction saved. The evidence remains submitted." : "Draft saved.");
     }
@@ -1120,16 +1206,18 @@ function QaEvidenceEditor({ evidenceId, reviews, onNavigate, onSubmitted }: { ev
       <div className="section-heading"><div><Button icon={ArrowLeft} onClick={() => onNavigate(`/qa-hub/reviews/${detail.evidence.reviewId}/evidence`)} variant="quiet">Evidence list</Button><p className="eyebrow">{reviews.find((review) => review.id === detail.evidence.reviewId)?.title ?? "QA review"}</p><p className="eyebrow">{detail.evidence.activityName} · {detail.teamNames.length > 1 ? `${detail.teamNames.length} teams` : detail.evidence.teamName}</p><h1>{detail.evidence.status === "draft" ? "Evidence draft" : `Submitted evidence · revision ${detail.evidence.versionNumber}`}</h1><p>{finalizing ? "Submitting…" : saving ? "Saving in the background…" : dirty ? "Unsaved changes" : detail.evidence.status === "draft" ? "Draft autosaved" : `Submitted by ${detail.evidence.reviewerName}`}</p>{detail.teamNames.length > 1 ? <div className="qa-evidence-team-tags">{detail.teamNames.map((team) => <span key={team}>{team}</span>)}</div> : null}</div><span className={`status-pill status-${detail.evidence.status}`}>{detail.evidence.status}</span></div>
       {message ? <div className={message.startsWith("Evidence submitted") || (message === "Draft saved." || message.startsWith("Correction saved.")) ? "success-banner" : "api-error-banner"} role="status">{message}</div> : null}
       {!detail.evidence.canEdit ? <p className="notice-row">This evidence is read-only. Editing depends on the review being open and your access to this form and submission.</p> : null}
+      {deliveryAreaError ? <div className="notice-row" role="alert">{deliveryAreaError}<Button onClick={() => setDeliveryAreaAttempt(value => value + 1)}>Try again</Button></div> : null}
       <div className="entry-section"><h2>Course and delivery context</h2><div className="entry-field-grid"><label className="entry-field"><span>Delivery area <strong>Required to submit</strong></span><select disabled={!detail.evidence.canEdit || finalizing || !deliveryAreasLoaded} value={request.deliveryAreaKey ?? ""} onChange={(event) => update("deliveryAreaKey", event.target.value)}><option value="">{deliveryAreasLoaded ? "Select delivery area" : "Loading delivery areas…"}</option>{learningWalkDeliveryChoices(deliveryAreas, detail.evidence.deliveryAreaKey, detail.evidence.deliveryAreaName).map((area) => <option key={area.key} value={area.key} disabled={!area.isActive && area.key !== detail.evidence.deliveryAreaKey}>{area.name}{area.isActive ? "" : " (retired)"}</option>)}</select></label></div><small>Uses the shared LIV and Learning Walk delivery-area list.</small></div>
       <div className="qa-criteria-list">{detail.responses.map((question, index) => <QaCriterion key={question.reviewQuestionId} question={question} response={request.responses[index]} disabled={!detail.evidence.canEdit || finalizing} onChange={(patch) => updateResponse(index, patch)} />)}</div>
       <div className="toolbar qa-evidence-actions">{detail.evidence.canRemove ? <Button disabled={saving} icon={X} onClick={() => void remove()} variant="danger">Remove</Button> : null}<span className="button-spacer" />{detail.evidence.canEdit ? <Button disabled={saving} onClick={() => void save(false)}>{detail.evidence.status === "submitted" ? "Save correction" : "Save draft"}</Button> : null}{detail.evidence.canEdit && detail.evidence.status === "draft" ? <Button disabled={finalizing} icon={Check} onClick={() => void save(true)} variant="primary">Submit evidence</Button> : null}</div>
-      {detail.revisions.length ? <section className="qa-revisions"><h2>Revision history</h2><ul className="timeline-list">{detail.revisions.map((revision) => <li key={revision.versionNumber}><strong>Revision {revision.versionNumber}</strong><span>{revision.createdBy} · {new Date(revision.createdAt).toLocaleString()}</span>{revision.reason ? <small>{revision.reason}</small> : null}</li>)}</ul></section> : null}
+      {detail.revisions.length ? <details className="qa-revisions"><summary>Revision history ({detail.revisions.length})</summary><ul className="timeline-list">{detail.revisions.map((revision) => <li key={revision.versionNumber}><strong>Revision {revision.versionNumber}</strong><span>{revision.createdBy} · {new Date(revision.createdAt).toLocaleString()}</span>{revision.reason ? <small>{revision.reason}</small> : null}</li>)}</ul></details> : null}
     </section>
   );
 }
 
 function QaCriterion({ question, response, disabled, onChange }: { question: QaEvidenceResponseSummary; response: SaveQaEvidenceRequest["responses"][number]; disabled: boolean; onChange: (patch: Partial<SaveQaEvidenceRequest["responses"][number]>) => void }) {
   const labels = useQaOutcomeLabels();
+  const criterionId = useId();
   const showNotSeen = question.allowsNotSeen || question.outcome === "not_seen";
   const outcomes = [...(showNotSeen ? [{ key: "not_seen", label: "Not seen" }] : []), { key: "below", label: labels.below }, { key: "at", label: labels.at }, { key: "above", label: labels.above }, ...(question.allowsNotApplicable ? [{ key: "not_applicable", label: labels.notApplicable }] : [])];
   return (
@@ -1138,13 +1226,21 @@ function QaCriterion({ question, response, disabled, onChange }: { question: QaE
       <header className="qa-criterion-header">
         <div className="qa-criterion-title">
           {question.themeOrWeek ? <span className="qa-criterion-theme">{question.themeOrWeek}</span> : null}
-          <h3>{question.questionText}</h3>
+          <h3 id={`${criterionId}-question`}>{question.questionText}</h3>
         </div>
         <span className={question.isRequired ? "qa-criterion-requirement is-required" : "qa-criterion-requirement"}>{question.isRequired ? "Required" : "Optional"}</span>
       </header>
       {question.guidance ? <p className="qa-criterion-guidance">{question.guidance}</p> : null}
-      <div aria-label={`Outcome for ${question.questionText}`} className="qa-outcome-buttons" data-outcome-count={outcomes.length} role="group">
-        {outcomes.map((outcome) => <button aria-pressed={response.outcome === outcome.key} className={`outcome-${outcome.key}`} disabled={disabled} key={outcome.key} onClick={() => onChange({ outcome: outcome.key, notApplicableReason: outcome.key === "not_applicable" ? response.notApplicableReason : undefined })} type="button">{outcome.label}</button>)}
+      <div aria-labelledby={`${criterionId}-question`} aria-required={question.isRequired} className="qa-outcome-buttons" data-outcome-count={outcomes.length} role="radiogroup">
+        {outcomes.map((outcome, index) => <button aria-checked={response.outcome === outcome.key} role="radio" tabIndex={response.outcome === outcome.key || !outcomes.some(item => item.key === response.outcome) && index === 0 ? 0 : -1} className={`outcome-${outcome.key}`} disabled={disabled} key={outcome.key} onClick={() => onChange({ outcome: outcome.key, notApplicableReason: outcome.key === "not_applicable" ? response.notApplicableReason : undefined })} onKeyDown={event => {
+          if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? 0 : event.key === "End" ? outcomes.length - 1
+            : (index + (event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1) + outcomes.length) % outcomes.length;
+          const chosen = outcomes[next];
+          onChange({ outcome: chosen.key, notApplicableReason: chosen.key === "not_applicable" ? response.notApplicableReason : undefined });
+          event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
+        }} type="button">{outcome.label}</button>)}
       </div>
       {showNotSeen ? <p className="qa-not-seen-help">Not seen means there was insufficient evidence to make a judgement. It has no score and is excluded from rated percentages.</p> : null}
       {response.outcome === "not_applicable" ? <label className="qa-not-applicable-reason"><span>Reason for {labels.notApplicable}</span><textarea disabled={disabled} onChange={(event) => onChange({ notApplicableReason: event.target.value })} required rows={2} value={response.notApplicableReason ?? ""} /></label> : null}

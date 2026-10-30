@@ -84,7 +84,8 @@ public sealed partial class SqlFoundationDataStore
             foreach (var rule in rules.Where(rule => ConditionsMatch(rule.ConditionConfigJson, context.Conditions)))
             {
                 var recipients = await ResolveDomainEventRecipientsAsync(
-                    connection, (SqlTransaction)transaction, rule.RecipientConfigJson, context, cancellationToken);
+                    connection, (SqlTransaction)transaction, rule.RecipientConfigJson, context,
+                    domainEvent.AggregateType == "action" ? domainEvent.AggregateId : null, cancellationToken);
                 if (recipients.Count == 0)
                 {
                     warnings.Add($"Rule {rule.Id} had no resolvable recipients.");
@@ -279,15 +280,26 @@ public sealed partial class SqlFoundationDataStore
         SqlTransaction transaction,
         string recipientConfigJson,
         DomainMessageContext context,
+        Guid? actionId,
         CancellationToken cancellationToken)
     {
         using var document = JsonDocument.Parse(recipientConfigJson);
         var requested = new List<(string Type, Guid StaffId)>();
+        var responsibleStaffIds=new List<Guid>();
+        if(context.RecordType==ProcessReviewRules.Activate&&actionId.HasValue)
+        {
+            await using var assignees=new SqlCommand("SELECT staff_id FROM quality.process_review_action_assignees WHERE action_id=@id;",connection,transaction);
+            assignees.Parameters.AddWithValue("@id",actionId.Value);
+            await using var people=await assignees.ExecuteReaderAsync(cancellationToken);
+            while(await people.ReadAsync(cancellationToken))responsibleStaffIds.Add(people.GetGuid(0));
+        }
         foreach (var type in new[] { "to", "cc", "bcc" })
         {
             if (!document.RootElement.TryGetProperty(type, out var values) || values.ValueKind != JsonValueKind.Array) continue;
             foreach (var value in values.EnumerateArray())
             {
+                if(value.GetString()=="action_owner"&&responsibleStaffIds.Count>0)
+                {requested.AddRange(responsibleStaffIds.Select(id=>(type,id)));continue;}
                 var staffId = value.GetString() switch
                 {
                     "staff" => context.SubjectStaffId,
@@ -305,8 +317,23 @@ public sealed partial class SqlFoundationDataStore
         var staffIds = requested.Select(item => item.StaffId).Distinct().ToArray();
         var parameterNames = staffIds.Select((_, index) => $"@staff{index}").ToArray();
         await using var command = new SqlCommand(
-            $"SELECT id, email, display_name FROM people.staff WHERE archived_at IS NULL AND account_status = N'active' AND id IN ({string.Join(',', parameterNames)});",
+            $"""
+            SELECT staff.id, staff.email, staff.display_name FROM people.staff staff
+            WHERE staff.archived_at IS NULL AND staff.account_status = N'active'
+              AND staff.id IN ({string.Join(',', parameterNames)})
+              AND (@actionId IS NULL OR EXISTS (
+                  SELECT 1 FROM auth.user_accounts recipient_account
+                  CROSS APPLY quality.fn_liv_action_access(@actionId, recipient_account.id) access
+                  WHERE recipient_account.staff_id = staff.id AND recipient_account.archived_at IS NULL
+                    AND recipient_account.account_status = N'active' AND recipient_account.is_disabled = 0
+              ) OR NOT EXISTS (
+                  SELECT 1 FROM quality.actions action_row
+                  JOIN quality.liv_records liv ON liv.record_id = action_row.source_record_id
+                  WHERE action_row.id = @actionId
+              ));
+            """,
             connection, transaction);
+        command.Parameters.AddWithValue("@actionId", ToDbValue(actionId));
         for (var index = 0; index < staffIds.Length; index++) command.Parameters.AddWithValue(parameterNames[index], staffIds[index]);
         var staff = new Dictionary<Guid, (string Email, string Name)>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

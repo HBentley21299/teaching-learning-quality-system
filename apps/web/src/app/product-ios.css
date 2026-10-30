@@ -1,0 +1,270 @@
+/* iOS-inspired finish. Keep the established layout, teal identity and semantic
+ * colours; refine the material, grouping and response of existing controls. */
+:root {
+  --radius-sm: 0.75rem;
+  --radius-md: 1rem;
+  --radius-lg: 1.375rem;
+  --ios-group-bg: #eaf0ed;
+  --ios-field-bg: #f7f9f8;
+  --ios-pressed-bg: #e2ebe6;
+  --ios-icon-bg: #e1f1eb;
+  --ios-chrome-bg: #fffffff0;
+  --ios-panel-radius: 1.375rem;
+  --ios-control-radius: 0.75rem;
+  --ios-elevation: 0 1px 2px #18392b05, 0 6px 22px #18392b08;
+  --ios-control-elevation: 0 1px 2px #18392b12, 0 2px 5px #18392b08;
+  --ios-popover-elevation: 0 12px 48px #18392b22, 0 2px 8px #18392b12;
+  --ios-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root[data-theme="dark"] {
+  --ios-group-bg: #15201a;
+  --ios-field-bg: #202d25;
+  --ios-pressed-bg: #304237;
+  --ios-icon-bg: #243f34;
+  --ios-chrome-bg: #1b2520f0;
+  --ios-elevation: 0 1px 2px #00000020, 0 8px 24px #00000014;
+  --ios-control-elevation: 0 1px 3px #00000038;
+  --ios-popover-elevation: 0 12px 48px #00000060, 0 2px 8px #00000030;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ios-group-bg: #15201a;
+    --ios-field-bg: #202d25;
+    --ios-pressed-bg: #304237;
+    --ios-icon-bg: #243f34;
+    --ios-chrome-bg: #1b2520f0;
+    --ios-elevation: 0 1px 2px #00000020, 0 8px 24px #00000014;
+    --ios-control-elevation: 0 1px 3px #00000038;
+    --ios-popover-elevation: 0 12px 48px #00000060, 0 2px 8px #00000030;
+  }
+}
+
+/* Solid chrome is the fallback. Translucency is deliberately near-opaque so
+ * scrolling content cannot undermine the text or focus contrast. */
+.sidebar, .topbar { background: var(--surface); }
+.topbar { border-bottom-color: var(--line); }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .sidebar, .topbar {
+    background: var(--ios-chrome-bg);
+    -webkit-backdrop-filter: saturate(125%) blur(20px);
+    backdrop-filter: saturate(125%) blur(20px);
+  }
+}
+.sidebar-navigation .nav-item {
+  border-radius: 0.875rem;
+  transition: background-color 160ms var(--ios-ease), color 160ms var(--ios-ease), box-shadow 160ms var(--ios-ease);
+}
+.sidebar-navigation .nav-item:hover { background: var(--ios-group-bg); }
+.sidebar-navigation .nav-item-active,
+.sidebar-navigation .nav-item-active:hover {
+  background: var(--teal-soft);
+  box-shadow: inset 0 0 0 1px var(--teal-line);
+  color: var(--teal-text);
+}
+.sidebar-navigation .nav-item:active { background: var(--ios-pressed-bg); }
+.sidebar-navigation-group { border-top-color: var(--line); }
+.sidebar-navigation-heading { font-weight: 600; }
+.topbar .academic-year-selector select,
+.topbar .display-settings-trigger,
+.topbar .user-menu-trigger { border-radius: var(--ios-control-radius); }
+.topbar .academic-year-selector select { background: var(--ios-group-bg); }
+.sidebar-navigation-wrapper > .workspace-compact button { border-radius: var(--ios-control-radius); }
+.workspace-compact button[aria-current="true"] {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  box-shadow: var(--ios-control-elevation);
+  color: var(--teal-text);
+}
+
+/* Grouped cards gain a small amount of depth without movement on hover. */
+.panel,
+.workflow-filter-panel,
+.admin-directory,
+.dashboard-switcher,
+.intelligence-metric,
+.kpi {
+  border-radius: var(--ios-panel-radius);
+  box-shadow: var(--ios-elevation);
+}
+.panel:hover, .kpi:hover { box-shadow: var(--ios-elevation); }
+.panel .panel, .panel .workflow-filter-panel { box-shadow: none; }
+.collapsible-section-header > button,
+.admin-task-group > summary,
+.probation-stage-panel > summary { border-radius: var(--ios-panel-radius); }
+.collapsible-section.is-expanded .collapsible-section-header > button { border-radius: var(--ios-panel-radius) var(--ios-panel-radius) 0 0; }
+.admin-task-group[open] > summary,
+.probation-stage-panel[open] > summary { border-radius: var(--ios-panel-radius) var(--ios-panel-radius) 0 0; }
+.route-header h1,
+.intelligence-dashboard .intelligence-header h1 { font-weight: 720; letter-spacing: -0.035em; }
+.panel-heading h2 { font-weight: 650; }
+.intelligence-metric dd, .kpi dd { letter-spacing: -0.045em; }
+.intelligence-metric dt, .kpi dt { font-weight: 550; }
+.workflow-filter-panel, .reporting-scope-more, .reporting-register-more { border-color: var(--line); }
+
+/* Home has a larger, quiet greeting and tactile app-like destinations. */
+.home-hero { background: transparent; border: 0; border-radius: 0; box-shadow: none; grid-template-columns: minmax(0, 1fr); padding: 0.5rem 0.25rem 0.75rem; }
+.home-hero-copy h1 { font-size: clamp(1.875rem, 1.45rem + 1.1vw, 2.5rem); font-weight: 740; letter-spacing: -0.045em; margin-block: 0.375rem 0.625rem; }
+.home-hero .eyebrow { color: var(--text-muted); font-size: 0.8125rem; }
+.home-hero-message { font-size: 1rem; }
+.home-groups { gap: 2rem; }
+.home-group-heading { margin-bottom: 0.875rem; padding-inline: 0.25rem; }
+.home-group-heading h2 { font-size: 1.0625rem; font-weight: 650; letter-spacing: -0.02em; }
+.home-group-heading p { font-size: 0.8125rem; line-height: var(--reading-leading); }
+.home-group .home-tiles { gap: 0.875rem; }
+.home-tile {
+  border-radius: var(--ios-panel-radius);
+  box-shadow: var(--ios-elevation);
+  padding: 1.125rem;
+  transition: background-color 160ms var(--ios-ease), border-color 160ms var(--ios-ease), box-shadow 160ms var(--ios-ease), transform 120ms var(--ios-ease);
+}
+.home-tile:hover { background: var(--ios-field-bg); border-color: var(--line-strong); box-shadow: var(--ios-elevation); transform: none; }
+.home-tile-glyph { background: var(--ios-icon-bg); border-radius: 0.875rem; color: var(--teal-text); padding: 0.625rem; }
+.home-tile-text { gap: 0.375rem; }
+.home-tile-text strong { font-size: 1rem; font-weight: 650; line-height: 1.35; }
+.home-tile-text span { font-size: 0.8125rem; line-height: 1.5; }
+.home-dashboard-tile { background: var(--surface); border-color: var(--teal-line); }
+.home-dashboard-tile .home-tile-glyph { background: var(--teal); color: var(--on-accent); padding: 0.875rem; }
+.home-dashboard-tile .home-tile-glyph svg { height: 1.75rem; width: 1.75rem; }
+.home-dashboard-tile .home-tile-text strong { font-size: 1.25rem; letter-spacing: -0.025em; }
+.home-dashboard-tile .home-tile-text span { font-size: 0.875rem; }
+
+/* Inset fields keep their visible accessible boundaries. No native control
+ * appearance or browser date/choice affordance is replaced. */
+:is(.field, .entry-field, .studio-field, .preview-field, .record-filter-field, .dashboard-explorer-filter, .filter-toolbar, .admin-list-sort) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), select, textarea),
+.login-form input,
+.display-setting-select > select {
+  background: var(--ios-field-bg);
+  border-radius: var(--ios-control-radius);
+}
+.search-box, .topbar-search, .admin-search-input,
+.staff-search-input, .course-search, .cpd-participant-search {
+  background: var(--ios-group-bg);
+  border-radius: var(--ios-control-radius);
+}
+.search-box:focus-within, .topbar-search:focus-within,
+.admin-search-input:focus-within { background: var(--surface); }
+.qa-form-grid :is(input, select, textarea),
+.admin-list-search input,
+.intelligence-filter-grid :is(input, select) { border-radius: var(--ios-control-radius); }
+.button, .icon-button, .login-primary {
+  border-radius: var(--ios-control-radius);
+  transition: background-color 160ms var(--ios-ease), border-color 160ms var(--ios-ease), color 160ms var(--ios-ease), box-shadow 160ms var(--ios-ease), transform 120ms var(--ios-ease);
+}
+.button-primary, .login-primary { box-shadow: var(--ios-control-elevation); }
+.button-primary:hover:not(:disabled) { box-shadow: var(--ios-control-elevation); }
+.button:active:not(:disabled), .icon-button:active:not(:disabled),
+.login-primary:active:not(:disabled), .home-tile:active:not(:disabled) { transform: scale(0.985); }
+.button-secondary:active:not(:disabled), .icon-button:active:not(:disabled),
+.home-tile:active:not(:disabled) { background: var(--ios-pressed-bg); }
+
+/* Segmented choices sit in one inset tray, with a raised selected segment. */
+.segmented-control:not(.liv-v2-cycles, .qa-hub-tabs, .qa-review-tabs) { display: flex; flex-wrap: wrap; }
+.segmented-control:not(.liv-v2-cycles, .qa-hub-tabs, .qa-review-tabs) > button { flex: 1 1 8rem; min-width: 0; white-space: normal; }
+.segmented-control,
+.dashboard-section-tabs,
+.form-editor-tabs {
+  background: var(--ios-group-bg);
+  border: 1px solid var(--line);
+  border-radius: 0.875rem;
+  gap: 0.25rem;
+  padding: 0.25rem;
+}
+.segmented-control button,
+.dashboard-section-tabs > button,
+.form-editor-tabs button {
+  border: 1px solid transparent;
+  border-radius: 0.625rem;
+  color: var(--text-muted);
+  font-weight: 550;
+  min-height: var(--control-height);
+  transition: background-color 160ms var(--ios-ease), border-color 160ms var(--ios-ease), color 160ms var(--ios-ease), box-shadow 160ms var(--ios-ease);
+}
+.segmented-control button:is(.is-active, [aria-pressed="true"], [aria-selected="true"]),
+.dashboard-section-tabs > button[aria-current="page"],
+.form-editor-tabs button[aria-pressed="true"] {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  box-shadow: var(--ios-control-elevation);
+  color: var(--teal-text);
+  font-weight: 650;
+}
+
+/* Tables and settings use the same inset edges, separators and row feedback. */
+.table-shell { border-radius: var(--radius-md); }
+thead th, .dashboard-explorer-table thead th { background: var(--ios-group-bg); font-weight: 600; }
+tbody tr:focus-within { background: var(--teal-softer); }
+.admin-task-directory > button,
+.admin-related-settings button,
+.qa-review-card,
+.qa-process-breakdown,
+.outcome-drilldown-groups details { border-radius: var(--radius-md); }
+.admin-task-directory > button,
+.admin-directory button,
+.admin-related-settings button { transition: background-color 160ms var(--ios-ease), border-color 160ms var(--ios-ease); }
+.admin-directory button { border-radius: var(--ios-control-radius); }
+.admin-directory button[aria-current="page"] { background: var(--ios-group-bg); border-color: var(--teal); color: var(--teal-text); }
+.admin-directory-home { border-radius: var(--ios-control-radius); }
+.workflow-feedback, .workflow-error-summary, .reporting-date-error { border-radius: var(--radius-md); }
+.user-menu-list, .staff-search-results,
+.dashboard-column-picker-body, .workflow-row-menu-items { border-radius: var(--radius-md); box-shadow: var(--ios-popover-elevation); }
+dialog.app-dialog,
+dialog.display-settings-dialog { border-radius: 1.5rem; box-shadow: var(--ios-popover-elevation); }
+dialog.app-dialog::backdrop { background: #0c201766; }
+.appearance-options label { border-radius: var(--ios-control-radius); }
+.display-settings-storage-message { border-radius: var(--ios-control-radius); }
+.login-panel { border-radius: 1.75rem; box-shadow: var(--ios-popover-elevation); }
+.onboarding-category-options label { border-radius: var(--ios-control-radius); }
+
+/* Preferences remain authoritative, including a fully opaque high-contrast
+ * mode and the system palette. No focus rule is weakened by this layer. */
+:root[data-contrast="high"] {
+  --ios-group-bg: var(--surface-muted);
+  --ios-field-bg: var(--surface);
+  --ios-pressed-bg: var(--surface-muted);
+  --ios-icon-bg: var(--surface-muted);
+  --ios-chrome-bg: var(--surface);
+  --ios-elevation: none;
+  --ios-control-elevation: none;
+  --ios-popover-elevation: none;
+}
+:root[data-contrast="high"] :is(.sidebar, .topbar) { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root[data-contrast="high"] .sidebar-navigation .nav-item-active { box-shadow: inset 0 0 0 1px var(--teal-text); }
+:root[data-motion="reduced"] :is(.button, .icon-button, .login-primary, .home-tile):active { transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root :is(.button, .icon-button, .login-primary, .home-tile):active { transform: none; }
+}
+@media (max-width: 760px) {
+  .home-hero { padding-inline: 0; }
+  .home-hero-copy h1 { font-size: clamp(1.75rem, 1.4rem + 1.5vw, 2rem); }
+  .home-tile { padding: 1rem; }
+  .home-groups { gap: 1.5rem; }
+  .home-group .home-tiles { gap: 0.75rem; }
+  .home-dashboard-tile { gap: 0.875rem; }
+  .home-dashboard-tile .home-tile-glyph { padding: 0.625rem; }
+}
+@media (forced-colors: active) {
+  :root, :root[data-theme], :root[data-contrast] {
+    --ios-group-bg: Canvas;
+    --ios-field-bg: Canvas;
+    --ios-pressed-bg: Canvas;
+    --ios-icon-bg: Canvas;
+    --ios-chrome-bg: Canvas;
+    --ios-elevation: none;
+    --ios-control-elevation: none;
+    --ios-popover-elevation: none;
+  }
+  .sidebar, .topbar { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .panel, .home-tile, .kpi, .intelligence-metric,
+  .dashboard-switcher, .segmented-control, .dashboard-section-tabs,
+  .form-editor-tabs { border-color: CanvasText; }
+  .sidebar-navigation .nav-item-active,
+  .sidebar-navigation .nav-item-active:hover,
+  .segmented-control button:is(.is-active, [aria-pressed="true"], [aria-selected="true"]),
+  .dashboard-section-tabs > button[aria-current="page"],
+  .form-editor-tabs button[aria-pressed="true"] { background: Highlight; border-color: Highlight; color: HighlightText; }
+  .home-dashboard-tile .home-tile-glyph { background: Highlight; color: HighlightText; }
+}
+@media print {
+  .panel, .home-tile, .kpi, .intelligence-metric,
+  .admin-directory, .dashboard-switcher { box-shadow: none; }
+}

@@ -121,4 +121,75 @@ public sealed class DashboardExportScopeTests
         Assert.Single(actions);
         Assert.Empty(DashboardExportScope.Records([record], [], "liv", filter, [action with { IsDeleted = true }]));
     }
+
+    [Theory]
+    [InlineData("work_scrutiny","work_scrutiny")]
+    [InlineData("coaching_session","coaching_mentoring")]
+    [InlineData("learning_walk","learning_walk")]
+    [InlineData("overview","learning_walk")]
+    public void Source_submission_status_and_form_focus_keep_linked_actions_with_different_themes(string process,string source)
+    {
+        var record=Record(Guid.NewGuid(),theme:"Feedback") with {ProcessKey=process=="overview" ? "learning_walk" : process};
+        var action=new DashboardActionSummary(Guid.NewGuid(),record.Id,source,"Teacher",Guid.NewGuid(),"Owner","Inclusive planning","Follow up","open",null,null,false,new(2026,9,8,12,0,0,TimeSpan.Zero),"FAC","DIG",false);
+        var filter=Filter with {Status="submitted",DimensionLabel="Feedback"};
+        var records=DashboardExportScope.Records([record],[],process,filter,[action]);
+        Assert.Single(records);
+        Assert.Single(DashboardExportScope.Actions([action,action with {Id=Guid.NewGuid(),SourceRecordId=Guid.NewGuid()}],process,filter,records.Select(row=>row.Id).ToHashSet()));
+    }
+
+    [Fact]
+    public void Action_theme_can_select_a_work_scrutiny_source_without_hiding_other_actions_from_that_source()
+    {
+        var record=Record(Guid.NewGuid()) with {ProcessKey="work_scrutiny"};
+        var action=new DashboardActionSummary(Guid.NewGuid(),record.Id,"work_scrutiny","Teacher",Guid.NewGuid(),"Owner","Feedback","Follow up","open",null,null,false,new(2026,9,8,12,0,0,TimeSpan.Zero),"FAC","DIG",false);
+        var filter=Filter with {DimensionLabel="Feedback"};
+        var records=DashboardExportScope.Records([record],[],"work_scrutiny",filter,[action]);
+        Assert.Single(records);
+        Assert.Equal(2,DashboardExportScope.Actions([action,action with {Id=Guid.NewGuid(),ActionTheme="Other theme"}],"work_scrutiny",filter,records.Select(row=>row.Id).ToHashSet()).Length);
+    }
+
+    [Fact]
+    public void Actions_only_filters_use_action_state_and_action_theme()
+    {
+        var action=new DashboardActionSummary(Guid.NewGuid(),Guid.NewGuid(),"work_scrutiny","Teacher",Guid.NewGuid(),"Owner","Feedback","Follow up","open",null,null,true,new(2026,9,8,12,0,0,TimeSpan.Zero),"FAC","DIG",false);
+        Assert.Single(DashboardExportScope.Actions([action],"actions",Filter with {Status="overdue",DimensionLabel="Feedback"},new HashSet<Guid>()));
+        Assert.Empty(DashboardExportScope.Actions([action],"actions",Filter with {Status="submitted"},new HashSet<Guid>()));
+        Assert.Empty(DashboardExportScope.Actions([action],"actions",Filter with {DimensionLabel="Planning"},new HashSet<Guid>()));
+        Assert.Single(DashboardExportScope.Actions([action with {StatusKey="cancelled"}],"actions",Filter with {Status="cancelled"},new HashSet<Guid>()));
+    }
+
+    [Fact]
+    public void Dashboard_and_organisation_action_counts_share_canonical_states_and_disclose_unverifiable_completion_timing()
+    {
+        var today=DateOnly.FromDateTime(DateTime.UtcNow);
+        var open=new DashboardActionSummary(Guid.NewGuid(),Guid.NewGuid(),"learning_walk","Teacher",Guid.NewGuid(),"Owner","Feedback","Follow up","open",today.AddDays(5),null,false,DateTimeOffset.UtcNow,"FAC","DIG",false);
+        var overdue=open with {Id=Guid.NewGuid(),DueDate=today.AddDays(-5),IsOverdue=true};
+        var legacyComplete=overdue with {Id=Guid.NewGuid(),StatusKey="complete"};
+        var datedComplete=overdue with {Id=Guid.NewGuid(),CompletedDate=today.AddDays(-6)};
+        var cancelled=overdue with {Id=Guid.NewGuid(),StatusKey="cancelled"};
+        var cancelledWithDate=datedComplete with {Id=Guid.NewGuid(),StatusKey="cancelled"};
+        DashboardActionSummary[] actions=[open,overdue,legacyComplete,datedComplete,cancelled,cancelledWithDate];
+        Assert.Equal(new[] {"open","overdue","complete","complete","cancelled","cancelled"},actions.Select(DashboardExportScope.ActionState));
+        var metrics=DashboardExportScope.Metrics("learning_walk",[Record(Guid.NewGuid())],[],actions);
+        Assert.Equal("2",metrics.Single(metric=>metric.Label=="Open actions").Value);
+        Assert.Equal("1",metrics.Single(metric=>metric.Label=="Overdue actions").Value);
+        Assert.Equal("1",metrics.Single(metric=>metric.Label=="Completed records").Value);
+        var organisation=DashboardExportScope.OrganisationItems([],[],actions,[],[]);
+        Assert.Equal(2,organisation.Count);
+        Assert.All(organisation,item=> {
+            Assert.Equal("2",item.Fields.Single(field=>field.Label=="Open actions").Value);
+            Assert.Equal("1",item.Fields.Single(field=>field.Label=="Overdue actions").Value);
+        });
+        var assurance=DashboardExportScope.ActionAssurance(actions);
+        var position=assurance.Items.Single().Fields;
+        Assert.Equal("4",position.Single(field=>field.Label=="Total").Value);
+        Assert.Equal("2",position.Single(field=>field.Label=="Complete").Value);
+        Assert.Equal("1",position.Single(field=>field.Label=="In progress").Value);
+        Assert.Equal("1",position.Single(field=>field.Label=="Overdue").Value);
+        Assert.Equal("1",position.Single(field=>field.Label=="Completion date not recorded").Value);
+        Assert.Equal("2 of 3 (67%)",position.Single(field=>field.Label=="Due-date compliance").Value);
+        Assert.Contains("timing cannot be verified",assurance.Description);
+        var unknownOnly=DashboardExportScope.ActionAssurance([legacyComplete]);
+        Assert.Equal("No verifiable due dates",unknownOnly.Items.Single().Fields.Single(field=>field.Label=="Due-date compliance").Value);
+    }
 }

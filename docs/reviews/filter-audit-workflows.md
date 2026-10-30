@@ -1,0 +1,47 @@
+# Workflow and shared-picker filter audit — 29 October 2026
+
+## Behaviour applied
+
+The workflow APIs reviewed here return the complete permitted register. These screens do not fetch a capped server page and then sort that page. Searches and filters run over the full authorised response, followed by typed, deterministic sorting. Existing ownership and record-access rules remain in place.
+
+`services/listQuery.ts` provides accent-insensitive, multi-term search across business fields and natural text/date/number sorting. Every search term must match somewhere in the supplied business fields. Empty and invalid sort values stay last in either direction; a record identity breaks equal-value ties. Dropdown choices derive from the full permitted register before its local search or filters, including historical labels where the response provides them.
+
+## Register coverage
+
+| Screen | Search and filters | Sorting and data notes |
+| --- | --- | --- |
+| Learning Walk / ALS Learning Walk | Title, associated staff, owner, submitter, summary, theme, delivery area, faculty/team names and codes, status, record date; person, theme, delivery-area, area, status and date-range filters | Newest/oldest, title, person, area, status, form type. Full organisation metadata is retained for historical list labels; new form organisation choices remain active-only. |
+| CPD | The same shared record search plus actual form type, all named participants and recorded themes; explicit CPD-type, participant, theme, person, status, area and date-range filters | Uses additive listing metadata rather than one form-detail request per row. Internal, external and mandatory template identities remain distinguishable. Filters are now available here rather than only on Learning Walks. |
+| Learning Environment | Shared record search plus room code/name; explicit room, person, status, area and date-range filters | Room codes sort naturally, alongside title, person, dates and status. Room/name and staff context appear in register rows. |
+| Work Scrutiny | Shared record filters across people, title, summary, area, delivery area, theme, status, form type and dates | Published questions, rubric levels, form sections and workflow steps retain their authored order. |
+| LIV / ALS LIV records | Staff, reviewer, area, stage, status, cycle, visit course/level/delivery-area/date and academic year; explicit reviewer, academic-year, area, cycle and status filters | Staff/reviewer, area, cycle, status, last activity and latest visit, with oldest/newest date choices. Academic year comes from the source record. Ownership still includes records created by or reviewing the signed-in staff member. |
+| LIV coverage | Staff name, email, external staff ID, faculty/team codes and names, reviewer, status; faculty, team and coverage-status filters | Staff, faculty, team or status. Child-code teams are included. Where multiple cases exist for a person, the most recently active case is chosen deterministically instead of relying on incidental response order. Coverage continues to describe the complete staff list supplied to the screen. |
+| Probationary Observations | Staff, email/external ID, recorded area, named reviewers, year, observation number and status; faculty, team, year, reviewer, current observation and status filters | Staff, last activity, academic year, current observation or status. Historical area matching uses the case's recorded organisation snapshot rather than the staff member's later transferred membership. |
+| Coaching and Mentoring | Staff, coach, configured/historical focus label, type, status, date, cycle/session number, academic year; coach, focus, type, status and year filters | Staff, coach, focus, status, date, numeric cycle/session. Academic year is read from `core.records.academic_year` through an additive optional DTO field; no inferred calendar boundary. |
+| ELI completion | Staff name, email, external ID, faculty/team codes and names, academic year and status; status, faculty and team filters | Staff, faculty, team, status and last activity. Organisation choices include unassigned rows. |
+| ELI validation | Completion search plus reviewer, validation status and feedback; validation status, faculty, team and reviewer filters | Staff, faculty, team, validation status, reviewer and review date. Existing pending/returned/validated/draft outcomes remain unchanged. |
+| Actions | Action title/detail/theme, owner and associated staff, source title/type, status, organisation labels, due/completed dates, closure comments, intended evidence/impact; existing ownership/owner/staff/area/source/status/due controls plus search and theme | Earliest/latest due, newest/oldest creation, owner, associated staff, source, title, theme or status. Historical owner/staff/area choices come from action data rather than requiring an active directory entry. Existing deleted-action and management gates remain. |
+| UCO review register | Title, lecturer, observer, course/module, academic year, workflow/follow-up statuses and scheduled dates; observer, course, workflow and follow-up filters | Lecturer, observer, course, workflow, newest/oldest observation. Unscheduled observations stay last in either date direction. Export capabilities and review permissions are unchanged. |
+
+## Shared form pickers
+
+- `StaffSearchSelect`: removed the eight-result cap; searches combined name/email/external-ID/job-title terms; explicit name, staff-ID, email or job-title sort. An unavailable saved staff selection is retained and explained.
+- `RoomSearchSelect`: removed the ten-result cap; combined room-code/building search; natural code or room/building sort. An unavailable saved room code remains displayed.
+- `CourseMultiSelect`: removed the ten-result cap; combined course-code/title/year search; code, title or newest-academic-year sort. Unknown saved course IDs remain represented by removable saved-course chips and survive adding another course.
+- `CpdParticipantPicker`: removed the ten-result cap; searches staff identities and associated faculty/team metadata; explicit results sort, selected-participant search/sort and group search. Unknown saved participants remain selected. Bulk additions still use the same authorised staff list and active organisation choices.
+- Comboboxes keep Arrow Up/Down, Enter and Escape handling. Their result sort controls remain keyboard-focusable. Mouse focus preservation is attached to option buttons rather than a parent that would prevent focus on the sort selector.
+- `WorkScrutinyResponseField`: historical course levels and delivery areas already survived list changes. Generic single/multiple choices now also display removed saved values; an old rubric response is explicitly displayed without changing the current rubric sequence.
+
+## Boundaries and remaining audit handoff
+
+No assessment answer, workflow order, published template, action state or database record was modified by this audit. Fixed lists such as rubric levels, workflow stages, authored question options and onboarding staff categories are deliberately not given user-reorder controls. `ActionThemeSelect` already retains a saved theme absent from the current lookup. Work Scrutiny's native creation faculty/team selects have no hidden result cap; they intentionally offer active creation destinations.
+
+The separate export area chooser in `ExportButtons.tsx` was handed to the parent audit owner: its historical-area coverage and faculty-child classification require the same review. Dashboard explorers, My Team, staff profiles, form administration, QA and other admin registers are covered by the other audit owners rather than this note.
+
+## Verification
+
+`node --test tests/workflow-list-filters.test.mjs` passes 12 focused tests. They exercise actual component handlers as well as the shared selectors: multi-field query composition, historical transferred cases, retired coach/focus/person labels, CPD filters outside Learning Walks, numeric/natural sorting, date order with missing values, more than ten picker matches, keyboard selection, retained unknown selections and unchanged authored choice ordering.
+
+The focused workflow suite together with `tests/liv-workspace-render.test.mjs`, `tests/probation-actions-save.test.mjs` and `tests/liv-workflow.test.mjs` passed 31 tests. These also retain the preceding LIV sharing, first-cycle progression and probation-action save protections. No live application data was written. The parent audit owns the final integrated TypeScript/backend build and runtime checks; a local isolated backend invocation without actual test output is not counted as validation.
+
+The final backend projection review added selected Learning Walk/ALS focus snapshots alongside legacy theme labels, saved `staff_search` participant fallbacks for CPD drafts, and saved room/building fallbacks for environment drafts. Submitted records retain their authoritative attendance/room projections. The listing's permission and draft-visibility predicates were unchanged; no draft attendance or room projection is created. `tests/workflow-record-metadata-sql.ps1` executes the actual whole listing SELECT against eight CTE-only fixture records in SQL Server `master` and passes 11 assertions, including duplicate/invalid participant IDs, historical snapshots, latest-submission resolution and exclusion of LIV narrative/theme content. No database objects or application rows are written by this check.

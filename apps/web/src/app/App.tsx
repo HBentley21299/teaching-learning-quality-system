@@ -1,5 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CalendarDays, Moon, PanelLeftClose, PanelLeftOpen, Menu, Sun } from "lucide-react";
+import { AlertTriangle, CalendarDays, House, Menu, PanelLeftClose, PanelLeftOpen, SlidersHorizontal } from "lucide-react";
+import { useDisplayPreferences } from "../features/DisplayPreferencesProvider";
+import { LoadingState } from "../components/LoadingState";
+import { actionsAcademicYear, pageUsesAcademicYear } from "./pageContext";
 import { initialiseAppHistory, historyPosition, writeAppPath } from "./history";
 import { UnsavedChangesGuard, confirmUnsavedNavigation, hasUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { canAccessRoute, navigationItems, type AppRoute } from "./navigation";
@@ -45,6 +48,7 @@ const CoachingMentoring = lazy(() => import("../routes/CoachingMentoring").then(
 const MyTeam = lazy(() => import("../routes/MyTeam").then((module) => ({ default: module.MyTeam })));
 const QaHub = lazy(() => import("../routes/QaHub").then((module) => ({ default: module.QaHub })));
 const UcoTlaReviews = lazy(() => import("../routes/UcoTlaReviews").then((module) => ({ default: module.UcoTlaReviews })));
+const ProcessReviews = lazy(() => import("../routes/ProcessReviews").then((module) => ({ default: module.ProcessReviews })));
 
 const emptyUser: CurrentUser = {
   displayName: "Loading...",
@@ -54,6 +58,7 @@ const emptyUser: CurrentUser = {
 };
 
 export function App() {
+  const { preferences, appearance: theme, updatePreferences, openDisplaySettings } = useDisplayPreferences();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const historyIndex = useRef(historyPosition());
@@ -64,8 +69,12 @@ export function App() {
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
   const [staff, setStaff] = useState<StaffSummary[]>([]);
   const [actions, setActions] = useState<ActionSummary[]>([]);
+  const actionLoadSequence = useRef(0);
   const [academicYears, setAcademicYears] = useState<AcademicYearSummary[]>([]);
   const [academicYear, setAcademicYear] = useState("");
+  const actionsScope = `${user.userAccountId ?? ""}:${route}:${academicYear}`;
+  const latestActionsScope = useRef(actionsScope);
+  latestActionsScope.current = actionsScope;
   const [modulesLoaded, setModulesLoaded] = useState(false);
   const [staffLoaded, setStaffLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -82,23 +91,7 @@ export function App() {
   const [pendingRecordId, setPendingRecordId] = useState(initialLocation.pendingRecordId);
   const [adminTab, setAdminTab] = useState(initialLocation.adminTab);
   const [linkError, setLinkError] = useState("");
-  const [isNavigationCollapsed, setIsNavigationCollapsed] = useState(
-    () => localStorage.getItem("ielevate-navigation-collapsed") === "true"
-  );
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const stored = localStorage.getItem("ielevate-theme");
-    if (stored === "light" || stored === "dark") return stored;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  });
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("ielevate-theme", theme);
-  }, [theme]);
-
-  useEffect(() => {
-    localStorage.setItem("ielevate-navigation-collapsed", String(isNavigationCollapsed));
-  }, [isNavigationCollapsed]);
+  const isNavigationCollapsed = preferences.navigation === "compact";
 
   const applyLocation = useCallback((location: AppLocation) => {
     setRoute(location.route);
@@ -187,29 +180,41 @@ export function App() {
     let cancelled = false;
     void api.modules()
       .then((rows) => { if (!cancelled) { setModules(rows); setModulesLoaded(true); setLookupErrors(current => ({ ...current, modules: "" })); } })
-      .catch(error => { if (!cancelled) { setModulesLoaded(true); setLookupErrors(current => ({ ...current, modules: error instanceof Error ? error.message : "Could not load modules." })); } });
+      .catch(() => { if (!cancelled) { setModulesLoaded(true); setLookupErrors(current => ({ ...current, modules: "Could not load modules. Check your connection and try again." })); } });
     return () => { cancelled = true; };
   }, [modulesLoaded, route, user.userAccountId]);
 
   useEffect(() => {
-    const staffRoutes: AppRoute[] = ["staff", "learning", "liv", "als_learning", "als_liv", "probation", "elevate", "coaching", "scrutiny", "cpd", "profile", "actions", "qa"];
+    const staffRoutes: AppRoute[] = ["staff", "learning", "digital", "activate", "liv", "als_learning", "als_liv", "probation", "elevate", "coaching", "scrutiny", "cpd", "profile", "actions", "qa"];
     if (!user.userAccountId || staffLoaded || !staffRoutes.includes(route)) return;
     let cancelled = false;
     void api.staff()
       .then((rows) => { if (!cancelled) { setStaff(rows); setStaffLoaded(true); setLookupErrors(current => ({ ...current, staff: "" })); } })
-      .catch(error => { if (!cancelled) { setStaffLoaded(true); setLookupErrors(current => ({ ...current, staff: error instanceof Error ? error.message : "Could not load staff." })); } });
+      .catch(() => { if (!cancelled) { setStaffLoaded(true); setLookupErrors(current => ({ ...current, staff: "Could not load staff. Check your connection and try again." })); } });
     return () => { cancelled = true; };
   }, [route, staffLoaded, user.userAccountId]);
 
   useEffect(() => {
     if (!user.userAccountId || !academicYear || !["actions", "probation"].includes(route)) return;
     let cancelled = false;
+    const request = ++actionLoadSequence.current;
     setActions([]);
-    void api.actions(false, academicYear)
-      .then((rows) => { if (!cancelled) { setActions(rows); setLookupErrors(current => ({ ...current, actions: "" })); } })
-      .catch(error => { if (!cancelled) setLookupErrors(current => ({ ...current, actions: error instanceof Error ? error.message : "Actions could not be loaded." })); });
+    void api.actions(false, actionsAcademicYear(route, academicYear))
+      .then((rows) => { if (!cancelled && request === actionLoadSequence.current && latestActionsScope.current === actionsScope) { setActions(rows); setLookupErrors(current => ({ ...current, actions: "" })); } })
+      .catch(() => { if (!cancelled && request === actionLoadSequence.current && latestActionsScope.current === actionsScope) setLookupErrors(current => ({ ...current, actions: "Could not load actions. Try again." })); });
     return () => { cancelled = true; };
   }, [academicYear, route, user.userAccountId, lookupAttempt]);
+
+  // Teams links identify a native action permanently, across annual review cycles.
+  // Resolve its authorised year before filtering the main action register.
+  useEffect(() => {
+    if (route !== "actions" || !actionDetailId || !user.userAccountId) return;
+    let cancelled = false;
+    void api.processReviewAction(actionDetailId)
+      .then(action => { if (!cancelled) setAcademicYear(action.academicYear); })
+      .catch(() => { /* Other action sources continue through their existing register path. */ });
+    return () => { cancelled = true; };
+  }, [route, actionDetailId, user.userAccountId]);
 
   useEffect(() => {
     initialiseAppHistory();
@@ -290,12 +295,16 @@ export function App() {
 
   const refreshActions = useCallback(async () => {
     if (!academicYear || !["actions", "probation"].includes(route)) return;
+    const request = ++actionLoadSequence.current;
     try {
-      setActions(await api.actions(false, academicYear));
+      const rows = await api.actions(false, actionsAcademicYear(route, academicYear));
+      if (request === actionLoadSequence.current && latestActionsScope.current === actionsScope) {
+        setActions(rows); setLookupErrors(current => ({ ...current, actions: "" }));
+      }
     } catch {
-      // keep the previous list when a refresh fails
+      if (request === actionLoadSequence.current && latestActionsScope.current === actionsScope) setLookupErrors(current => ({ ...current, actions: "Could not refresh actions. Saved changes are retained. Try again." }));
     }
-  }, [academicYear, route]);
+  }, [academicYear, route, actionsScope]);
 
   const effectivePermissions = useMemo(
     () => ucoAccess?.canAccess && !user.permissions.includes("uco_tla.manage")
@@ -312,6 +321,16 @@ export function App() {
     [accessibleNavigationItems]
   );
   const activeItem = useMemo(() => accessibleNavigationItems.find((item) => item.key === route), [route, accessibleNavigationItems]);
+
+  useEffect(() => { document.title = `${activeItem?.label ?? "Home"} · i-Elevate`; }, [activeItem?.label]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const main = document.getElementById("main-content");
+      main?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "instant" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [route, sourceRecordId, profileStaffId, adminTab]);
 
   useEffect(() => {
     if (isLoading || !user.userAccountId || pendingRecordId || sourceRecordId
@@ -332,6 +351,7 @@ export function App() {
   async function navigate(nextRoute: AppRoute) {
     if (!await confirmUnsavedNavigation()) return;
     setMobileNavigationOpen(false);
+    if (nextRoute === "dashboard" && route === "dashboard" && window.location.pathname === routePath("dashboard")) return;
 
     setProfileStaffId("");
     setActionStaffId("");
@@ -483,6 +503,13 @@ export function App() {
     writePath(adminPath(tab));
   }
 
+  const handleAdminPathChanged = useCallback((path: string) => {
+    // The administration shell has already resolved unsaved work before navigation.
+    writePath(path);
+    applyLocation(parseAppLocation(path));
+    window.dispatchEvent(new CustomEvent("app:navigation-accepted", { detail: { pathname: path } }));
+  }, [applyLocation, writePath]);
+
   function handleActionOpened(actionId: string) {
     setActionDetailId(actionId);
     writePath(actionPath(actionId));
@@ -508,6 +535,7 @@ export function App() {
 
   return (
     <div className={isNavigationCollapsed ? "app-shell app-shell-nav-collapsed" : "app-shell"}>
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <UnsavedChangesGuard />
       <aside className={`sidebar${mobileNavigationOpen ? " mobile-navigation-open" : ""}`} aria-label="Main navigation" id="main-navigation">
         <div className="brand-block">
@@ -521,30 +549,40 @@ export function App() {
           <img
             aria-hidden="true"
             className="brand-logo-mark"
-            src="/system-assets/eli/eli-favicon-64.png"
+            src={theme === "dark" ? "/system-assets/i-elevate-logo-transparent.png" : "/system-assets/i-elevate-logo-ink.png"}
             alt=""
           />
         </div>
         <button className="button mobile-navigation-button" aria-expanded={mobileNavigationOpen} aria-controls="mobile-navigation-links" onClick={() => setMobileNavigationOpen(open => !open)} type="button"><Menu size={18} aria-hidden="true" />{mobileNavigationOpen ? "Close menu" : "Menu"}</button>
-        <div id="mobile-navigation-links" className="sidebar-navigation-wrapper"><SidebarNavigation items={visibleNavigationItems} route={route} onNavigate={navigate} /></div>
+        <div id="mobile-navigation-links" className="sidebar-navigation-wrapper" onKeyDown={event => {
+          if (event.key === "Escape" && mobileNavigationOpen) { event.stopPropagation(); setMobileNavigationOpen(false); document.querySelector<HTMLButtonElement>(".mobile-navigation-button")?.focus(); }
+        }}>
+          {!isLoading && user.userAccountId && qaHubSummary?.canAccessHub === true ? <WorkspaceSwitch active={route === "qa" ? "qa" : "elevate"} compact onChange={workspace => void navigate(workspace === "qa" ? "qa" : "home")} /> : null}
+          <SidebarNavigation items={visibleNavigationItems} route={route} onNavigate={navigate} />
+        </div>
       </aside>
 
-      <main className="main">
-        <header className="topbar">
+      <div className="main">
+        <header className={`topbar${academicYears.length > 0 && pageUsesAcademicYear(route) ? " topbar-with-year" : ""}`}>
           <button
             aria-controls="main-navigation"
             aria-expanded={!isNavigationCollapsed}
+            aria-label={isNavigationCollapsed ? "Expand navigation" : "Collapse navigation"}
             className="icon-button navigation-collapse-button"
-            onClick={() => setIsNavigationCollapsed((current) => !current)}
+            onClick={() => updatePreferences({ navigation: isNavigationCollapsed ? "expanded" : "compact" })}
             title={isNavigationCollapsed ? "Expand navigation" : "Collapse navigation"}
             type="button"
           >
-            {isNavigationCollapsed
-              ? <PanelLeftOpen size={18} aria-hidden="true" />
-              : <PanelLeftClose size={18} aria-hidden="true" />}
+            {isNavigationCollapsed ? <PanelLeftOpen size={20} aria-hidden="true" /> : <PanelLeftClose size={20} aria-hidden="true" />}
           </button>
-          <div className="topbar-context">{activeItem?.label ?? "i-Elevate"}</div>
-          {academicYears.length > 0 ? (
+          <a aria-current={route === "home" ? "page" : undefined} aria-label="Home" className="topbar-home-link" href={routePath("home")} onClick={event => {
+            if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+              event.preventDefault();
+              void navigate("home");
+            }
+          }} title="Go to homepage"><House size={18} aria-hidden="true" /><span>Home</span></a>
+          <div className="topbar-context">{route === "home" ? "" : activeItem?.label ?? "i-Elevate"}</div>
+          {academicYears.length > 0 && pageUsesAcademicYear(route) ? (
             <label className="academic-year-selector">
               <CalendarDays size={16} aria-hidden="true" />
               <span className="sr-only">Academic year</span>
@@ -558,12 +596,13 @@ export function App() {
             </label>
           ) : null}
           <button
-            className="icon-button"
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            title={theme === "dark" ? "Switch to light appearance" : "Switch to dark appearance"}
+            className="button button-quiet display-settings-trigger"
+            onClick={openDisplaySettings}
+            aria-haspopup="dialog"
+            aria-label="Display and accessibility settings"
             type="button"
           >
-            {theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
+            <SlidersHorizontal size={18} aria-hidden="true" /><span>Display</span>
           </button>
           <UserMenu displayName={user.displayName} />
         </header>
@@ -588,15 +627,9 @@ export function App() {
           </div>
         ) : null}
 
-        <div className="content-frame" aria-label={activeItem?.label ?? "Dashboard"}>
-          {!isLoading && user.userAccountId && qaHubSummary?.canAccessHub === true ? (
-            <WorkspaceSwitch active={route === "qa" ? "qa" : "elevate"}
-              onChange={(workspace) => navigate(workspace === "qa" ? "qa" : "home")} />
-          ) : null}
+        <main className="content-frame" id="main-content" tabIndex={-1} aria-label={activeItem?.label ?? "Home"} aria-busy={isLoading}>
           {isLoading ? (
-            <div className="route-stack">
-              <p className="muted-copy">Loading i-Elevate...</p>
-            </div>
+            <LoadingState size="page" label="Loading i-Elevate…" detail="Getting your workspace ready." />
           ) : loadError && !user.userAccountId ? (
             <section className="panel"><h1>Unable to load your account</h1><p>Use Retry above to reconnect. Your account access has not been checked yet.</p></section>
           ) : !user.userAccountId ? (
@@ -614,7 +647,7 @@ export function App() {
               ) : null}
             </section>
           ) : (
-            <Suspense fallback={<div className="route-stack"><p className="muted-copy">Loading this workspace...</p></div>}>
+            <Suspense fallback={<LoadingState size="page" label={`Loading ${activeItem?.label ?? "page"}…`} />}>
               {route === "home" ? (
                 <Home
                   onNavigate={navigate}
@@ -623,10 +656,11 @@ export function App() {
                 />
               ) : null}
               {route === "dashboard" ? (
-                <Dashboard
+                !ucoAccessLoaded ? <LoadingState size="page" label="Loading dashboard access…" /> : <Dashboard
                   academicYear={academicYear}
                   orgUnits={orgUnits}
                   ucoAccess={ucoAccess}
+                  staff={staff}
                   user={user}
                   onOpenAction={openActionDetails}
                   onOpenRecord={openDashboardRecord}
@@ -634,11 +668,14 @@ export function App() {
                   onOpenUcoReview={openUcoTlaReview}
                 />
               ) : null}
-              {route === "staff" ? <StaffProfiles academicYear={academicYear} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffSelected={(staffId) => writePath(staffPath(staffId))} staff={staff} user={user} /> : null}
+              {route === "staff" ? !staffLoaded ? <LoadingState size="page" label="Loading the staff directory…" /> : <StaffProfiles academicYear={academicYear} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffSelected={(staffId) => writePath(staffPath(staffId))} staff={staff} user={user} /> : null}
               {route === "team" ? <MyTeam onOpenActions={openTeamActions} onOpenProfile={openTeamProfile} /> : null}
-              {route === "admin" ? <AdminCentre initialTab={adminTab} modules={modules} onOpenRecord={openAdminRecord} onTabChange={handleAdminTabChanged} staff={staff} user={user} /> : null}
+              {route === "admin" ? <AdminCentre initialTab={adminTab} modules={modules} onOpenRecord={openAdminRecord} onTabChange={handleAdminTabChanged} onNavigatePath={handleAdminPathChanged} staff={staff} user={user} /> : null}
               {route === "learning" ? (
                 <ModuleWorkspace academicYear={academicYear} eyebrow="Teaching and learning activity" initialRecordId={sourceRecordId} mode="learning" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("learning")} onRecordOpened={handleRecordOpened} staff={staff} title="Learning Walks" user={user} />
+              ) : null}
+              {route === "digital" || route === "activate" ? (
+                <ProcessReviews key={route} processKey={route === "digital" ? "digital_learning_walk" : "activate_growth_review"} academicYear={academicYear} orgUnits={orgUnits} staff={staff} user={user} initialRecordId={sourceRecordId} onRecordOpened={handleRecordOpened} onRecordClosed={() => handleRecordClosed(route)} onActionsChanged={refreshActions} />
               ) : null}
               {route === "liv" ? (
                 <LivVisits
@@ -672,7 +709,7 @@ export function App() {
               ) : null}
               {route === "probation" ? (
                 <ProbationObservations
-                  actions={yearActions}
+                  actions={actions}
                   initialSourceRecordId={sourceRecordId}
                   onActionsChanged={refreshActions}
                   onOpenEliReport={openElevateReport}
@@ -706,9 +743,9 @@ export function App() {
                 <ModuleWorkspace academicYear={academicYear} eyebrow="Teaching and learning activity" initialRecordId={sourceRecordId} mode="scrutiny" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("scrutiny")} onRecordOpened={handleRecordOpened} staff={staff} title="Work Scrutiny" user={user} />
               ) : null}
               {route === "cpd" ? (
-                <ModuleWorkspace academicYear={academicYear} eyebrow="Professional learning" initialRecordId={sourceRecordId} mode="cpd" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("cpd")} onRecordOpened={handleRecordOpened} staff={staff} title={user.permissions.includes("cpd.manage") ? "CPD Management" : "CPD"} user={user} />
+                <ModuleWorkspace academicYear={academicYear} eyebrow="Professional learning" initialRecordId={sourceRecordId} mode="cpd" onActionsChanged={refreshActions} onRecordClosed={() => handleRecordClosed("cpd")} onRecordOpened={handleRecordOpened} onOpenCsvImport={() => handleAdminPathChanged("/admin/cpd-import")} staff={staff} title={user.permissions.includes("cpd.manage") ? "CPD Management" : "CPD"} user={user} />
               ) : null}
-              {route === "profile" ? <StaffProfileWorkspace academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffChanged={(staffId) => writePath(staffPath(staffId))} staff={staff} user={user} /> : null}
+              {route === "profile" ? !staffLoaded ? <LoadingState size="page" label="Loading the staff directory…" /> : <StaffProfileWorkspace key={profileStaffId} academicYear={academicYear} initialElevateRecordId={sourceRecordId} initialStaffId={profileStaffId} onOpenActionDetails={openActionDetails} onOpenRecord={openStaffRecord} onStaffChanged={(staffId) => writePath(staffPath(staffId))} staff={staff} user={user} /> : null}
               {route === "actions" ? (
                 <ActionsView academicYear={academicYear} actions={yearActions} initialActionId={actionDetailId} initialStaffId={actionStaffId} onActionClosed={handleActionClosed} onActionOpened={handleActionOpened} onChanged={refreshActions} onOpenSource={openActionSource} orgUnits={orgUnits} staff={staff} user={user} />
               ) : null}
@@ -733,8 +770,8 @@ export function App() {
               ) : null}
             </Suspense>
           )}
-        </div>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
@@ -755,6 +792,8 @@ function routeForRecordType(recordType: string): AppRoute {
     elevate_practice: "profile",
     elevate_practice_assessment: "profile",
     learning_walk: "learning",
+    digital_learning_walk: "digital",
+    activate_growth_review: "activate",
     als_learning_walk: "als_learning",
     liv: "liv",
     als_liv: "als_liv",

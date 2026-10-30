@@ -4,6 +4,8 @@ import { useState } from "react";
 import { ExportExcelButton } from "../components/ExportButtons";
 import { StaffProfilePanel, type StaffProfileRecordLinkHandler } from "../features/StaffProfilePanel";
 import type { CurrentUser, StaffSummary } from "../services/types";
+import { distinctListValues } from "../services/listQuery";
+import { WorkflowFilters } from "../components/WorkflowFilters";
 
 /**
  * Staff search for programme leaders and above (reports.view_scoped or
@@ -27,6 +29,9 @@ export function StaffProfiles({
 }) {
   const [selectedStaffId, setSelectedStaffId] = useState("");
   const [pickerStaffId, setPickerStaffId] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [accountStatus, setAccountStatus] = useState("");
+  const filteredStaff = staff.filter(person => (!jobTitle || person.jobTitle === jobTitle) && (!accountStatus || person.accountStatus === accountStatus));
 
   const canUseStaffSearch = [
     "reports.view_scoped",
@@ -42,7 +47,7 @@ export function StaffProfiles({
       <div className="route-stack">
         <div className="route-header">
           <div>
-            <p className="eyebrow">People and scope</p>
+            <p className="eyebrow">Staff directory</p>
             <h1>Staff</h1>
           </div>
         </div>
@@ -63,7 +68,7 @@ export function StaffProfiles({
     <div className="route-stack">
       <div className="route-header">
         <div>
-          <p className="eyebrow">People and scope</p>
+          <p className="eyebrow">Staff directory</p>
           <h1>Staff</h1>
         </div>
         {user.permissions.includes("exports.create") ? <ExportExcelButton filters={{ academicYear }} moduleKey="staff" /> : null}
@@ -72,18 +77,23 @@ export function StaffProfiles({
       <section className="panel">
         <div className="panel-heading">
           <h2>Find a staff member</h2>
-          <span>{staff.length} in your scope</span>
+          <span>{staff.length} staff you can view</span>
         </div>
-        <StaffSearchSelect id="staff-directory" label="Search staff by name, email or job title" staff={staff} value={pickerStaffId} onChange={async id => {
+        <WorkflowFilters activeCount={[jobTitle, accountStatus].filter(Boolean).length} onClear={() => { setJobTitle(""); setAccountStatus(""); }} primary={<div className="staff-directory-search"><StaffSearchSelect id="staff-directory" label="Search staff by name, email or job title" staff={filteredStaff} value={pickerStaffId} onChange={async id => {
           setPickerStaffId(id);
           if (!id || id === selectedStaffId) return;
           if (await confirmUnsavedNavigation()) { setSelectedStaffId(id); onStaffSelected?.(id); }
           else setPickerStaffId(selectedStaffId);
-        }} />
+        }} /></div>}>
+          <label><span>Job title</span><select value={jobTitle} onChange={event => setJobTitle(event.target.value)}><option value="">All job titles</option>{distinctListValues(staff.map(person => person.jobTitle ?? "")).map(value => <option key={value}>{value}</option>)}</select></label>
+          <label><span>Account status</span><select value={accountStatus} onChange={event => setAccountStatus(event.target.value)}><option value="">All statuses</option>{distinctListValues(staff.map(person => person.accountStatus)).map(value => <option key={value}>{value}</option>)}</select></label>
+        </WorkflowFilters>
+        <small role="status">{filteredStaff.length} matching staff</small>
       </section>
 
       {selectedStaff ? (
         <StaffProfilePanel
+          key={`${selectedStaff.id}:${academicYear}`}
           academicYear={academicYear}
           onOpenActionDetails={onOpenActionDetails}
           onOpenRecord={onOpenRecord}

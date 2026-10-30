@@ -1,4 +1,5 @@
 import { navigationGroups, navigationItems, type AppRoute } from "../app/navigation";
+import { routePath } from "../app/routing";
 
 type NavigationItem = (typeof navigationItems)[number];
 
@@ -9,11 +10,11 @@ export function SidebarNavigation({ items, route, onNavigate }: {
 }) {
   function renderItem(item: NavigationItem) {
     const Icon = item.icon;
-    return <button aria-current={item.key === route ? "page" : undefined}
+    return <a aria-current={item.key === route ? "page" : undefined} aria-label={item.label} href={routePath(item.key)}
       className={item.key === route ? "nav-item nav-item-active" : "nav-item"}
-      key={item.key} onClick={() => onNavigate(item.key)} title={item.label} type="button">
+      key={item.key} onClick={event => { if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onNavigate(item.key); } }} title={item.label}>
       <Icon size={18} aria-hidden="true" /><span>{item.label}</span>
-    </button>;
+    </a>;
   }
 
   return <nav aria-label="i-Elevate areas" className="sidebar-navigation">

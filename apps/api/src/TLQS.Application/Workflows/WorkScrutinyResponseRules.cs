@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace TLQS.Application.Workflows;
 
 public static class WorkScrutinyResponseRules
@@ -21,6 +23,13 @@ public static class WorkScrutinyResponseRules
             throw new WorkflowValidationException("Learner sample size must be a positive whole number.");
         }
 
+        if (fieldKey.StartsWith("custom_", StringComparison.Ordinal) && fieldType is "multi_select" or "checkbox_group")
+        {
+            if (!IsConfiguredJsonSelection(value, options))
+                throw new WorkflowValidationException($"Choose a configured response for {label}.");
+            return; // An empty optional selection is valid; required answers are checked by the form validator.
+        }
+
         if (options.Count == 0) return; // Preserve legacy fields without configured choices.
         var selected = fieldType is "multi_select" or "checkbox_group"
             ? value.Split('|', StringSplitOptions.RemoveEmptyEntries)
@@ -33,5 +42,23 @@ public static class WorkScrutinyResponseRules
 
         if (fieldKey == "triangulation_sources" && selected.Length > 1 && selected.Contains("No further validation required"))
             throw new WorkflowValidationException("Choose further evidence or No further validation required, rather than both.");
+    }
+
+    private static bool IsConfiguredJsonSelection(string value, IReadOnlyList<string> options)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return false;
+            var selected = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String) return false;
+                var choice = item.GetString()!;
+                if (!options.Contains(choice, StringComparer.Ordinal) || !selected.Add(choice)) return false;
+            }
+            return true;
+        }
+        catch (JsonException) { return false; }
     }
 }

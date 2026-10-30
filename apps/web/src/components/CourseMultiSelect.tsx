@@ -1,39 +1,45 @@
 import { Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type AriaAttributes } from "react";
+import { matchesListSearch, sortListRows } from "../services/listQuery";
 import type { CourseSummary } from "../services/types";
+import { useComboboxNavigation } from "./useComboboxNavigation";
 
 export function CourseMultiSelect({
   courses,
   disabled = false,
   id,
   onChange,
-  selectedIds
+  selectedIds,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": describedBy,
+  "aria-required": ariaRequired
 }: {
   courses: CourseSummary[];
   disabled?: boolean;
   id: string;
   onChange: (courseIds: string[]) => void;
   selectedIds: string[];
-}) {
+} & Pick<AriaAttributes, "aria-invalid" | "aria-describedby" | "aria-required">) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
-  const selectedCourses = selectedIds
-    .map((courseId) => courses.find((course) => course.id === courseId))
-    .filter((course): course is CourseSummary => Boolean(course));
-  const filteredCourses = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
-    return courses
-      .filter((course) => !selectedIds.includes(course.id))
-      .filter((course) => !normalizedQuery || [course.courseCode, course.courseName, course.academicYear ?? ""]
-        .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)))
-      .slice(0, 10);
-  }, [courses, query, selectedIds]);
+  const [sort, setSort] = useState("code");
+  const selectedCourses = selectedIds.map(courseId => courses.find(course => course.id === courseId)
+    || { id: courseId, courseCode: "Saved course", courseName: "Outside the available catalogue", orgUnitId: "" });
+  const filteredCourses = useMemo(() => sortListRows(courses.filter(course => !selectedIds.includes(course.id))
+    .filter(course => matchesListSearch(query, course.courseCode, course.courseName, course.academicYear)),
+    course => sort === "name" ? course.courseName : sort === "year" ? course.academicYear : course.courseCode,
+    sort === "year" ? "desc" : "asc", course => course.courseCode), [courses, query, selectedIds, sort]);
 
   function addCourse(course: CourseSummary) {
     onChange([...selectedIds, course.id]);
-    setQuery("");
+    setActiveIndex(-1); setQuery("");
     setIsOpen(true);
   }
+  const { activeIndex, activeId, setActiveIndex, onKeyDown } = useComboboxNavigation({
+    open: isOpen, setOpen: setIsOpen,
+    optionIds: filteredCourses.map(course => `${id}-option-${course.id}`),
+    onSelect: index => addCourse(filteredCourses[index])
+  });
 
   return (
     <div className="course-multi-select">
@@ -45,6 +51,7 @@ export function CourseMultiSelect({
               {course.courseName}
               <button
                 aria-label={`Remove ${course.courseCode}`}
+                disabled={disabled}
                 onClick={() => onChange(selectedIds.filter((courseId) => courseId !== course.id))}
                 type="button"
               >
@@ -54,49 +61,50 @@ export function CourseMultiSelect({
           ))}
         </div>
       ) : null}
-      <div className="staff-search course-search">
+      <div className="staff-search course-search" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setIsOpen(false); }}>
         <div className="search-box staff-search-input">
           <Search size={16} aria-hidden="true" />
           <input
+            aria-label="Search courses"
+            aria-invalid={ariaInvalid}
+            aria-describedby={describedBy}
+            aria-required={ariaRequired}
+            aria-activedescendant={!disabled ? activeId : undefined}
             aria-autocomplete="list"
-            aria-controls={`${id}-options`}
-            aria-expanded={isOpen}
+            aria-controls={isOpen && !disabled && courses.length ? `${id}-options` : undefined}
+            aria-expanded={isOpen && !disabled && courses.length > 0}
             autoComplete="off"
             disabled={disabled || courses.length === 0}
-            onBlur={() => setIsOpen(false)}
+            id={id}
             onChange={(event) => {
-              setQuery(event.target.value);
+              setActiveIndex(-1); setQuery(event.target.value);
               setIsOpen(true);
             }}
-            onFocus={() => setIsOpen(true)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && filteredCourses.length > 0) {
-                event.preventDefault();
-                addCourse(filteredCourses[0]);
-              }
-              if (event.key === "Escape") {
-                setIsOpen(false);
-              }
-            }}
+            onFocus={() => { setIsOpen(true); setActiveIndex(-1); }}
+            onKeyDown={onKeyDown}
             placeholder={courses.length ? "Type a course code or title" : "Course data not loaded"}
             role="combobox"
             type="text"
             value={query}
           />
         </div>
-        {isOpen && courses.length > 0 ? (
+        {isOpen && !disabled ? <div className="picker-tools"><div className="picker-sort"><span>Sort by</span><select aria-label="Course results sort" value={sort} onChange={event => { setSort(event.target.value); setActiveIndex(-1); }}><option value="code">Course code</option><option value="name">Course title</option><option value="year">Academic year: newest first</option></select></div><span className="picker-results-count" role="status">{filteredCourses.length} {filteredCourses.length === 1 ? "result" : "results"}</span></div> : null}
+        {isOpen && !disabled && courses.length > 0 ? (
           <div
             className="staff-search-results"
             id={`${id}-options`}
-            onMouseDown={(event) => event.preventDefault()}
-            role="listbox"
+            role="listbox" aria-label="Course results"
           >
             {filteredCourses.length === 0 ? (
               <div className="staff-search-empty">No remaining courses match "{query.trim()}".</div>
-            ) : filteredCourses.map((course) => (
+            ) : filteredCourses.map((course, index) => (
               <button
-                className="staff-search-result"
+                aria-selected={index === activeIndex}
+                id={`${id}-option-${course.id}`}
+                tabIndex={-1}
+                className={`staff-search-result${index === activeIndex ? " is-active" : ""}`}
                 key={course.id}
+                onMouseDown={event => event.preventDefault()}
                 onClick={() => addCourse(course)}
                 role="option"
                 type="button"
