@@ -1,0 +1,34 @@
+/* ELI types only while a real request is pending. Four consistent frames;
+   a still first frame is the complete reduced-motion experience. */
+.loading-state { display: flex; align-items: center; justify-content: center; gap: 1.125rem; min-width: 0; max-width: 100%; color: var(--text); }
+.loading-state-art { display: block; flex: 0 0 auto; width: 5.25rem; aspect-ratio: 1; background: url('/system-assets/eli/eli-loading-typing.png') 0 100% / 400% auto no-repeat; image-rendering: pixelated; animation: eli-loading-type 1.1s steps(1, end) infinite; }
+.loading-state-copy { min-width: 0; }
+.loading-state-copy > strong { display: block; font-size: .9375rem; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.loading-state-copy > p { color: var(--text-muted); font-size: .875rem; line-height: var(--reading-leading); margin: .375rem 0 0; max-width: 44ch; }
+.loading-state-dots { display: inline-flex; align-items: center; gap: .25rem; flex: 0 0 auto; }
+.loading-state-dots > i { display: block; width: .3125rem; height: .3125rem; background: currentColor; border-radius: 50%; opacity: .4; animation: loading-dot-pulse 1.4s ease-in-out infinite; }
+.loading-state-dots > i:nth-child(2) { animation-delay: .16s; }
+.loading-state-dots > i:nth-child(3) { animation-delay: .32s; }
+.loading-state-page { flex-direction: column; text-align: center; min-height: clamp(18rem, 48dvh, 28rem); padding: 1.5rem 1rem; gap: .75rem; }
+.loading-state-page .loading-state-art { width: 8rem; }
+.loading-state-page .loading-state-copy > strong { font-size: 1.125rem; letter-spacing: -.015em; }
+.loading-state-page .loading-state-dots { margin-top: .25rem; }
+.loading-state-section { padding: 1.25rem; min-height: 9rem; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-muted); }
+.loading-state-section .loading-state-dots { align-self: center; }
+.loading-state-inline { justify-content: flex-start; gap: .625rem; padding: .5rem 0; min-height: 2.5rem; }
+.loading-state-inline .loading-state-copy > strong { font-size: .8125rem; font-weight: 500; color: var(--text-muted); }
+.loading-state-inline .loading-state-copy > p { font-size: .8125rem; }
+.startup-loading-shell { min-height: 100dvh; display: grid; place-items: center; padding: 1.5rem; }
+.startup-loading-shell > .loading-state { width: min(100%, 32rem); }
+@keyframes eli-loading-type { 0%, 24.999% { background-position-x: 0; } 25%, 49.999% { background-position-x: 33.333333%; } 50%, 74.999% { background-position-x: 66.666667%; } 75%, 100% { background-position-x: 100%; } }
+@keyframes loading-dot-pulse { 0%, 70%, 100% { opacity: .4; } 35% { opacity: 1; } }
+@media (max-width: 480px) {
+  .loading-state-section { flex-wrap: wrap; gap: .5rem .875rem; padding: 1rem; }
+  .loading-state-section .loading-state-art { width: 4rem; }
+  .loading-state-section .loading-state-copy { flex: 1 1 8rem; }
+  .loading-state-section .loading-state-dots { margin-inline-start: auto; }
+}
+:root[data-motion="reduced"] :is(.loading-state-art, .loading-state-dots > i) { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .loading-state-art, .loading-state-dots > i { animation: none !important; } }
+@media (forced-colors: active) { .loading-state-section { background: Canvas; border-color: CanvasText; } .loading-state-dots { color: CanvasText; } }
+@media print { .loading-state { display: none; } }

@@ -1,13 +1,11 @@
 import { navigationGroups, navigationItems, type AppRoute } from "../app/navigation";
 import { ArrowRight, LayoutDashboard } from "lucide-react";
-import { EliStage } from "../components/EliScene";
 import type { CurrentUser } from "../services/types";
 
 
 /**
- * Landing page: a time-aware personalised greeting from ELI, plus a grid of
- * grouped navigation into every area the signed-in user can access. The tile
- * list arrives pre-filtered by the same permission rules as the sidebar.
+ * A compact, useful starting point with the same permitted destinations as
+ * the sidebar. Business names are paired with plain descriptions.
  */
 
 type HomeTile = {
@@ -22,76 +20,47 @@ type HomeProps = {
 };
 
 const tileDescriptions: Partial<Record<AppRoute, string>> = {
-  dashboard: "KPIs, trends and activity across your scope",
+  dashboard: "Reports, activity and progress across your area",
   staff: "Browse staff and their teaching and learning profiles",
   team: "Your team's records and actions at a glance",
   admin: "Users, permissions, templates and settings",
   learning: "Record and review learning walks",
+  digital: "Review digital learning across a team, with linked evidence samples",
+  activate: "Review team Skills Scan results, record meetings and agree actions",
   liv: "Learning and Innovation Visits",
   als_learning: "ALS-specific learning walks and focus areas",
   als_liv: "ALS Learning and Innovation Visits",
   probation: "Support colleagues through probation",
   uco: "University teaching, learning and assessment reviews",
   elevate: "Audit and improve learning environments",
-  practice: "Elevate Learning and Innovation",
+  practice: "Reflect on your teaching and plan your development",
   coaching: "Coaching cycles and mentoring sessions",
   scrutiny: "Sample and review learners' work",
   cpd: "Log and manage professional development",
   profile: "Your teaching and learning profile and records",
-  actions: "Track actions assigned to you and your teams"
+  actions: "View and update actions and their progress"
 };
-
-const morningMessages = [
-  "Fresh coffee, fresh start — let's make today count.",
-  "The learners are lucky to have you today.",
-  "New day, new wins to record.",
-  "ELI is already on coffee number two. Pace yourself."
-];
-
-const afternoonMessages = [
-  "Keep going — the best lessons are still ahead.",
-  "Great teaching happening all over college today. Some of it is yours.",
-  "ELI says the data is looking good.",
-  "Strong afternoon energy. Make it count."
-];
-
-const eveningMessages = [
-  "A late one? Your dedication doesn't go unnoticed.",
-  "Even ELI is winding down. Great work today.",
-  "Thoughtful development takes time — thanks for putting it in.",
-  "Wrapping up — tomorrow is already looking brighter."
-];
-
-const fridayMessage = "Happy Friday — finish the week strong!";
-const weekendMessage = "Weekend mode: even great educators deserve a rest.";
 
 function greetingFor(now: Date) {
   const hour = now.getHours();
-  const day = now.getDay();
-  const salutation = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-  const dayIndex = Math.floor(
-    (now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / 86400000
-  );
-  let message: string;
-  if (day === 0 || day === 6) {
-    message = weekendMessage;
-  } else if (day === 5 && hour >= 12) {
-    message = fridayMessage;
-  } else {
-    const pool = hour < 12 ? morningMessages : hour < 17 ? afternoonMessages : eveningMessages;
-    message = pool[dayIndex % pool.length];
-  }
-  return { salutation, message };
+  return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 }
 
 export function Home({ user, tiles, onNavigate }: HomeProps) {
   const firstName = user.displayName.split(" ")[0] || user.displayName;
-  const { salutation, message } = greetingFor(new Date());
+  const salutation = greetingFor(new Date());
   const visibleTiles = tiles.filter((tile) => tile.key !== "home");
 
 
   return (
     <div className="route-stack home-stack">
+      <section className="home-hero" aria-labelledby="home-greeting">
+        <div className="home-hero-copy">
+          <p className="eyebrow">Home</p>
+          <h1 id="home-greeting">{salutation}, {firstName}</h1>
+          <p className="home-hero-message">Choose an area to get started.</p>
+        </div>
+      </section>
       {visibleTiles.some((tile) => tile.key === "dashboard") ? (
         <button className="home-tile home-dashboard-tile" onClick={() => onNavigate("dashboard")} type="button">
           <span aria-hidden="true" className="home-tile-glyph"><LayoutDashboard size={40} strokeWidth={1.6} /></span>
@@ -99,18 +68,7 @@ export function Home({ user, tiles, onNavigate }: HomeProps) {
           <ArrowRight aria-hidden="true" className="home-dashboard-arrow" size={24} />
         </button>
       ) : null}
-      <section className="panel home-hero">
-        <div className="home-hero-copy">
-          <p className="eyebrow">i-Elevate</p>
-          <h1>
-            {salutation}, {firstName}
-          </h1>
-          <p className="home-hero-message">{message}</p>
-        </div>
-        <EliStage />
-      </section>
-
-      <nav aria-label="Areas you can access" className="home-groups">
+      <nav aria-label="Work areas" className="home-groups">
         {navigationGroups.map((group) => {
           const groupTiles = group.routes.flatMap((key) => visibleTiles.filter((tile) => tile.key === key));
           if (!groupTiles.length) return null;

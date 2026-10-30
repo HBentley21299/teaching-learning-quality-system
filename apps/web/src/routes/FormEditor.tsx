@@ -51,7 +51,7 @@ export function FormEditor({ user, initialLocation = "forms", onDirtyChange, ren
     <div className="form-editor-tabs" role="group" aria-label={`${family.label} settings`}>
       {panels.map((item) => <button type="button" key={item.key} disabled={saving} aria-pressed={item.key === activePanel} onClick={async () => { if (item.key !== activePanel && await confirmUnsavedNavigation()) { setDirty(false); setPanel(item.key); } }}>{item.label}</button>)}
     </div>
-    {dirty ? <p className="notice-row" role="status">Unsaved changes. When switching forms or settings, choose Save, Discard or Stay.</p> : null}
+    {dirty ? <p className="notice-row" role="status">You have unsaved changes. Save or discard them before switching forms or settings.</p> : null}
     <div key={`${family.key}-${activePanel}`}>
       {activePanel === "layout" ? <FormBuilder embedded user={user} moduleKey={family.templateModule} onDirtyChange={trackChanges} /> : null}
       {activePanel === "questions" ? <QaQuestionBankAdmin onDirtyChange={trackChanges} /> : null}

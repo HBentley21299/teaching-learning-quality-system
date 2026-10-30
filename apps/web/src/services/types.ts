@@ -75,6 +75,8 @@ export type ActionSummary = {
   subjectStaffName?: string;
   ownerStaffId: string;
   ownerStaffName?: string;
+  responsibleStaffIds?: string[] | null;
+  responsibleStaffNames?: string[] | null;
   actionTheme: string;
   title: string;
   detail?: string;
@@ -634,6 +636,16 @@ export type ActionOwnerOption = {
 
 export type RecordSummary = {
   id: string;
+  ownerDisplayName?: string;
+  subjectDisplayName?: string;
+  submitterDisplayName?: string;
+  templateKey?: string;
+  templateName?: string;
+  summary?: string;
+  themeNames?: string[];
+  participantNames?: string[];
+  roomCode?: string;
+  roomName?: string;
   deliveryAreaKey?: string;
   deliveryAreaName?: string;
   moduleId: string;
@@ -684,6 +696,8 @@ export type LivStage = {
   developmentOpportunityKeys: string[];
   visitId?: string;
   canEdit: boolean;
+  visibleToStaff: boolean;
+  canView: boolean;
 };
 export type LivCycle = {
   id: string;
@@ -719,6 +733,7 @@ export type LivStaffContext = {
 
 export type LivRecordSummary = {
   id: string;
+  academicYear?: string;
   recordId: string;
   subjectStaffId: string;
   subjectStaffName: string;
@@ -1037,6 +1052,9 @@ export type ProcessDashboardRecordSummary = {
   parentAreaCode?: string;
   ownerDisplayName?: string;
   submitterDisplayName?: string;
+  ownerStaffId?: string | null;
+  submitterStaffId?: string | null;
+  submittedAt?: string | null;
   subjectDisplayName?: string;
   theme?: string;
   detail?: string;
@@ -1101,6 +1119,36 @@ export type ElevateStatusDashboardSummary = {
   level5OrAbove: number;
 };
 
+export type ElevateStatusStaffSummary = {
+  staffId: string;
+  staffName: string;
+  orgUnitId?: string;
+  areaCode?: string;
+  areaName?: string;
+  parentAreaCode?: string;
+  currentLevel: number;
+  currentLevelName: string;
+  qualifyingAttendanceCount: number;
+  nextLevel?: number | null;
+  nextLevelName?: string | null;
+  sessionsToNextLevel?: number | null;
+  lastConfirmedAt?: string | null;
+};
+
+export type DashboardRecordData = {
+  dashboardKey: string;
+  columns: Array<{ key: string; label: string; section?: string | null; dataType?: string | null }>;
+  rows: Array<{ recordId: string; values: Record<string, string | null> }>;
+  relatedTables?: Array<{
+    key: string;
+    label: string;
+    columns: Array<{ key: string; label: string; section?: string | null; dataType?: string | null }>;
+    rows: Array<{ recordId: string; values: Record<string, string | null> }>;
+  }>;
+  wasTruncated: boolean;
+  generatedAt: string;
+};
+
 export type EliSubmissionStaffSummary = {
   staffId: string;
   staffName: string;
@@ -1114,7 +1162,7 @@ export type EliSubmissionStaffSummary = {
 };
 
 export type StaffParticipationDashboardSummary = {
-  processKey: "eli" | "liv" | "cpd_event" | "coaching_session";
+  processKey: "eli" | "liv" | "als_liv" | "cpd_event" | "coaching_session";
   orgUnitId?: string;
   areaCode?: string;
   areaName?: string;
@@ -1388,6 +1436,18 @@ export type PagedResult<T> = {
   pageSize: number;
   totalCount: number;
   totalPages: number;
+  filterOptions?: { status: string[]; type: string[]; person: string[] };
+};
+
+export type ListQuery = {
+  search?: string;
+  status?: string;
+  type?: string;
+  person?: string;
+  fromDate?: string;
+  toDate?: string;
+  sortBy?: string;
+  sortDirection?: "asc" | "desc";
 };
 
 export type StaffProfileSectionSummary = {
@@ -1573,6 +1633,7 @@ export type CoachingReviewOutcome = "completed" | "continue" | "revised" | "clos
 
 export type CoachingSessionSummary = {
   id: string;
+  academicYear?: string;
   recordId: string;
   cycleId: string;
   cycleNumber: number;
@@ -1789,6 +1850,7 @@ export type UpdateAdminUserRequest = {
 };
 
 export type UpdateFormTemplateStructureRequest = {
+  rowVersion?: string;
   name: string;
   description?: string;
   orgUnitId?: string;
@@ -1817,6 +1879,27 @@ export type CurrentUser = {
   permissions: string[];
   scopes: Array<{ scopeType: string; orgUnitId?: string; staffId?: string }>;
 };
+
+export type AdminCsvImportKind = "qa-questions" | "cpd-events" | "managed-list-values";
+export type AdminCsvImportMetadata = {
+  kind: AdminCsvImportKind;
+  title: string;
+  description: string;
+  columns: Array<{ key: string; label: string; required: boolean; description: string; example?: string | null }>;
+  notes: string[];
+  references: Array<{ label: string; columns: string[]; rows: string[][] }>;
+};
+export type AdminCsvImportPreview = {
+  kind: AdminCsvImportKind;
+  rowsRead: number;
+  createCount: number;
+  skipCount: number;
+  rows: Array<{ rowNumber: number; reference: string; operation: string; values: Record<string, string | null> }>;
+  issues: Array<{ rowNumber: number; column: string; message: string; severity: "error" | "warning" | "info" }>;
+  canImport: boolean;
+  previewToken: string | null;
+};
+export type AdminCsvImportResult = { batchId: string; createdCount: number; skippedCount: number; message: string };
 
 export type StaffOnboardingCategory = {
   key: string;
@@ -2047,6 +2130,7 @@ export type AdminManagedList = {
 };
 
 export type AdminRecord = {
+  academicYear?: string;
   recordId: string;
   moduleKey: string;
   moduleName: string;
@@ -2133,6 +2217,18 @@ export type FormTemplateSummary = {
   submissionCount: number;
 };
 
+export type AdminFormField = FormFieldDefinition & { isProtected: boolean };
+export type AdminFormSection = Omit<FormSectionDefinition, "fields"> & { fields: AdminFormField[] };
+export type AdminFormVersion = { id: string; version: string; status: "Draft" | "Published" | "Superseded"; submissionCount: number; createdAt: string };
+export type FormTemplateAdministration = {
+  templateId: string; templateKey: string; moduleKey: string; name: string; description?: string;
+  versionId: string; version: string; rowVersion: string; status: "Draft" | "Published" | "Superseded";
+  submissionCount: number; sections: AdminFormSection[]; versions: AdminFormVersion[];
+};
+export type SaveFormVersionRequest = Pick<UpdateFormTemplateStructureRequest, "name" | "description" | "sections"> & { rowVersion: string };
+export type WorkflowFormContentField = { key: string; label: string; helpText?: string };
+export type WorkflowFormContent = { formKey: string; title: string; fields: WorkflowFormContentField[]; rowVersion?: string };
+
 export type CreateFormTemplateRequest = {
   moduleKey: "work_scrutiny";
   name: string;
@@ -2209,6 +2305,7 @@ export type SaveLearningWalkThemeRequest = {
 };
 
 export type SubmitFormRequest = {
+  templateVersionId?: string;
   templateKey: string;
   recordType: string;
   title: string;
@@ -2345,5 +2442,5 @@ export type SaveMessagingConfigurationRequest = Omit<
 export type QaOutcomeLabels = { below: string; at: string; above: string; notApplicable: string };
 export type QaNotSeenSetting = { templateId: string; activityName: string; templateName: string; allowsNotSeen: boolean; rowVersion: string };
 export type QaFormAccessSetting = { templateId: string; activityName: string; templateName: string; restrictQaStaff: boolean; staffIds: string[]; rowVersion: string };
-export type QaFormAccessSettings = { forms: QaFormAccessSetting[]; staff: { staffId: string; displayName: string; email: string }[] };
+export type QaFormAccessSettings = { forms: QaFormAccessSetting[]; staff: { staffId: string; displayName: string; email: string; isEligibleQaStaff: boolean }[] };
 export type QaOutcomeLabelsState = { labels: QaOutcomeLabels; rowVersion?: string; isAvailable: boolean };

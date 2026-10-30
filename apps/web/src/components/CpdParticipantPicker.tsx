@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type AriaAttributes } from "react";
 import { Search, UsersRound, X } from "lucide-react";
+import { matchesListSearch, sortListRows } from "../services/listQuery";
 import type { OrgUnitSummary, StaffSummary } from "../services/types";
+import { useComboboxNavigation } from "./useComboboxNavigation";
 
 type CpdParticipantPickerProps = {
   id: string;
@@ -8,43 +10,31 @@ type CpdParticipantPickerProps = {
   orgUnits: OrgUnitSummary[];
   staff: StaffSummary[];
   value: string;
-};
+} & Pick<AriaAttributes, "aria-invalid" | "aria-describedby" | "aria-required">;
 
-export function CpdParticipantPicker({ id, onChange, orgUnits, staff, value }: CpdParticipantPickerProps) {
+export function CpdParticipantPicker({ id, onChange, orgUnits, staff, value, "aria-invalid": ariaInvalid, "aria-describedby": describedBy, "aria-required": ariaRequired }: CpdParticipantPickerProps) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
+  const [sort, setSort] = useState("name");
+  const [selectedQuery, setSelectedQuery] = useState("");
+  const [selectedSort, setSelectedSort] = useState("selection");
+  const [groupQuery, setGroupQuery] = useState("");
   const [bulkStatus, setBulkStatus] = useState("");
   const selectedIds = useMemo(() => splitIds(value), [value]);
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const optionsId = `${id}-options`;
 
-  const filteredStaff = useMemo(() => {
-    const search = query.trim().toLocaleLowerCase();
-    return staff
-      .filter((staffMember) => !selectedIdSet.has(staffMember.id))
-      .filter((staffMember) => {
-        if (!search) {
-          return true;
-        }
-
-        return [
-          staffMember.displayName,
-          staffMember.email,
-          staffMember.externalId,
-          staffMember.jobTitle ?? ""
-        ].some((candidate) => candidate.toLocaleLowerCase().includes(search));
-      })
-      .sort((left, right) => left.displayName.localeCompare(right.displayName))
-      .slice(0, 10);
-  }, [query, selectedIdSet, staff]);
-
-  const selectedStaff = useMemo(
-    () => selectedIds.map((staffId) => staff.find((staffMember) => staffMember.id === staffId)),
-    [selectedIds, staff]
-  );
+  const staffValue = (person: StaffSummary | undefined, order: string) => order === "email" ? person?.email : order === "staff_id" ? person?.externalId : order === "job" ? person?.jobTitle : person?.displayName;
+  const staffMatches = (person: StaffSummary | undefined, search: string) => matchesListSearch(search, person?.displayName || "Unavailable staff member", person?.email, person?.externalId, person?.jobTitle,
+    [...(person?.orgUnitIds || []), person?.primaryOrgUnitId].map(unitId => orgUnits.find(unit => unit.id === unitId)).filter(Boolean).map(unit => [unit?.code, unit?.name]));
+  const filteredStaff = useMemo(() => sortListRows(staff.filter(person => !selectedIdSet.has(person.id) && staffMatches(person, query)),
+    person => staffValue(person, sort), "asc", person => person.id), [query, selectedIdSet, staff, sort, orgUnits]);
+  const selectedStaffById = new Map(staff.map(person => [person.id, person]));
+  const filteredSelectedIds = selectedIds.filter(staffId => staffMatches(selectedStaffById.get(staffId), selectedQuery));
+  const displayedSelectedIds = selectedSort === "selection" ? filteredSelectedIds : sortListRows(filteredSelectedIds, staffId => staffValue(selectedStaffById.get(staffId), selectedSort), "asc", staffId => staffId);
 
   const groupOptions = useMemo(
-    () => orgUnits
+    () => sortListRows(orgUnits
       .filter((orgUnit) => orgUnit.isActive && ["faculty", "team", "faculty_child", "faculty_child_code"].includes(orgUnit.orgUnitType))
       .map((orgUnit) => {
         const parent = orgUnits.find((candidate) => candidate.id === orgUnit.parentOrgUnitId);
@@ -53,21 +43,23 @@ export function CpdParticipantPicker({ id, onChange, orgUnits, staff, value }: C
           label: parent ? `${parent.code} / ${orgUnit.code} - ${orgUnit.name}` : `${orgUnit.code} - ${orgUnit.name}`
         };
       })
-      .sort((left, right) => {
-        const levelDifference = Number(Boolean(left.parentOrgUnitId)) - Number(Boolean(right.parentOrgUnitId));
-        return levelDifference || left.label.localeCompare(right.label);
-      }),
-    [orgUnits]
+      .filter(unit => matchesListSearch(groupQuery, unit.label)), unit => `${unit.parentOrgUnitId ? "1" : "0"} ${unit.label}`, "asc", unit => unit.id),
+    [orgUnits, groupQuery]
   );
 
   function addStaff(staffId: string) {
     if (!selectedIdSet.has(staffId)) {
       onChange([...selectedIds, staffId].join("|"));
     }
-    setQuery("");
+    setActiveIndex(-1); setQuery("");
     setIsOpen(false);
     setBulkStatus("");
   }
+  const { activeIndex, activeId, setActiveIndex, onKeyDown } = useComboboxNavigation({
+    open: isOpen, setOpen: setIsOpen,
+    optionIds: filteredStaff.map(person => `${optionsId}-${person.id}`),
+    onSelect: index => addStaff(filteredStaff[index].id)
+  });
 
   function removeStaff(staffId: string) {
     onChange(selectedIds.filter((selectedId) => selectedId !== staffId).join("|"));
@@ -103,31 +95,26 @@ export function CpdParticipantPicker({ id, onChange, orgUnits, staff, value }: C
   return (
     <div className="cpd-participant-picker">
       <div className="cpd-participant-controls">
-        <div className="staff-search form-staff-search">
+        <div className="staff-search form-staff-search" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setIsOpen(false); }}>
           <div className="search-box staff-search-input">
             <Search size={16} aria-hidden="true" />
             <input
+              aria-activedescendant={activeId}
               aria-autocomplete="list"
-              aria-controls={optionsId}
+              aria-controls={isOpen ? optionsId : undefined}
               aria-expanded={isOpen}
               aria-label="Search participants"
+              aria-invalid={ariaInvalid}
+              aria-describedby={describedBy}
+              aria-required={ariaRequired}
               autoComplete="off"
               id={id}
-              onBlur={() => setIsOpen(false)}
               onChange={(event) => {
-                setQuery(event.target.value);
+                setActiveIndex(-1); setQuery(event.target.value);
                 setIsOpen(true);
               }}
-              onFocus={() => setIsOpen(true)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && filteredStaff.length > 0) {
-                  event.preventDefault();
-                  addStaff(filteredStaff[0].id);
-                }
-                if (event.key === "Escape") {
-                  setIsOpen(false);
-                }
-              }}
+              onFocus={() => { setIsOpen(true); setActiveIndex(-1); }}
+              onKeyDown={onKeyDown}
               placeholder="Search by name, email or staff ID"
               role="combobox"
               type="search"
@@ -135,20 +122,24 @@ export function CpdParticipantPicker({ id, onChange, orgUnits, staff, value }: C
             />
           </div>
 
+          {isOpen ? <div className="picker-tools"><div className="picker-sort"><span>Sort by</span><select aria-label="Participant results sort" value={sort} onChange={event => { setSort(event.target.value); setActiveIndex(-1); }}><option value="name">Name</option><option value="staff_id">Staff ID</option><option value="email">Email</option><option value="job">Job title</option></select></div><span className="picker-results-count" role="status">{filteredStaff.length} {filteredStaff.length === 1 ? "result" : "results"}</span></div> : null}
           {isOpen ? (
             <div
               className="staff-search-results"
               id={optionsId}
-              onMouseDown={(event) => event.preventDefault()}
-              role="listbox"
+              role="listbox" aria-label="Participant results"
             >
               {filteredStaff.length === 0 ? (
                 <div className="staff-search-empty">No available staff match "{query.trim()}".</div>
               ) : (
-                filteredStaff.map((staffMember) => (
+                filteredStaff.map((staffMember, index) => (
                   <button
-                    className="staff-search-result"
+                    aria-selected={index === activeIndex}
+                    id={`${optionsId}-${staffMember.id}`}
+                    tabIndex={-1}
+                    className={`staff-search-result${index === activeIndex ? " is-active" : ""}`}
                     key={staffMember.id}
+                    onMouseDown={event => event.preventDefault()}
                     onClick={() => addStaff(staffMember.id)}
                     role="option"
                     type="button"
@@ -165,6 +156,7 @@ export function CpdParticipantPicker({ id, onChange, orgUnits, staff, value }: C
 
         <label className="cpd-bulk-select">
           <span><UsersRound size={16} aria-hidden="true" /> Add faculty or sub-team</span>
+          <input aria-label="Search participant groups" type="search" placeholder="Search faculty or team" value={groupQuery} onChange={event => setGroupQuery(event.target.value)} />
           <select
             aria-label="Add participants by faculty or sub-team"
             defaultValue=""
@@ -185,14 +177,15 @@ export function CpdParticipantPicker({ id, onChange, orgUnits, staff, value }: C
 
       <div className="cpd-selected-heading">
         <strong>Selected participants</strong>
-        <span>{selectedIds.length}</span>
+        <span>{displayedSelectedIds.length} of {selectedIds.length}</span>
       </div>
+      {selectedIds.length ? <div className="filter-toolbar"><input aria-label="Search selected participants" type="search" placeholder="Search selected participants" value={selectedQuery} onChange={event => setSelectedQuery(event.target.value)} /><div className="picker-sort"><span>Sort selected by</span><select aria-label="Selected participants sort" value={selectedSort} onChange={event => setSelectedSort(event.target.value)}><option value="selection">Selection order</option><option value="name">Name</option><option value="staff_id">Staff ID</option><option value="email">Email</option></select></div></div> : null}
       <div className="cpd-participant-list">
-        {selectedIds.length === 0 ? (
-          <div className="empty-row">No participants selected.</div>
+        {displayedSelectedIds.length === 0 ? (
+          <div className="empty-row">{selectedIds.length ? "No selected participants match this search." : "No participants selected."}</div>
         ) : (
-          selectedIds.map((staffId, index) => {
-            const staffMember = selectedStaff[index];
+          displayedSelectedIds.map((staffId) => {
+            const staffMember = selectedStaffById.get(staffId);
             return (
               <div className="cpd-participant-row" key={staffId}>
                 <div>

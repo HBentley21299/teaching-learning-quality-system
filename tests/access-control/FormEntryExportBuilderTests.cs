@@ -141,6 +141,16 @@ public sealed class FormEntryExportBuilderTests
         Assert.Equal("date", result.ColumnTypes![4]);
     }
 
+    [Fact]
+    public void Readable_template_name_replaces_internal_faculty_clone_key_in_business_metadata()
+    {
+        var answers=new ExportSheet("Form Answers",["Record ID","Form template","Form template name","Question key","Question","Response"],
+            [new string?[] {"one","work_scrutiny_quality_20000000-0000-0000-0000-000000000021","Digital work scrutiny","template/context/evidence","Evidence","Clear feedback"}],false);
+        var result=FormEntryExportBuilder.Flatten("Form entries",Entries("one"),"Record ID",answers);
+        Assert.Equal("Digital work scrutiny",result.Rows[0][result.Columns.ToList().IndexOf("Form template")]);
+        Assert.DoesNotContain(result.Rows.SelectMany(row=>row),value=>value?.Contains("20000000")==true);
+    }
+
     private static ExportSheet Entries(params string[] ids) => new("Reviews", ["Record ID"], ids.Select(id => (IReadOnlyList<string?>)new[] { id }).ToArray(), false);
     private static ExportSheet Answers(params IReadOnlyList<string?>[] rows) => new("Form Answers", AnswerColumns, rows, false);
     private static IReadOnlyList<string?> Answer(string record, string key, string label, string? value, string type = "text", string version = "v1") => [record, key, label, value, type, version];

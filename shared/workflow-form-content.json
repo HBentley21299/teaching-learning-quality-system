@@ -1,0 +1,228 @@
+[
+  {
+    "formKey": "liv",
+    "title": "LIV and ALS LIV",
+    "fields": [
+      {
+        "key": "contextText",
+        "label": "Context"
+      },
+      {
+        "key": "aimsText",
+        "label": "Aims and intended outcomes"
+      },
+      {
+        "key": "learnerActivityText",
+        "label": "Planned learner activity"
+      },
+      {
+        "key": "distanceImpactText",
+        "label": "Distance travelled and impact"
+      },
+      {
+        "key": "reflectionText",
+        "label": "Post-LIV reflection and discussion"
+      },
+      {
+        "key": "reflectionNotes",
+        "label": "LIV notes"
+      }
+    ]
+  },
+  {
+    "formKey": "probation",
+    "title": "Probationary observations",
+    "fields": [
+      {
+        "key": "contextText",
+        "label": "Context"
+      },
+      {
+        "key": "aimsText",
+        "label": "Aims and intended outcomes"
+      },
+      {
+        "key": "learnerActivityText",
+        "label": "Planned learner activity"
+      },
+      {
+        "key": "reflectionText",
+        "label": "Reflection and feedback"
+      },
+      {
+        "key": "keyPoints",
+        "label": "Key points"
+      },
+      {
+        "key": "evidenceOfPractice",
+        "label": "Evidence of practice"
+      }
+    ]
+  },
+  {
+    "formKey": "coaching",
+    "title": "Coaching and Mentoring",
+    "fields": [
+      {
+        "key": "specificSessionFocus",
+        "label": "What is the specific focus for this session?"
+      },
+      {
+        "key": "focusOtherText",
+        "label": "Describe the other focus area"
+      },
+      {
+        "key": "supportOtherText",
+        "label": "Describe the other support provided"
+      },
+      {
+        "key": "conversationSummary",
+        "label": "Conversation summary",
+        "helpText": "Summarise the coaching or mentoring conversation, including the key reflections, guidance and agreed approach."
+      },
+      {
+        "key": "progressUpdate",
+        "label": "Progress, evidence or update"
+      },
+      {
+        "key": "impactObserved",
+        "label": "Impact observed"
+      },
+      {
+        "key": "actionText",
+        "label": "Action"
+      },
+      {
+        "key": "intendedEvidence",
+        "label": "Evidence"
+      },
+      {
+        "key": "intendedImpact",
+        "label": "Intended impact"
+      }
+    ]
+  },
+  {
+    "formKey": "uco",
+    "title": "UCO TLA Reviews",
+    "fields": [
+      {
+        "key": "academic_research_skills",
+        "label": "Academic/research skills"
+      },
+      {
+        "key": "personal_professional_development",
+        "label": "Personal and professional development"
+      },
+      {
+        "key": "employability",
+        "label": "Employability"
+      },
+      {
+        "key": "structure_pace_organisation",
+        "label": "Structure, pace and organisation of session"
+      },
+      {
+        "key": "level_appropriate_inclusive",
+        "label": "Level-appropriate and inclusive content and delivery"
+      },
+      {
+        "key": "delivery_methods_styles_resources",
+        "label": "Range of delivery methods, styles and resources"
+      },
+      {
+        "key": "student_feedback_engagement",
+        "label": "Student feedback and engagement"
+      },
+      {
+        "key": "module_handbook",
+        "label": "Module handbook"
+      },
+      {
+        "key": "itslearning_resources",
+        "label": "Resources on ItsLearning"
+      },
+      {
+        "key": "session_materials",
+        "label": "Session materials, handouts and resources"
+      },
+      {
+        "key": "assessment_information",
+        "label": "Assessment information"
+      },
+      {
+        "key": "feedback_to_students",
+        "label": "Feedback to students"
+      },
+      {
+        "key": "good_practice",
+        "label": "Aspects of good practice"
+      },
+      {
+        "key": "essential_actions",
+        "label": "Essential actions"
+      },
+      {
+        "key": "advisable_actions",
+        "label": "Advisable actions"
+      },
+      {
+        "key": "excellent_practice",
+        "label": "Excellent practice to share"
+      },
+      {
+        "key": "lecturer_reflection",
+        "label": "Reflection on observation and professional discussion"
+      },
+      {
+        "key": "target",
+        "label": "Target"
+      },
+      {
+        "key": "achievementMethod",
+        "label": "How it will be achieved and checked"
+      }
+    ]
+  },
+  {
+    "formKey": "practice",
+    "title": "Elevate Learning and Innovation",
+    "fields": [
+      {
+        "key": "desiredOutcome",
+        "label": "What would you like to achieve through your LIV?",
+        "helpText": "Have you considered a specific area of your practice you would like to develop, test or receive feedback on?\n\nThink about:\n• What you want to improve or explore\n• Why this matters for your learners\n• What you would like the observer to focus on\n• What success or improvement might look like\n\nInclude any particular strategies, approaches or learner groups you would like the LIV to consider."
+      },
+      {
+        "key": "secondaryFocusOther",
+        "label": "Other secondary focus"
+      }
+    ]
+  },
+  {
+    "formKey": "actions",
+    "title": "Actions",
+    "fields": [
+      {
+        "key": "title",
+        "label": "Action"
+      },
+      {
+        "key": "detail",
+        "label": "Description"
+      },
+      {
+        "key": "completionNote",
+        "label": "Closure comments"
+      },
+      {
+        "key": "cancellationComments",
+        "label": "Cancellation reason"
+      },
+      {
+        "key": "extensionReason",
+        "label": "Extension reason"
+      }
+    ]
+  }
+]

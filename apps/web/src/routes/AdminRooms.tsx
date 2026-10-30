@@ -1,9 +1,13 @@
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
+import { LoadingState } from "../components/LoadingState";
 import { DoorOpen, Edit3, Plus, RefreshCw, Save, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { api } from "../services/api";
 import type { AdminRoomSummary, SaveAdminRoomRequest } from "../services/types";
+import { AdminListSort } from "../components/AdminListSort";
+import { distinctListValues, matchesListSearch, sortListRows } from "../services/listQuery";
 
 const emptyRoom: SaveAdminRoomRequest = { roomCode: "", buildingName: "", isActive: true };
 
@@ -16,6 +20,9 @@ export function AdminRooms({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("active");
+  const [building, setBuilding] = useState("");
+  const [usage, setUsage] = useState("");
+  const [sort, setSort] = useState("room-asc");
   const [editor, setEditor] = useState<{ room: AdminRoomSummary | null } | null>(null);
   const [draft, setDraft] = useState<SaveAdminRoomRequest>(emptyRoom);
   const original = editor?.room ?? emptyRoom;
@@ -51,11 +58,13 @@ export function AdminRooms({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
   useEffect(() => { void refresh(); }, []);
 
   const visibleRooms = useMemo(() => {
-    const search = query.trim().toLocaleLowerCase();
-    return rooms.filter((room) => (status === "all" || room.isActive === (status === "active"))
-      && `${room.roomCode} ${room.buildingName}`.toLocaleLowerCase().includes(search))
-      .sort((left, right) => left.roomCode.localeCompare(right.roomCode, undefined, { numeric: true }));
-  }, [rooms, query, status]);
+    return sortListRows(rooms.filter((room) => (status === "all" || room.isActive === (status === "active"))
+      && (!building || room.buildingName === building)
+      && (!usage || (usage === "used" ? room.assessmentCount > 0 : room.assessmentCount === 0))
+      && matchesListSearch(query, room.roomCode, room.buildingName, room.isActive ? "active" : "inactive", room.assessmentCount)),
+      room => sort.startsWith("building") ? room.buildingName : sort.startsWith("usage") ? room.assessmentCount : room.roomCode,
+      sort.endsWith("desc") ? "desc" : "asc", room => room.roomCode);
+  }, [rooms, query, status, building, usage, sort]);
 
   function beginEdit(room: AdminRoomSummary | null) {
     setEditor({ room });
@@ -142,18 +151,21 @@ export function AdminRooms({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
       <div className="lookup-admin-toolbar">
         <label className="entry-field"><span><Search aria-hidden="true" size={15} /> Search rooms</span><input type="search" placeholder="Room code or building name" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <label className="entry-field"><span>Show</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="active">Active rooms</option><option value="inactive">Inactive rooms</option><option value="all">All rooms</option></select></label>
+        <label className="entry-field"><span>Building</span><select value={building} onChange={event => setBuilding(event.target.value)}><option value="">All buildings</option>{distinctListValues(rooms.map(room => room.buildingName)).map(value => <option key={value}>{value}</option>)}</select></label>
+        <label className="entry-field"><span>Usage</span><select value={usage} onChange={event => setUsage(event.target.value)}><option value="">Any usage</option><option value="used">Has linked records</option><option value="unused">No linked records</option></select></label>
+        <AdminListSort value={sort} onChange={setSort} options={[["room-asc","Room: A–Z"],["room-desc","Room: Z–A"],["building-asc","Building: A–Z"],["usage-desc","Linked records: most first"],["usage-asc","Linked records: fewest first"]]} />
         {loaded ? <span role="status">{visibleRooms.length} of {rooms.length} rooms</span> : null}
       </div>
-      {loading ? <div className="empty-row" role="status">Loading room catalogue…</div> : !loaded ? <div className="empty-row"><Button onClick={() => void refresh()}>Retry loading</Button></div> : visibleRooms.length === 0 ? <div className="empty-row">{rooms.length === 0 ? "No rooms yet. Add a room to make it available in learning environment assessments." : "No rooms match these filters. Try another search or show all rooms."}</div> : (
-        <div className="table-scroll">
-          <table className="data-table admin-room-table">
+      {loading ? <LoadingState label="Loading room catalogue" /> : !loaded ? <div className="empty-row"><Button onClick={() => void refresh()}>Retry loading</Button></div> : visibleRooms.length === 0 ? <div className="empty-row">{rooms.length === 0 ? "No rooms yet. Add a room to make it available in learning environment assessments." : "No rooms match these filters. Try another search or show all rooms."}</div> : (
+        <ScrollableTableRegion label="Room catalogue">
+          <table className="data-table admin-room-table" aria-label="Room catalogue">
             <thead><tr><th scope="col">Room</th><th scope="col">Building</th><th scope="col">Availability</th><th scope="col">Linked records</th><th scope="col">Actions</th></tr></thead>
             <tbody>{visibleRooms.map((room) => <tr key={room.id}>
               <td><strong>{room.roomCode}</strong></td><td>{room.buildingName}</td><td><span className={`status-badge ${room.isActive ? "is-active" : "is-inactive"}`}>{room.isActive ? "Active" : "Inactive"}</span></td><td>{room.assessmentCount}</td>
               <td><Button disabled={editor !== null} icon={Edit3} onClick={() => beginEdit(room)} title={`Edit room ${room.roomCode}`} variant="quiet">Edit</Button></td>
             </tr>)}</tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
       )}
     </section>
   );

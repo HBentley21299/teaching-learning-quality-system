@@ -175,7 +175,13 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\087_mandatory_cpd.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\088_dashboard_faculty_selection.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\089_account_administration_guards.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\090_form_draft_actions.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\090_form_draft_actions.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\091_liv_section_visibility.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\092_admin_csv_imports.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\093_form_version_administration.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\094_process_reviews.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\095_activate_growth_review_workflow.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\096_activate_linked_follow_ups.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

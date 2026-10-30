@@ -10,6 +10,13 @@ public sealed partial class SqlFoundationDataStore
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var processKeys = await QueryAsync("SELECT record_type FROM core.records WHERE id=@id AND archived_at IS NULL;",
+            command => command.Parameters.AddWithValue("@id", recordId), reader => reader.GetString(0), cancellationToken);
+        if (processKeys.FirstOrDefault() is { } processKey && ProcessReviewRules.IsProcess(processKey))
+        {
+            var review = await GetProcessReviewAsync(recordId, currentUser, cancellationToken);
+            return review is null ? null : new RecordNavigationSummary(review.RecordId, review.ProcessKey, null);
+        }
         var rows = await QueryAsync(
             """
             WITH visible_staff AS (

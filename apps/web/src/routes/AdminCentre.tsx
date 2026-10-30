@@ -1,8 +1,10 @@
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
+import { LoadingState } from "../components/LoadingState";
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { DashboardFacultyAdmin } from "./DashboardFacultyAdmin";
 import { PermissionAdminPanel } from "./PermissionsAdmin";
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, Database, Edit3, FileText, LayoutDashboard, ListChecks, Mail, Plus, RefreshCw, Save, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accessibleAdminSections, resolveAdminSectionKey, type AdminSectionKey } from "../app/adminNavigation";
 import { AdminRooms } from "./AdminRooms";
 import { AdminStaffDetails } from "./AdminStaffDetails";
@@ -22,106 +24,117 @@ import type {
   StaffProfileSummary,
   StaffSummary
 } from "../services/types";
-import { FormEditor } from "./FormEditor";
+import { FormBuilder } from "./FormBuilder";
+import { AdminFormVersions } from "./AdminFormVersions";
+import { AdminWorkflowContent } from "./AdminWorkflowContent";
+import { AdminProcessReviews } from "./AdminProcessReviews";
+import { AdminManagedLists } from "./AdminManagedLists";
+import { AdminCsvImport } from "./AdminCsvImport";
+import { AdminSettingsLayout } from "../components/AdminSettingsLayout";
 import { AdminElevatePractice } from "./AdminElevatePractice";
 import { ElevateStatusAssetsAdmin } from "./ElevateStatusAssetsAdmin";
 import { AdminWorkScrutiny } from "./AdminWorkScrutiny";
 import { AdminRecordsPanel } from "./AdminRecordsPanel";
 import { OrganisationStructureAdmin } from "./OrganisationStructureAdmin";
 import { MessagingAdminPanel } from "./MessagingAdminPanel";
+import { AdminListSort } from "../components/AdminListSort";
+import { distinctListValues, matchesListSearch, sortListRows } from "../services/listQuery";
 
-export function AdminCentre({ user, modules, onOpenRecord, initialTab = "overview", onTabChange }: {
+export function AdminCentre({ user, modules, onOpenRecord, initialTab = "overview", onTabChange, onNavigatePath }: {
   user: CurrentUser;
   modules: ModuleSummary[];
   staff: StaffSummary[];
   onOpenRecord: (record: AdminRecord) => void;
   initialTab?: string;
   onTabChange?: (tab: string) => void;
+  onNavigatePath?: (path: string) => void;
 }) {
-  const sections = accessibleAdminSections(user.permissions);
-  const resolveSection = (key: string) => sections.find((section) => section.key === resolveAdminSectionKey(key))?.key ?? "overview";
-  const [activeTab, setActiveTab] = useState<AdminSectionKey>(() => resolveSection(initialTab));
-  const [search, setSearch] = useState("");
+  const sections = accessibleAdminSections(user.permissions, user.isAdministrator === true);
+  const [activeTab, setActiveTab] = useState<AdminSectionKey>(() => resolveAdminSectionKey(initialTab));
   const [staffDetailsFocusId, setStaffDetailsFocusId] = useState("");
-  const [, setEditorDirty] = useState(false);
   const [editorBusy, setEditorBusy] = useState(false);
-  function handleFormDirty(dirty: boolean, saving = false) { setEditorDirty(dirty); setEditorBusy(saving); }
-  useEffect(() => { setActiveTab(resolveSection(initialTab)); }, [initialTab, user.permissions]);
-  const activeSection = sections.find((section) => section.key === activeTab) ?? sections[0];
-  const query = search.trim().toLocaleLowerCase();
-  const matchingSections = sections.filter((section) => !query || `${section.label} ${section.group} ${section.description}`.toLocaleLowerCase().includes(query));
-  const groups = [...new Set(matchingSections.map((section) => section.group))];
+  const handleEditorDirty = useCallback((_dirty: boolean, saving = false) => setEditorBusy(saving), []);
+  useEffect(() => {
+    const key = resolveAdminSectionKey(initialTab);
+    const section = accessibleAdminSections(user.permissions, user.isAdministrator === true).find(item => item.key === key);
+    if (section?.path && onNavigatePath) onNavigatePath(section.path);
+    else setActiveTab(key);
+  }, [initialTab, user.permissions, user.isAdministrator, onNavigatePath]);
+  const section = sections.find(item => item.key === activeTab);
+  const current = section?.key;
   async function selectTab(key: AdminSectionKey) {
     if (editorBusy || key === activeTab || !await confirmUnsavedNavigation()) return;
-    openSection(key);
-  }
-  function openSection(key: AdminSectionKey) {
-    setEditorDirty(false);
+    const destination = sections.find(item => item.key === key);
+    if (!destination) return;
+    if (destination.path) { onNavigatePath?.(destination.path); return; }
     setEditorBusy(false);
     setActiveTab(key);
-    setSearch("");
     onTabChange?.(key);
   }
-  if (!activeSection) return <section className="panel"><h1>Admin centre</h1><p>You do not have permission to manage system administration.</p></section>;
-  const current = activeSection.key;
-  return (
-    <div className="route-stack admin-centre">
-      <div className="route-header"><div><p className="eyebrow">Administration</p><h1>Admin centre</h1><p>Find the right setting, make a change and get back to your work.</p></div></div>
-      <div className="admin-workbench">
-        <aside className="admin-directory" aria-label="Admin navigation">
-          <label className="admin-setting-search"><span>Find a setting</span><input type="search" placeholder="Try rooms, staff or forms" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-          <nav aria-label="Admin sections">
-            {groups.map((group) => <div className="admin-directory-group" key={group}><h2>{group}</h2>{matchingSections.filter((section) => section.group === group).map((section) => <button disabled={editorBusy} type="button" key={section.key} aria-current={current === section.key ? "page" : undefined} onClick={() => selectTab(section.key)}>{section.label}</button>)}</div>)}
-            {matchingSections.length === 0 ? <p className="muted-copy" role="status">No settings found. Try another word.</p> : null}
-          </nav>
-        </aside>
-        <div className="admin-workspace">
-          <div className="admin-section-heading"><p>{activeSection.group}</p><h2>{activeSection.label}</h2><span>{activeSection.description}</span></div>
-          {current === "overview" ? <>
-            <div className="admin-task-directory">{matchingSections.filter((section) => section.key !== "overview").map((section) => <button disabled={editorBusy} type="button" key={section.key} onClick={() => selectTab(section.key)}><span>{section.group}</span><strong>{section.label}</strong><p>{section.description}</p><span className="admin-task-open">Open section →</span></button>)}</div>
-          </> : null}
-          {current === "staff-access" ? <StaffAdminPanel user={user} onOpenDetails={(id) => { setStaffDetailsFocusId(id); selectTab("staff-details"); }} /> : null}
-          {current === "staff-details" ? <AdminStaffDetails isAdministrator={user.isAdministrator} initialUserAccountId={staffDetailsFocusId} onDirtyChange={setEditorDirty} /> : null}
-          {current === "roles" ? <PermissionAdminPanel user={user} onDirtyChange={handleFormDirty} /> : null}
-          {current === "organisation" ? <OrganisationStructureAdmin isAdministrator={user.isAdministrator} /> : null}
-          {current === "forms" ? <FormEditor user={user} initialLocation={initialTab} onDirtyChange={handleFormDirty} renderSettings={(family, onDirtyChange) => {
-            if (family === "coaching") return <CoachingConfigurationAdmin onDirtyChange={onDirtyChange} />;
-            if (family === "als_learning_walk") return <LearningWalkThemeAdminPanel onDirtyChange={onDirtyChange} key="als-learning" processKey="als_learning_walk" title="ALS Learning Walk themes and focus areas" subtitle="Used by ALS Learning Walks and ALS reporting" />;
-            if (family === "als_liv") return <LearningWalkThemeAdminPanel onDirtyChange={onDirtyChange} key="als-liv" processKey="als_liv_practitioner" title="ALS LIV practitioner areas" subtitle="Standalone configurable areas used only by ALS LIV" />;
-            return <LearningWalkThemeAdminPanel onDirtyChange={onDirtyChange} />;
-          }} /> : null}
-          {current === "rooms" ? <AdminRooms onDirtyChange={setEditorDirty} /> : null}
-          {current === "elevate" ? <AdminElevatePractice /> : null}
-          {current === "badges" ? <ElevateStatusAssetsAdmin /> : null}
-          {current === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
-          {current === "work-scrutiny" ? <AdminWorkScrutiny /> : null}
-          {current === "messaging" ? <MessagingAdminPanel /> : null}
-          {current === "dashboards" ? <DashboardAdminPanel onDirtyChange={handleFormDirty} /> : null}
-          {current === "system" ? <div className="route-stack">
-            <section className="panel"><h3>Module availability</h3><p className="muted-copy">Configured by the application release. Access to each module also depends on staff permissions.</p><ul className="admin-module-list">{modules.map((module) => <li key={module.id}><span>{module.name}</span><strong>{module.isEnabled ? "Enabled" : "Disabled"}</strong></li>)}</ul></section>
-            <section className="panel"><h3>Managed with college IT</h3><p>SQL Server connections, Microsoft sign-in, file storage, backups and deployment are managed in the hosting configuration. Ask college IT to change these settings.</p><p>Academic-year rules and controlled workflow stages currently require a reviewed application or database update. The form editor changes form definitions; it does not change workflow rules or rewrite submitted records.</p></section>
-          </div> : null}
-        </div>
-      </div>
+  const relatedKeys = current === "forms" || current === "form-versions" || current === "workflow-form-content" ? ["form-versions", "workflow-form-content", "work-scrutiny-templates", "work-scrutiny-template-setup", "learning-walk-templates", "cpd-templates", "environment-templates", "all-lists", "teaching-themes", "coaching-session"]
+    : current === "dashboards" || current?.startsWith("dashboard-") ? ["dashboard-faculties", "organisation-reporting", "dashboard-presentation", "qa-dashboard-faculties"]
+    : ["staff-access", "staff-details", "staff-scope", "roles", "archived-staff"].includes(current ?? "") ? ["staff-access", "staff-details", "staff-scope", "roles", "archived-staff", "organisation-leadership", "organisation-membership"]
+    : current?.startsWith("liv-") ? ["delivery-areas", "liv-visit-focus", "liv-preferences", "teaching-themes"]
+    : current?.startsWith("coaching-") ? ["coaching-session", "coaching-qualifications", "coaching-focus", "coaching-support"]
+    : current?.startsWith("cpd-") ? ["cpd-import", "cpd-templates", "cpd-themes", "cpd-action-themes", "list-import"]
+    : current === "list-import" || current === "all-lists" || Boolean(section?.lookupKey) ? ["list-import", "all-lists"]
+    : current === "message-templates" || current === "email-delivery" || current === "message-history" ? ["message-templates", "email-delivery", "message-history"]
+    : current === "work-scrutiny" || current === "work-scrutiny-templates" || current === "work-scrutiny-template-setup" ? ["work-scrutiny-templates", "work-scrutiny-template-setup", "work-scrutiny-action-themes", "work-scrutiny", "records"]
+    : [];
+  const related = sections.filter(item => item.key !== current && relatedKeys.includes(item.key));
+  if (sections.length === 0) return <section className="panel"><h1>Administration unavailable</h1><p>Your account has no administration permissions.</p></section>;
+  return <AdminSettingsLayout title="i-Elevate administration" description="Find the task you need, then open its focused settings page. QA Hub has its own administration area." entries={sections} activeKey={activeTab} onSelect={selectTab} storageKey="ielevate" busy={editorBusy}>
+    {!section ? <section className="panel" role="alert"><h2>Setting unavailable</h2><p>This page does not exist or is not available to your account. Use Administration home to choose a permitted setting.</p><Button onClick={() => void selectTab("overview")}>Administration home</Button></section> : null}
+    <div key={current} className="admin-focused-editor">
+      {current === "staff-access" ? <StaffAdminPanel user={user} onOpenDetails={id => { setStaffDetailsFocusId(id); void selectTab("staff-details"); }} /> : null}
+      {current === "staff-details" || current === "staff-scope" || current === "archived-staff" ? <AdminStaffDetails isAdministrator={user.isAdministrator} initialUserAccountId={staffDetailsFocusId} onDirtyChange={handleEditorDirty} view={current === "staff-scope" ? "scope" : current === "archived-staff" ? "archived" : "details"} /> : null}
+      {current === "roles" || current === "permission-tiers" ? <PermissionAdminPanel user={user} onDirtyChange={handleEditorDirty} view={current === "roles" ? "people" : "tiers"} /> : null}
+      {current === "organisation" || current === "organisation-leadership" || current === "organisation-membership" || current === "organisation-reviews" || current === "organisation-reporting" ? <OrganisationStructureAdmin isAdministrator={user.isAdministrator} view={current === "organisation-leadership" ? "leadership" : current === "organisation-membership" ? "membership" : current === "organisation-reviews" ? "reviews" : current === "organisation-reporting" ? "reporting" : "structure"} /> : null}
+      {section?.templateModule || current === "form-versions" ? <AdminFormVersions moduleKey={section?.templateModule} onDirtyChange={handleEditorDirty} /> : null}
+      {current === "workflow-form-content" ? <AdminWorkflowContent onDirtyChange={handleEditorDirty} /> : null}
+      {current === "digital-learning-walks" || current === "activate-growth-reviews" ? <AdminProcessReviews processKey={current === "digital-learning-walks" ? "digital_learning_walk" : "activate_growth_review"} onDirtyChange={handleEditorDirty} /> : null}
+      {current === "work-scrutiny-template-setup" ? <FormBuilder embedded user={user} moduleKey="work_scrutiny" onDirtyChange={handleEditorDirty} /> : null}
+      {section?.lookupKey ? <AdminManagedLists lookupKeys={[section.lookupKey]} onDirtyChange={handleEditorDirty} /> : null}
+      {current === "all-lists" ? <AdminManagedLists excludeLookupKeys={["action_theme_qa_review"]} onDirtyChange={handleEditorDirty} /> : null}
+      {current === "cpd-import" || current === "list-import" ? <AdminCsvImport key={current} kind={current === "cpd-import" ? "cpd-events" : "managed-list-values"} user={user} onDirtyChange={handleEditorDirty} onOpenDestination={onNavigatePath} /> : null}
+      {section?.themeProcess ? <LearningWalkThemeAdminPanel processKey={section.themeProcess} title={section.label} subtitle={section.description} onDirtyChange={handleEditorDirty} /> : null}
+      {current === "coaching-session" ? <CoachingConfigurationAdmin onDirtyChange={handleEditorDirty} /> : null}
+      {current === "rooms" ? <AdminRooms onDirtyChange={handleEditorDirty} /> : null}
+      {current === "elevate" ? <AdminElevatePractice /> : null}
+      {current === "badges" ? <ElevateStatusAssetsAdmin /> : null}
+      {current === "records" ? <AdminRecordsPanel onOpenRecord={onOpenRecord} /> : null}
+      {current === "work-scrutiny" ? <AdminWorkScrutiny /> : null}
+      {current === "message-templates" || current === "email-delivery" || current === "message-history" ? <MessagingAdminPanel view={current === "email-delivery" ? "delivery" : current === "message-history" ? "history" : "templates"} onDirtyChange={handleEditorDirty} /> : null}
+      {current === "dashboard-faculties" ? <DashboardFacultyAdmin excludeDashboardKeys={["qa_review"]} onDirtyChange={handleEditorDirty} /> : null}
+      {current === "dashboard-presentation" ? <DashboardAdminPanel onDirtyChange={handleEditorDirty} /> : null}
+      {current === "forms" ? <section className="panel"><h3>Choose the part of the form you need to change</h3><ul><li><strong>Form versions and additional questions:</strong> edit template wording, guidance and sections, or add questions with nine supported answer types. Preview a separate draft before publishing it for future records; published versions remain unchanged.</li><li><strong>Review and action wording:</strong> edit the 47 supported prompts and their guidance across LIV, ALS LIV, probation, coaching, UCO, ELI and standalone actions. This changes current display wording while retaining existing answers.</li><li><strong>Work Scrutiny template creation and allocation:</strong> create a separate template, allocate it to sub-teams, or retire it.</li><li><strong>Choices and themes:</strong> open the named list or theme page. QA questions, outcomes and form access belong to QA Hub administration.</li></ul><p>Answer types for protected fields, required workflow rules, owners, visibility, cycle progression and award calculations remain controlled. Published record corrections belong under Records &amp; audit.</p></section> : null}
+      {current === "dashboards" ? <section className="panel"><h3>Choose the level of reporting change</h3><ul><li><strong>Faculty datasets:</strong> which faculties contribute to a specific dashboard and its exports.</li><li><strong>Organisation-wide inclusion:</strong> whether a unit and its descendants may contribute across reporting.</li><li><strong>Dashboard presentation:</strong> labels, ordering and visible analysis panels.</li></ul><p>Reporting permissions are maintained under Staff role allocations. QA’s faculty dataset is maintained in QA Hub administration.</p></section> : null}
+      {current === "modules" ? <section className="panel"><h3>Installed module availability</h3><p className="muted-copy">Controlled by the application release. Staff permissions also determine access.</p><ul className="admin-module-list">{modules.map(module => <li key={module.id}><span>{module.name}</span><strong>{module.isEnabled ? "Enabled" : "Disabled"}</strong></li>)}</ul></section> : null}
+      {current === "system" ? <section className="panel"><h3>Managed with college IT</h3><dl className="admin-configuration-owners"><dt>Hosting and sign-in</dt><dd>SQL connections, Microsoft authentication, file storage, backups and deployment are maintained in hosting configuration.</dd><dt>Academic years and controlled workflow rules</dt><dd>Date rules, fixed workflow stages, LIV cycle progression and award thresholds require a reviewed application or database change.</dd><dt>Identity and course catalogues</dt><dd>Staff email/external IDs and catalogue imports need their existing identity and history safeguards.</dd></dl><p>A form-template change edits its definition; it does not change workflow validation or rewrite submitted records.</p></section> : null}
     </div>
-  );
+    {current && current !== "overview" && related.length > 0 ? <section className="panel admin-related-settings"><h3>Related settings</h3><div>{related.map(item => <button type="button" disabled={editorBusy} key={item.key} onClick={() => void selectTab(item.key)}><strong>{item.label}</strong><span>{item.description}</span></button>)}</div></section> : null}
+  </AdminSettingsLayout>;
 }
-
 function CoachingConfigurationAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean, saving?: boolean) => void }) {
   const [maxActions, setMaxActions] = useState("");
   const [savedMaxActions, setSavedMaxActions] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   const dirty = loaded && maxActions !== savedMaxActions;
   const clearGuard = useUnsavedChanges({ label: "Coaching workflow setting", dirty, saving: isSaving, onSave: saveConfiguration, onDiscard: () => { setMaxActions(savedMaxActions); clearGuard(); } });
   useEffect(() => { onDirtyChange?.(dirty || isSaving, isSaving); }, [dirty, isSaving, onDirtyChange]);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoadError("");
     void api.coachingConfiguration()
-      .then((configuration) => { const value = String(configuration.maxActionsPerSession); setMaxActions(value); setSavedMaxActions(value); setLoaded(true); })
-      .catch(() => setMessage("Coaching configuration could not be loaded."));
-  }, []);
+      .then((configuration) => { if (cancelled) return; const value = String(configuration.maxActionsPerSession); setMaxActions(value); setSavedMaxActions(value); setLoaded(true); })
+      .catch(() => { if (!cancelled) setLoadError("Coaching settings could not be loaded. Try again."); });
+    return () => { cancelled = true; };
+  }, [attempt]);
 
   async function saveConfiguration() {
     if (isSaving) return false;
@@ -144,6 +157,7 @@ function CoachingConfigurationAdmin({ onDirtyChange }: { onDirtyChange?: (dirty:
   return (
     <section className="panel">
       <div className="panel-heading"><div><h2>Coaching workflow</h2><span>Session-level configuration</span></div></div>
+      {loadError ? <div className="notice-row" role="alert">{loadError}<Button onClick={() => setAttempt(value => value + 1)}>Try again</Button></div> : !loaded ? <LoadingState label="Loading coaching settings" /> : null}
       <div className="lookup-admin-toolbar">
         <label className="entry-field"><span>Maximum new actions per session</span><input disabled={!loaded || isSaving} max={10} min={1} onChange={(event) => setMaxActions(event.target.value)} type="number" value={maxActions} /></label>
         <Button disabled={!loaded || isSaving || !dirty} icon={Save} onClick={() => void saveConfiguration()} variant="primary">Save setting</Button>
@@ -342,8 +356,15 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
   const [form, setForm] = useState<NewAccountForm>(emptyAccountForm);
   const [rowEdits, setRowEdits] = useState<Record<string, { accountStatus: string }>>({});
   const [accountSearch, setAccountSearch] = useState("");
+  const [accountRole, setAccountRole] = useState("");
+  const [accountArea, setAccountArea] = useState("");
+  const [accountState, setAccountState] = useState("");
+  const [accountSort, setAccountSort] = useState("name-asc");
   const [panelStatus, setPanelStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const loadSequence = useRef(0);
   const formDirty = JSON.stringify(form) !== JSON.stringify(emptyAccountForm);
   const editedAccounts = accounts.filter(account => rowEdits[account.userAccountId] && rowEdits[account.userAccountId].accountStatus !== account.accountStatus);
   const clearGuard = useUnsavedChanges({ label: "Staff account changes", dirty: formDirty || editedAccounts.length > 0, saving: isSaving,
@@ -352,26 +373,31 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
 
   useEffect(() => {
     void refreshData();
+    return () => { ++loadSequence.current; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refreshData(resetEdits = true) {
+    const sequence = ++loadSequence.current;
+    setLoadingAccounts(true); setLoadError("");
     try {
       const [nextAccounts, nextRoles, nextOrgUnits] = await Promise.all([
         api.adminUsers(),
         api.adminRoles(),
         api.orgUnits()
       ]);
+      if (sequence !== loadSequence.current) return;
       setAccounts(nextAccounts);
       setRoles(nextRoles);
       setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
       if (resetEdits) setRowEdits({});
     } catch {
-      setPanelStatus("User accounts could not be loaded from the API.");
-    }
+      if (sequence === loadSequence.current) setLoadError("Staff accounts could not be loaded. Check your connection and try again.");
+    } finally { if (sequence === loadSequence.current) setLoadingAccounts(false); }
   }
 
   async function createAccount() {
+    if (isSaving || loadingAccounts || loadError || !user.isAdministrator) return false;
     if (!form.displayName.trim() || !form.email.trim() || !form.externalId.trim()) {
       setPanelStatus("A staff name, email address and staff ID are required.");
       return false;
@@ -450,17 +476,12 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
   }
 
   const visibleAccounts = useMemo(() => {
-    const query = accountSearch.trim().toLowerCase();
-    if (!query) {
-      return accounts;
-    }
-
-    return accounts.filter((account) =>
-      [account.displayName, account.email, account.externalId, account.primaryOrgCode]
-        .filter(Boolean)
-        .some((value) => value!.toLowerCase().includes(query))
-    );
-  }, [accountSearch, accounts]);
+    return sortListRows(accounts.filter(account => (!accountRole || account.roles.some(role => role.roleKey === accountRole))
+      && (!accountArea || account.primaryOrgCode === accountArea)
+      && (!accountState || (accountState === "disabled" ? account.isDisabled : accountState === "enabled" ? !account.isDisabled : account.accountStatus === accountState))
+      && matchesListSearch(accountSearch, account.displayName, account.email, account.externalId, account.primaryOrgCode, account.jobTitle, account.staffCategory, account.accountStatus, account.roles.map(role => [role.name, role.roleKey]), account.scopes.map(scope => [scope.orgUnitCode, scope.scopeType]))),
+      account => accountSort.startsWith("email") ? account.email : accountSort.startsWith("id") ? account.externalId : accountSort.startsWith("login") ? Date.parse(account.lastLoginAt ?? "") : account.displayName, accountSort.endsWith("desc") ? "desc" : "asc", account => account.userAccountId);
+  }, [accountSearch, accounts, accountRole, accountArea, accountState, accountSort]);
 
   const scopeOrgUnits = orgUnits.filter((orgUnit) =>
     ["faculty", "team", "faculty_child_code", "faculty_child", "directorate"].includes(orgUnit.orgUnitType)
@@ -474,7 +495,7 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
           <h2>New staff details</h2>
           <span>Linked to Entra by email</span>
         </div>
-        <div className="admin-field-grid">
+        <fieldset className="admin-field-grid admin-dialog-fields" disabled={isSaving || loadingAccounts || !user.isAdministrator}><legend className="sr-only">New staff account details</legend>
           <label className="entry-field">
             <span>Staff name</span>
             <input
@@ -561,10 +582,12 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
               <option value="leaver">Leaver</option>
             </select>
           </label>
-        </div>
-        {panelStatus ? <div className="notice-row">{panelStatus}</div> : null}
+        </fieldset>
+        {panelStatus ? <div className="notice-row" role="status">{panelStatus}</div> : null}
+        {loadingAccounts ? <LoadingState label="Loading staff accounts" /> : null}
+        {loadError ? <div className="notice-row" role="alert">{loadError}<Button disabled={loadingAccounts || isSaving} onClick={() => void refreshData(false)}>Try again</Button></div> : null}
         <div className="toolbar admin-panel-actions">
-          <Button disabled={isSaving || !user.isAdministrator} icon={UserCog} onClick={() => void createAccount()} variant="primary">
+          <Button disabled={isSaving || loadingAccounts || Boolean(loadError) || !user.isAdministrator} icon={UserCog} onClick={() => void createAccount()} variant="primary">
             Create account
           </Button>
           {!user.isAdministrator ? <p>Only Administrators can create accounts and allocate their access.</p> : null}
@@ -576,7 +599,7 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
           <h2>User accounts</h2>
           <div className="toolbar">
             <span>{visibleAccounts.length} of {accounts.length} accounts</span>
-            <Button icon={RefreshCw} onClick={() => void refreshData()} variant="secondary">Refresh</Button>
+            <Button disabled={loadingAccounts || isSaving} icon={RefreshCw} onClick={async () => { if (await confirmUnsavedNavigation()) void refreshData(); }} variant="secondary">Refresh</Button>
           </div>
         </div>
         <div className="admin-list-toolbar">
@@ -589,19 +612,23 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
               value={accountSearch}
             />
           </label>
-          <span className="muted-copy">Open details to correct staff category or archive an account. Manage role membership in Roles & permissions.</span>
+          <label className="entry-field"><span>Permission tier</span><select value={accountRole} onChange={event => setAccountRole(event.target.value)}><option value="">All tiers</option>{sortListRows([...new Map(accounts.flatMap(account => account.roles).map(role => [role.roleKey, role])).values()], role => role.name).map(role => <option key={role.roleKey} value={role.roleKey}>{role.name}</option>)}</select></label>
+          <label className="entry-field"><span>Primary area</span><select value={accountArea} onChange={event => setAccountArea(event.target.value)}><option value="">All areas</option>{distinctListValues(accounts.map(account => account.primaryOrgCode)).map(value => <option key={value}>{value}</option>)}</select></label>
+          <label className="entry-field"><span>Account status</span><select value={accountState} onChange={event => setAccountState(event.target.value)}><option value="">All statuses</option><option value="enabled">Sign-in enabled</option><option value="disabled">Sign-in disabled</option>{distinctListValues(accounts.map(account => account.accountStatus)).filter(value => !["enabled", "disabled"].includes(value)).map(value => <option key={value}>{value}</option>)}</select></label>
+          <AdminListSort value={accountSort} onChange={setAccountSort} options={[["name-asc","Name: A–Z"],["name-desc","Name: Z–A"],["email-asc","Email: A–Z"],["id-asc","Staff ID: A–Z"],["login-desc","Last sign-in: newest first"]]} />
+          <span className="muted-copy">Open Details to correct a staff category. Use Staff role allocations for permissions, or Archived staff &amp; restoration to archive or restore an account.</span>
         </div>
-        <div className="table-shell">
-          <table>
+        <ScrollableTableRegion label="Administration data">
+          <table aria-label="Administration data">
             <thead>
               <tr>
-                <th>Staff member</th>
-                <th>Staff ID</th>
-                <th>Role</th>
-                <th>Scope</th>
-                <th>Status</th>
-                <th>Enabled</th>
-                <th>Actions</th>
+                <th scope="col">Staff member</th>
+                <th scope="col">Staff ID</th>
+                <th scope="col">Role</th>
+                <th scope="col">Scope</th>
+                <th scope="col">Status</th>
+                <th scope="col">Enabled</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -674,7 +701,7 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
                           onClick={() => void saveAccount(account)}
                           title={`Save changes for ${account.displayName}`}
                           type="button"
-                        >
+                         aria-label={`Save changes for ${account.displayName}`}>
                           <Save size={16} aria-hidden="true" />
                         </button>
                       </td>
@@ -684,7 +711,7 @@ function StaffAdminPanel({ user, onOpenDetails }: { user: CurrentUser; onOpenDet
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
       </section>
     </>
   );
@@ -698,6 +725,8 @@ function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSumm
   const [records, setRecords] = useState<StaffProfileRecordSummary[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [reflectionFilter, setReflectionFilter] = useState("all");
+  const [profileSort, setProfileSort] = useState("name-asc");
+  const [profileArea, setProfileArea] = useState("");
   const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
@@ -707,18 +736,16 @@ function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSumm
       .catch(() => setLoadError("Staff Profile records could not be loaded from the API."));
   }, []);
 
-  const filteredRecords = records.filter((record) => {
-    const query = searchTerm.trim().toLowerCase();
-    const matchingText = `${record.displayName} ${record.email} ${record.externalId} ${record.primaryOrgCode ?? ""}`.toLowerCase();
-    const matchesSearch = !query || matchingText.includes(query);
+  const filteredRecords = sortListRows(records.filter((record) => {
+    const matchesSearch = matchesListSearch(searchTerm, record.displayName, record.email, record.externalId, record.primaryOrgCode);
     const matchesReflection =
       reflectionFilter === "all" ||
       (reflectionFilter === "has_reflections" && record.reflectionCount > 0) ||
       (reflectionFilter === "none" && record.reflectionCount === 0) ||
       (reflectionFilter === "submitted" && record.submittedReflections > 0) ||
       (reflectionFilter === "draft" && record.draftReflections > 0);
-    return matchesSearch && matchesReflection;
-  });
+    return matchesSearch && matchesReflection && (!profileArea || record.primaryOrgCode === profileArea);
+  }), record => profileSort.startsWith("reflections") ? record.reflectionCount : profileSort.startsWith("actions") ? record.openActions : profileSort.startsWith("id") ? record.externalId : record.displayName, profileSort.endsWith("desc") ? "desc" : "asc", record => record.staffId);
 
   return (
     <>
@@ -748,18 +775,20 @@ function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSumm
             <option value="submitted">Has submitted reflections</option>
             <option value="draft">Has draft reflections</option>
           </select>
+          <label className="entry-field"><span>Primary area</span><select value={profileArea} onChange={event => setProfileArea(event.target.value)}><option value="">All areas</option>{distinctListValues(records.map(record => record.primaryOrgCode)).map(value => <option key={value}>{value}</option>)}</select></label>
+          <AdminListSort value={profileSort} onChange={setProfileSort} options={[["name-asc","Staff: A–Z"],["name-desc","Staff: Z–A"],["id-asc","Staff ID: A–Z"],["reflections-desc","Reflections: most first"],["actions-desc","Open actions: most first"]]} />
         </div>
-        <div className="table-shell">
-          <table>
+        <ScrollableTableRegion label="Administration data">
+          <table aria-label="Administration data">
             <thead>
               <tr>
-                <th>Staff member</th>
-                <th>Staff ID</th>
-                <th>CPD sessions</th>
-                <th>Evidence</th>
-                <th>Reflections</th>
-                <th>Open actions</th>
-                <th>Directory status</th>
+                <th scope="col">Staff member</th>
+                <th scope="col">Staff ID</th>
+                <th scope="col">CPD sessions</th>
+                <th scope="col">Evidence</th>
+                <th scope="col">Reflections</th>
+                <th scope="col">Open actions</th>
+                <th scope="col">Directory status</th>
               </tr>
             </thead>
             <tbody>
@@ -780,7 +809,7 @@ function RecordCorrectionPanel({ profiles, staff }: { profiles: StaffProfileSumm
               })}
             </tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
       </section>
 
       <section className="panel">
@@ -823,7 +852,16 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
   const [editingThemeGroupId, setEditingThemeGroupId] = useState("");
   const [status, setStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [loadingThemes, setLoadingThemes] = useState(true);
+  const loadSequence = useRef(0);
   const [, setNewThemeAreaChanged] = useState(false);
+  const [themeQuery, setThemeQuery] = useState("");
+  const [themeStatus, setThemeAvailabilityFilter] = useState("all");
+  const [themeSort, setThemeSort] = useState("configured");
+  const canReorderThemes = !themeQuery.trim() && themeStatus === "all" && themeSort === "configured";
+  const themeMatches = (theme: LearningWalkTheme, group: LearningWalkThemeGroup) => theme.id === editingId || ((themeStatus === "all" || (theme.isActive && group.isActive) === (themeStatus === "active")) && matchesListSearch(themeQuery, group.name, theme.name));
+  const visibleThemeGroups = sortListRows(groups.filter(group => group.id === editingAreaId || group.themes.some(theme => themeMatches(theme, group)) || (!group.themes.length && matchesListSearch(themeQuery, group.name) && (themeStatus === "all" || group.isActive === (themeStatus === "active")))), group => themeSort === "configured" ? groups.indexOf(group) : group.name, themeSort.endsWith("desc") ? "desc" : "asc", group => group.id);
   const originalArea = groups.find(group => group.id === editingAreaId);
   const originalTheme = groups.flatMap(group => group.themes).find(theme => theme.id === editingId);
   const areaDirty = Boolean(editingAreaId && editingAreaName !== originalArea?.name);
@@ -846,19 +884,23 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
 
   useEffect(() => {
     void refreshThemes();
+    return () => { ++loadSequence.current; };
   }, [processKey]);
 
   async function refreshThemes(nextStatus = "") {
+    const sequence = ++loadSequence.current;
+    setLoadingThemes(true); setLoadError("");
     try {
       const nextGroups = await api.adminLearningWalkThemes(processKey);
+      if (sequence !== loadSequence.current) return;
       setGroups(nextGroups);
       setNewThemeGroupId((current) => nextGroups.some((group) => group.id === current && group.isActive)
         ? current
         : nextGroups.find((group) => group.isActive)?.id ?? "");
       setStatus(nextStatus);
     } catch {
-      setStatus("Themes could not be loaded from the API.");
-    }
+      if (sequence === loadSequence.current) setLoadError("Themes could not be loaded. Check your connection and try again.");
+    } finally { if (sequence === loadSequence.current) setLoadingThemes(false); }
   }
 
   async function changeTheme(operation: () => Promise<{ ok: boolean; message?: string }>, success: string, afterSuccess?: () => void) {
@@ -908,6 +950,7 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
     await changeTheme(() => api.setLearningWalkThemeStatus(theme.id, isActive), isActive ? "Theme reactivated." : "Theme deactivated.");
   }
   async function moveTheme(group: LearningWalkThemeGroup, themeIndex: number, direction: -1 | 1) {
+    if (!canReorderThemes) return;
     const targetIndex = themeIndex + direction;
     if (targetIndex < 0 || targetIndex >= group.themes.length) return;
     const nextIds = group.themes.map((theme) => theme.id);
@@ -958,16 +1001,20 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
 
       {dirty ? <div className="toolbar"><span className="muted-copy">Unsaved theme changes</span><Button disabled={isSaving} onClick={cancelChanges}>Cancel all changes</Button></div> : null}
       {status ? <div className="notice-row" role="status">{status}</div> : null}
+      {loadingThemes ? <LoadingState label="Loading themes" /> : null}
+      {loadError ? <div className="notice-row" role="alert">{loadError}<Button disabled={loadingThemes || isSaving} onClick={() => void refreshThemes()}>Try again</Button></div> : null}
 
+<div className="filter-toolbar"><label className="entry-field"><span>Find a theme or area</span><input type="search" value={themeQuery} onChange={event => setThemeQuery(event.target.value)} /></label><label className="entry-field"><span>Availability</span><select value={themeStatus} onChange={event => setThemeAvailabilityFilter(event.target.value)}><option value="all">All themes</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label><AdminListSort value={themeSort} onChange={setThemeSort} options={[["configured","Configured form order"],["name-asc","Name: A–Z"],["name-desc","Name: Z–A"]]} /></div>
+      {!canReorderThemes ? <p className="muted-copy">Clear filters and choose configured form order to move themes. View sorting does not change saved form order.</p> : null}
       <div className="learning-theme-groups">
-        {groups.map((group) => (
+        {visibleThemeGroups.map((group) => (
           <div className={`learning-theme-group${group.isActive ? "" : " is-inactive"}`} key={group.id}>
             <div className="learning-theme-group-heading">
               {editingAreaId === group.id ? (
                 <div className="learning-theme-area-edit">
                   <input disabled={isSaving} aria-label="Theme area name" onChange={(event) => setEditingAreaName(event.target.value)} type="text" value={editingAreaName} />
-                  <button aria-label="Cancel area editing" className="icon-button" disabled={isSaving} onClick={() => setEditingAreaId("")} title="Cancel area editing" type="button"><X size={16} /></button>
-                  <button aria-label="Save theme area" className="icon-button" disabled={isSaving || !editingAreaName.trim()} onClick={() => void saveAreaEdit()} title="Save theme area" type="button"><Save size={16} /></button>
+                  <button aria-label="Cancel area editing" className="icon-button" disabled={isSaving} onClick={() => setEditingAreaId("")} title="Cancel area editing" type="button"><X size={16}  aria-hidden="true"/></button>
+                  <button aria-label="Save theme area" className="icon-button" disabled={isSaving || !editingAreaName.trim()} onClick={() => void saveAreaEdit()} title="Save theme area" type="button"><Save size={16}  aria-hidden="true"/></button>
                 </div>
               ) : (
                 <>
@@ -976,7 +1023,7 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
                     <span>{group.isActive ? "Active" : "Inactive"} · {group.themes.length} theme{group.themes.length === 1 ? "" : "s"}</span>
                   </div>
                   <div className="learning-theme-row-actions">
-                    <button aria-label={`Rename ${group.name} area`} className="icon-button" disabled={isSaving || dirty} onClick={() => startAreaEdit(group)} title="Rename theme area" type="button"><Edit3 size={16} /></button>
+                    <button aria-label={`Rename ${group.name} area`} className="icon-button" disabled={isSaving || dirty} onClick={() => startAreaEdit(group)} title="Rename theme area" type="button"><Edit3 size={16}  aria-hidden="true"/></button>
                     <button
                       aria-label={`${group.isActive ? "Deactivate" : "Reactivate"} ${group.name} area`}
                       className="icon-button"
@@ -985,14 +1032,14 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
                       title={group.isActive ? "Deactivate theme area" : "Reactivate theme area"}
                       type="button"
                     >
-                      {group.isActive ? <Archive size={16} /> : <ArchiveRestore size={16} />}
+                      {group.isActive ? <Archive size={16}  aria-hidden="true"/> : <ArchiveRestore size={16}  aria-hidden="true"/>}
                     </button>
                   </div>
                 </>
               )}
             </div>
             {group.themes.length === 0 ? <div className="empty-row">No themes in this area.</div> : null}
-            {group.themes.map((theme, index) => (
+            {sortListRows(group.themes.filter(theme => themeMatches(theme, group)), theme => themeSort === "configured" ? group.themes.indexOf(theme) : theme.name, themeSort.endsWith("desc") ? "desc" : "asc", theme => theme.id).map((theme) => (
               <div className={`learning-theme-admin-row${theme.isActive && group.isActive ? "" : " is-inactive"}`} key={theme.id}>
                 {editingId === theme.id ? (
                   <>
@@ -1003,8 +1050,8 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
                       ))}
                     </select>
                     <div className="learning-theme-row-actions">
-                      <button aria-label="Cancel editing" className="icon-button" disabled={isSaving} onClick={() => setEditingId("")} title="Cancel editing" type="button"><X size={16} /></button>
-                      <button aria-label="Save theme" className="icon-button" disabled={isSaving || !editingName.trim()} onClick={() => void saveEdit()} title="Save theme" type="button"><Save size={16} /></button>
+                      <button aria-label="Cancel editing" className="icon-button" disabled={isSaving} onClick={() => setEditingId("")} title="Cancel editing" type="button"><X size={16}  aria-hidden="true"/></button>
+                      <button aria-label="Save theme" className="icon-button" disabled={isSaving || !editingName.trim()} onClick={() => void saveEdit()} title="Save theme" type="button"><Save size={16}  aria-hidden="true"/></button>
                     </div>
                   </>
                 ) : (
@@ -1014,11 +1061,11 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
                       <span>{!group.isActive ? "Area inactive" : theme.isActive ? "Active" : "Inactive"}</span>
                     </div>
                     <div className="learning-theme-order-actions">
-                      <button aria-label={`Move ${theme.name} up`} className="icon-button" disabled={isSaving || dirty || !group.isActive || index === 0} onClick={() => void moveTheme(group, index, -1)} title="Move up" type="button"><ArrowUp size={16} /></button>
-                      <button aria-label={`Move ${theme.name} down`} className="icon-button" disabled={isSaving || dirty || !group.isActive || index === group.themes.length - 1} onClick={() => void moveTheme(group, index, 1)} title="Move down" type="button"><ArrowDown size={16} /></button>
+                      <button aria-label={`Move ${theme.name} up`} className="icon-button" disabled={!canReorderThemes || isSaving || dirty || !group.isActive || group.themes.indexOf(theme) === 0} onClick={() => void moveTheme(group, group.themes.indexOf(theme), -1)} title="Move up" type="button"><ArrowUp size={16}  aria-hidden="true"/></button>
+                      <button aria-label={`Move ${theme.name} down`} className="icon-button" disabled={!canReorderThemes || isSaving || dirty || !group.isActive || group.themes.indexOf(theme) === group.themes.length - 1} onClick={() => void moveTheme(group, group.themes.indexOf(theme), 1)} title="Move down" type="button"><ArrowDown size={16}  aria-hidden="true"/></button>
                     </div>
                     <div className="learning-theme-row-actions">
-                      <button aria-label={`Edit ${theme.name}`} className="icon-button" disabled={isSaving || dirty || !group.isActive} onClick={() => startEdit(theme)} title="Edit theme" type="button"><Edit3 size={16} /></button>
+                      <button aria-label={`Edit ${theme.name}`} className="icon-button" disabled={isSaving || dirty || !group.isActive} onClick={() => startEdit(theme)} title="Edit theme" type="button"><Edit3 size={16}  aria-hidden="true"/></button>
                       <button
                         aria-label={`${theme.isActive ? "Deactivate" : "Reactivate"} ${theme.name}`}
                         className="icon-button"
@@ -1027,7 +1074,7 @@ function LearningWalkThemeAdminPanel({ processKey = "learning_walk", title = "Te
                         title={theme.isActive ? "Deactivate theme" : "Reactivate theme"}
                         type="button"
                       >
-                        {theme.isActive ? <Archive size={16} /> : <ArchiveRestore size={16} />}
+                        {theme.isActive ? <Archive size={16}  aria-hidden="true"/> : <ArchiveRestore size={16}  aria-hidden="true"/>}
                       </button>
                     </div>
                   </>
@@ -1051,30 +1098,38 @@ function formatOrgUnitOption(orgUnit: OrgUnitSummary) {
 }
 
 function DashboardAdminPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean, busy: boolean) => void }) {
-  const [facultyState, setFacultyState] = useState({ dirty: false, busy: false });
-  const handleFacultyDirty = useCallback((dirty: boolean, busy: boolean) => setFacultyState({ dirty, busy }), []);
   const [savedProcesses, setSavedProcesses] = useState("");
+  const [processQuery, setProcessQuery] = useState("");
+  const [processStatus, setProcessStatus] = useState("");
+  const [processSort, setProcessSort] = useState("configured");
+  const canReorderProcesses = !processQuery.trim() && !processStatus && processSort === "configured";
   const [processes, setProcesses] = useState<DashboardProcessConfiguration[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true); setLoadError("");
     api.dashboardConfiguration()
-      .then((configuration) => { const loaded = [...configuration.processes].sort((left, right) => left.displayOrder - right.displayOrder); setProcesses(loaded); setSavedProcesses(JSON.stringify(loaded)); })
-      .catch(() => setMessage("Dashboard configuration could not be loaded."))
-      .finally(() => setIsLoading(false));
-  }, []);
+      .then((configuration) => { if (cancelled) return; const loaded = [...configuration.processes].sort((left, right) => left.displayOrder - right.displayOrder); setProcesses(loaded); setSavedProcesses(JSON.stringify(loaded)); })
+      .catch(() => { if (!cancelled) setLoadError("Dashboard settings could not be loaded. Try again."); })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, [attempt]);
 
   const dirty = savedProcesses !== "" && JSON.stringify(processes) !== savedProcesses;
   const clearGuard = useUnsavedChanges({ label: "Dashboard layout", dirty, saving: isSaving, onSave: save, onDiscard: () => { if (savedProcesses) setProcesses(JSON.parse(savedProcesses)); clearGuard(); } });
-  useEffect(() => { onDirtyChange?.(dirty || facultyState.dirty, isSaving || facultyState.busy); }, [dirty, facultyState.dirty, facultyState.busy, isSaving, onDirtyChange]);
+  useEffect(() => { onDirtyChange?.(dirty, isSaving); }, [dirty, isSaving, onDirtyChange]);
   useEffect(() => { if (!dirty) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
   function update(processKey: string, changes: Partial<DashboardProcessConfiguration>) {
     setProcesses((current) => current.map((process) => process.processKey === processKey ? { ...process, ...changes } : process));
   }
 
   function move(index: number, direction: -1 | 1) {
+    if (!canReorderProcesses) return;
     const target = index + direction;
     if (target < 0 || target >= processes.length) return;
     setProcesses((current) => {
@@ -1086,16 +1141,18 @@ function DashboardAdminPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
 
   async function save() {
     setIsSaving(true); setMessage("");
+    let persisted = false;
     try {
       const result = await api.saveDashboardConfiguration(processes);
-      if (!result.ok) throw new Error("Save failed");
+      if (!result.ok) { setMessage(result.message ?? "Dashboard settings could not be saved. Your changes are still here."); return false; }
+      persisted = true; setSavedProcesses(JSON.stringify(processes)); clearGuard();
       const saved = await api.dashboardConfiguration();
       const loaded = [...saved.processes].sort((left, right) => left.displayOrder - right.displayOrder);
       setProcesses(loaded); setSavedProcesses(JSON.stringify(loaded));
       setMessage("Dashboard configuration saved. Leadership views will use the new layout on refresh.");
       clearGuard(); return true;
     } catch {
-      setMessage("Dashboard configuration could not be saved."); return false;
+      setMessage(persisted ? "Dashboard settings were saved, but the updated view could not be loaded. Reload the page to check them." : "Dashboard settings could not be saved. Your changes are still here."); return persisted;
     } finally {
       setIsSaving(false);
     }
@@ -1103,32 +1160,34 @@ function DashboardAdminPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolea
 
   return (
     <div className="admin-dashboard-config">
-      <DashboardFacultyAdmin onDirtyChange={handleFacultyDirty} />
       <section className="panel admin-dashboard-intro">
-        <div><p className="eyebrow">Reporting governance</p><h2>Leadership dashboard</h2><p>Control the order, naming and analytical emphasis of approved dashboard views. Metrics and permission rules remain protected.</p></div>
+        <div><p className="eyebrow">Reporting</p><h2>Dashboard presentation</h2><p>Arrange dashboards, edit their names and choose the charts people see.</p></div>
         <Button disabled={isLoading || isSaving || !dirty || processes.length === 0} icon={Save} onClick={() => void save()} variant="primary">{isSaving ? "Saving" : "Save configuration"}</Button>
       </section>
-      {message ? <div className="form-message">{message}</div> : null}
-      {isLoading ? <section className="panel"><p className="muted-copy">Loading dashboard configuration...</p></section> : (
+      {message ? <div className="form-message" role="status">{message}</div> : null}
+      {loadError ? <div className="notice-row" role="alert">{loadError}<Button disabled={isLoading} onClick={() => setAttempt(value => value + 1)}>Try again</Button></div> : null}
+      {isLoading ? <LoadingState label="Loading dashboard settings" /> : loadError && !processes.length ? null : (
         <section className="panel admin-dashboard-processes">
           <div className="panel-heading"><h2>Dashboard views</h2><span>{processes.filter((process) => process.isEnabled).length} visible</span></div>
           <p className="muted-copy">Disabling a view hides it from navigation; it does not delete records or reporting data. Labels may be changed without changing stable process keys. Outcome matrices and frequency profiles are selected automatically from the type of structured data available.</p>
+<div className="filter-toolbar"><label className="entry-field"><span>Find a dashboard</span><input type="search" value={processQuery} onChange={event => setProcessQuery(event.target.value)} /></label><label className="entry-field"><span>Visibility</span><select value={processStatus} onChange={event => setProcessStatus(event.target.value)}><option value="">All views</option><option value="visible">Visible</option><option value="hidden">Hidden</option></select></label><AdminListSort value={processSort} onChange={setProcessSort} options={[["configured","Configured navigation order"],["name-asc","Dashboard: A–Z"],["name-desc","Dashboard: Z–A"]]} /></div>
+          {!canReorderProcesses ? <p className="muted-copy">Clear filters and choose configured navigation order to move dashboards.</p> : null}
           <fieldset disabled={isSaving} className="admin-dashboard-process-list" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><legend className="sr-only">Dashboard presentation settings</legend>
-            {processes.map((process, index) => <article className={process.isEnabled ? "" : "is-disabled"} key={process.processKey}>
-              <div className="admin-dashboard-order"><Button aria-label="Move up" disabled={index === 0} icon={ArrowUp} onClick={() => move(index, -1)} variant="secondary">Up</Button><Button aria-label="Move down" disabled={index === processes.length - 1} icon={ArrowDown} onClick={() => move(index, 1)} variant="secondary">Down</Button></div>
-              <div className="admin-dashboard-identity"><small>{process.processKey}</small><input aria-label={`${process.label} dashboard label`} maxLength={80} onChange={(event) => update(process.processKey, { label: event.target.value })} value={process.label}/></div>
+            {sortListRows(processes.filter(process => matchesListSearch(processQuery, process.label, process.processKey) && (!processStatus || process.isEnabled === (processStatus === "visible"))), process => processSort === "configured" ? processes.indexOf(process) : process.label, processSort.endsWith("desc") ? "desc" : "asc", process => process.processKey).map((process) => <article className={process.isEnabled ? "" : "is-disabled"} key={process.processKey}>
+              <div className="admin-dashboard-order"><Button aria-label="Move up" disabled={!canReorderProcesses || processes.indexOf(process) === 0} icon={ArrowUp} onClick={() => move(processes.indexOf(process), -1)} variant="secondary">Up</Button><Button aria-label="Move down" disabled={!canReorderProcesses || processes.indexOf(process) === processes.length - 1} icon={ArrowDown} onClick={() => move(processes.indexOf(process), 1)} variant="secondary">Down</Button></div>
+              <div className="admin-dashboard-identity" title={process.processKey}><small>Dashboard name</small><input aria-label={`${process.label} dashboard label`} maxLength={80} onChange={(event) => update(process.processKey, { label: event.target.value })} value={process.label}/></div>
               <div className="admin-dashboard-widgets" aria-label={`${process.label} visible analysis`}>
-                <label><input checked={process.showTrend} onChange={(event) => update(process.processKey, { showTrend: event.target.checked })} type="checkbox"/>Trend</label>
-                <label><input checked={process.showAreaComparison} onChange={(event) => update(process.processKey, { showAreaComparison: event.target.checked })} type="checkbox"/>Areas</label>
-                <label><input checked={process.showOutcomes} onChange={(event) => update(process.processKey, { showOutcomes: event.target.checked })} type="checkbox"/>Outcomes</label>
-                <label><input checked={process.showActions} onChange={(event) => update(process.processKey, { showActions: event.target.checked })} type="checkbox"/>Actions</label>
+                <label><input checked={process.showTrend} onChange={(event) => update(process.processKey, { showTrend: event.target.checked })} type="checkbox"/>Trends over time</label>
+                <label><input checked={process.showAreaComparison} onChange={(event) => update(process.processKey, { showAreaComparison: event.target.checked })} type="checkbox"/>Faculty and team comparison</label>
+                <label><input checked={process.showOutcomes} onChange={(event) => update(process.processKey, { showOutcomes: event.target.checked })} type="checkbox"/>Review outcomes</label>
+                <label><input checked={process.showActions} onChange={(event) => update(process.processKey, { showActions: event.target.checked })} type="checkbox"/>Linked actions</label>
               </div>
               <label className="admin-dashboard-enabled"><input checked={process.isEnabled} disabled={process.processKey === "overview"} onChange={(event) => update(process.processKey, { isEnabled: event.target.checked })} type="checkbox"/><span>{process.processKey === "overview" ? "Required" : process.isEnabled ? "Visible" : "Hidden"}</span></label>
             </article>)}
           </fieldset>
         </section>
       )}
-      <section className="panel admin-dashboard-guardrails"><ShieldCheck size={20}/><div><h3>Protected reporting guardrails</h3><p>Administrators can change presentation, but cannot expose restricted narrative responses, alter scope permissions, introduce arbitrary database queries or delete historical reporting labels.</p></div></section>
+      <p className="muted-copy">These settings change labels and charts. Existing access permissions and saved records still apply.</p>
     </div>
   );
 }

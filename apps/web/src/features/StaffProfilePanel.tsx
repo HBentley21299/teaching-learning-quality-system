@@ -1,13 +1,19 @@
 import { useUnsavedChanges, confirmUnsavedNavigation } from "../components/UnsavedChangesGuard";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Award, ChevronDown, ExternalLink, Eye, Save } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { ElevateStatusBadgeImage } from "../components/ElevateStatusBadgeImage";
 import { CollapsibleSection, Pagination } from "../components/CollapsibleSection";
+import { ProfileListControls, type ProfileListSection } from "../components/ProfileListControls";
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
+import { LoadingState } from "../components/LoadingState";
 import { api } from "../services/api";
+import { listDateRangeError } from "../services/listQuery";
 import { ElevatePracticeResultPage } from "../routes/ElevatePractice";
 import type {
   CurrentUser,
+  ListQuery,
+  PagedResult,
   StaffProfileDetail,
   ElevateStatusLevelSummary,
   StaffProfileLivSummary,
@@ -39,7 +45,9 @@ export function StaffProfilePanel({
   onOpenRecord?: StaffProfileRecordLinkHandler;
   onOpenActionDetails?: (actionId: string, staffId: string) => void;
 }) {
+  const panelId = useId();
   const [detail, setDetail] = useState<StaffProfileDetail | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [statusMessage, setStatusMessage] = useState("");
   const [showElevateResult, setShowElevateResult] = useState(openElevateResult);
@@ -54,9 +62,13 @@ export function StaffProfilePanel({
   const [savingElevateLevel, setSavingElevateLevel] = useState<number | null>(null);
   const [sectionSummary, setSectionSummary] = useState<StaffProfileSectionSummary | null>(null);
   const [loadedSections, setLoadedSections] = useState<Record<string, boolean>>({});
-  const [loadingSection, setLoadingSection] = useState<string | null>(null);
+  const [loadingSections, setLoadingSections] = useState<Record<string, boolean>>({});
   const [sectionErrors, setSectionErrors] = useState<Record<string, string>>({});
-  const [sectionPages, setSectionPages] = useState<Record<string, { page: number; totalPages: number }>>({});
+  const [sectionPages, setSectionPages] = useState<Record<string, { page: number; totalPages: number; totalCount?: number }>>({});
+  const [sectionQueries, setSectionQueries] = useState<Record<string, ListQuery>>({});
+  const [sectionOptions, setSectionOptions] = useState<Record<string, PagedResult<unknown>["filterOptions"]>>({});
+  const queryRefs = useRef<Record<string, ListQuery>>({});
+  const queryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [livRecords, setLivRecords] = useState<StaffProfileLivSummary[]>([]);
   const [probationRecords, setProbationRecords] = useState<StaffProfileProbationSummary[]>([]);
   const sectionRequests = useRef<Record<string, AbortController>>({});
@@ -85,8 +97,14 @@ export function StaffProfilePanel({
     setStatusMessage("");
     setActiveProfileTab("overview");
     setLoadedSections({});
+    setLoadingSections({});
     setSectionErrors({});
     setSectionPages({});
+    setSectionQueries({});
+    setSectionOptions({});
+    queryRefs.current = {};
+    Object.values(queryTimers.current).forEach(clearTimeout);
+    queryTimers.current = {};
     setLivRecords([]);
     setProbationRecords([]);
     Object.values(sectionRequests.current).forEach((controller) => controller.abort());
@@ -117,8 +135,9 @@ export function StaffProfilePanel({
     return () => {
       cancelled = true;
       Object.values(sectionRequests.current).forEach((controller) => controller.abort());
+      Object.values(queryTimers.current).forEach(clearTimeout);
     };
-  }, [academicYear, openElevateResult, staffId]);
+  }, [academicYear, openElevateResult, staffId, loadAttempt]);
 
   const openActionCount = sectionSummary?.openActionCount ?? 0;
   const completedActionCount = sectionSummary?.completedActionCount ?? 0;
@@ -147,51 +166,96 @@ export function StaffProfilePanel({
   async function loadProfileSection(
     section: "cpd" | "coaching" | "liv" | "probation" | "actions",
     page = 1,
-    shell = detail
+    shell = detail,
+    query = queryRefs.current[section] ?? {}
   ) {
     if (!shell) return;
+    const effectiveQuery: ListQuery = { sortBy: "date", sortDirection: "desc", ...query };
     sectionRequests.current[section]?.abort();
+    const dateError = listDateRangeError(query);
+    if (dateError) {
+      delete sectionRequests.current[section];
+      setLoadingSections(current => ({ ...current, [section]: false }));
+      setSectionErrors(current => ({ ...current, [section]: dateError }));
+      return;
+    }
     const controller = new AbortController();
     sectionRequests.current[section] = controller;
-    setLoadingSection(section);
+    setLoadingSections(current => ({ ...current, [section]: true }));
     setSectionErrors((current) => ({ ...current, [section]: "" }));
     try {
       if (section === "cpd") {
-        const result = await api.staffProfileCpd(staffId, academicYear, page, 20, controller.signal);
+        const result = await api.staffProfileCpd(staffId, academicYear, page, 20, controller.signal, effectiveQuery);
+        if (controller.signal.aborted || sectionRequests.current[section] !== controller) return;
+        setSectionOptions(current => ({ ...current, [section]: result.filterOptions }));
         setDetail((current) => current ? { ...current, cpdRecords: result.items } : current);
-        setSectionPages((current) => ({ ...current, cpd: { page: result.page, totalPages: result.totalPages } }));
+        setSectionPages((current) => ({ ...current, cpd: { page: result.page, totalPages: result.totalPages, totalCount: result.totalCount } }));
       } else if (section === "coaching") {
-        const result = await api.staffProfileCoaching(staffId, academicYear, page, 20, controller.signal);
+        const result = await api.staffProfileCoaching(staffId, academicYear, page, 20, controller.signal, effectiveQuery);
+        if (controller.signal.aborted || sectionRequests.current[section] !== controller) return;
+        setSectionOptions(current => ({ ...current, [section]: result.filterOptions }));
         setDetail((current) => current ? { ...current, coachingRecords: result.items } : current);
-        setSectionPages((current) => ({ ...current, coaching: { page: result.page, totalPages: result.totalPages } }));
+        setSectionPages((current) => ({ ...current, coaching: { page: result.page, totalPages: result.totalPages, totalCount: result.totalCount } }));
       } else if (section === "liv") {
-        const result = await api.staffProfileLiv(staffId, academicYear, page, 20, controller.signal);
+        const result = await api.staffProfileLiv(staffId, academicYear, page, 20, controller.signal, effectiveQuery);
+        if (controller.signal.aborted || sectionRequests.current[section] !== controller) return;
+        setSectionOptions(current => ({ ...current, [section]: result.filterOptions }));
         setLivRecords(result.items);
-        setSectionPages((current) => ({ ...current, liv: { page: result.page, totalPages: result.totalPages } }));
+        setSectionPages((current) => ({ ...current, liv: { page: result.page, totalPages: result.totalPages, totalCount: result.totalCount } }));
       } else if (section === "probation") {
-        const result = await api.staffProfileProbation(staffId, page, 20, controller.signal);
+        const result = await api.staffProfileProbation(staffId, page, 20, controller.signal, effectiveQuery);
+        if (controller.signal.aborted || sectionRequests.current[section] !== controller) return;
+        setSectionOptions(current => ({ ...current, [section]: result.filterOptions }));
         setProbationRecords(result.items);
-        setSectionPages((current) => ({ ...current, probation: { page: result.page, totalPages: result.totalPages } }));
+        setSectionPages((current) => ({ ...current, probation: { page: result.page, totalPages: result.totalPages, totalCount: result.totalCount } }));
       } else {
-        const result = await api.staffProfileActions(staffId, academicYear, page, 20, controller.signal);
+        const result = await api.staffProfileActions(staffId, academicYear, page, 20, controller.signal, effectiveQuery);
+        if (controller.signal.aborted || sectionRequests.current[section] !== controller) return;
+        setSectionOptions(current => ({ ...current, [section]: result.filterOptions }));
         setDetail((current) => current ? { ...current, actions: result.items } : current);
-        setSectionPages((current) => ({ ...current, actions: { page: result.page, totalPages: result.totalPages } }));
+        setSectionPages((current) => ({ ...current, actions: { page: result.page, totalPages: result.totalPages, totalCount: result.totalCount } }));
       }
       setLoadedSections((current) => ({ ...current, [section]: true }));
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") return;
+      if (controller.signal.aborted || sectionRequests.current[section] !== controller || error instanceof Error && error.name === "AbortError") return;
       setSectionErrors((current) => ({ ...current, [section]: "These records could not be loaded." }));
     } finally {
       if (sectionRequests.current[section] === controller) {
         delete sectionRequests.current[section];
-        setLoadingSection((current) => current === section ? null : current);
+        setLoadingSections(current => ({ ...current, [section]: false }));
       }
     }
   }
 
   function handleSectionExpansion(section: "coaching" | "liv" | "probation" | "actions", expanded: boolean) {
     if (expanded && !loadedSections[section]) void loadProfileSection(section);
-    if (!expanded) sectionRequests.current[section]?.abort();
+    if (!expanded) {
+      sectionRequests.current[section]?.abort();
+      delete sectionRequests.current[section];
+      clearTimeout(queryTimers.current[section]);
+      setLoadingSections(current => ({ ...current, [section]: false }));
+    }
+  }
+
+  function updateSectionQuery(section: ProfileListSection, query: ListQuery) {
+    queryRefs.current[section] = query;
+    setLoadedSections(current => ({ ...current, [section]: false }));
+    setSectionQueries(current => ({ ...current, [section]: query }));
+    sectionRequests.current[section]?.abort();
+    delete sectionRequests.current[section];
+    setLoadingSections(current => ({ ...current, [section]: true }));
+    clearTimeout(queryTimers.current[section]);
+    queryTimers.current[section] = setTimeout(() => void loadProfileSection(section, 1, detail, query), 250);
+  }
+
+  function sectionControls(section: ProfileListSection) {
+    return <><ProfileListControls section={section} query={sectionQueries[section] ?? {}} options={sectionOptions[section]} totalCount={sectionPages[section]?.totalCount} onChange={query => updateSectionQuery(section, query)} />
+      {sectionErrors[section] && !listDateRangeError(sectionQueries[section] ?? {}) ? <Button onClick={() => void loadProfileSection(section, sectionPages[section]?.page ?? 1)}>Try again</Button> : null}</>;
+  }
+
+  function selectProfileTab(tab: "overview" | "cpd") {
+    setActiveProfileTab(tab);
+    if (tab === "cpd" && !loadedSections.cpd && !loadingSections.cpd) void loadProfileSection("cpd");
   }
 
   function syncElevateStatusDrafts(nextDetail: StaffProfileDetail) {
@@ -246,7 +310,7 @@ export function StaffProfilePanel({
   if (isLoading) {
     return (
       <section className="panel">
-        <p className="muted-copy">Loading the Staff Profile...</p>
+        <LoadingState label="Loading the staff profile…" />
       </section>
     );
   }
@@ -254,7 +318,9 @@ export function StaffProfilePanel({
   if (!detail) {
     return (
       <section className="panel">
-        <p className="muted-copy">{statusMessage || "No Staff Profile is available for this staff member."}</p>
+        <h2>Staff profile unavailable</h2>
+        <p className="muted-copy" role="alert">{statusMessage || "No staff profile is available for this staff member."}</p>
+        <Button onClick={() => setLoadAttempt(attempt => attempt + 1)}>Try again</Button>
       </section>
     );
   }
@@ -267,23 +333,31 @@ export function StaffProfilePanel({
     <>
       {statusMessage ? <div className="notice-row" role="status">{statusMessage}</div> : null}
 
-      <div className="segmented-control" aria-label="Staff Profile section" role="tablist">
+      <div className="segmented-control" aria-label="Staff Profile section" role="tablist" onKeyDown={event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? "overview" : event.key === "End" ? "cpd" : activeProfileTab === "overview" ? "cpd" : "overview";
+        selectProfileTab(next); document.getElementById(`${panelId}-tab-${next}`)?.focus();
+      }}>
         <button
+          id={`${panelId}-tab-overview`}
+          aria-controls={`${panelId}-overview`}
+          tabIndex={activeProfileTab === "overview" ? 0 : -1}
           aria-selected={activeProfileTab === "overview"}
           className={activeProfileTab === "overview" ? "is-active" : ""}
-          onClick={() => setActiveProfileTab("overview")}
+          onClick={() => selectProfileTab("overview")}
           role="tab"
           type="button"
         >
           Overview
         </button>
         <button
+          id={`${panelId}-tab-cpd`}
+          aria-controls={`${panelId}-cpd`}
+          tabIndex={activeProfileTab === "cpd" ? 0 : -1}
           aria-selected={activeProfileTab === "cpd"}
           className={activeProfileTab === "cpd" ? "is-active" : ""}
-          onClick={() => {
-            setActiveProfileTab("cpd");
-            if (!loadedSections.cpd) void loadProfileSection("cpd");
-          }}
+          onClick={() => selectProfileTab("cpd")}
           role="tab"
           type="button"
         >
@@ -291,6 +365,7 @@ export function StaffProfilePanel({
         </button>
       </div>
 
+      <div className="profile-overview" role="tabpanel" id={`${panelId}-overview`} aria-labelledby={`${panelId}-tab-overview`} hidden={activeProfileTab !== "overview"}>
       {detail.elevateStatus.levels.some((level) => level.isAwarded) ? (
         <section className="elevate-status-banner" hidden={activeProfileTab !== "overview"} aria-label={`Elevate Status badges for ${detail.academicYear}`}>
           <div className="elevate-status-banner-heading">
@@ -506,71 +581,7 @@ export function StaffProfilePanel({
         </section>
       </div>
 
-      <section className="panel" hidden={activeProfileTab !== "cpd"} role="tabpanel">
-        <div className="panel-heading">
-          <h2>CPD engagement</h2>
-          <span>{formatDuration(totalCpdMinutes)} recorded</span>
-        </div>
-        <div className="profile-cpd-summary">
-          <div>
-            <span>Total CPD time</span>
-            <strong>{formatDuration(totalCpdMinutes)}</strong>
-          </div>
-          <div>
-            <span>Internal CPD</span>
-            <strong>{internalCpdCount}</strong>
-          </div>
-          <div>
-            <span>Mandatory CPD</span>
-            <strong>{sectionSummary?.mandatoryCpdCount ?? 0}</strong>
-          </div>
-          <div>
-            <span>External CPD</span>
-            <strong>{externalCpdCount}</strong>
-          </div>
-        </div>
-        {loadingSection === "cpd" ? <div className="section-state" role="status">Loading CPD records...</div> : null}
-        {sectionErrors.cpd ? <div className="section-state section-state-error" role="alert">{sectionErrors.cpd}</div> : null}
-        {loadingSection !== "cpd" && !sectionErrors.cpd ? <div className="table-shell">
-          <table>
-            <thead>
-              <tr>
-                <th>Session</th>
-                <th>Date</th>
-                <th>Themes</th>
-                <th>Type</th>
-                <th>Duration</th>
-                <th>Record</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.cpdRecords.length === 0 ? (
-                <tr>
-                  <td colSpan={6}>No CPD attendance has been recorded yet.</td>
-                </tr>
-              ) : (
-                detail.cpdRecords.map((record) => (
-                  <tr key={record.id}>
-                    <td>{record.title}</td>
-                    <td>{record.eventDate}</td>
-                    <td>{formatThemes(record.themes)}</td>
-                    <td>{record.isMandatory ? "Mandatory" : record.isInternal ? "Internal" : "External"}</td>
-                    <td>{record.durationMinutes ? formatDuration(record.durationMinutes) : "Not recorded"}</td>
-                    <td>
-                      {onOpenRecord ? (
-                        <button className="icon-button" onClick={() => onOpenRecord("cpd_event", record.recordId, detail.staffId)} title={`Open full CPD record for ${record.title}`} type="button">
-                          <ExternalLink aria-hidden="true" size={16} />
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div> : null}
-        <Pagination page={sectionPages.cpd?.page ?? 1} totalPages={sectionPages.cpd?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("cpd", page)} />
-      </section>
+
 
       <div hidden={activeProfileTab !== "overview"}>
       <CollapsibleSection
@@ -579,13 +590,14 @@ export function StaffProfilePanel({
         emptyMessage="No active LIV records are associated with this staff member."
         error={sectionErrors.liv}
         isEmpty={(sectionSummary?.livCount ?? 0) === 0}
-        isLoading={loadingSection === "liv"}
+        isLoading={loadingSections.liv}
         onExpandedChange={(expanded) => handleSectionExpansion("liv", expanded)}
         statusSummary="Active LIV record history"
         storageKey={`staff-profile:${staffId}:${academicYear}:liv`}
         title="LIV records"
+        toolbar={sectionControls("liv")}
       >
-        <div className="table-shell">
+        <ScrollableTableRegion label="LIV records">
           <table>
             <thead>
               <tr>
@@ -601,7 +613,7 @@ export function StaffProfilePanel({
             <tbody>
               {livRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>No active LIV records are associated with this staff member.</td>
+                  <td colSpan={7}>No LIV records match the current filters.</td>
                 </tr>
               ) : (
                 livRecords.map((record) => (
@@ -633,7 +645,7 @@ export function StaffProfilePanel({
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
         <Pagination page={sectionPages.liv?.page ?? 1} totalPages={sectionPages.liv?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("liv", page)} />
       </CollapsibleSection>
       </div>
@@ -645,13 +657,14 @@ export function StaffProfilePanel({
             defaultExpanded={false}
             error={sectionErrors.probation}
             isEmpty={probationRecords.length === 0 && loadedSections.probation}
-            isLoading={loadingSection === "probation"}
+            isLoading={loadingSections.probation}
             onExpandedChange={(expanded) => handleSectionExpansion("probation", expanded)}
             statusSummary="Visible probationary observation history"
             storageKey={`staff-profile:${staffId}:probation`}
             title="Probationary Records"
+            toolbar={sectionControls("probation")}
           >
-            <div className="table-shell">
+            <ScrollableTableRegion label="Probation records">
               <table>
                 <thead>
                   <tr>
@@ -664,6 +677,7 @@ export function StaffProfilePanel({
                   </tr>
                 </thead>
                 <tbody>
+                  {probationRecords.length === 0 ? <tr><td colSpan={6}>No probation records match the current filters.</td></tr> : null}
                   {probationRecords.map((record) => (
                     <tr key={record.id}>
                       <td>
@@ -693,7 +707,7 @@ export function StaffProfilePanel({
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ScrollableTableRegion>
             <Pagination page={sectionPages.probation?.page ?? 1} totalPages={sectionPages.probation?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("probation", page)} />
           </CollapsibleSection>
         </div>
@@ -705,13 +719,14 @@ export function StaffProfilePanel({
         emptyMessage="No coaching or mentoring sessions have been recorded yet."
         error={sectionErrors.coaching}
         isEmpty={(sectionSummary?.coachingCount ?? 0) === 0}
-        isLoading={loadingSection === "coaching"}
+        isLoading={loadingSections.coaching}
         onExpandedChange={(expanded) => handleSectionExpansion("coaching", expanded)}
         statusSummary="Session history"
         storageKey={`staff-profile:${staffId}:${academicYear}:coaching`}
         title="Coaching and mentoring"
+        toolbar={sectionControls("coaching")}
       >
-        <div className="table-shell">
+        <ScrollableTableRegion label="Coaching sessions">
           <table>
             <thead>
               <tr>
@@ -726,7 +741,7 @@ export function StaffProfilePanel({
             <tbody>
               {detail.coachingRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>No coaching or mentoring sessions have been recorded yet.</td>
+                  <td colSpan={6}>No coaching or mentoring sessions match the current filters.</td>
                 </tr>
               ) : (
                 detail.coachingRecords.map((record) => (
@@ -763,7 +778,7 @@ export function StaffProfilePanel({
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
         <Pagination page={sectionPages.coaching?.page ?? 1} totalPages={sectionPages.coaching?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("coaching", page)} />
       </CollapsibleSection>
       </div>
@@ -774,13 +789,14 @@ export function StaffProfilePanel({
         emptyMessage="No actions are connected to this staff member."
         error={sectionErrors.actions}
         isEmpty={openActionCount + completedActionCount === 0}
-        isLoading={loadingSection === "actions"}
+        isLoading={loadingSections.actions}
         onExpandedChange={(expanded) => handleSectionExpansion("actions", expanded)}
         statusSummary={`${openActionCount} open / ${sectionSummary?.overdueActionCount ?? 0} overdue / ${completedActionCount} completed`}
         storageKey={`staff-profile:${staffId}:${academicYear}:actions`}
         title="Actions"
+        toolbar={sectionControls("actions")}
       >
-        <div className="table-shell">
+        <ScrollableTableRegion label="Actions">
           <table>
             <thead>
               <tr>
@@ -795,7 +811,7 @@ export function StaffProfilePanel({
             <tbody>
               {detail.actions.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>No actions are connected to this staff member.</td>
+                  <td colSpan={6}>No actions match the current filters.</td>
                 </tr>
               ) : (
                 detail.actions.map((action) => (
@@ -838,10 +854,77 @@ export function StaffProfilePanel({
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
         <Pagination page={sectionPages.actions?.page ?? 1} totalPages={sectionPages.actions?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("actions", page)} />
       </CollapsibleSection>
       </div>
+      </div>
+      <section className="panel" hidden={activeProfileTab !== "cpd"} role="tabpanel" id={`${panelId}-cpd`} aria-labelledby={`${panelId}-tab-cpd`}>
+        <div className="panel-heading">
+          <h2>CPD engagement</h2>
+          <span>{formatDuration(totalCpdMinutes)} recorded</span>
+        </div>
+        <div className="profile-cpd-summary">
+          <div>
+            <span>Total CPD time</span>
+            <strong>{formatDuration(totalCpdMinutes)}</strong>
+          </div>
+          <div>
+            <span>Internal CPD</span>
+            <strong>{internalCpdCount}</strong>
+          </div>
+          <div>
+            <span>Mandatory CPD</span>
+            <strong>{sectionSummary?.mandatoryCpdCount ?? 0}</strong>
+          </div>
+          <div>
+            <span>External CPD</span>
+            <strong>{externalCpdCount}</strong>
+          </div>
+        </div>
+        {sectionControls("cpd")}
+        {loadingSections.cpd ? <LoadingState label="Loading CPD records…" /> : null}
+        {sectionErrors.cpd ? <div className="section-state section-state-error" role="alert">{sectionErrors.cpd}</div> : null}
+        {!loadingSections.cpd && !sectionErrors.cpd ? <ScrollableTableRegion label="CPD attendance">
+          <table>
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Date</th>
+                <th>Themes</th>
+                <th>Type</th>
+                <th>Duration</th>
+                <th>Record</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.cpdRecords.length === 0 ? (
+                <tr>
+                  <td colSpan={6}>No CPD attendance records match the current filters.</td>
+                </tr>
+              ) : (
+                detail.cpdRecords.map((record) => (
+                  <tr key={record.id}>
+                    <td>{record.title}</td>
+                    <td>{formatDate(record.eventDate)}</td>
+                    <td>{formatThemes(record.themes)}</td>
+                    <td>{record.isMandatory ? "Mandatory" : record.isInternal ? "Internal" : "External"}</td>
+                    <td>{record.durationMinutes ? formatDuration(record.durationMinutes) : "Not recorded"}</td>
+                    <td>
+                      {onOpenRecord ? (
+                        <button className="icon-button" onClick={() => onOpenRecord("cpd_event", record.recordId, detail.staffId)} title={`Open full CPD record for ${record.title}`} type="button">
+                          <ExternalLink aria-hidden="true" size={16} />
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </ScrollableTableRegion> : null}
+        <Pagination page={sectionPages.cpd?.page ?? 1} totalPages={sectionPages.cpd?.totalPages ?? 0} onPageChange={(page) => void loadProfileSection("cpd", page)} />
+      </section>
     </>
   );
 }

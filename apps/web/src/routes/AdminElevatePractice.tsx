@@ -1,9 +1,14 @@
+import { ScrollableTableRegion } from "../components/ScrollableTableRegion";
+import { LoadingState } from "../components/LoadingState";
 import { Edit3, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import type { ElevatePracticeProgress } from "../services/types";
 import { ElevatePracticeAdminEditor } from "./ElevatePractice";
+import { AdminListSort } from "../components/AdminListSort";
+import { distinctListValues, matchesListSearch, sortListRows } from "../services/listQuery";
+import { WorkflowFilters } from "../components/WorkflowFilters";
 
 export function AdminElevatePractice() {
   const [records, setRecords] = useState<ElevatePracticeProgress[]>([]);
@@ -12,16 +17,20 @@ export function AdminElevatePractice() {
   const [status, setStatus] = useState("all");
   const [faculty, setFaculty] = useState("all");
   const [academicYear, setAcademicYear] = useState("all");
+  const [team, setTeam] = useState("");
+  const [sort, setSort] = useState("staff-asc");
   const [isLoading, setIsLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   async function refresh(nextMessage = "") {
     setIsLoading(true);
+    setLoadError("");
     try {
-      setRecords(await api.elevatePracticeProgress());
+      setRecords(await api.elevatePracticeProgress("all"));
       setMessage(nextMessage);
     } catch {
-      setMessage("Elevate Learning and Innovation records could not be loaded from the API.");
+      setLoadError("ELI records could not be loaded. Check your connection and try again.");
     } finally {
       setIsLoading(false);
     }
@@ -40,14 +49,14 @@ export function AdminElevatePractice() {
     [records]
   );
   const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return records.filter((record) =>
+    return sortListRows(records.filter((record) =>
       (status === "all" || record.status === status)
       && (faculty === "all" || record.facultyCode === faculty)
       && (academicYear === "all" || record.academicYear === academicYear)
-      && (!query || `${record.staffName} ${record.externalId} ${record.email} ${record.facultyCode ?? ""} ${record.teamCode ?? ""}`.toLowerCase().includes(query))
-    );
-  }, [academicYear, faculty, records, search, status]);
+      && (!team || record.teamCode === team)
+      && matchesListSearch(search, record.staffName, record.externalId, record.email, record.facultyCode, record.facultyName, record.teamCode, record.teamName, record.academicYear, statusLabel(record.status))
+    ), record => sort.startsWith("activity") ? Date.parse(record.submittedAt ?? record.updatedAt ?? "") : sort.startsWith("year") ? record.academicYear : sort.startsWith("status") ? statusLabel(record.status) : record.staffName, sort.endsWith("desc") ? "desc" : "asc", record => `${record.staffId}-${record.academicYear}`);
+  }, [academicYear, faculty, records, search, status, team, sort]);
 
   if (selectedAssessmentId) {
     return (
@@ -65,7 +74,7 @@ export function AdminElevatePractice() {
   return (
     <div className="route-stack">
       <section className="kpi-strip" aria-label="Elevate Learning and Innovation completion summary">
-        <div className="kpi"><span>Active staff</span><strong>{records.length}</strong></div>
+        <div className="kpi"><span>Staff/year entries</span><strong>{records.length}</strong></div>
         <div className="kpi kpi-amber"><span>Not started</span><strong>{records.filter((record) => record.status === "not_started").length}</strong></div>
         <div className="kpi kpi-blue"><span>Draft</span><strong>{records.filter((record) => record.status === "draft").length}</strong></div>
         <div className="kpi kpi-green"><span>Submitted</span><strong>{records.filter((record) => record.status === "submitted").length}</strong></div>
@@ -76,21 +85,26 @@ export function AdminElevatePractice() {
           <div><p className="eyebrow">Self-assessment administration</p><h2>Elevate Learning and Innovation records</h2></div>
           <span>{filtered.length} shown</span>
         </div>
+        <p className="muted-copy">All retained assessment years are included, including records for former staff. Not started shows active staff with no assessment record. Summary counts cover the complete list; the filters below narrow the table.</p>
 
-        <div className="filter-toolbar admin-elevate-filters">
-          <label className="search-box"><Search aria-hidden="true" size={16} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Search staff, ID or team" value={search} /></label>
+        <WorkflowFilters activeCount={[status, faculty, academicYear].filter(value => value !== "all").length + Number(Boolean(team))} hasQuery={Boolean(search)} onClear={() => { setSearch(""); setStatus("all"); setFaculty("all"); setAcademicYear("all"); setTeam(""); }} primary={<>
+          <label className="search-box"><Search aria-hidden="true" size={16} /><input aria-label="Search ELI administration records" type="search" onChange={(event) => setSearch(event.target.value)} placeholder="Search staff, ID or team" value={search} /></label>
+          <AdminListSort value={sort} onChange={setSort} options={[["staff-asc","Staff: A–Z"],["staff-desc","Staff: Z–A"],["activity-desc","Last activity: newest first"],["activity-asc","Last activity: oldest first"],["year-desc","Academic year: newest first"],["status-asc","Status: A–Z"]]} />
+        </>}>
           <label><span>Status</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="all">All statuses</option><option value="not_started">Not started</option><option value="draft">Draft</option><option value="submitted">Submitted</option></select></label>
           <label><span>Faculty</span><select onChange={(event) => setFaculty(event.target.value)} value={faculty}><option value="all">All faculties</option>{faculties.map(([code, name]) => <option key={code} value={code}>{code} - {name}</option>)}</select></label>
           <label><span>Academic year</span><select onChange={(event) => setAcademicYear(event.target.value)} value={academicYear}><option value="all">All years</option>{academicYears.map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
-        </div>
+          <label><span>Team</span><select value={team} onChange={event => setTeam(event.target.value)}><option value="">All teams</option>{distinctListValues(records.map(record => record.teamCode)).map(value => <option key={value}>{value}</option>)}</select></label>
+        </WorkflowFilters>
 
         {message ? <div className="notice-row" role="status">{message}</div> : null}
+        {loadError ? <div className="notice-row" role="alert">{loadError}<Button disabled={isLoading} onClick={() => void refresh()}>Try again</Button></div> : null}
 
-        <div className="table-shell">
-          <table>
-            <thead><tr><th>Staff member</th><th>Faculty</th><th>Team</th><th>Year</th><th>Status</th><th>Last activity</th><th><span className="sr-only">Manage</span></th></tr></thead>
+        <ScrollableTableRegion label="ELI administration records">
+          <table aria-label="ELI administration records">
+            <thead><tr><th scope="col">Staff member</th><th scope="col">Faculty</th><th scope="col">Team</th><th scope="col">Year</th><th scope="col">Status</th><th scope="col">Last activity</th><th scope="col"><span className="sr-only">Manage</span></th></tr></thead>
             <tbody>
-              {isLoading ? <tr><td colSpan={7}>Loading records...</td></tr> : filtered.length === 0 ? <tr><td colSpan={7}>No staff match these filters.</td></tr> : filtered.map((record) => (
+              {isLoading ? <tr><td colSpan={7}><LoadingState label="Loading records" /></td></tr> : filtered.length === 0 ? <tr><td colSpan={7}>No staff match these filters.</td></tr> : filtered.map((record) => (
                 <tr key={`${record.staffId}-${record.academicYear}`}>
                   <td><strong>{record.staffName}</strong><small className="table-subline">{record.externalId}</small></td>
                   <td>{record.facultyCode ?? "Unassigned"}</td>
@@ -103,7 +117,7 @@ export function AdminElevatePractice() {
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
       </section>
 
       <section className="admin-elevate-note">

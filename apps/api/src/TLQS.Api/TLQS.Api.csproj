@@ -16,9 +16,11 @@
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Keys" />
     <PackageReference Include="DocumentFormat.OpenXml" />
     <PackageReference Include="MailKit" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Templates\Exports\*.docx" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="..\..\..\..\shared\workflow-form-content.json" LogicalName="TLQS.WorkflowFormContent.json" />
     <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 </Project>

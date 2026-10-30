@@ -10,7 +10,7 @@ namespace TLQS.Api.Data;
 public sealed partial class SqlFoundationDataStore
 {
     public async Task<ExportWorkbookData> GetDashboardExportAsync(string moduleKey, ExportFilter filter,
-        CurrentUser user, CancellationToken cancellationToken, bool includeWorkbookEntries = true)
+        CurrentUser user, CancellationToken cancellationToken, bool includeWorkbookEntries = true, bool includeDashboardSummary = true)
     {
         var module = NormalizeExportModuleKey(moduleKey);
         ValidateExportFilters(module, filter);
@@ -20,16 +20,18 @@ public sealed partial class SqlFoundationDataStore
         if (module == "uco-tla-reviews")
         {
             var workbook = includeWorkbookEntries ? await GetExportWorkbookAsync(module, filter, user, cancellationToken) : DashboardMetadata();
+            if (!includeDashboardSummary) return workbook;
             var dashboard = await GetUcoTlaDashboardAsync(user, filter.AcademicYear, cancellationToken);
-            return workbook with { Dashboard = UcoDashboardReportBuilder.Build(dashboard, DateTimeOffset.UtcNow) };
+            return workbook with { Dashboard = UcoDashboardReportBuilder.Build(dashboard, DateTimeOffset.UtcNow, filter.Status) };
         }
 
         var process = DashboardProcess(module);
         var recordsTask = GetProcessDashboardRecordsAsync(user, cancellationToken, filter.AcademicYear, process);
         var factsTask = GetDashboardDimensionFactsAsync(filter.AcademicYear, user, cancellationToken, process);
         var actionsTask = GetDashboardActionsAsync(filter.AcademicYear, user, cancellationToken, process);
-        var configurationTask = GetDashboardConfigurationAsync(cancellationToken);
-        await Task.WhenAll(recordsTask, factsTask, actionsTask, configurationTask);
+        var configurationTask = includeDashboardSummary ? GetDashboardConfigurationAsync(cancellationToken) : null;
+        await Task.WhenAll(recordsTask, factsTask, actionsTask);
+        if (configurationTask is not null) await configurationTask;
         var excludedUnits = await GetExcludedDashboardUnitsAsync(process, cancellationToken);
         var excludedIds = excludedUnits.Select(unit => unit.Id).ToHashSet();
         var excludedCodes = excludedUnits.Select(unit => unit.Code).ToHashSet();
@@ -43,23 +45,25 @@ public sealed partial class SqlFoundationDataStore
         var data = includeWorkbookEntries ? await GetExportWorkbookAsync(module, scopedFilter, user, cancellationToken) : DashboardMetadata();
         if (includeWorkbookEntries && process == "overview")
         {
-            var merged = data.Sheets[0];
+            var merged = (data.Sheets.FirstOrDefault(sheet => sheet.Name == "Dashboard Records") ?? data.Sheets[0]) with {Name="Form entries"};
             var supporting = new List<ExportSheet>();
             foreach (var group in records.GroupBy(record => record.ProcessKey))
             {
-                var specialisedModule = group.Key switch { "cpd_event" => "cpd", "coaching_session" => "coaching", "eli" => "elevate-practice", "liv" => "liv", "als_liv" => "als-liv", "probation_case" => "probation", "elevate_environment" => "elevate-environments", _ => null };
+                var specialisedModule = group.Key switch { "cpd_event" => "cpd", "coaching_session" => "coaching", "eli" => "elevate-practice", "liv" => "liv", "als_liv" => "als-liv", "probation_case" => "probation", "elevate_environment" => "elevate-environments", "learning_walk" => "learning-walks", "als_learning_walk" => "als-learning-walks", "work_scrutiny" => "work-scrutiny", _ => null };
                 if (specialisedModule is null) continue;
                 var specialised = await GetExportWorkbookAsync(specialisedModule, scopedFilter with { DashboardRecordIds = group.Select(record => record.Id).ToArray() }, user, cancellationToken);
-                var entries = specialised.Sheets[0] with { Name = specialised.DisplayName };
-                merged = FormEntryExportBuilder.Flatten("Form entries", merged, "Record ID", entries);
+                var entries = specialised.Sheets[0] with { Name = SafeWorksheetName(specialised.DisplayName) };
+                supporting.Add(entries);
                 // Separate detail sheets retain collection relationships and original field definitions.
-                supporting.AddRange(specialised.Sheets.Skip(1).Select((sheet, index) => sheet with { Name = SafeWorksheetName($"{specialisedModule}-{index + 1}-{sheet.Name}") }));
+                supporting.AddRange(specialised.Sheets.Skip(1).Select((sheet, index) => sheet with {
+                    Name = SafeWorksheetName($"{specialisedModule}-{index + 1}-{sheet.Name}"),SourceModuleKey=specialisedModule,SourceSheetName=sheet.Name }));
             }
             data = data with { Sheets = new[] { merged }.Concat(data.Sheets.Skip(1)).Concat(supporting).ToArray() };
         }
         if (includeWorkbookEntries && data.Sheets.Count > 0 && process is not ("actions" or "elevate_status"))
             data = data with { Sheets = new[] { DashboardSubmissionExportBuilder.AddSubmitters(data.Sheets[0], records) }.Concat(data.Sheets.Skip(1)).ToArray() };
-        var configuration = (await configurationTask).Processes.FirstOrDefault(item => item.ProcessKey == process);
+        if (!includeDashboardSummary) return data with {Filter=filter};
+        var configuration = (await configurationTask!).Processes.FirstOrDefault(item => item.ProcessKey == process);
         var reportSections = new List<DashboardReportSection>();
         var metricsList = DashboardExportScope.Metrics(process, records, facts, actions).ToList();
         var extraSheets = new List<ExportSheet>();
@@ -112,13 +116,20 @@ public sealed partial class SqlFoundationDataStore
         }
         if (process == "elevate_status")
         {
-            var status = (await GetElevateStatusDashboardAsync(filter.AcademicYear, user, cancellationToken))
-                .Where(row => DashboardExportScope.Organisation(row.AreaCode, row.ParentAreaCode, filter)).ToArray();
+            var statusStaff = (await GetElevateStatusStaffDashboardAsync(filter.AcademicYear, user, cancellationToken))
+                .Where(row => DashboardExportScope.Organisation(row.AreaCode,row.ParentAreaCode,filter)
+                    && (!filter.StatusLevel.HasValue || row.CurrentLevel==filter.StatusLevel)
+                    && (!filter.StaffId.HasValue || row.StaffId==filter.StaffId)).ToArray();
+            var status = ElevateStatusDashboardBuilder.Areas(statusStaff).ToArray();
             metricsList.Clear();
             metricsList.Add(Metric("Staff in scope", status.Sum(row => row.StaffCount)));
             metricsList.AddRange([Metric("Level 1 or above", status.Sum(row => row.Level1OrAbove)), Metric("Level 2 or above", status.Sum(row => row.Level2OrAbove)),
                 Metric("Level 3 or above", status.Sum(row => row.Level3OrAbove)), Metric("Level 4 or above", status.Sum(row => row.Level4OrAbove)), Metric("Level 5 or above", status.Sum(row => row.Level5OrAbove))]);
             extraSheets.Add(ObjectSheet("Status coverage", status));
+            reportSections.Add(new("Staff level register", "One staff member per row, using confirmed consecutive levels and qualifying internal CPD attendance.",
+                statusStaff.Select(row => new DashboardReportItem(row.StaffName,[new("Area",row.AreaName ?? row.AreaCode),
+                    new("Current level",$"{row.CurrentLevel} — {row.CurrentLevelName}"),new("Qualifying attendance",row.QualifyingAttendanceCount.ToString()),
+                    new("Next level",row.NextLevelName),new("Sessions to next level",row.SessionsToNextLevel?.ToString())])).ToArray()));
             reportSections.Add(new("Status by area", "Cumulative level totals for the selected academic year and organisation.",
                 status.Select(row => new DashboardReportItem(row.AreaName ?? row.AreaCode ?? "Unassigned", [new("Staff", row.StaffCount.ToString())],
                     [new("Level 1+", row.Level1OrAbove), new("Level 2+", row.Level2OrAbove), new("Level 3+", row.Level3OrAbove), new("Level 4+", row.Level4OrAbove), new("Level 5", row.Level5OrAbove)])).ToArray()));
@@ -158,20 +169,13 @@ public sealed partial class SqlFoundationDataStore
             reportSections.Add(new("Learning walk delivery areas", "Each form counts once. Wording follows the latest saved label for each delivery-area key.", [new("Delivery area", [], records.GroupBy(row => row.DeliveryAreaKey ?? "__not_recorded__").OrderBy(group => group.Key).Select(group => new DashboardReportDistribution(group.OrderByDescending(row => row.CreatedAt).First().DeliveryAreaName ?? "Not recorded", group.Count())).ToArray())]));
         if (configuration?.ShowActions != false)
             reportSections.Add(new("Actions", "Every action in the dashboard scope, with its owner, due date and completion state.", actions.Select(action => new DashboardReportItem(action.Title,
-                [new("Theme", action.ActionTheme), new("Owner", action.OwnerStaffName), new("Status", action.CompletedDate.HasValue ? "Complete" : action.IsOverdue ? "Overdue" : "Open"), new("Due date", action.DueDate?.ToString("dd MMM yyyy")), new("Completed date", action.CompletedDate?.ToString("dd MMM yyyy"))])).ToArray()));
+                [new("Theme", action.ActionTheme), new("Owner", action.OwnerStaffName), new("Status", CultureInfo.InvariantCulture.TextInfo.ToTitleCase(DashboardExportScope.ActionState(action))), new("Due date", action.DueDate?.ToString("dd MMM yyyy")), new("Completed date", action.CompletedDate?.ToString("dd MMM yyyy"))])).ToArray()));
 
         if (process == "overview")
             reportSections.Add(new("Process mix", "All processes contributing to this dashboard.", [new("Records by process", [], records.GroupBy(row => row.ProcessKey).OrderBy(group => group.Key).Select(group => new DashboardReportDistribution(group.Key, group.Count())).ToArray())]));
         if (process is "overview" or "actions") reportSections.Add(DashboardExportScope.ActionAssurance(actions));
         if (process is not ("actions" or "elevate_status"))
             reportSections.Add(DashboardSubmissionExportBuilder.RecordDetails(records));
-        // Keep source rows available alongside the form-shaped entry sheet; these are the exact dashboard inputs.
-        if (process != "elevate_status")
-        {
-            extraSheets.Add(ObjectSheet("Dashboard record data", records));
-            extraSheets.Add(ObjectSheet("Dashboard response data", facts));
-            extraSheets.Add(ObjectSheet("Dashboard action data", actions));
-        }
         // PDF sections mirror the expanded dashboard; raw form rows remain in Excel only.
         return data with { Filter = filter, DisplayName = configuration?.Label ?? data.DisplayName,
             Sheets = data.Sheets.Concat(extraSheets).ToArray(), Dashboard = new(metricsList, reportSections) };
@@ -222,8 +226,9 @@ public static class DashboardExportScope
         IReadOnlyList<DashboardDimensionFactSummary> facts, string process, ExportFilter filter, IReadOnlyList<DashboardActionSummary>? actions = null)
     {
         var matchingDimensions = facts.Where(fact => fact.SeriesLabel == filter.DimensionLabel).Select(fact => fact.SourceRecordId).ToHashSet();
-        if (process is "liv" or "als_liv")
-            matchingDimensions.UnionWith(Actions(actions ?? [], process, filter with { Status = null, DeliveryAreaKey = null }, new HashSet<Guid>()).Where(action => action.SourceRecordId.HasValue).Select(action => action.SourceRecordId!.Value));
+        if (filter.DimensionLabel is not null)
+            matchingDimensions.UnionWith(Actions(actions ?? [], process, filter with { Status = null, DeliveryAreaKey = null, DimensionLabel = null }, new HashSet<Guid>())
+                .Where(action => action.SourceRecordId.HasValue && action.ActionTheme==filter.DimensionLabel).Select(action => action.SourceRecordId!.Value));
         return rows.Select(row => ScopeCpd(row, filter)).OfType<ProcessDashboardRecordSummary>().Where(row => process == "overview" || row.ProcessKey == process)
             .Where(row => !row.Status.Equals("draft", StringComparison.OrdinalIgnoreCase))
             .Where(row => (row.ProcessKey == "cpd_event" && row.ParticipantCount > 0) || Organisation(row.AreaCode, row.ParentAreaCode, filter))
@@ -238,8 +243,10 @@ public static class DashboardExportScope
         var source = process switch { "eli" => "elevate_practice", "probation_case" => "probation_observation", "coaching_session" => "coaching_mentoring", _ => process };
         return rows.Where(row => !row.IsDeleted && (process is "overview" or "actions" || row.SourceFormType == source || (process == "cpd_event" && row.SourceFormType == "cpd")))
             .Where(row => Organisation(row.TeamCode, row.FacultyCode, filter) && DateMatches(DateOnly.FromDateTime(row.CreatedAt.Date), filter))
-            .Where(row => filter.Status is null || (process is "liv" or "als_liv" ? row.SourceRecordId.HasValue && recordIds.Contains(row.SourceRecordId.Value) : filter.Status == (row.CompletedDate.HasValue ? "complete" : row.IsOverdue ? "overdue" : "open")))
-            .Where(row => filter.DimensionLabel is null || row.ActionTheme == filter.DimensionLabel)
+            .Where(row => filter.Status is null || (process != "actions" ? row.SourceRecordId.HasValue && recordIds.Contains(row.SourceRecordId.Value)
+                : filter.Status == ActionState(row)))
+            .Where(row => filter.DimensionLabel is null || (process == "actions" ? row.ActionTheme == filter.DimensionLabel
+                : row.SourceRecordId.HasValue && recordIds.Contains(row.SourceRecordId.Value)))
             .Where(row => filter.DeliveryAreaKey is null || row.SourceRecordId.HasValue && recordIds.Contains(row.SourceRecordId.Value))
             .OrderBy(row => row.DueDate).ThenBy(row => row.Id).ToArray();
     }
@@ -258,12 +265,20 @@ public static class DashboardExportScope
     }
     public static DashboardReportSection ActionAssurance(IReadOnlyList<DashboardActionSummary> actions)
     {
-        var rows = actions.Where(row => row.StatusKey != "cancelled").ToArray();
-        var complete = rows.Count(row => row.CompletedDate.HasValue || row.StatusKey == "complete");
-        var active = rows.Where(row => !row.CompletedDate.HasValue && row.StatusKey != "complete").ToArray();
-        var dated = rows.Where(row => row.DueDate.HasValue).ToArray(); var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var rows = actions.Where(row => ActionState(row) != "cancelled").ToArray();
+        var complete = rows.Count(row => ActionState(row) == "complete");
+        var active = rows.Where(IsActiveAction).ToArray();
+        var completionDateMissing=rows.Count(row=>row.DueDate.HasValue && ActionState(row)=="complete" && !row.CompletedDate.HasValue);
+        var dated = rows.Where(row => row.DueDate.HasValue && (ActionState(row)!="complete" || row.CompletedDate.HasValue)).ToArray(); var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var compliant = dated.Count(row => row.CompletedDate.HasValue ? row.CompletedDate <= row.DueDate : !row.IsOverdue);
-        return new("Action assurance", "Cancelled actions are excluded from assurance measures.", [new("Action position", [new("Total", rows.Length.ToString()), new("Complete", complete.ToString()), new("In progress", active.Count(row => !row.IsOverdue).ToString()), new("Overdue", active.Count(row => row.IsOverdue).ToString()), new("Due in 14 days", active.Count(row => !row.IsOverdue && row.DueDate >= today && row.DueDate <= today.AddDays(14)).ToString()), new("Due-date compliance", dated.Length == 0 ? "No due dates" : $"{compliant} of {dated.Length} ({100m * compliant / dated.Length:0}%)")])]);
+        var fields=new List<RecordReportField> {new("Total",rows.Length.ToString()),new("Complete",complete.ToString()),
+            new("In progress",active.Count(row=>ActionState(row)=="open").ToString()),new("Overdue",active.Count(row=>ActionState(row)=="overdue").ToString()),
+            new("Due in 14 days",active.Count(row=>ActionState(row)=="open" && row.DueDate>=today && row.DueDate<=today.AddDays(14)).ToString()),
+            new("Due-date compliance",dated.Length==0 ? completionDateMissing>0 ? "No verifiable due dates" : "No due dates" : $"{compliant} of {dated.Length} ({100m*compliant/dated.Length:0}%)")};
+        if(completionDateMissing>0) fields.Add(new("Completion date not recorded",completionDateMissing.ToString()));
+        var description="Cancelled actions are excluded from assurance measures.";
+        if(completionDateMissing>0) description+=" Completed actions with a due date but no recorded completion date are excluded from due-date compliance because their timing cannot be verified.";
+        return new("Action assurance",description,[new("Action position",fields)]);
     }
     public static IReadOnlyList<DashboardReportItem> OrganisationItems(IReadOnlyList<ProcessDashboardRecordSummary> records, IReadOnlyList<DashboardDimensionFactSummary> facts, IReadOnlyList<DashboardActionSummary> actions, IReadOnlyList<StaffParticipationDashboardSummary> staff, IReadOnlyList<LivLifecycleDashboardSummary> lifecycle)
     {
@@ -276,7 +291,7 @@ public static class DashboardExportScope
             var selectedActions = actions.Where(row => Match(row.TeamCode, row.FacultyCode)).ToArray();
             var people = staff.Where(row => Match(row.AreaCode, row.ParentAreaCode)).ToArray();
             var journey = lifecycle.Where(row => Match(row.AreaCode, row.ParentAreaCode)).ToArray();
-            var fields = new List<RecordReportField> {new("Records", selected.Length.ToString()), new("Completed records", selected.Count(row => Completed(row.Status)).ToString()), new("Open actions", selectedActions.Count(row => !row.CompletedDate.HasValue).ToString()), new("Overdue actions", selectedActions.Count(row => !row.CompletedDate.HasValue && row.IsOverdue).ToString())};
+            var fields = new List<RecordReportField> {new("Records", selected.Length.ToString()), new("Completed records", selected.Count(row => Completed(row.Status)).ToString()), new("Open actions", selectedActions.Count(IsActiveAction).ToString()), new("Overdue actions", selectedActions.Count(row => ActionState(row)=="overdue").ToString())};
             fields.AddRange(OutcomeFields(ratings).Where(field => field.Label is "Average score" or "Secure or above"));
             if (people.Length > 0) { fields.Add(new("Active staff", people.Sum(row => row.ActiveStaffCount).ToString())); fields.Add(new("Participating staff", people.Sum(row => row.ParticipatingStaffCount).ToString())); }
             if (journey.Length > 0) { fields.Add(new("Visits completed", journey.Sum(row => row.VisitedCount).ToString())); fields.Add(new("Elevate practitioners", journey.Sum(row => row.PractitionerStaffCount).ToString())); }
@@ -284,6 +299,9 @@ public static class DashboardExportScope
         }).ToArray();
     }
     public static bool Completed(string value) => new[] { "completed", "submitted", "closed" }.Contains(value.ToLowerInvariant());
+    public static string ActionState(DashboardActionSummary action) => action.StatusKey=="cancelled" ? "cancelled"
+        : action.CompletedDate.HasValue || action.StatusKey=="complete" ? "complete" : action.IsOverdue ? "overdue" : "open";
+    private static bool IsActiveAction(DashboardActionSummary action) => ActionState(action) is "open" or "overdue";
     public static bool DateMatches(DateOnly date, ExportFilter filter) => (!filter.FromDate.HasValue || date >= filter.FromDate) && (!filter.ToDate.HasValue || date <= filter.ToDate);
     private static string[] Split(string? value, char delimiter) => value?.Split(delimiter, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries) ?? [];
     public static IReadOnlyList<DashboardReportDistribution> Trend(IEnumerable<DateOnly> dates, ExportFilter filter)
@@ -304,7 +322,7 @@ public static class DashboardExportScope
     {
         DashboardReportMetric Count(string label, long count) => new(label, count.ToString("N0", CultureInfo.InvariantCulture));
         var metrics = new List<DashboardReportMetric> { Count(process == "actions" ? "Actions raised" : "Records in view", process == "actions" ? actions.Count : records.Count),
-            Count("Completed records", records.Count(row => Completed(row.Status))), Count("Open actions", actions.Count(row => !row.CompletedDate.HasValue)), Count("Overdue actions", actions.Count(row => !row.CompletedDate.HasValue && row.IsOverdue)) };
+            Count("Completed records", records.Count(row => Completed(row.Status))), Count("Open actions", actions.Count(IsActiveAction)), Count("Overdue actions", actions.Count(row => ActionState(row)=="overdue")) };
         var numeric = facts.Where(fact => !fact.DimensionKey.EndsWith("_statement_outcome") && fact.NumericValue.HasValue).ToArray();
         if (process != "overview" && numeric.Length > 0) metrics.Add(new("Secure practice or above", $"{100m * numeric.Count(fact => fact.NumericValue >= 3) / numeric.Length:0}%"));
         if (process is "learning_walk" or "als_learning_walk") metrics.Add(Count("Focus selections", facts.Where(fact => fact.DimensionKey == "focus").Select(fact => (fact.SourceRecordId, fact.SeriesKey)).Distinct().Count()));

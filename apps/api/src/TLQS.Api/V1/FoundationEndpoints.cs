@@ -13,10 +13,16 @@ public static partial class FoundationEndpoints
     {
         var api = app.MapGroup("/api/v1").RequireAuthorization();
         MapCustomRoleAdminEndpoints(api);
+        MapReportingExplorerEndpoints(api);
+        MapAdminCsvImportEndpoints(api);
+        MapFormAdministrationEndpoints(api);
+        MapProcessReviewEndpoints(api);
         api.AddEndpointFilter(async (context, next) =>
         {
             try { return await next(context); }
             catch (System.Data.DBConcurrencyException exception) when (context.HttpContext.Request.Path.StartsWithSegments("/api/v1/admin"))
+            { return Results.Conflict(new { message = exception.Message }); }
+            catch (System.Data.DBConcurrencyException exception) when (context.HttpContext.Request.Path.StartsWithSegments("/api/v1/form-templates"))
             { return Results.Conflict(new { message = exception.Message }); }
             catch (UnauthorizedAccessException exception) when (context.HttpContext.Request.Path.StartsWithSegments("/api/v1/admin"))
             { return Results.Json(new { message = exception.Message }, statusCode: 403); }
@@ -693,7 +699,7 @@ public static partial class FoundationEndpoints
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             var processKey = NormalizeLivProcess(process);
-            return CanSubmitLivProcess(currentUser, processKey) || currentUser.HasPermission(PermissionKeys.ReportsViewAll)
+            return currentUser.StaffId.HasValue || CanSubmitLivProcess(currentUser, processKey) || currentUser.HasPermission(PermissionKeys.ReportsViewAll)
                 ? Results.Ok(await store.GetLivCasesV2Async(currentUser, cancellationToken, processKey))
                 : Results.Forbid();
         });
@@ -702,7 +708,7 @@ public static partial class FoundationEndpoints
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             var processKey = NormalizeLivProcess(process);
-            return CanSubmitLivProcess(currentUser, processKey)
+            return currentUser.StaffId.HasValue || CanSubmitLivProcess(currentUser, processKey)
                 ? Results.Ok(await store.GetLivConfigurationAsync(cancellationToken, processKey))
                 : Results.Forbid();
         });
@@ -800,8 +806,20 @@ public static partial class FoundationEndpoints
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             var processKey = NormalizeLivProcess(process);
-            if (!CanSubmitLivProcess(currentUser, processKey)) return Results.Forbid();
+            if (!currentUser.StaffId.HasValue && !CanSubmitLivProcess(currentUser, processKey)) return Results.Forbid();
             var result = await store.UpdateLivStageAsync(id, stageId, request, currentUser, cancellationToken, processKey);
+            return result switch
+            {
+                FormSubmissionUpdateResult.Saved => Results.NoContent(),
+                FormSubmissionUpdateResult.Forbidden => Results.Forbid(),
+                _ => Results.NotFound()
+            };
+        });
+
+        api.MapPut("/liv-records/{id:guid}/stages/{stageId:guid}/visibility", async (Guid id, Guid stageId, string? process, SaveLivStageVisibilityRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        {
+            var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
+            var result = await store.UpdateLivStageVisibilityAsync(id, stageId, request.VisibleToStaff, currentUser, cancellationToken, NormalizeLivProcess(process));
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -1323,12 +1341,13 @@ public static partial class FoundationEndpoints
             return Results.Ok(result);
         });
 
-        api.MapGet("/elevate-practice/progress", async (ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapGet("/elevate-practice/progress", async (string? academicYear, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
-            return AdministrationAccessPolicy.CanManageRecords(currentUser)
-                ? Results.Ok(await store.GetElevatePracticeProgressAsync(SqlFoundationDataStore.GetCurrentAcademicYear(), cancellationToken))
-                : Results.Forbid();
+            if (!AdministrationAccessPolicy.CanManageRecords(currentUser)) return Results.Forbid();
+            if (!ElevateProgressPolicy.TryResolveAcademicYear(academicYear, SqlFoundationDataStore.GetCurrentAcademicYear(), out var selectedYear))
+                return Results.BadRequest(new { message = "Choose an academic year in YYYY/YY format, or all." });
+            return Results.Ok(await store.GetElevatePracticeProgressAsync(selectedYear, cancellationToken));
         });
 
         api.MapGet("/elevate-practice/admin/records/{assessmentId:guid}", async (Guid assessmentId, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
@@ -1823,7 +1842,7 @@ public static partial class FoundationEndpoints
             };
         });
 
-        api.MapPost("/form-templates/{id:guid}/publish", async (Guid id, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
+        api.MapPost("/form-templates/{id:guid}/publish", async (Guid id, FormVersionCommandRequest request, ClaimsPrincipal principal, SqlFoundationDataStore store, CancellationToken cancellationToken) =>
         {
             var currentUser = await GetCurrentUserAsync(principal, store, cancellationToken);
             if (!currentUser.HasPermission(PermissionKeys.FormsManage))
@@ -1831,7 +1850,7 @@ public static partial class FoundationEndpoints
                 return Results.Forbid();
             }
 
-            var result = await store.PublishFormTemplateAsync(id, currentUser, cancellationToken);
+            var result = await store.PublishFormTemplateAsync(id, currentUser, cancellationToken, request.RowVersion);
             return result switch
             {
                 FormSubmissionUpdateResult.Saved => Results.NoContent(),
@@ -2012,7 +2031,10 @@ public sealed record MyTeamMemberSummary(
     int? ElevateLevel,
     bool CanOpenProfile,
     bool CanManageActions);
-public sealed record RecordSummary(Guid Id, Guid ModuleId, string RecordType, string Title, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate, DateTimeOffset CreatedAt, string SubmissionStatus, string AcademicYear, bool IsCreatedByCurrentUser, string? DeliveryAreaKey = null, string? DeliveryAreaName = null);
+public sealed record RecordSummary(Guid Id, Guid ModuleId, string RecordType, string Title, Guid? SubjectStaffId, Guid? OwnerStaffId, Guid? OrgUnitId, DateOnly? RecordDate, DateTimeOffset CreatedAt, string SubmissionStatus, string AcademicYear, bool IsCreatedByCurrentUser, string? DeliveryAreaKey = null, string? DeliveryAreaName = null,
+    string? OwnerDisplayName = null, string? SubjectDisplayName = null, string? SubmitterDisplayName = null,
+    string? TemplateKey = null, string? TemplateName = null, string? Summary = null,
+    IReadOnlyList<string>? ThemeNames = null, IReadOnlyList<string>? ParticipantNames = null, string? RoomCode = null, string? RoomName = null);
 
 public sealed record RecordNavigationSummary(Guid Id, string RecordType, Guid? SubjectStaffId);
 public sealed record ActionSummary(
@@ -2065,7 +2087,9 @@ public sealed record ActionSummary(
     string? IntendedImpact,
     string? ProgressStatus,
     Guid? ParentActionId,
-    string AcademicYear)
+    string AcademicYear,
+    IReadOnlyList<Guid>? ResponsibleStaffIds=null,
+    IReadOnlyList<string>? ResponsibleStaffNames=null)
 {
     public bool IsDeleted => DeletedAt.HasValue;
 }
@@ -2140,7 +2164,10 @@ public sealed record ProcessDashboardRecordSummary(
     string? AcademicYear = null,
     string? DeliveryAreaKey = null,
     string? DeliveryAreaName = null,
-    string? SubmitterDisplayName = null);
+    string? SubmitterDisplayName = null,
+    Guid? OwnerStaffId = null,
+    Guid? SubmitterStaffId = null,
+    DateTimeOffset? SubmittedAt = null);
 public sealed record LearningWalkRollupSummary(Guid? FacultyOrgUnitId, string? FacultyCode, string? FacultyName, Guid? ChildOrgUnitId, string? ChildCode, string? ChildName, long RecordCount, DateOnly? LatestRecordDate);
 public sealed record RecordDetailSummary(
     Guid Id,
@@ -2213,7 +2240,8 @@ public sealed record SubmitFormRequest(
     bool SaveAsDraft = false,
     IReadOnlyList<Guid>? CourseIds = null,
     IReadOnlyList<SubmitLinkedActionRequest>? Actions = null,
-    IReadOnlyList<DraftLinkedActionRequest>? DraftActions = null);
+    IReadOnlyList<DraftLinkedActionRequest>? DraftActions = null,
+    Guid? TemplateVersionId = null);
 public sealed record DraftLinkedActionRequest(string? ActionTheme, string? Title, Guid? OwnerStaffId, DateOnly? DueDate, string? Detail = null);
 public sealed record SubmitLinkedActionRequest(string ActionTheme, string Title, Guid OwnerStaffId, DateOnly DueDate, string? Detail = null);
 public sealed record SubmittedFormResult(Guid SubmissionId, Guid RecordId);
@@ -2331,7 +2359,8 @@ public sealed record LivCaseSummary(
     string? EliSecondaryFocusOther = null,
     Guid? LinkedProbationCaseId = null,
     int? ProbationObservationNumber = null,
-    bool IsCreatedByCurrentUser = false);
+    bool IsCreatedByCurrentUser = false,
+    string? AcademicYear = null);
 public sealed record LivLookupOptionSummary(string Key, string Name, int DisplayOrder, bool IsOther = false);
 public sealed record LivConfigurationSummary(
     IReadOnlyList<LivLookupOptionSummary> DeliveryAreas,
@@ -2366,6 +2395,7 @@ public sealed record SaveLivStageRequest(
     IReadOnlyList<string>? DevelopmentOpportunityKeys,
     string? StageStatus = null);
 public sealed record LivStageCreatedSummary(Guid Id, string StageType, int StageOrder, Guid? VisitId);
+public sealed record SaveLivStageVisibilityRequest(bool VisibleToStaff);
 public sealed record LivStageSummary(
     Guid Id,
     string StageType,
@@ -2379,7 +2409,9 @@ public sealed record LivStageSummary(
     string? DistanceImpactText,
     IReadOnlyList<string> DevelopmentOpportunityKeys,
     Guid? VisitId,
-    bool CanEdit);
+    bool CanEdit,
+    bool VisibleToStaff = false,
+    bool CanView = true);
 public sealed record LivCycleSummary(
     Guid Id,
     int CycleNumber,
@@ -2588,7 +2620,8 @@ public sealed record UpdateFormTemplateStructureRequest(
     string Name,
     string? Description,
     Guid? OrgUnitId,
-    IReadOnlyList<FormStructureSectionRequest> Sections);
+    IReadOnlyList<FormStructureSectionRequest> Sections,
+    string? RowVersion = null);
 
 public sealed record FormStructureSectionRequest(
     string SectionKey,

@@ -711,7 +711,7 @@ public sealed partial class SqlFoundationDataStore
     }
 
     public Task<IReadOnlyList<ElevatePracticeProgressSummary>> GetElevatePracticeProgressAsync(
-        string academicYear,
+        string? academicYear,
         CancellationToken cancellationToken) =>
         QueryAsync(
             """
@@ -721,18 +721,24 @@ public sealed partial class SqlFoundationDataStore
                    CASE WHEN team.org_unit_type = 'team' THEN team.code ELSE NULL END AS team_code,
                    CASE WHEN team.org_unit_type = 'team' THEN team.name ELSE NULL END AS team_name,
                    COALESCE(assessment.status, 'not_started') AS status,
-                   assessment.updated_at, assessment.submitted_at
+                   assessment.updated_at, assessment.submitted_at,
+                   COALESCE(assessment.academic_year, @academicYear, @currentAcademicYear) AS academic_year
             FROM people.staff s
             LEFT JOIN org.org_units team ON team.id = s.primary_org_unit_id AND team.archived_at IS NULL
             LEFT JOIN org.org_units faculty ON faculty.id = team.parent_org_unit_id AND faculty.archived_at IS NULL
             LEFT JOIN quality.elevate_practice_assessments assessment
                 ON assessment.staff_id = s.id
-                AND assessment.academic_year = @academicYear
+                AND (@academicYear IS NULL OR assessment.academic_year = @academicYear)
                 AND assessment.archived_at IS NULL
-            WHERE s.account_status = 'active' AND s.archived_at IS NULL
-            ORDER BY s.display_name;
+            WHERE (s.account_status = 'active' AND s.archived_at IS NULL)
+               OR (@academicYear IS NULL AND assessment.id IS NOT NULL)
+            ORDER BY s.display_name, academic_year DESC, assessment.id;
             """,
-            command => command.Parameters.AddWithValue("@academicYear", academicYear),
+            command =>
+            {
+                command.Parameters.AddWithValue("@academicYear", (object?)academicYear ?? DBNull.Value);
+                command.Parameters.AddWithValue("@currentAcademicYear", GetCurrentAcademicYear());
+            },
             reader => new ElevatePracticeProgressSummary(
                 GetGuidOrNull(reader, 0),
                 GetGuidOrNull(reader, 1),
@@ -744,7 +750,7 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 7),
                 GetStringOrNull(reader, 8),
                 GetStringOrNull(reader, 9),
-                academicYear,
+                reader.GetString(13),
                 reader.GetString(10),
                 GetDateTimeOffsetOrNull(reader, 11),
                 GetDateTimeOffsetOrNull(reader, 12)),

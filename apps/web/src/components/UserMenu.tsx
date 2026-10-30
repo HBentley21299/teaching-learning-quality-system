@@ -3,6 +3,7 @@ import { ChevronDown, KeyRound, LogOut } from "lucide-react";
 import { api } from "../services/api";
 import { confirmUnsavedNavigation } from "./UnsavedChangesGuard";
 import { getLocalToken, isAuthEnabled, signOut } from "../services/auth";
+import { ModalDialog } from "./ModalDialog";
 
 /**
  * Topbar user chip: clicking the name opens a menu with sign out and, for
@@ -16,12 +17,8 @@ export function UserMenu({ displayName }: { displayName: string }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [feedback, setFeedback] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (isChangingPassword) dialogRef.current?.showModal();
-  }, [isChangingPassword]);
   useEffect(() => {
     if (isOpen) menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [isOpen]);
@@ -46,18 +43,17 @@ export function UserMenu({ displayName }: { displayName: string }) {
     }
     setIsSaving(true);
     setFeedback("");
-    const result = await api.changePassword({ currentPassword, newPassword });
-    setIsSaving(false);
-    if (result.ok) {
-      closeDialog();
-      return;
-    }
-    setFeedback(result.message ?? "The password could not be changed.");
+    try {
+      const result = await api.changePassword({ currentPassword, newPassword });
+      if (result.ok) { closeDialog(); return; }
+      setFeedback(result.message ?? "The password could not be changed. Try again.");
+    } catch { setFeedback("The password could not be changed. Check your connection and try again."); }
+    finally { setIsSaving(false); }
   }
 
   return (
-    <div className="user-chip user-menu" onKeyDown={event => {
-      if (event.key === "Escape" && isOpen) { setIsOpen(false); triggerRef.current?.focus(); }
+    <div className="user-chip user-menu" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setIsOpen(false); }} onKeyDown={event => {
+      if (event.key === "Escape" && isOpen) { event.stopPropagation(); setIsOpen(false); triggerRef.current?.focus(); }
       if (isOpen && ["ArrowDown", "ArrowUp"].includes(event.key)) {
         event.preventDefault();
         const options = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
@@ -65,7 +61,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
         options[(next + options.length) % options.length]?.focus();
       }
     }}>
-      <button
+      {canSignOut ? <button
         aria-expanded={isOpen}
         aria-haspopup="menu"
         ref={triggerRef}
@@ -75,12 +71,12 @@ export function UserMenu({ displayName }: { displayName: string }) {
       >
         <span>{displayName}</span>
         <ChevronDown aria-hidden="true" size={15} />
-      </button>
+      </button> : <span className="user-menu-trigger"><span>{displayName}</span></span>}
 
       {isOpen ? (
         <>
           <div className="user-menu-backdrop" onClick={() => setIsOpen(false)} />
-          <div className="user-menu-list" role="menu" ref={menuRef}>
+          <div className="user-menu-list" role="menu" aria-label="Your account" ref={menuRef}>
             {hasLocalSession ? (
               <button
                 onClick={() => { setIsOpen(false); setIsChangingPassword(true); }}
@@ -104,17 +100,20 @@ export function UserMenu({ displayName }: { displayName: string }) {
       ) : null}
 
       {isChangingPassword ? (
-        <dialog ref={dialogRef} className="user-menu-dialog-backdrop" aria-label="Change password" onCancel={event => { event.preventDefault(); if (!isSaving) closeDialog(); }}>
+        <ModalDialog className="account-password-dialog" label="Change password" onClose={closeDialog} busy={isSaving}>
           <form
             className="panel user-menu-dialog"
             onClick={(event) => event.stopPropagation()}
             onSubmit={submitPasswordChange}
+            aria-busy={isSaving}
+            aria-describedby={feedback ? "password-change-feedback" : undefined}
           >
-            <h2>Change password</h2>
+            <h2 data-dialog-heading tabIndex={-1}>Change password</h2>
             <label>
               <span>Current password</span>
               <input
                 autoComplete="current-password"
+                disabled={isSaving}
                 onChange={(event) => setCurrentPassword(event.target.value)}
                 required
                 type="password"
@@ -125,6 +124,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
               <span>New password (at least 10 characters)</span>
               <input
                 autoComplete="new-password"
+                disabled={isSaving}
                 minLength={10}
                 onChange={(event) => setNewPassword(event.target.value)}
                 required
@@ -136,6 +136,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
               <span>Confirm new password</span>
               <input
                 autoComplete="new-password"
+                disabled={isSaving}
                 minLength={10}
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 required
@@ -143,7 +144,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
                 value={confirmPassword}
               />
             </label>
-            {feedback ? <p className="login-error" role="alert">{feedback}</p> : null}
+            {feedback ? <p className="login-error" role="alert" id="password-change-feedback">{feedback}</p> : null}
             <div className="user-menu-dialog-actions">
               <button className="button button-secondary" disabled={isSaving} onClick={closeDialog} type="button">
                 Cancel
@@ -153,7 +154,7 @@ export function UserMenu({ displayName }: { displayName: string }) {
               </button>
             </div>
           </form>
-        </dialog>
+        </ModalDialog>
       ) : null}
     </div>
   );

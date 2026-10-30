@@ -5,7 +5,8 @@ public sealed record PagedResult<T>(
     int Page,
     int PageSize,
     int TotalCount,
-    int TotalPages);
+    int TotalPages,
+    ListFilterOptions? FilterOptions = null);
 
 public sealed record StaffProfileSectionSummary(
     int ReflectionCount,

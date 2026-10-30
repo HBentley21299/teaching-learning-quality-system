@@ -67,7 +67,7 @@ public sealed partial class SqlFoundationDataStore
         var reviews = await ReadExportSheetAsync(connection, "UCO TLA Reviews", """
             SELECT TOP (@exportTake)
                    CONVERT(nvarchar(36), review.record_id) AS [Record ID],
-                   record.title AS [Record title], template.template_key AS [Form template], version.version_label AS [Form version],
+                   record.title AS [Record title], COALESCE(version.display_name, template.name) AS [Form template], version.version_label AS [Form version],
                    record.academic_year_key AS [Academic year], review.workflow_status AS [Workflow status],
                    lecturer.display_name AS [Lecturer], observer.display_name AS [Observer],
                    review.observation_at AS [Observation date and time], review.session_type AS [Session type],
@@ -75,17 +75,26 @@ public sealed partial class SqlFoundationDataStore
                    review.number_registered AS [Number registered], review.number_present AS [Number present],
                    review.number_late AS [Number late], review.professional_discussion_at AS [Professional discussion],
                    review.lecturer_acknowledged_at AS [Lecturer acknowledged], review.observer_signed_at AS [Observer signed],
+                   lecturer_signatory.display_name AS [Lecturer signatory], observer_signatory.display_name AS [Observer signatory],
+                   review.reopened_at AS [Reopened at], review.reopen_reason AS [Reopen reason],
                    follow_up.follow_up_type AS [Follow-up type], follow_up.scheduled_at AS [Follow-up date],
-                   follow_up.status AS [Follow-up status], follow_up.outcome_notes AS [Follow-up outcome]
+                   follow_up.status AS [Follow-up status], follow_up.outcome_notes AS [Follow-up outcome], follow_up.completed_at AS [Follow-up completed at]
             FROM quality.uco_tla_reviews review
             JOIN core.records record ON record.id = review.record_id
             JOIN people.staff lecturer ON lecturer.id = review.lecturer_staff_id
             JOIN people.staff observer ON observer.id = review.observer_staff_id
+            LEFT JOIN auth.user_accounts lecturer_signatory_account ON lecturer_signatory_account.id=review.lecturer_acknowledged_by_user_account_id
+            LEFT JOIN people.staff lecturer_signatory ON lecturer_signatory.id=lecturer_signatory_account.staff_id
+            LEFT JOIN auth.user_accounts observer_signatory_account ON observer_signatory_account.id=review.observer_signed_by_user_account_id
+            LEFT JOIN people.staff observer_signatory ON observer_signatory.id=observer_signatory_account.staff_id
             LEFT JOIN forms.form_submissions submission ON submission.id = review.form_submission_id
             LEFT JOIN forms.form_template_versions version ON version.id = submission.form_template_version_id
             LEFT JOIN forms.form_templates template ON template.id = version.form_template_id
             LEFT JOIN quality.uco_tla_follow_ups follow_up ON follow_up.review_record_id = review.record_id
             WHERE review.archived_at IS NULL AND record.archived_at IS NULL AND review.workflow_status <> N'observer_draft' AND org.fn_dashboard_process_unit_visible(record.org_unit_id,N'uco_tla_review')=1 AND org.fn_dashboard_process_unit_visible(lecturer.primary_org_unit_id,N'uco_tla_review')=1
+              AND (@dashboardRecordIds IS NULL OR review.record_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardRecordIds)))
+              AND (@teamCode IS NULL OR EXISTS (SELECT 1 FROM org.org_units area WHERE area.id=record.org_unit_id AND area.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@teamCode,N','))))
+              AND (@teamCode IS NOT NULL OR @facultyCode IS NULL OR EXISTS (SELECT 1 FROM org.org_units area LEFT JOIN org.org_units parent ON parent.id=area.parent_org_unit_id WHERE area.id=record.org_unit_id AND COALESCE(parent.code,area.code) IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@facultyCode,N','))))
               AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
               AND (@fromDate IS NULL OR CONVERT(date, review.observation_at) >= @fromDate)
               AND (@toDate IS NULL OR CONVERT(date, review.observation_at) <= @toDate)
@@ -98,7 +107,7 @@ public sealed partial class SqlFoundationDataStore
         var responses = await ReadExportSheetAsync(connection, "Form Answers", """
             SELECT TOP (@exportTake)
                    CONVERT(nvarchar(36), review.record_id) AS [Record ID], lecturer.display_name AS [Lecturer],
-                   template.template_key AS [Form template], version.version_label AS [Form version], section.title AS [Section],
+                   COALESCE(version.display_name, template.name) AS [Form template], version.version_label AS [Form version], section.title AS [Section],
                    CONCAT(template.template_key, N'/', section.section_key, N'/', field.field_key) AS [Question key],
                    field.label AS [Question], field.field_type AS [Response type],
                    COALESCE(response.response_text, CONVERT(nvarchar(100), response.response_number),
@@ -114,6 +123,9 @@ public sealed partial class SqlFoundationDataStore
             LEFT JOIN forms.form_responses response ON response.form_submission_id = submission.id AND response.form_field_id = field.id AND response.archived_at IS NULL
             LEFT JOIN core.lookup_values lookup_value ON lookup_value.id = response.response_lookup_value_id
             WHERE review.archived_at IS NULL AND record.archived_at IS NULL AND review.workflow_status <> N'observer_draft' AND org.fn_dashboard_process_unit_visible(record.org_unit_id,N'uco_tla_review')=1 AND org.fn_dashboard_process_unit_visible(lecturer.primary_org_unit_id,N'uco_tla_review')=1
+              AND (@dashboardRecordIds IS NULL OR review.record_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardRecordIds)))
+              AND (@teamCode IS NULL OR EXISTS (SELECT 1 FROM org.org_units area WHERE area.id=record.org_unit_id AND area.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@teamCode,N','))))
+              AND (@teamCode IS NOT NULL OR @facultyCode IS NULL OR EXISTS (SELECT 1 FROM org.org_units area LEFT JOIN org.org_units parent ON parent.id=area.parent_org_unit_id WHERE area.id=record.org_unit_id AND COALESCE(parent.code,area.code) IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@facultyCode,N','))))
               AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
               AND (@fromDate IS NULL OR CONVERT(date, review.observation_at) >= @fromDate)
               AND (@toDate IS NULL OR CONVERT(date, review.observation_at) <= @toDate)
@@ -135,6 +147,9 @@ public sealed partial class SqlFoundationDataStore
             JOIN people.staff lecturer ON lecturer.id = review.lecturer_staff_id
             JOIN people.staff owner ON owner.id = action_plan.owner_staff_id
             WHERE review.archived_at IS NULL AND record.archived_at IS NULL AND review.workflow_status <> N'observer_draft' AND org.fn_dashboard_process_unit_visible(record.org_unit_id,N'uco_tla_review')=1 AND org.fn_dashboard_process_unit_visible(lecturer.primary_org_unit_id,N'uco_tla_review')=1
+              AND (@dashboardRecordIds IS NULL OR review.record_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@dashboardRecordIds)))
+              AND (@teamCode IS NULL OR EXISTS (SELECT 1 FROM org.org_units area WHERE area.id=record.org_unit_id AND area.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@teamCode,N','))))
+              AND (@teamCode IS NOT NULL OR @facultyCode IS NULL OR EXISTS (SELECT 1 FROM org.org_units area LEFT JOIN org.org_units parent ON parent.id=area.parent_org_unit_id WHERE area.id=record.org_unit_id AND COALESCE(parent.code,area.code) IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@facultyCode,N','))))
               AND (@academicYear IS NULL OR record.academic_year_key = @academicYear)
               AND (@fromDate IS NULL OR CONVERT(date, review.observation_at) >= @fromDate)
               AND (@toDate IS NULL OR CONVERT(date, review.observation_at) <= @toDate)
@@ -145,11 +160,14 @@ public sealed partial class SqlFoundationDataStore
             """, command => AddUcoExportParameters(command, filter), cancellationToken);
 
         responses = FormEntryExportBuilder.ExpandAnswers(responses);
-        return [FormEntryExportBuilder.Flatten("Form entries", reviews, "Record ID", responses, actions), reviews, responses, actions];
+        return [FormEntryExportBuilder.Flatten("Form entries", reviews, "Record ID", responses), reviews, responses, actions];
     }
 
     private static void AddUcoExportParameters(SqlCommand command, ExportFilter filter)
     {
+        command.Parameters.AddWithValue("@dashboardRecordIds",filter.DashboardRecordIds is null ? DBNull.Value : JsonSerializer.Serialize(filter.DashboardRecordIds));
+        AddNullableText(command,"@facultyCode",filter.FacultyCode,4000);
+        AddNullableText(command,"@teamCode",filter.TeamCode,4000);
         AddNullableText(command, "@academicYear", filter.AcademicYear, 10);
         AddNullableDate(command, "@fromDate", filter.FromDate);
         AddNullableDate(command, "@toDate", filter.ToDate);

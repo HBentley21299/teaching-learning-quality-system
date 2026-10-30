@@ -1,39 +1,71 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowRight, BarChart3, BookOpenCheck, CalendarClock, CheckCircle2, ClipboardCheck, Eye, MessageSquareText, RefreshCw, Search, ShieldCheck, Sparkles, UsersRound } from "lucide-react";
 import { DashboardReportButton } from "../components/ExportButtons";
+import { LoadingState } from "../components/LoadingState";
+import { DashboardDataExplorer } from "../components/DashboardDataExplorer";
 import { KpiStrip } from "../components/KpiStrip";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
+import { DashboardRequestCache } from "../services/dashboardRequestCache";
+import { compareListValues, distinctListValues, matchesListSearch } from "../services/listQuery";
+import { Pagination } from "../components/CollapsibleSection";
 import type { UcoTlaAccessSummary, UcoTlaDashboardSummary, UcoTlaReviewSummary } from "../services/types";
 
 type Props = {
   access: UcoTlaAccessSummary;
   academicYear: string;
   onOpenReview: (recordId: string) => void;
+  section?: "summary" | "data";
+  onSectionChange?: (section: "summary" | "data") => void;
+  requestCache?: DashboardRequestCache;
+  accessScope?: string;
 };
 
-export function UcoTlaDashboard({ access, academicYear, onOpenReview }: Props) {
-  const [dashboard, setDashboard] = useState<UcoTlaDashboardSummary | null>(null);
+export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: controlledSection, onSectionChange, requestCache: sharedCache, accessScope = JSON.stringify(access) }: Props) {
+  const localCache = useRef(new DashboardRequestCache()).current;
+  const requestCache = sharedCache ?? localCache;
+  const scope = JSON.stringify([academicYear, accessScope, access.canAccess, access.canManage, access.canExport]);
+  const [localSection, setLocalSection] = useState<"summary" | "data">("summary");
+  const section = controlledSection ?? localSection;
+  const [loadedDashboard, setLoadedDashboard] = useState<{ scope: string; revision: number; value: UcoTlaDashboardSummary } | null>(null);
+  const dashboard = loadedDashboard?.scope === scope ? loadedDashboard.value : null;
   const [reviewSearch, setReviewSearch] = useState("");
   const [reviewStatus, setReviewStatus] = useState("all");
+  const [lecturerFilter, setLecturerFilter] = useState("all");
+  const [observerFilter, setObserverFilter] = useState("all");
+  const [courseFilter, setCourseFilter] = useState("all");
+  const [moduleFilter, setModuleFilter] = useState("all");
+  const [followUpFilter, setFollowUpFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("observationAt");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [page, setPage] = useState(1);
   const [error, setError] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const loadSequence = useRef(0);
+  const activeScope = useRef(scope);
+  activeScope.current = scope;
 
-  async function refresh() {
+  async function refresh(invalidate = true) {
+    if (invalidate) { requestCache.clear(); setLoadedDashboard(null); }
+    const sequence = ++loadSequence.current;
+    const requestedScope = scope;
     setIsRefreshing(true);
     setError("");
     try {
-      setDashboard(await api.ucoTlaDashboard(academicYear));
+      const next = await requestCache.get(`uco-summary:${requestedScope}`, () => api.ucoTlaDashboard(academicYear));
+      if (sequence === loadSequence.current && activeScope.current === requestedScope) setLoadedDashboard({ scope: requestedScope, revision: sequence, value: next });
     } catch {
-      setError("The UCO TLA dashboard could not be loaded.");
+      if (sequence === loadSequence.current && activeScope.current === requestedScope) setError("The UCO TLA dashboard could not be loaded.");
     } finally {
-      setIsRefreshing(false);
+      if (sequence === loadSequence.current && activeScope.current === requestedScope) setIsRefreshing(false);
     }
   }
 
-  useEffect(() => { void refresh(); }, [academicYear]);
+  useEffect(() => { setLoadedDashboard(null); setPage(1); void refresh(false); return () => { ++loadSequence.current; }; }, [scope]);
+  const formFilterKey = JSON.stringify({ academicYear, status: reviewStatus === "all" ? undefined : reviewStatus });
+  const loadFormData = useCallback(() => requestCache.get(`uco-data:${scope}:${formFilterKey}`, () => api.dashboardRecordData(academicYear, "uco_tla_review", JSON.parse(formFilterKey))), [requestCache, scope, formFilterKey]);
 
-  const reviews = dashboard?.reviews ?? [];
+  const reviews = (dashboard?.reviews ?? []).filter(review => reviewStatus === "all" || review.workflowStatus === reviewStatus);
   const completedReviews = reviews.filter((review) => review.workflowStatus === "completed").length;
   const inProgressReviews = reviews.length - completedReviews;
   const completedSectionMarks = reviews.reduce((total, review) => total + review.completedSectionCount, 0);
@@ -45,9 +77,14 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview }: Props) {
     { status: "awaiting_lecturer", label: "With lecturer", detail: "Discussion and reflection", tone: "amber" },
     { status: "awaiting_finalisation", label: "Final sign-off", detail: "Observer acknowledgement", tone: "teal" },
     { status: "completed", label: "Complete", detail: "Signed and locked", tone: "green" }
-  ].map((item) => ({ ...item, count: reviews.filter((review) => review.workflowStatus === item.status).length }));
+  ].map((item) => ({ ...item, count: (dashboard?.reviews ?? []).filter((review) => review.workflowStatus === item.status).length }));
   const largestWorkflowCount = Math.max(1, ...workflowDistribution.map((item) => item.count));
   const now = Date.now();
+  const openActionCount = reviews.reduce((sum, review) => sum + review.openActionCount, 0);
+  const overdueActionCount = reviews.reduce((sum, review) => sum + review.overdueActionCount, 0);
+  const followUpsDue = reviews.filter(review => review.followUpStatus === "scheduled" && review.followUpAt && new Date(review.followUpAt).getTime() <= now + 14 * 24 * 60 * 60 * 1000).length;
+  const reviewIds = new Set(reviews.map(review => review.recordId));
+  const practiceHighlights = (dashboard?.practiceHighlights ?? []).filter(highlight => reviewIds.has(highlight.recordId));
   const upcomingObservations = reviews.filter((review) => {
     if (!review.observationAt) return false;
     const observation = new Date(review.observationAt).getTime();
@@ -57,19 +94,37 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview }: Props) {
     const attention = reviewAttention(review, now);
     return attention ? [{ review, attention }] : [];
   }).sort((left, right) => left.attention.priority - right.attention.priority || sortableDate(left.review.observationAt) - sortableDate(right.review.observationAt));
-  const query = reviewSearch.trim().toLowerCase();
   const filteredReviews = reviews.filter((review) =>
-    (reviewStatus === "all" || review.workflowStatus === reviewStatus)
-    && (!query || `${review.lecturerName} ${review.observerName} ${review.courseTitle} ${review.moduleTitle}`.toLowerCase().includes(query))
-  );
+    (lecturerFilter === "all" || review.lecturerName === lecturerFilter)
+    && (observerFilter === "all" || review.observerName === observerFilter)
+    && (courseFilter === "all" || (review.courseTitle || "Not recorded") === courseFilter)
+    && (moduleFilter === "all" || (review.moduleTitle || "Not recorded") === moduleFilter)
+    && (followUpFilter === "all" || (review.followUpStatus || "Not recorded") === followUpFilter)
+    && matchesListSearch(reviewSearch, review.title, review.lecturerName, review.observerName, review.courseTitle, review.moduleTitle, humanStatus(review.workflowStatus), formatDateTime(review.observationAt), formatDateTime(review.professionalDiscussionAt), formatDateTime(review.followUpAt), humanStatus(review.followUpStatus ?? ""), `${review.completedSectionCount}/7 sections marked`, `${review.openActionCount} open`, `${review.overdueActionCount} overdue`)
+  ).sort((left, right) => {
+    const value = (review: UcoTlaReviewSummary) => ["observationAt", "professionalDiscussionAt", "followUpAt"].includes(sortBy) ? review[sortBy as "observationAt"] ? new Date(review[sortBy as "observationAt"]!) : null : sortBy === "workflowStatus" ? humanStatus(review.workflowStatus) : review[sortBy as "lecturerName"];
+    return compareListValues(value(left), value(right), sortDirection) || left.lecturerName.localeCompare(right.lecturerName) || left.recordId.localeCompare(right.recordId);
+  });
+  const totalPages = Math.max(1, Math.ceil(filteredReviews.length / 15)), currentPage = Math.min(page, totalPages);
+  const choiceSets = [
+    { key: "lecturer", label: "Lecturer", value: lecturerFilter, change: setLecturerFilter, values: distinctListValues((dashboard?.reviews ?? []).map(review => review.lecturerName)) },
+    { key: "observer", label: "Observer", value: observerFilter, change: setObserverFilter, values: distinctListValues((dashboard?.reviews ?? []).map(review => review.observerName)) },
+    { key: "course", label: "Course", value: courseFilter, change: setCourseFilter, values: distinctListValues((dashboard?.reviews ?? []).map(review => review.courseTitle || "Not recorded")) },
+    { key: "module", label: "Module", value: moduleFilter, change: setModuleFilter, values: distinctListValues((dashboard?.reviews ?? []).map(review => review.moduleTitle || "Not recorded")) },
+    { key: "follow-up", label: "Follow-up", value: followUpFilter, change: setFollowUpFilter, values: distinctListValues((dashboard?.reviews ?? []).map(review => review.followUpStatus || "Not recorded")) }
+  ];
 
   return <>
     <header className="intelligence-header">
-      <div><p className="eyebrow">University Centre Oldham · {academicYear}</p><h1>Teaching, Learning and Assessment Reviews</h1><p>Workflow oversight and qualitative practice evidence. No teaching rating or score is calculated.</p></div>
-      <div className="intelligence-header-actions">{access.canExport ? <DashboardReportButton filters={{ academicYear }} moduleKey="uco-tla-reviews" /> : null}<Button disabled={isRefreshing} icon={RefreshCw} onClick={() => void refresh()}>{isRefreshing ? "Refreshing" : "Refresh"}</Button></div>
+      <div><p className="eyebrow">University Centre Oldham · {academicYear}</p><h1>Teaching, Learning and Assessment Reviews</h1><p>Track reviews, follow-ups and shared practice. Written evidence is kept in its original form.</p></div>
+      <div className="intelligence-header-actions">{access.canExport && dashboard ? <DashboardReportButton filters={{ academicYear, status: reviewStatus === "all" ? undefined : reviewStatus }} moduleKey="uco-tla-reviews" /> : null}<Button disabled={isRefreshing} icon={RefreshCw} onClick={() => void refresh()}>{isRefreshing ? "Refreshing" : "Refresh"}</Button></div>
     </header>
 
-    {error ? <div className="intelligence-warning"><AlertCircle size={16} />{error}</div> : null}
+    {error ? <div className="intelligence-warning" role="alert"><AlertCircle aria-hidden="true" size={16} />{error}</div> : null}
+    {!dashboard ? <section className="panel">{error ? <><h2>Reporting data unavailable</h2><p>Unavailable records are not shown as zero. Refresh to try again.</p></> : <LoadingState label="Loading UCO reporting data" detail={`Retrieving records for ${academicYear}.`} />}</section> : <>
+    <section className="panel intelligence-filter-panel"><div className="intelligence-filter-heading"><div><span>Reporting scope</span><strong>{academicYear} · UCO TLA Reviews</strong></div><small>Workflow stage filters review activity, form data and exports. Annual staff coverage uses the academic-year cohort.</small></div><label className="entry-field"><span>Workflow stage</span><select aria-label="UCO dashboard workflow stage" onChange={event => setReviewStatus(event.target.value)} value={reviewStatus}><option value="all">All stages</option><option value="observer_draft">Observer review</option><option value="awaiting_lecturer">With lecturer</option><option value="awaiting_finalisation">Final sign-off</option><option value="completed">Complete</option>{distinctListValues((dashboard?.reviews ?? []).map(review => review.workflowStatus)).filter(value => !["observer_draft", "awaiting_lecturer", "awaiting_finalisation", "completed"].includes(value)).map(value => <option key={value} value={value}>{humanStatus(value)}</option>)}</select></label></section>
+    {access.canExport ? <nav className="dashboard-section-tabs" aria-label="UCO report sections"><button type="button" aria-current={section === "summary" ? "page" : undefined} onClick={() => (onSectionChange ?? setLocalSection)("summary")}>Summary</button><button type="button" aria-current={section === "data" ? "page" : undefined} onClick={() => (onSectionChange ?? setLocalSection)("data")}>Form data</button></nav> : null}
+    {access.canExport && section === "data" ? <><p className="dashboard-explorer-scope-note">Saved report data includes released reviews. Unpublished observer drafts remain available through their original review workflow.</p><DashboardDataExplorer processKey="uco_tla_review" academicYear={academicYear} filters={{ academicYear, status: reviewStatus === "all" ? undefined : reviewStatus }} loadData={loadFormData} refreshKey={loadedDashboard?.revision} onOpenEntry={onOpenReview} /></> : <>
 
     <KpiStrip items={[
       access.canManage
@@ -77,8 +132,8 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview }: Props) {
         : { label: "Reviews in my view", value: reviews.length, tone: "blue" },
       { label: "Reviews complete", value: completedReviews, tone: "green" },
       { label: "In progress", value: inProgressReviews, tone: "amber" },
-      { label: "Follow-ups due", value: dashboard?.followUpsDue ?? 0, tone: "amber" },
-      { label: "Overdue actions", value: dashboard?.overdueActions ?? 0, tone: "red" }
+      { label: "Follow-ups due", value: followUpsDue, tone: "amber" },
+      { label: "Overdue actions", value: overdueActionCount, tone: "red" }
     ]} />
 
     <section className="uco-dashboard-grid" aria-label="UCO review dashboard">
@@ -88,13 +143,13 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview }: Props) {
           <div className="uco-dashboard-ring" role="img" aria-label={`${headlineProgress}% ${access.canManage ? "annual coverage" : "review completion"}`} style={{ background: `conic-gradient(var(--teal) 0 ${headlineProgress}%, var(--surface-muted) ${headlineProgress}% 100%)` }}><span><strong>{headlineProgress}%</strong><small>{access.canManage ? "coverage" : "complete"}</small></span></div>
           <div className="uco-dashboard-progress-copy"><strong>{access.canManage ? `${dashboard?.coveredUcoStaff ?? 0} of ${dashboard?.activeUcoStaff ?? 0} staff covered` : `${completedReviews} of ${reviews.length} reviews complete`}</strong><p>Coverage means an authenticated review has reached final sign-off.</p></div>
         </div>
-        <div className="uco-dashboard-mini-metrics"><div><span>Sections marked</span><strong>{sectionReadiness}%</strong></div><div><span>Next 30 days</span><strong>{upcomingObservations}</strong></div><div><span>Open actions</span><strong>{dashboard?.openActions ?? 0}</strong></div></div>
+        <div className="uco-dashboard-mini-metrics"><div><span>Sections marked</span><strong>{sectionReadiness}%</strong></div><div><span>Next 30 days</span><strong>{upcomingObservations}</strong></div><div><span>Open actions</span><strong>{openActionCount}</strong></div></div>
       </article>
 
       <article className="panel uco-dashboard-card">
-        <header><div><p className="eyebrow">Workflow</p><h2>Where reviews are now</h2><span>Select a stage to filter the register below.</span></div><BarChart3 size={20} /></header>
+        <header><div><p className="eyebrow">Workflow</p><h2>Where reviews are now</h2><span>All stages in this academic year. Select a stage to filter the report; select it again to show all.</span></div><BarChart3 aria-hidden="true" size={20} /></header>
         <div className="uco-dashboard-workflow-bars">
-          {workflowDistribution.map((item) => <button key={item.status} onClick={() => setReviewStatus(item.status)} type="button"><span><strong>{item.label}</strong><small>{item.detail}</small></span><div><i className={`is-${item.tone}`} style={{ width: item.count ? `${Math.max(8, item.count * 100 / largestWorkflowCount)}%` : "0%" }} /></div><b>{item.count}</b></button>)}
+          {workflowDistribution.map((item) => <button aria-pressed={reviewStatus === item.status} key={item.status} onClick={() => setReviewStatus(reviewStatus === item.status ? "all" : item.status)} type="button"><span><strong>{item.label}</strong><small>{item.detail}</small></span><div aria-hidden="true"><i className={`is-${item.tone}`} style={{ width: item.count ? `${Math.max(2, item.count * 100 / largestWorkflowCount)}%` : "0%" }} /></div><b>{item.count}</b></button>)}
         </div>
       </article>
     </section>
@@ -108,12 +163,13 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview }: Props) {
             return <button key={review.recordId} onClick={() => onOpenReview(review.recordId)} type="button"><span className={`uco-attention-icon is-${attention.tone}`}><AttentionIcon size={17} /></span><span><strong>{review.lecturerName}</strong><small>{attention.label} · {review.courseTitle || "Session details pending"}</small></span><time>{attention.dateLabel}</time><ArrowRight size={16} /></button>;
           })}
         </div>
+        {attentionItems.length > 5 ? <p className="uco-dashboard-method-note">Showing the first 5 of {attentionItems.length} reviews needing attention. All reviews are available in the register below.</p> : null}
       </article>
 
       <article className="panel uco-dashboard-card">
         <header><div><p className="eyebrow">Qualitative evidence</p><h2>Practice highlights</h2><span>Recent good or excellent-practice narratives shared through the review process.</span></div><Sparkles size={20} /></header>
         <div className="uco-dashboard-highlight-list">
-          {(dashboard?.practiceHighlights ?? []).length === 0 ? <div className="uco-dashboard-empty"><BookOpenCheck size={22} /><div><strong>No shared highlights yet</strong><span>Good-practice narratives appear after the observer sends a review to the lecturer.</span></div></div> : dashboard!.practiceHighlights.map((highlight) => <button key={`${highlight.recordId}-${highlight.category}`} onClick={() => onOpenReview(highlight.recordId)} type="button"><span>{highlight.category}</span><blockquote>{highlight.narrative}</blockquote><small>{highlight.lecturerName} · {highlight.courseTitle} / {highlight.moduleTitle}</small></button>)}
+          {practiceHighlights.length === 0 ? <div className="uco-dashboard-empty"><BookOpenCheck size={22} /><div><strong>No shared highlights in this view</strong><span>Good-practice narratives appear after the observer sends a review to the lecturer.</span></div></div> : practiceHighlights.map((highlight) => <button key={`${highlight.recordId}-${highlight.category}`} onClick={() => onOpenReview(highlight.recordId)} type="button"><span>{highlight.category}</span><blockquote>{highlight.narrative}</blockquote><small>{highlight.lecturerName} · {highlight.courseTitle} / {highlight.moduleTitle}</small></button>)}
         </div>
         <p className="uco-dashboard-method-note"><ShieldCheck size={15} />Narrative evidence is shown as written. It is not scored, ranked or automatically interpreted.</p>
       </article>
@@ -122,11 +178,20 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview }: Props) {
     <section className="panel">
       <div className="panel-heading"><div><h2>{access.canManage ? "UCO review register" : "Reviews in my view"}</h2><span>{filteredReviews.length} of {reviews.length} reviews in {academicYear || "the current academic year"}</span></div></div>
       <div className="filter-toolbar uco-dashboard-filter">
-        <label className="search-box"><Search size={16} aria-hidden="true" /><input onChange={(event) => setReviewSearch(event.target.value)} placeholder="Search lecturer, observer, course or module" value={reviewSearch} /></label>
-        <label><span>Workflow stage</span><select onChange={(event) => setReviewStatus(event.target.value)} value={reviewStatus}><option value="all">All stages</option><option value="observer_draft">Observer review</option><option value="awaiting_lecturer">With lecturer</option><option value="awaiting_finalisation">Final sign-off</option><option value="completed">Complete</option></select></label>
+        <label className="search-box"><Search size={16} aria-hidden="true" /><input aria-label="Search UCO review register" onChange={(event) => { setReviewSearch(event.target.value); setPage(1); }} placeholder="Search people, sessions, dates or progress" value={reviewSearch} /></label>
+        <label className="dashboard-explorer-filter"><span>Sort by</span><select aria-label="Sort UCO reviews by" value={sortBy} onChange={event => { setSortBy(event.target.value); setPage(1); }}>{[["lecturerName", "Lecturer"], ["observerName", "Observer"], ["title", "Review title"], ["courseTitle", "Course"], ["moduleTitle", "Module"], ["observationAt", "Observation date"], ["workflowStatus", "Workflow stage"], ["completedSectionCount", "Sections marked"], ["openActionCount", "Open actions"], ["overdueActionCount", "Overdue actions"], ["professionalDiscussionAt", "Discussion date"], ["followUpAt", "Follow-up date"], ["followUpStatus", "Follow-up status"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <label className="dashboard-explorer-filter"><span>Order</span><select aria-label="UCO review sort order" value={sortDirection} onChange={event => { setSortDirection(event.target.value as "asc" | "desc"); setPage(1); }}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+        <Button variant="secondary" onClick={() => { setLecturerFilter("all"); setObserverFilter("all"); setCourseFilter("all"); setModuleFilter("all"); setFollowUpFilter("all"); setReviewSearch(""); setPage(1); }}>Clear register filters</Button>
       </div>
-      <div className="uco-review-list">{filteredReviews.length === 0 ? <p className="muted-copy">No UCO TLA Reviews match this dashboard view.</p> : filteredReviews.map((review) => <DashboardReviewRow key={review.recordId} review={review} onOpen={() => onOpenReview(review.recordId)} />)}</div>
+      <details className="reporting-register-more"><summary>People and session filters{[lecturerFilter, observerFilter, courseFilter, moduleFilter, followUpFilter].filter(value => value !== "all").length ? <span className="reporting-filter-count">{[lecturerFilter, observerFilter, courseFilter, moduleFilter, followUpFilter].filter(value => value !== "all").length} active</span> : null}</summary><div className="filter-toolbar reporting-register-filters">
+        {choiceSets.map(choice => <label className="dashboard-explorer-filter" key={choice.key}><span>{choice.label}</span><select aria-label={`UCO register ${choice.key}`} value={choice.value} onChange={event => { choice.change(event.target.value); setPage(1); }}><option value="all">All {choice.label.toLocaleLowerCase()} values</option>{choice.values.map(value => <option key={value} value={value}>{choice.key === "follow-up" ? humanStatus(value) : value}</option>)}{choice.value !== "all" && !choice.values.includes(choice.value) ? <option value={choice.value}>{choice.value} · no matching records</option> : null}</select></label>)}
+      </div></details>
+      <p className="dashboard-explorer-scope-note">These people, session and follow-up filters refine this register. Summary figures, form data and Excel use the academic year and workflow stage above. Choices include historical values from all permitted reviews.</p>
+      <div className="uco-review-list">{filteredReviews.length === 0 ? <p className="muted-copy">No UCO TLA Reviews match this dashboard view.</p> : filteredReviews.slice((currentPage - 1) * 15, currentPage * 15).map((review) => <DashboardReviewRow key={review.recordId} review={review} onOpen={() => onOpenReview(review.recordId)} />)}</div>
+      <Pagination page={currentPage} totalPages={totalPages} onPageChange={setPage} />
     </section>
+    </>}
+    </>}
   </>;
 }
 

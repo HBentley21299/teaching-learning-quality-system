@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { LoadingState } from "./LoadingState";
 
 type CollapsibleSectionProps = {
   storageKey: string;
@@ -13,6 +14,7 @@ type CollapsibleSectionProps = {
   isEmpty?: boolean;
   children: ReactNode;
   actions?: ReactNode;
+  toolbar?: ReactNode;
   onExpandedChange?: (expanded: boolean) => void;
   className?: string;
   persistState?: boolean;
@@ -30,6 +32,7 @@ export function CollapsibleSection({
   isEmpty = false,
   children,
   actions,
+  toolbar,
   onExpandedChange,
   className = "",
   persistState = true
@@ -51,7 +54,10 @@ export function CollapsibleSection({
   function toggle() {
     setExpanded((current) => {
       const next = !current;
-      if (persistState) window.sessionStorage.setItem(`collapse:${storageKey}`, next ? "open" : "closed");
+      if (persistState) {
+        try { window.sessionStorage.setItem(`collapse:${storageKey}`, next ? "open" : "closed"); }
+        catch { /* Expanding a section must still work when storage is disabled. */ }
+      }
       return next;
     });
   }
@@ -69,30 +75,35 @@ export function CollapsibleSection({
         </button>
         {actions ? <div className="collapsible-section-actions">{actions}</div> : null}
       </div>
-      {expanded ? (
-        <div className="collapsible-section-content" id={contentId}>
-          {isLoading ? <div className="section-state" role="status">Loading records...</div> : null}
+        <div className="collapsible-section-content" id={contentId} hidden={!expanded} aria-busy={expanded && isLoading || undefined}>
+          {expanded ? <>
+          {toolbar}
+          {isLoading ? <LoadingState label={`Loading ${title.toLocaleLowerCase()}`} /> : null}
           {!isLoading && error ? <div className="section-state section-state-error" role="alert">{error}</div> : null}
           {!isLoading && !error && isEmpty ? <div className="section-state">{emptyMessage}</div> : null}
           {!isLoading && !error && !isEmpty ? children : null}
+          </> : null}
         </div>
-      ) : null}
     </section>
   );
 }
 
-export function Pagination({ page, totalPages, onPageChange }: { page: number; totalPages: number; onPageChange: (page: number) => void }) {
+export function Pagination({ page, totalPages, onPageChange, label = "Pagination" }: { page: number; totalPages: number; onPageChange: (page: number) => void; label?: string }) {
   if (totalPages <= 1) return null;
+  const currentPage = Math.max(1, Math.min(page, totalPages));
   return (
-    <nav aria-label="Pagination" className="pagination-controls">
-      <button aria-label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)} title="Previous page" type="button"><ChevronLeft size={17} /></button>
-      <span>Page {page} of {totalPages}</span>
-      <button aria-label="Next page" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)} title="Next page" type="button"><ChevronRight size={17} /></button>
+    <nav aria-label={label} className="pagination-controls">
+      <button aria-label="Previous page" disabled={currentPage <= 1} onClick={() => onPageChange(currentPage - 1)} type="button"><ChevronLeft aria-hidden="true" size={17} /></button>
+      <span aria-live="polite" aria-atomic="true">Page {currentPage} of {totalPages}</span>
+      <button aria-label="Next page" disabled={currentPage >= totalPages} onClick={() => onPageChange(currentPage + 1)} type="button"><ChevronRight aria-hidden="true" size={17} /></button>
     </nav>
   );
 }
 
 function readSessionState(storageKey: string, fallback: boolean) {
-  const stored = window.sessionStorage.getItem(`collapse:${storageKey}`);
-  return stored === "open" ? true : stored === "closed" ? false : fallback;
+  if (typeof window === "undefined") return fallback;
+  try {
+    const stored = window.sessionStorage.getItem(`collapse:${storageKey}`);
+    return stored === "open" ? true : stored === "closed" ? false : fallback;
+  } catch { return fallback; }
 }

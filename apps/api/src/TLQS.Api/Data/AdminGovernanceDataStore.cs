@@ -382,7 +382,7 @@ public sealed partial class SqlFoundationDataStore
                    COALESCE(uco_review.workflow_status, liv.status, practice.status, coaching.status, submission.status,
                             CASE WHEN record.archived_at IS NULL THEN N'complete' ELSE N'archived' END) AS status,
                    record.record_date, record.created_at, record.updated_at, record.archived_at,
-                   deleted_staff.display_name, record.deletion_reason
+                   deleted_staff.display_name, record.deletion_reason, record.academic_year_key
             FROM core.records record
             JOIN core.modules module ON module.id = record.module_id
             LEFT JOIN people.staff subject ON subject.id = record.subject_staff_id
@@ -410,7 +410,7 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 5), GetGuidOrNull(reader, 6), GetStringOrNull(reader, 7),
                 GetStringOrNull(reader, 8), GetStringOrNull(reader, 9), GetStringOrNull(reader, 10), GetStringOrNull(reader, 11),
                 reader.GetString(12), GetDateOnlyOrNull(reader, 13), reader.GetFieldValue<DateTimeOffset>(14),
-                GetDateTimeOffsetOrNull(reader, 15), GetDateTimeOffsetOrNull(reader, 16), GetStringOrNull(reader, 17), GetStringOrNull(reader, 18)),
+                GetDateTimeOffsetOrNull(reader, 15), GetDateTimeOffsetOrNull(reader, 16), GetStringOrNull(reader, 17), GetStringOrNull(reader, 18), GetStringOrNull(reader, 19)),
             cancellationToken);
     }
 

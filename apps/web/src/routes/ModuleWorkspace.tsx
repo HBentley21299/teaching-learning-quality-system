@@ -1,6 +1,13 @@
+import { LoadingState } from "../components/LoadingState";
+import { hasFormAnswer, isCustomChoiceField, normalizeFormAnswer, parseChoiceAnswers, serializeChoiceAnswers } from "../services/formChoiceAnswers";
+import { useWorkflowPagination, WorkflowPagination } from "../components/WorkflowPagination";
+import { WorkflowErrorSummary } from "../components/WorkflowErrorSummary";
+import { focusWorkflowControl, requiredWorkflowMessage, workflowDescription, type WorkflowFieldError } from "../services/workflowExperience";
+import { WorkflowFeedback } from "../components/WorkflowFeedback";
+import { WorkflowFilters } from "../components/WorkflowFilters";
 import { learningWalkDeliveryChoices, type LearningWalkDeliveryArea } from "../services/learningWalkDeliveryAreas";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, Building2, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, X } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Archive, Building2, CalendarPlus, CheckCircle2, ChevronDown, Edit3, Eye, FilePlus2, Plus, RotateCcw, Save, Send, Upload, X } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/UnsavedChangesGuard";
 import { DraftActionsEditor } from "../components/DraftActionsEditor";
@@ -12,6 +19,9 @@ import { RoomSearchSelect } from "../components/RoomSearchSelect";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { WorkScrutinyCreateForm, WorkScrutinyResponseField } from "../components/WorkScrutinyCreateForm";
 import { api } from "../services/api";
+import { distinctListValues, sortListRows } from "../services/listQuery";
+import { selectWorkspaceRecords } from "../services/workflowListQueries";
+import { canUseAdminCsvImport } from "../services/csvImportPresentation";
 import type {
   ActionOwnerOption,
   ActionSummary,
@@ -51,6 +61,7 @@ type ModuleWorkspaceProps = {
   initialRecordId?: string;
   onRecordOpened?: (recordId: string) => void;
   onRecordClosed?: () => void;
+  onOpenCsvImport?: () => void | Promise<void>;
 };
 
 const workspaceConfig: Record<WorkspaceMode, {
@@ -109,7 +120,7 @@ const mandatoryCpdConfig = { ...workspaceConfig.cpd, templateKey: "cpd_mandatory
 
 type CpdWorkspaceView = "managed" | "external" | "mandatory";
 
-export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "", onRecordOpened, onRecordClosed }: ModuleWorkspaceProps) {
+export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = [], user, onActionsChanged, initialRecordId = "", onRecordOpened, onRecordClosed, onOpenCsvImport }: ModuleWorkspaceProps) {
   const canManageCpd = user.permissions.includes("cpd.manage");
   const canLogMandatoryCpd = mode === "cpd" && user.permissions.includes("cpd.mandatory_log");
   const canLogCpdEvent = mode === "cpd" && canManageCpd;
@@ -127,6 +138,12 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingRecords, setIsLoadingRecords] = useState(true);
+  const [recordsLoadFailed, setRecordsLoadFailed] = useState(false);
+  const refreshRequest = useRef(0);
+  const detailRequest = useRef(0);
+  const detailOrigin = useRef<HTMLElement | null>(null);
+  const [openingRecordId, setOpeningRecordId] = useState("");
   const [definition, setDefinition] = useState<FormDefinition | null>(null);
   const [definitionError, setDefinitionError] = useState("");
   const [orgUnits, setOrgUnits] = useState<OrgUnitSummary[]>([]);
@@ -141,17 +158,26 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const { owners: leaderActionOwners, loading: ownersLoading, error: ownersError, retry: retryOwners } = useActionOwners(undefined, undefined, config.recordType, requiresLeaderActionOwner);
   const [cpdThemes, setCpdThemes] = useState<string[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
-  const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(false);
+  const [isActiveRecordsOpen, setIsActiveRecordsOpen] = useState(true);
   const [recordOwnershipView, setRecordOwnershipView] = useState<"mine" | "scope">("mine");
   const [recordSearch, setRecordSearch] = useState("");
   const [recordStatusFilter, setRecordStatusFilter] = useState("all");
   const [recordAreaFilter, setRecordAreaFilter] = useState("all");
-  const [recordSort, setRecordSort] = useState<"newest" | "oldest" | "area" | "status">("newest");
+  const [recordSort, setRecordSort] = useState("newest");
+  const [recordTypeFilter, setRecordTypeFilter] = useState("all");
+  const [recordThemeFilter, setRecordThemeFilter] = useState("all");
+  const [recordPersonFilter, setRecordPersonFilter] = useState("all");
+  const [recordParticipantFilter, setRecordParticipantFilter] = useState("all");
+  const [recordDeliveryFilter, setRecordDeliveryFilter] = useState("all");
+  const [recordRoomFilter, setRecordRoomFilter] = useState("all");
+  const [recordFrom, setRecordFrom] = useState("");
+  const [recordTo, setRecordTo] = useState("");
   const [actions, setActions] = useState<ActionSummary[]>([]);
   const [selectedDetail, setSelectedDetail] = useState<RecordDetail | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [editResponses, setEditResponses] = useState<Record<string, string>>({});
   const [statusMessage, setStatusMessage] = useState("");
+  const [validationErrors, setValidationErrors] = useState<WorkflowFieldError[]>([]);
   const [isCreatingAction, setIsCreatingAction] = useState(false);
   const [actionTheme, setActionTheme] = useState("");
   const [actionTitle, setActionTitle] = useState("");
@@ -160,13 +186,19 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   const openedInitialRecord = useRef("");
   const editBaseline = useRef("");
   const clearNavigation = useUnsavedChanges({ label: config.recordLabel, saving: isSaving,
+    submission: isCreating && mode !== "scrutiny" || isEditing && selectedDetail?.submissionStatus !== "submitted",
+    submitLabel: isEditing ? "Submit" : config.submitLabel,
+    onSubmit: isEditing
+      ? selectedDetail?.canEdit && ["draft", "reopened"].includes(selectedDetail.submissionStatus) ? submitEditedForm : undefined
+      : isCreating && mode !== "scrutiny" ? () => saveRecord(false) : undefined,
     dirty: (isCreating && mode !== "scrutiny" && (Object.values(responses).some(Boolean) || draftActions.length > 0))
       || (isEditing && JSON.stringify([editResponses, editDraftActions]) !== editBaseline.current),
     onSave: () => isEditing ? saveEdit() : saveRecord(true),
     onDiscard: () => { setIsCreating(false); setIsEditing(false); setResponses({}); setDraftActions([]); }
   });
   const clearActionNavigation = useUnsavedChanges({ label: "Linked action", saving: isSaving && isCreatingAction,
-    dirty: isCreatingAction && Boolean(actionTheme || actionTitle || actionDueDate), onSave: () => createLinkedAction(),
+    submission: true, submitLabel: "Create action", onSubmit: () => createLinkedAction(),
+    dirty: isCreatingAction && Boolean(actionTheme || actionTitle || actionDueDate),
     onDiscard: () => { setIsCreatingAction(false); setActionTheme(""); setActionTitle(""); setActionDueDate(""); } });
 
   const canManageForms = user.permissions.includes("forms.manage");
@@ -202,7 +234,8 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
   const editSections = selectedDetail?.sections ?? [];
   const editEntrySections = getEnvironmentEntrySections(mode, editSections, environmentPillars);
-  const detailSections = getEnvironmentEntrySections(mode, editSections, environmentPillars);
+  // Saved submissions retain their original questions, including since-retired pillars.
+  const detailSections = orderEnvironmentSections(mode, editSections);
   const editFacultyId = getResponseValue(editSections, editResponses, "faculty_area");
   const editTeamId = getResponseValue(editSections, editResponses, "team_level");
   const editTeam = useMemo(() => orgUnits.find((orgUnit) => orgUnit.id === editTeamId), [orgUnits, editTeamId]);
@@ -214,82 +247,41 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     getResponseValue(editSections, editResponses, "additional_focus_context")
   );
 
-  const recordAreaOptions = useMemo(
-    () =>
-      orgUnits
-        .filter((orgUnit) => records.some((record) => record.orgUnitId === orgUnit.id))
-        .map((orgUnit) => {
-          const parent = orgUnits.find((candidate) => candidate.id === orgUnit.parentOrgUnitId);
-          return {
-            id: orgUnit.id,
-            label: parent?.code ? `${parent.code} / ${orgUnit.code}` : orgUnit.code
-          };
-        })
-        .sort((left, right) => left.label.localeCompare(right.label)),
-    [orgUnits, records]
-  );
-
-  const recordStatusOptions = useMemo(
-    () => Array.from(new Set(records.map((record) => record.submissionStatus))).sort(),
-    [records]
-  );
-
-  const displayedRecords = useMemo(() => {
-    const ownershipRecords = recordOwnershipView === "mine"
-      ? records.filter((record) => record.isCreatedByCurrentUser)
-      : records;
-    if (!isLearningWalkMode) {
-      return ownershipRecords;
-    }
-
-    const query = recordSearch.trim().toLocaleLowerCase();
-    const filtered = ownershipRecords.filter((record) => {
-      const areaLabel = getRecordAreaLabel(record, orgUnits);
-      const matchesSearch =
-        !query ||
-        [record.title, areaLabel, record.deliveryAreaName ?? "Not recorded", formatStatus(record.submissionStatus), record.recordDate ?? ""]
-          .some((value) => value.toLocaleLowerCase().includes(query));
-      const matchesStatus = recordStatusFilter === "all" || record.submissionStatus === recordStatusFilter;
-      const matchesArea = recordAreaFilter === "all" || record.orgUnitId === recordAreaFilter;
-      return matchesSearch && matchesStatus && matchesArea;
-    });
-
-    return [...filtered].sort((left, right) => {
-      if (recordSort === "oldest") {
-        return getRecordTimestamp(left) - getRecordTimestamp(right);
-      }
-      if (recordSort === "area") {
-        return getRecordAreaLabel(left, orgUnits).localeCompare(getRecordAreaLabel(right, orgUnits));
-      }
-      if (recordSort === "status") {
-        return formatStatus(left.submissionStatus).localeCompare(formatStatus(right.submissionStatus));
-      }
-      return getRecordTimestamp(right) - getRecordTimestamp(left);
-    });
-  }, [mode, orgUnits, recordAreaFilter, recordOwnershipView, recordSearch, recordSort, recordStatusFilter, records, user.staffId]);
-
-  const hasRecordFilters =
-    recordSearch.trim().length > 0 || recordStatusFilter !== "all" || recordAreaFilter !== "all" || recordSort !== "newest";
+  const recordAreaOptions = sortListRows([...new Map(records.map(record => [record.orgUnitId || "unassigned", { id: record.orgUnitId || "unassigned", label: getRecordAreaLabel(record, orgUnits) }])).values()], area => area.label);
+  const recordStatusOptions = distinctListValues(records.map(record => record.submissionStatus));
+  const recordTypeOptions = sortListRows([...new Map(records.filter(record => record.templateKey).map(record => [record.templateKey!, record.templateName || record.templateKey!])).entries()], entry => entry[1]);
+  const recordThemeOptions = distinctListValues(records.flatMap(record => record.themeNames || []));
+  const recordPersonOptions = distinctListValues(records.flatMap(record => [record.subjectDisplayName, record.ownerDisplayName, record.submitterDisplayName]));
+  const recordParticipantOptions = distinctListValues(records.flatMap(record => record.participantNames || []));
+  const recordRoomOptions = sortListRows([...new Map(records.map(record => [record.roomCode || record.roomName || "unassigned", [record.roomCode, record.roomName].filter(Boolean).join(" - ") || "Not recorded"])).entries()], entry => entry[1]);
+  const recordDeliveryOptions = distinctListValues(records.map(record => record.deliveryAreaName));
+  const displayedRecords = selectWorkspaceRecords(records, orgUnits, { search: recordSearch, status: recordStatusFilter, area: recordAreaFilter,
+    type: recordTypeFilter, theme: recordThemeFilter, person: recordPersonFilter, participant: recordParticipantFilter,
+    deliveryArea: recordDeliveryFilter, room: recordRoomFilter, from: recordFrom, to: recordTo, sort: recordSort, mine: recordOwnershipView === "mine" });
+  const recordPage = useWorkflowPagination(displayedRecords, JSON.stringify([academicYear, mode, recordOwnershipView, recordSearch, recordStatusFilter, recordAreaFilter, recordTypeFilter, recordThemeFilter, recordPersonFilter, recordParticipantFilter, recordDeliveryFilter, recordRoomFilter, recordFrom, recordTo, recordSort]));
 
   useEffect(() => {
     let cancelled = false;
     setSelectedDetail(null);
+    setRecords([]);
     if (mode !== "cpd") {
       setIsCreating(false);
     }
     setIsEditing(false);
     setDefinition(null);
     setDefinitionError("");
-    setIsActiveRecordsOpen(false);
+    setIsActiveRecordsOpen(true);
     setRecordOwnershipView("mine");
     setRecordSearch("");
     setRecordStatusFilter("all");
     setRecordAreaFilter("all");
     setRecordSort("newest");
-    setStatusMessage("");
+    setRecordTypeFilter("all"); setRecordThemeFilter("all"); setRecordPersonFilter("all"); setRecordParticipantFilter("all");
+    setRecordDeliveryFilter("all"); setRecordRoomFilter("all"); setRecordFrom(""); setRecordTo("");
+    setStatusMessage(""); setValidationErrors([]);
     void refreshData();
     if (mode === "scrutiny" || (mode === "cpd" && cpdCreateOptionCount === 0)) {
-      return;
+      return () => { cancelled = true; refreshRequest.current += 1; detailRequest.current += 1; };
     }
     api.formDefinition(config.templateKey)
       .then((nextDefinition) => {
@@ -301,11 +293,12 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         if (cancelled) return;
         setDefinition(null);
         setDefinitionError(
-          `The ${config.recordLabel} form template could not be loaded. Check the database migrations have been applied.`
+          `The ${config.recordLabel} form could not be loaded. Try again, or ask an administrator to check the published form.`
         );
       });
     return () => {
       cancelled = true;
+      refreshRequest.current += 1; detailRequest.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [academicYear, config.templateKey, cpdCreateOptionCount, mode]);
@@ -329,6 +322,8 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   }, [initialRecordId]);
 
   async function refreshData() {
+    const request = ++refreshRequest.current;
+    setIsLoadingRecords(true);
     try {
       const [nextRecords, nextOrgUnits, nextActions, nextRooms, nextLookups, nextEnvironmentPillars] = await Promise.all([
         api.records(academicYear),
@@ -338,8 +333,9 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         mode === "cpd" ? api.lookups() : Promise.resolve([]),
         mode === "elevate" ? api.elevateEnvironmentPillars() : Promise.resolve([] as ElevateEnvironmentPillarSummary[])
       ]);
+      if (request !== refreshRequest.current) return;
       setRecords(nextRecords.filter((record) => record.recordType === config.recordType));
-      setOrgUnits(nextOrgUnits.filter((orgUnit) => orgUnit.isActive));
+      setOrgUnits(nextOrgUnits);
       setActions(nextActions);
       setRooms(nextRooms);
       setCpdThemes(nextLookups.find((lookup) => lookup.lookupKey === "cpd_theme")?.values ?? []);
@@ -347,6 +343,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
       if (mode === "scrutiny") {
         const nextDeliveryAreas = await api.learningWalkDeliveryAreas();
+        if (request !== refreshRequest.current) return;
         setDeliveryAreas(nextDeliveryAreas);
         setDeliveryAreasLoaded(true);
       }
@@ -357,6 +354,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
           api.coachingConfiguration(),
           api.learningWalkDeliveryAreas(learningWalkProcess)
         ]);
+        if (request !== refreshRequest.current) return;
         setDeliveryAreas(nextDeliveryAreas);
         setDeliveryAreasLoaded(true);
         setLearningWalkThemeGroups(nextThemeGroups);
@@ -366,9 +364,12 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
             .slice(0, 5)
         );
       }
+      setRecordsLoadFailed(false);
     } catch {
-      setStatusMessage("Data could not be loaded from the API.");
-    }
+      if (request !== refreshRequest.current) return;
+      setRecordsLoadFailed(true);
+      setStatusMessage("The records could not be loaded. Your saved data is still available; try loading again.");
+    } finally { if (request === refreshRequest.current) setIsLoadingRecords(false); }
   }
 
   function buildRecordContext(
@@ -420,38 +421,42 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   function validateForSubmit(
     sections: Array<{ fields: FormFieldDefinition[] }>,
     values: Record<string, string>,
-    externalCpdRecord = isExternalCpd
-  ) {
+    externalCpdRecord = isExternalCpd,
+    editing = false
+  ): WorkflowFieldError[] {
+    const errors: WorkflowFieldError[] = [];
+    const fields = sections.flatMap(section => section.fields)
+      .filter(field => !isLegacyCpdParticipantField(mode, field))
+      .filter(field => shouldShowLearningWalkField(mode, field, sections, values, learningWalkThemeGroups));
+    const controlId = (field: FormFieldDefinition) => mode === "scrutiny" ? `scrutiny-field-${field.id}` : `workflow-${editing ? "edit" : "create"}-${field.id}`;
+    const add = (key: string, message: string) => {
+      const field = fields.find(candidate => candidate.fieldKey === key);
+      if (field && !errors.some(error => error.id === controlId(field))) errors.push({ id: controlId(field), message });
+    };
     if (mode === "elevate") {
       const roomCode = getResponseValue(sections, values, "room_code");
-      if (!rooms.some((room) => room.roomCode.toLocaleLowerCase() === roomCode?.toLocaleLowerCase())) {
-        return "Select a room from the room register before completing the check.";
-      }
-
+      if (!rooms.some(room => room.roomCode.toLocaleLowerCase() === roomCode?.toLocaleLowerCase()))
+        add("room_code", "Select a room from the room register.");
     }
-
     if (mode === "cpd") {
       const hoursValue = getResponseValue(sections, values, "duration_hours");
       const minutesValue = getResponseValue(sections, values, "duration_minutes");
-      const hours = Number(hoursValue);
-      const minutes = Number(minutesValue);
-      if (!hoursValue || !minutesValue || !Number.isInteger(hours) || hours < 0 || hours > 24
-          || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) {
-        return "Enter CPD duration using hours from 0 to 24 and minutes from 0 to 59.";
-      }
-      if ((hours * 60) + minutes === 0) {
-        return "CPD duration must be at least one minute.";
-      }
-      if (!externalCpdRecord && !getResponseValue(sections, values, "staff_search")) {
-        return "Select at least one participant before submitting the CPD event.";
-      }
+      const hours = Number(hoursValue), minutes = Number(minutesValue);
+      if (!hoursValue || !Number.isInteger(hours) || hours < 0 || hours > 24)
+        add("duration_hours", "Enter CPD hours from 0 to 24.");
+      if (!minutesValue || !Number.isInteger(minutes) || minutes < 0 || minutes > 59)
+        add("duration_minutes", "Enter CPD minutes from 0 to 59.");
+      if (hoursValue && minutesValue && hours === 0 && minutes === 0)
+        add("duration_minutes", "CPD duration must be at least one minute.");
+      if (!externalCpdRecord && !getResponseValue(sections, values, "staff_search"))
+        add("staff_search", "Select at least one participant.");
     }
-
-    if (hasMissingRequired(sections, values)) {
-      return "Complete the required fields before submitting. Use Save draft to keep partial work.";
+    if (isLearningWalkMode && !getResponseValue(sections, values, "learning_walk_delivery_area"))
+      add("learning_walk_delivery_area", "Select the delivery area for this Learning Walk.");
+    for (const field of fields.filter(field => field.isRequired && !hasFormAnswer(field, values[field.id]))) {
+      if (!errors.some(error => error.id === controlId(field))) errors.push({ id: controlId(field), message: requiredWorkflowMessage(field.label) });
     }
-
-    return "";
+    return errors;
   }
 
   async function saveRecord(asDraft: boolean): Promise<boolean> {
@@ -460,9 +465,10 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     }
 
     if (!asDraft) {
-      const validationMessage = validateForSubmit(createEntrySections, responses);
-      if (validationMessage) {
-        setStatusMessage(validationMessage);
+      const errors = validateForSubmit(createEntrySections, responses);
+      setValidationErrors(errors);
+      if (errors.length) {
+        setStatusMessage("");
         return false;
       }
 
@@ -504,6 +510,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     try {
       const result = await api.submitForm({
         templateKey: definition.templateKey,
+        templateVersionId: definition.versionId,
         recordType: config.recordType,
         title: context.recordTitle,
         summary: context.summary,
@@ -540,16 +547,22 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
   async function openRecord(recordId: string, afterSave = false) {
     if (!afterSave && !await confirmUnsavedNavigation()) return;
+    if (!afterSave && typeof document !== "undefined") detailOrigin.current = document.activeElement as HTMLElement;
+    const request = ++detailRequest.current;
+    setOpeningRecordId(recordId);
     try {
       const detail = await api.recordDetail(recordId);
+      if (request !== detailRequest.current) return;
       setSelectedDetail(detail);
       onRecordOpened?.(detail.id);
       setIsEditing(false);
       setEditResponses({});
       setStatusMessage("");
+      if (!afterSave) window.requestAnimationFrame(() => focusWorkflowControl("workflow-record-detail"));
     } catch {
+      if (request !== detailRequest.current) return;
       setStatusMessage("The record could not be opened. You may not have access to it.");
-    }
+    } finally { if (request === detailRequest.current) setOpeningRecordId(""); }
   }
 
   function startEdit() {
@@ -568,22 +581,17 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     editBaseline.current = JSON.stringify([nextResponses, nextActions]);
     setIsCreating(false);
     setIsEditing(true);
-    setStatusMessage("");
+    setStatusMessage(""); setValidationErrors([]);
   }
 
-  async function saveEdit(): Promise<boolean> {
-    if (!selectedDetail) {
-      return false;
-    }
-
-    if (selectedDetail.submissionStatus === "submitted") {
-      const validationMessage = validateForSubmit(
-        editEntrySections,
-        editResponses,
-        selectedDetail.templateKey === externalCpdConfig.templateKey
+  function validateEditCompletion(): boolean {
+    if (!selectedDetail) return false;
+      const errors = validateForSubmit(
+        editEntrySections, editResponses, selectedDetail.templateKey === externalCpdConfig.templateKey, true
       );
-      if (validationMessage) {
-        setStatusMessage(validationMessage);
+      setValidationErrors(errors);
+      if (errors.length) {
+        setStatusMessage("");
         return false;
       }
 
@@ -604,7 +612,18 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
           return false;
         }
       }
-    }
+    return true;
+  }
+
+  async function submitEditedForm(): Promise<boolean> {
+    if (!selectedDetail?.canEdit || !["draft", "reopened"].includes(selectedDetail.submissionStatus) || !validateEditCompletion()) return false;
+    if (!await saveEdit(true)) return false;
+    return changeStatus("submit");
+  }
+
+  async function saveEdit(keepEditing = false): Promise<boolean> {
+    if (!selectedDetail) return false;
+    if (selectedDetail.submissionStatus === "submitted" && !validateEditCompletion()) return false;
 
     const context = mode === "scrutiny"
       ? {
@@ -635,11 +654,14 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
 
       if (result.ok) {
-        clearNavigation();
-        setStatusMessage(`${config.recordLabel} updated.`);
-        setIsEditing(false);
-        await refreshData();
-        await openRecord(selectedDetail.id, true);
+        if (!keepEditing) {
+          editBaseline.current = JSON.stringify([editResponses, editDraftActions]);
+          clearNavigation();
+          setStatusMessage(`${config.recordLabel} updated.`);
+          setIsEditing(false);
+          await refreshData();
+          await openRecord(selectedDetail.id, true);
+        }
       } else {
         setStatusMessage(result.message ?? "The record could not be saved.");
       }
@@ -647,13 +669,13 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     } finally { setIsSaving(false); }
   }
 
-  async function changeStatus(action: "submit" | "reopen" | "archive") {
+  async function changeStatus(action: "submit" | "reopen" | "archive"): Promise<boolean> {
     if (!selectedDetail) {
-      return;
+      return false;
     }
 
     if (action === "archive" && !window.confirm("Archive this record? It will be hidden from lists and reporting.")) {
-      return;
+      return false;
     }
 
     setIsSaving(true);
@@ -672,11 +694,12 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
           setSelectedDetail(null);
           onRecordClosed?.();
         } else {
-          await openRecord(selectedDetail.id);
+          await openRecord(selectedDetail.id, true);
         }
       } else {
         setStatusMessage(result.message ?? "The status could not be changed.");
       }
+      return result.ok;
     } finally { setIsSaving(false); }
   }
 
@@ -733,19 +756,31 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
   }
 
   async function toggleCreateForm() {
+    const shouldOpen = !isCreating;
     if ((isCreating || isEditing) && !await confirmUnsavedNavigation()) return;
-    setIsCreating((current) => {
-      if (!current && mode === "elevate") {
+      if (shouldOpen && mode === "elevate") {
         const dateField = findField(createSections, "assessment_date");
         setResponses(dateField ? { [dateField.id]: getTodayDate() } : {});
       }
-      if (!current && (isLearningWalkMode || mode === "elevate")) {
+      if (shouldOpen && (isLearningWalkMode || mode === "elevate")) {
         setDraftActions([]);
       }
-      return !current;
-    });
+    setIsCreating(shouldOpen);
     setIsEditing(false);
     setStatusMessage("");
+    setValidationErrors([]);
+  }
+
+  async function cancelCreateForm() {
+    if (!await confirmUnsavedNavigation()) return;
+    setIsCreating(false); setResponses({}); setDraftActions([]); setValidationErrors([]); clearNavigation();
+    window.requestAnimationFrame(() => focusWorkflowControl(mode === "cpd" ? `cpd-create-${cpdWorkspaceView}` : "workflow-create-trigger"));
+  }
+
+  async function closeRecord() {
+    if (!await confirmUnsavedNavigation()) return;
+    detailRequest.current += 1; setSelectedDetail(null); setIsEditing(false); setEditResponses({}); setValidationErrors([]); clearNavigation(); onRecordClosed?.();
+    window.requestAnimationFrame(() => { if (detailOrigin.current?.isConnected) detailOrigin.current.focus(); else focusWorkflowControl("workflow-records-heading"); });
   }
 
   function addDraftAction() {
@@ -764,6 +799,8 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
     setRecordStatusFilter("all");
     setRecordAreaFilter("all");
     setRecordSort("newest");
+    setRecordTypeFilter("all"); setRecordThemeFilter("all"); setRecordPersonFilter("all"); setRecordParticipantFilter("all");
+    setRecordDeliveryFilter("all"); setRecordRoomFilter("all"); setRecordFrom(""); setRecordTo("");
   }
 
   async function startCpdForm(nextView: CpdWorkspaceView) {
@@ -837,8 +874,9 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         </div>
         {!isLearningWalkMode ? (
           <div className="toolbar">
+            {mode === "cpd" && onOpenCsvImport && canUseAdminCsvImport(user, "cpd-events") ? <Button icon={Upload} onClick={async () => { if (await confirmUnsavedNavigation()) await onOpenCsvImport(); }}>Import CPD CSV</Button> : null}
             {mode !== "cpd" ? (
-              <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
+              <Button id="workflow-create-trigger" aria-expanded={isCreating} icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
                 {config.createLabel}
               </Button>
             ) : null}
@@ -849,17 +887,17 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       {mode === "cpd" && cpdCreateOptionCount > 0 ? (
         <div className={`cpd-create-actions${cpdCreateOptionCount === 1 ? " is-single" : ""}`}>
           {canLogCpdEvent ? (
-            <Button icon={CalendarPlus} onClick={() => startCpdForm("managed")} variant="primary">
+            <Button id="cpd-create-managed" aria-expanded={isCreating && cpdWorkspaceView === "managed"} icon={CalendarPlus} onClick={() => startCpdForm("managed")} variant="primary">
               Log a CPD Event
             </Button>
           ) : null}
           {canLogMandatoryCpd ? (
-            <Button icon={CalendarPlus} onClick={() => startCpdForm("mandatory")} variant="secondary">
+            <Button id="cpd-create-mandatory" aria-expanded={isCreating && cpdWorkspaceView === "mandatory"} icon={CalendarPlus} onClick={() => startCpdForm("mandatory")} variant="secondary">
               Log Mandatory CPD
             </Button>
           ) : null}
           {canLogExternalCpd ? (
-            <Button icon={FilePlus2} onClick={() => startCpdForm("external")} variant="primary">
+            <Button id="cpd-create-external" aria-expanded={isCreating && cpdWorkspaceView === "external"} icon={FilePlus2} onClick={() => startCpdForm("external")} variant="primary">
               Log External CPD
             </Button>
           ) : null}
@@ -868,19 +906,23 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
       {isLearningWalkMode ? (
         <div className="learning-create-action">
-          <Button icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
+          <Button id="workflow-create-trigger" aria-expanded={isCreating} icon={primaryIcon} onClick={toggleCreateForm} variant="primary">
             {config.createLabel}
           </Button>
         </div>
       ) : null}
 
-      {statusMessage ? <div className="notice-row" role="alert">{statusMessage}</div> : null}
-      {requiresLeaderActionOwner && (isCreating || isEditing || isCreatingAction) ? ownersLoading ? <p role="status">Loading action owners…</p> : ownersError ? <div role="alert">{ownersError}<Button onClick={() => void retryOwners()}>Retry action owners</Button></div> : !leaderActionOwners.length ? <p role="status">No eligible action owners were found in your assigned scope.</p> : null : null}
-      {definitionError ? <div className="notice-row">{definitionError}</div> : null}
+      <WorkflowFeedback message={statusMessage} />
+      <WorkflowErrorSummary errors={validationErrors} />
+      {recordsLoadFailed ? <Button disabled={isLoadingRecords} onClick={() => void refreshData()}>Retry loading records</Button> : null}
+      {requiresLeaderActionOwner && (isCreating || isEditing || isCreatingAction) ? ownersLoading ? <LoadingState label="Loading action owners…" size="inline" /> : ownersError ? <div role="alert">{ownersError}<Button onClick={() => void retryOwners()}>Retry action owners</Button></div> : !leaderActionOwners.length ? <p role="status">No eligible action owners were found in your assigned scope.</p> : null : null}
+      <WorkflowFeedback message={definitionError} tone="error" />
+      {isLoadingRecords ? <LoadingState label={`Loading ${title} records…`} /> : null}
+      {openingRecordId ? <LoadingState label={`Opening ${config.recordLabel}…`} size="inline" /> : null}
 
       {isCreating && mode === "scrutiny" ? (
         <WorkScrutinyCreateForm
-          onCancel={() => setIsCreating(false)}
+          onCancel={() => { setIsCreating(false); window.requestAnimationFrame(() => focusWorkflowControl("workflow-create-trigger")); }}
             onSubmitted={async (recordId, isDraft) => {
             setIsCreating(false);
               setStatusMessage(isDraft ? "Work Scrutiny draft saved. It is excluded from reporting until submitted." : "Work Scrutiny submitted with its sampled courses and linked actions.");
@@ -895,10 +937,10 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
       ) : null}
 
       {isCreating && mode !== "scrutiny" ? (
-        <section className="panel">
+        <section className="panel" id="workflow-create-form">
           <div className="panel-heading">
-            <h2>{mode === "als_learning" ? "ALS Learning Walk form" : definition?.name ?? "Loading template"}</h2>
-            <span>{definition?.version ? `Version ${definition.version}` : "Template backed"}</span>
+            <h2>{mode === "als_learning" ? "ALS Learning Walk form" : definition?.name ?? `${config.recordLabel} form`}</h2>
+            <span>{definition?.version ? `Version ${definition.version}` : "Published form"}</span>
           </div>
           {definition ? (
             <div className="entry-form">
@@ -933,6 +975,8 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                       .filter((field) => shouldShowLearningWalkField(mode, field, createSections, responses, learningWalkThemeGroups))
                       .map((field) => (
                       <FieldInput
+                        controlId={`workflow-create-${field.id}`}
+                        error={validationErrors.find(error => error.id === `workflow-create-${field.id}`)?.message}
                         cpdThemes={cpdThemes}
                         deliveryAreas={deliveryAreas}
                         deliveryAreasLoaded={deliveryAreasLoaded}
@@ -966,11 +1010,11 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                       <h3>Actions</h3>
                       <small>
                         {mode === "elevate"
-                          ? "Create actions linked to this learning environment audit through the central action engine."
-                          : "Actions are assigned through the central action engine when the walk is submitted."}
+                          ? "Create follow-up actions for this learning environment check."
+                          : "Actions are assigned to their owners when you submit the walk."}
                       </small>
                     </div>
-                    <Button icon={Plus} onClick={addDraftAction}>Action</Button>
+                    <Button icon={Plus} onClick={addDraftAction}>Add action</Button>
                   </div>
                   {draftActions.length === 0 ? (
                     <div className="empty-row">No actions added.</div>
@@ -1031,6 +1075,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                 </div>
               ) : null}
               <div className="toolbar">
+                <Button icon={X} onClick={() => void cancelCreateForm()}>Cancel</Button>
                   {(
                   <Button disabled={isSaving} icon={Save} onClick={() => void saveRecord(true)}>Save draft</Button>
                   )}
@@ -1040,14 +1085,14 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
               </div>
             </div>
           ) : (
-            <p className="muted-copy">Loading form fields...</p>
+            definitionError ? <p className="muted-copy">The form is unavailable. Review the message above before trying again.</p> : <LoadingState label="Loading form fields…" />
           )}
         </section>
       ) : null}
 
       <section className="panel">
         <div className="panel-heading">
-          <h2>
+          <h2 id="workflow-records-heading" tabIndex={-1}>
             <button
               aria-controls={`${mode}-active-records`}
               aria-expanded={isActiveRecordsOpen}
@@ -1071,21 +1116,32 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
         {isActiveRecordsOpen ? (
           <div id={`${mode}-active-records`}>
             <div className="segmented-control record-ownership-switch" aria-label="Record ownership view">
-              <button className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My {listRecordLabel}s</button>
-              <button className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button>
+              <button aria-pressed={recordOwnershipView === "mine"} className={recordOwnershipView === "mine" ? "is-active" : ""} onClick={() => setRecordOwnershipView("mine")} type="button">My {listRecordLabel}s</button>
+              <button aria-pressed={recordOwnershipView === "scope"} className={recordOwnershipView === "scope" ? "is-active" : ""} onClick={() => setRecordOwnershipView("scope")} type="button">All in my scope</button>
             </div>
-            {isLearningWalkMode ? (
-              <div className="record-filter-bar">
-                <label className="record-filter-field record-filter-search">
+            {(
+              <WorkflowFilters activeCount={[recordStatusFilter, recordAreaFilter, recordTypeFilter, recordPersonFilter, recordThemeFilter, recordParticipantFilter, recordDeliveryFilter, recordRoomFilter].filter(value => value !== "all").length + Number(Boolean(recordFrom)) + Number(Boolean(recordTo))} hasQuery={Boolean(recordSearch)} onClear={clearRecordFilters} primary={<>
+<label className="record-filter-field record-filter-search">
                   <span>Search records</span>
                   <input
                     onChange={(event) => setRecordSearch(event.target.value)}
-                    placeholder="Title, delivery area, team, status or date"
+                    aria-label="Search workflow records" placeholder="Title, people, theme, room, area or date"
                     type="search"
                     value={recordSearch}
                   />
                 </label>
-                <label className="record-filter-field">
+<label className="record-filter-field">
+                  <span>Sort by</span>
+                  <select aria-label="Sort workflow records" onChange={(event) => setRecordSort(event.target.value as typeof recordSort)} value={recordSort}>
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="area">Area A-Z</option>
+                    <option value="status">Status A-Z</option>
+                    <option value="title">Title A-Z</option><option value="person">Staff / owner name</option><option value="type">Form type</option>{mode === "elevate" ? <option value="room">Room</option> : null}
+                  </select>
+                </label>
+</>}>
+<label className="record-filter-field">
                   <span>Status</span>
                   <select onChange={(event) => setRecordStatusFilter(event.target.value)} value={recordStatusFilter}>
                     <option value="all">All statuses</option>
@@ -1103,23 +1159,19 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                     ))}
                   </select>
                 </label>
-                <label className="record-filter-field">
-                  <span>Sort by</span>
-                  <select onChange={(event) => setRecordSort(event.target.value as typeof recordSort)} value={recordSort}>
-                    <option value="newest">Newest first</option>
-                    <option value="oldest">Oldest first</option>
-                    <option value="area">Area A-Z</option>
-                    <option value="status">Status A-Z</option>
-                  </select>
-                </label>
-                {hasRecordFilters ? (
-                  <Button icon={X} onClick={clearRecordFilters} variant="quiet">Clear filters</Button>
-                ) : null}
-              </div>
-            ) : null}
+                {recordTypeOptions.length > 1 ? <label className="record-filter-field"><span>{mode === "cpd" ? "CPD type" : "Form type"}</span><select value={recordTypeFilter} onChange={event => setRecordTypeFilter(event.target.value)}><option value="all">All types</option>{recordTypeOptions.map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select></label> : null}
+                {recordPersonOptions.length ? <label className="record-filter-field"><span>Staff / owner / submitter</span><select value={recordPersonFilter} onChange={event => setRecordPersonFilter(event.target.value)}><option value="all">All people</option>{recordPersonOptions.map(name => <option key={name}>{name}</option>)}</select></label> : null}
+                {recordThemeOptions.length ? <label className="record-filter-field"><span>Theme</span><select value={recordThemeFilter} onChange={event => setRecordThemeFilter(event.target.value)}><option value="all">All themes</option>{recordThemeOptions.map(name => <option key={name}>{name}</option>)}</select></label> : null}
+                {mode === "cpd" && recordParticipantOptions.length ? <label className="record-filter-field"><span>Participant</span><select value={recordParticipantFilter} onChange={event => setRecordParticipantFilter(event.target.value)}><option value="all">All participants</option>{recordParticipantOptions.map(name => <option key={name}>{name}</option>)}</select></label> : null}
+                {recordDeliveryOptions.length ? <label className="record-filter-field"><span>Delivery area</span><select value={recordDeliveryFilter} onChange={event => setRecordDeliveryFilter(event.target.value)}><option value="all">All delivery areas</option>{recordDeliveryOptions.map(name => <option key={name}>{name}</option>)}</select></label> : null}
+                {mode === "elevate" && recordRoomOptions.length ? <label className="record-filter-field"><span>Room</span><select value={recordRoomFilter} onChange={event => setRecordRoomFilter(event.target.value)}><option value="all">All rooms</option>{recordRoomOptions.map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select></label> : null}
+                <label className="record-filter-field"><span>From date</span><input type="date" value={recordFrom} onChange={event => setRecordFrom(event.target.value)} /></label>
+                <label className="record-filter-field"><span>To date</span><input type="date" min={recordFrom || undefined} value={recordTo} onChange={event => setRecordTo(event.target.value)} /></label>
+</WorkflowFilters>
+            )}
 
             <div className="record-list">
-              {records.length === 0 ? (
+              {isLoadingRecords && records.length === 0 ? null : recordsLoadFailed && records.length === 0 ? <div className="empty-row">Records are temporarily unavailable. Use Retry loading records above.</div> : records.length === 0 ? (
                 <div className="empty-row">
                   No {listRecordLabel}s yet. Use "{config.createLabel}" to add the first one.
                 </div>
@@ -1128,13 +1180,16 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
               ) : displayedRecords.length === 0 ? (
                 <div className="empty-row">No {listRecordLabel}s match those filters.</div>
               ) : (
-                displayedRecords.map((record) => {
+                recordPage.items.map((record) => {
                   const orgUnit = orgUnits.find((unit) => unit.id === record.orgUnitId);
                   const parent = orgUnits.find((unit) => unit.id === orgUnit?.parentOrgUnitId);
                   return (
                     <div className="record-row" key={record.id}>
                       <div>
                         <strong>{record.title}</strong>
+                        {record.subjectDisplayName || record.ownerDisplayName ? <small>Staff: {record.subjectDisplayName || record.ownerDisplayName}{record.submitterDisplayName ? ` · Submitted by ${record.submitterDisplayName}` : ""}</small> : null}
+                        {mode === "cpd" ? <small>{record.templateName}{record.participantNames?.length ? ` · ${record.participantNames.length} participants` : ""}{record.themeNames?.length ? ` · ${record.themeNames.join(", ")}` : ""}</small> : null}
+                        {mode === "elevate" && (record.roomCode || record.roomName) ? <small>Room: {[record.roomCode, record.roomName].filter(Boolean).join(" - ")}</small> : null}
                         {isLearningWalkMode ? <small>Delivery area: {record.deliveryAreaName || "Not recorded"}</small> : null}
                         <span>
                           {mode === "elevate"
@@ -1144,7 +1199,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                       </div>
                       <span className={`status-pill status-${record.submissionStatus}`}>{formatStatus(record.submissionStatus)}</span>
                       <span>{record.recordDate ?? "No date"}</span>
-                      <button className="icon-button" onClick={() => void openRecord(record.id)} type="button" title="Open record">
+                      <button aria-busy={openingRecordId === record.id || undefined} aria-label={`Open ${record.title}`} className="icon-button" disabled={openingRecordId === record.id} onClick={() => void openRecord(record.id)} type="button" title={openingRecordId === record.id ? "Opening record…" : "Open record"}>
                         <Eye size={16} aria-hidden="true" />
                       </button>
                     </div>
@@ -1154,13 +1209,14 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
             </div>
           </div>
         ) : null}
+        {isActiveRecordsOpen ? <WorkflowPagination {...recordPage} label="Records" /> : null}
       </section>
 
       {selectedDetail ? (
-        <section className="panel">
+        <section className="panel" id="workflow-record-detail" tabIndex={-1}>
           <div className="panel-heading">
             <h2>{selectedDetail.title}</h2>
-            <span>v{selectedDetail.templateVersion}</span>
+            <div className="toolbar"><span>v{selectedDetail.templateVersion}</span><Button icon={X} onClick={() => void closeRecord()} variant="quiet">Close record</Button></div>
           </div>
           <div className="record-detail-meta">
             <span>
@@ -1190,9 +1246,11 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                       .filter((field) => shouldShowLearningWalkField(mode, field, editSections, editResponses, learningWalkThemeGroups))
                       .map((field) => (
                       mode === "scrutiny" && ["short_text", "long_text", "number", "date", "yes_no_partial", "single_select", "rubric_scale", "multi_select", "checkbox_group"].includes(field.fieldType) ?
-                      <WorkScrutinyResponseField field={field} key={field.id} value={editResponses[field.id] ?? ""}
+                      <WorkScrutinyResponseField field={field} error={validationErrors.find(error => error.id === `scrutiny-field-${field.id}`)?.message} key={field.id} value={editResponses[field.id] ?? ""}
                         onChange={(value) => setEditResponses((current) => ({ ...current, [field.id]: value }))} /> :
                       <FieldInput
+                        controlId={`workflow-edit-${field.id}`}
+                        error={validationErrors.find(error => error.id === `workflow-edit-${field.id}`)?.message}
                         cpdThemes={cpdThemes}
                         savedDeliveryAreaKey={field.fieldKey === "learning_walk_delivery_area" ? field.value ?? "" : undefined}
                         savedDeliveryAreaName={field.fieldKey === "learning_walk_delivery_area" ? field.displayValue : undefined}
@@ -1232,7 +1290,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
               <div className="answer-section-list">
                 {detailSections.map((section) => (
                   <div className="answer-section" key={section.id}>
-                    <EnvironmentPillarHeader pillar={getEnvironmentPillar(mode, section.sectionKey, environmentPillars)} title={section.title} />
+                    <EnvironmentPillarHeader preserveTitle pillar={getEnvironmentPillar(mode, section.sectionKey, environmentPillars)} title={section.title} />
                     <div className="answer-grid">
                       {section.fields
                         .filter((field) => !isLegacyCpdParticipantField(mode, field))
@@ -1240,7 +1298,7 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
                         .map((field) => (
                         <div className={isWideEntryField(field.fieldType) ? "answer-item answer-item-wide" : "answer-item"} key={field.id}>
                           <span>{field.label}</span>
-                          <strong>{field.displayValue ?? formatAnswer(field.value, field.fieldType, field.fieldKey, environmentPillars, orgUnits, staff)}</strong>
+                          <strong>{isCustomChoiceField(field) ? parseChoiceAnswers(field.value).join("\n") || "Not recorded" : field.displayValue ?? formatAnswer(field.value, field.fieldType, field.fieldKey, environmentPillars, orgUnits, staff)}</strong>
                         </div>
                       ))}
                     </div>
@@ -1343,6 +1401,8 @@ export function ModuleWorkspace({ academicYear, title, eyebrow, mode, staff = []
 
 function FieldInput({
   field,
+  controlId: providedControlId,
+  error,
   onChange,
   orgUnits,
   rooms,
@@ -1359,6 +1419,8 @@ function FieldInput({
   selectedLearningWalkFocuses,
   value
 }: {
+  controlId?: string;
+  error?: string;
   cpdThemes: string[];
   deliveryAreas: LearningWalkDeliveryArea[];
   deliveryAreasLoaded: boolean;
@@ -1376,55 +1438,76 @@ function FieldInput({
   selectedLearningWalkFocuses: LearningWalkThemeSelection[];
   value: string;
 }) {
-  const faculties = orgUnits.filter((orgUnit) => orgUnit.orgUnitType === "faculty");
+  const generatedId = useId();
+  const controlId = providedControlId ?? `workflow-field-${generatedId}`;
+  const helpId = `${controlId}-guidance`, errorId = `${controlId}-error`;
+  const accessibility = { "aria-invalid": error ? true as const : undefined, "aria-required": field.isRequired || undefined,
+    "aria-describedby": workflowDescription(field.helpText ? helpId : undefined, error ? errorId : undefined) };
+  const errorMessage = error ? <small className="workflow-field-error" id={errorId}>{error}</small> : null;
+  const faculties = orgUnits.filter((orgUnit) => orgUnit.isActive && orgUnit.orgUnitType === "faculty");
   const teams = orgUnits.filter(
     (orgUnit) =>
-      orgUnit.parentOrgUnitId === selectedFacultyId &&
+      orgUnit.isActive && orgUnit.parentOrgUnitId === selectedFacultyId &&
       ["team", "faculty_child_code", "faculty_child"].includes(orgUnit.orgUnitType)
   );
   const selectedFaculty = orgUnits.find((orgUnit) => orgUnit.id === selectedFacultyId);
-  const teamOptions = teams.length > 0 ? teams : selectedFaculty ? [selectedFaculty] : [];
-  const selectedValues = splitDelimitedValues(value);
+  const teamOptions = teams.length > 0 ? teams : selectedFaculty?.isActive ? [selectedFaculty] : [];
+  const selectedValues = isCustomChoiceField(field) ? parseChoiceAnswers(value) : splitDelimitedValues(value);
+
+  if (["checkbox_group", "multi_select"].includes(field.fieldType)) {
+    const options = field.options?.length ? field.options : field.fieldType === "checkbox_group" ? getCheckboxOptions(field.fieldKey, cpdThemes) : [];
+    const choices = [...options, ...selectedValues.filter(value => !options.includes(value))];
+    return <fieldset id={controlId} tabIndex={-1} {...accessibility} className="entry-field entry-field-wide workflow-choice-field">
+      <legend>{field.label}{field.isRequired ? <strong>Required</strong> : null}</legend>
+      <div className="preview-check-list">{choices.map(option => <label key={option}><input checked={selectedValues.includes(option)} onChange={() => onChange(toggleDelimitedValue(value, option, field.fieldKey))} type="checkbox" /><span>{option}{options.includes(option) ? "" : " (existing response)"}</span></label>)}</div>
+      {field.helpText ? <small id={helpId}>{field.helpText}</small> : null}{errorMessage}
+    </fieldset>;
+  }
 
   if (field.fieldType === "learning_walk_delivery_area") {
     const choices = learningWalkDeliveryChoices(deliveryAreas, savedDeliveryAreaKey, savedDeliveryAreaName);
     return <label className="entry-field">
       <span>{field.label}{savedDeliveryAreaKey === undefined ? <strong>Required to submit</strong> : null}</span>
-      <select disabled={!deliveryAreasLoaded} value={value} onChange={(event) => onChange(event.target.value)}>
+      <select id={controlId} {...accessibility} disabled={!deliveryAreasLoaded} value={value} onChange={(event) => onChange(event.target.value)}>
         <option value="">{deliveryAreasLoaded ? "Select delivery area" : "Loading delivery areas…"}</option>
         {choices.map((area) => <option key={area.key} value={area.key} disabled={!area.isActive && area.key !== savedDeliveryAreaKey}>{area.name}{area.isActive ? "" : " (retired)"}</option>)}
       </select>
-      <small>Uses the shared LIV delivery-area list. Previously saved wording is retained.</small>
+      <small id={helpId}>Choose the delivery area for this visit. Existing saved wording is retained.</small>
+      {errorMessage}
     </label>;
   }
 
   if (field.fieldType === "staff_multi_select" && field.fieldKey === "staff_search") {
     return (
-      <div className="entry-field entry-field-wide">
-        <span>
+      <fieldset id={controlId} tabIndex={-1} {...accessibility} className="entry-field entry-field-wide workflow-choice-field">
+        <legend>
           {field.label}
           {field.isRequired ? <strong>Required</strong> : null}
-        </span>
+        </legend>
         <CpdParticipantPicker
-          id={`participants-${field.id}`}
+          id={`${controlId}-search`}
+          {...accessibility}
           onChange={onChange}
           orgUnits={orgUnits}
           staff={staff}
           value={value}
         />
-      </div>
+        {field.helpText ? <small id={helpId}>{field.helpText}</small> : null}
+        {errorMessage}
+      </fieldset>
     );
   }
 
   if (field.fieldType === "room_lookup") {
     return (
       <div className="entry-field">
-        <span>
+        <label htmlFor={controlId}>
           {field.label}
           {field.isRequired ? <strong>Required</strong> : null}
-        </span>
-        <RoomSearchSelect id={`room-${field.id}`} onChange={onChange} rooms={rooms} value={value} />
-        {field.helpText ? <small>{field.helpText}</small> : null}
+        </label>
+        <RoomSearchSelect id={controlId} {...accessibility} onChange={onChange} rooms={rooms} value={value} />
+        {field.helpText ? <small id={helpId}>{field.helpText}</small> : null}
+        {errorMessage}
       </div>
     );
   }
@@ -1433,11 +1516,11 @@ function FieldInput({
     const selected = parseLearningWalkThemeSelections(value);
     const selectedIds = selected.map((theme) => theme.id);
     return (
-      <div className="entry-field entry-field-wide learning-walk-theme-picker">
-        <span>
+      <fieldset id={controlId} tabIndex={-1} {...accessibility} className="entry-field entry-field-wide learning-walk-theme-picker workflow-choice-field">
+        <legend>
           {field.label}
           {field.isRequired ? <strong>Required</strong> : null}
-        </span>
+        </legend>
         <div className="learning-walk-theme-picker-groups">
           {learningWalkThemeGroups.map((group) => {
             const visibleThemes = group.themes.filter((theme) =>
@@ -1466,14 +1549,15 @@ function FieldInput({
             );
           })}
         </div>
-        {field.helpText ? <small>{field.helpText}</small> : null}
-      </div>
+        {field.helpText ? <small id={helpId}>{field.helpText}</small> : null}
+        {errorMessage}
+      </fieldset>
     );
   }
 
   if (field.fieldType === "practice_rubric_1_5") {
     return (
-      <fieldset className="coaching-wording-rubric entry-field-wide practice-observed-rubric">
+      <fieldset id={controlId} tabIndex={-1} {...accessibility} className="coaching-wording-rubric entry-field-wide practice-observed-rubric">
         <legend>
           {field.label}
           {field.isRequired ? <strong>Required</strong> : null}
@@ -1500,7 +1584,8 @@ function FieldInput({
             })}
           </div>
         ) : <div className="empty-row">The Elevate practice rubric is unavailable.</div>}
-        {field.helpText ? <small>{field.helpText}</small> : null}
+        {field.helpText ? <small id={helpId}>{field.helpText}</small> : null}
+        {errorMessage}
       </fieldset>
     );
   }
@@ -1508,7 +1593,7 @@ function FieldInput({
   if (field.fieldType === "focus_rubrics_1_5") {
     const ratings = parseLearningWalkFocusRatings(value);
     return (
-      <fieldset className="coaching-wording-rubric entry-field-wide learning-walk-focus-rubrics">
+      <fieldset id={controlId} tabIndex={-1} {...accessibility} className="coaching-wording-rubric entry-field-wide learning-walk-focus-rubrics">
         <legend>
           {field.label}
           {field.isRequired ? <strong>Required</strong> : null}
@@ -1545,7 +1630,8 @@ function FieldInput({
         ) : (
           <div className="empty-row">Select one or more focuses above to show their rubrics.</div>
         )}
-        {field.helpText ? <small>{field.helpText}</small> : null}
+        {field.helpText ? <small id={helpId}>{field.helpText}</small> : null}
+        {errorMessage}
       </fieldset>
     );
   }
@@ -1554,7 +1640,7 @@ function FieldInput({
     const pillarKey = field.fieldKey.replace(/_score$/, "");
     const rubric = environmentPillars.find((pillar) => pillar.pillarKey === pillarKey)?.rubric ?? [];
     return (
-      <fieldset className="coaching-wording-rubric entry-field-wide practice-observed-rubric environment-pillar-rubric">
+      <fieldset id={controlId} tabIndex={-1} {...accessibility} className="coaching-wording-rubric entry-field-wide practice-observed-rubric environment-pillar-rubric">
         <legend>
           {field.label}
           {field.isRequired ? <strong>Required</strong> : null}
@@ -1581,40 +1667,43 @@ function FieldInput({
             })}
           </div>
         ) : <div className="empty-row">The learning environment rubric is unavailable.</div>}
-        {field.helpText ? <small>{field.helpText}</small> : null}
+        {field.helpText ? <small id={helpId}>{field.helpText}</small> : null}
+        {errorMessage}
       </fieldset>
     );
   }
 
   return (
-    <label className={isWideEntryField(field.fieldType) ? "entry-field entry-field-wide" : "entry-field"}>
+    <label className={isWideEntryField(field.fieldType) ? "entry-field entry-field-wide" : "entry-field"} htmlFor={controlId}>
       <span>
         {field.label}
         {field.isRequired ? <strong>Required</strong> : null}
       </span>
       {field.fieldType === "date" ? (
-        <input type="date" value={value} onChange={(event) => onChange(event.target.value)} />
+        <input id={controlId} {...accessibility} type="date" value={value} onChange={(event) => onChange(event.target.value)} />
       ) : null}
       {field.fieldType === "datetime" ? (
-        <input type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} />
+        <input id={controlId} {...accessibility} type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} />
       ) : null}
       {field.fieldType === "short_text" ? (
-        <input type="text" value={value} onChange={(event) => onChange(event.target.value)} />
+        <input id={controlId} {...accessibility} type="text" value={value} onChange={(event) => onChange(event.target.value)} />
       ) : null}
       {field.fieldType === "number" ? (
         <input
+          id={controlId} {...accessibility}
           inputMode="numeric"
           max={field.fieldKey === "duration_hours" ? 24 : field.fieldKey === "duration_minutes" ? 59 : undefined}
-          min="0"
+          min={field.fieldKey.startsWith("custom_") ? undefined : "0"}
           onChange={(event) => onChange(event.target.value)}
-          step="1"
+          step={field.fieldKey.startsWith("custom_") ? "any" : "1"}
           type="number"
           value={value}
         />
       ) : null}
       {field.fieldType === "faculty_lookup" ? (
-        <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <select id={controlId} {...accessibility} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">Select faculty</option>
+          {value && !faculties.some(unit => unit.id === value) ? <option value={value}>{orgUnits.find(unit => unit.id === value)?.name || "Saved faculty"} (existing response)</option> : null}
           {faculties.map((orgUnit) => (
             <option key={orgUnit.id} value={orgUnit.id}>
               {orgUnit.code} - {orgUnit.name}
@@ -1623,8 +1712,9 @@ function FieldInput({
         </select>
       ) : null}
       {field.fieldType === "team_lookup" ? (
-        <select disabled={!selectedFacultyId || teamOptions.length === 0} value={value} onChange={(event) => onChange(event.target.value)}>
+        <select id={controlId} {...accessibility} disabled={!selectedFacultyId || teamOptions.length === 0} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">{selectedFacultyId ? "Select team or faculty-wide area" : "Select faculty first"}</option>
+          {value && !teamOptions.some(unit => unit.id === value) ? <option value={value}>{orgUnits.find(unit => unit.id === value)?.name || "Saved team"} (existing response)</option> : null}
           {teamOptions.map((orgUnit) => (
             <option key={orgUnit.id} value={orgUnit.id}>
               {orgUnit.code} - {orgUnit.name}
@@ -1634,13 +1724,14 @@ function FieldInput({
       ) : null}
       {field.fieldType === "auto_text" ? (
         <input
+          id={controlId} {...accessibility}
           readOnly
           type="text"
           value={value || (field.fieldKey === "building_name" ? "Select a room code" : "")}
         />
       ) : null}
       {field.fieldType === "score_0_3" ? (
-        <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <select id={controlId} {...accessibility} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">Select score</option>
           <option value="0">0 - Barrier</option>
           <option value="1">1 - Emerging</option>
@@ -1651,7 +1742,8 @@ function FieldInput({
       {field.fieldType === "staff_lookup" ? (
         <StaffSearchSelect
           helperText="Start typing, then select the action owner from the results."
-          id={`staff-${field.id}`}
+          id={controlId}
+          {...accessibility}
           onChange={onChange}
           staff={staff}
           value={value}
@@ -1659,6 +1751,7 @@ function FieldInput({
       ) : null}
       {field.fieldType === "staff_multi_select" ? (
         <select
+          id={controlId} {...accessibility}
           multiple
           onChange={(event) =>
             onChange(Array.from(event.currentTarget.selectedOptions).map((option) => option.value).join("|"))
@@ -1673,9 +1766,9 @@ function FieldInput({
         </select>
       ) : null}
       {field.fieldType === "team_bulk_add" ? (
-        <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <select id={controlId} {...accessibility} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">Select faculty, child code or team</option>
-          {orgUnits.map((orgUnit) => (
+          {orgUnits.filter(orgUnit => orgUnit.isActive).map((orgUnit) => (
             <option key={orgUnit.id} value={orgUnit.id}>
               {orgUnit.code} - {orgUnit.name}
             </option>
@@ -1684,6 +1777,7 @@ function FieldInput({
       ) : null}
       {field.fieldType === "selected_staff_list" ? (
         <textarea
+          id={controlId} {...accessibility}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder="Confirm selected staff names or paste a staff list"
@@ -1691,8 +1785,9 @@ function FieldInput({
         />
       ) : null}
       {field.fieldType === "single_select" ? (
-        <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <select id={controlId} {...accessibility} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">Select option</option>
+          {value && !(field.options?.length ? field.options : getSingleSelectOptions(field.fieldKey)).includes(value) ? <option value={value}>{value} (existing response)</option> : null}
           {(field.options?.length ? field.options : getSingleSelectOptions(field.fieldKey)).map((option) => (
             <option key={option} value={option}>
               {option}
@@ -1701,61 +1796,37 @@ function FieldInput({
         </select>
       ) : null}
       {field.fieldType === "rubric_scale" ? (
-        <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <select id={controlId} {...accessibility} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">Select rubric level</option>
+          {value && !field.options?.includes(value) ? <option value={value}>{value} (existing response)</option> : null}
           {(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
         </select>
       ) : null}
       {field.fieldType === "yes_no_partial" ? (
-        <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <select id={controlId} {...accessibility} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">Select answer</option>
           <option value="Yes">Yes</option>
           <option value="Partially">Partially</option>
           <option value="No">No</option>
         </select>
       ) : null}
-      {field.fieldType === "checkbox_group" ? (
-        <div className="preview-check-list">
-          {(field.options?.length ? field.options : getCheckboxOptions(field.fieldKey, cpdThemes)).map((option) => (
-            <label key={option}>
-              <input
-                checked={selectedValues.includes(option)}
-                onChange={() => onChange(toggleDelimitedValue(value, option))}
-                type="checkbox"
-              />
-              <span>{option}</span>
-            </label>
-          ))}
-        </div>
-      ) : null}
-      {field.fieldType === "multi_select" ? (
-        <div className="preview-check-list">
-          {(field.options ?? []).map((option) => (
-            <label key={option}>
-              <input
-                checked={selectedValues.includes(option)}
-                onChange={() => onChange(toggleDelimitedValue(value, option))}
-                type="checkbox"
-              />
-              <span>{option}</span>
-            </label>
-          ))}
-        </div>
-      ) : null}
       {field.fieldType === "long_text" ? (
-        <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={4} />
+        <textarea id={controlId} {...accessibility} value={value} onChange={(event) => onChange(event.target.value)} rows={4} />
       ) : null}
-      {field.helpText ? <small>{field.helpText}</small> : null}
+      {field.helpText ? <small id={helpId}>{field.helpText}</small> : null}
+        {errorMessage}
     </label>
   );
 }
 
 function EnvironmentPillarHeader({
   pillar,
-  title
+  title,
+  preserveTitle = true
 }: {
   pillar?: ElevateEnvironmentPillarSummary;
   title: string;
+  preserveTitle?: boolean;
 }) {
   if (!pillar) {
     return <h3>{title}</h3>;
@@ -1766,7 +1837,7 @@ function EnvironmentPillarHeader({
       <img alt={pillar.assetAltText} loading="lazy" src={pillar.assetUri} />
       <div>
         <span>Learning environment pillar{pillar.isActive ? "" : " · Inactive"}</span>
-        <h3>{pillar.name}</h3>
+        <h3>{preserveTitle ? title : pillar.name}</h3>
         <p>{pillar.description}</p>
       </div>
     </div>
@@ -1806,40 +1877,22 @@ function getEnvironmentEntrySections<T extends EnvironmentSectionLike>(
   }
 
   const byKey = new Map(pillars.map((pillar) => [pillar.pillarKey, pillar]));
-  return orderEnvironmentSections(
-    mode,
-    pillars.length === 0
-      ? sections
-      : sections.filter((section) => !byKey.has(section.sectionKey) || byKey.get(section.sectionKey)?.isActive),
-    pillars
-  ).map((section) => ({
+  return orderEnvironmentSections(mode, sections).map((section) => ({
     ...section,
-    title: section.sectionKey === "room_context" ? "Room" : section.title,
-    fields: section.fields.filter((field) => !isRetiredEnvironmentField(field.fieldKey))
-  })) as T[];
+    fields: section.fields.filter((field) => !isRetiredEnvironmentField(field.fieldKey)
+      && (!byKey.has(section.sectionKey) || byKey.get(section.sectionKey)?.isActive || field.fieldKey.startsWith("custom_")))
+  })).filter(section => section.fields.length > 0) as T[];
 }
 
 function orderEnvironmentSections<T extends EnvironmentSectionLike>(
   mode: WorkspaceMode,
-  sections: T[],
-  pillars: ElevateEnvironmentPillarSummary[]
+  sections: T[]
 ) {
-  if (mode !== "elevate" || pillars.length === 0) {
+  if (mode !== "elevate") {
     return sections;
   }
 
-  const byKey = new Map(pillars.map((pillar) => [pillar.pillarKey, pillar]));
-  return [...sections].sort((left, right) => {
-    const leftPillar = byKey.get(left.sectionKey);
-    const rightPillar = byKey.get(right.sectionKey);
-    const leftOrder = left.sectionKey === "room_context"
-      ? 0
-      : leftPillar ? 1000 + leftPillar.displayOrder : 2000 + left.displayOrder;
-    const rightOrder = right.sectionKey === "room_context"
-      ? 0
-      : rightPillar ? 1000 + rightPillar.displayOrder : 2000 + right.displayOrder;
-    return leftOrder - rightOrder;
-  });
+  return [...sections].sort((left, right) => left.displayOrder - right.displayOrder);
 }
 
 const workScrutinyTagOptions = ["Good Practice", "Development", "Compliance", "Assessment", "Feedback"];
@@ -1883,10 +1936,6 @@ function getRecordAreaLabel(record: RecordSummary, orgUnits: OrgUnitSummary[]) {
   return parent?.code ? `${parent.code} / ${orgUnit?.code ?? "No team"}` : orgUnit?.code ?? "No team";
 }
 
-function getRecordTimestamp(record: RecordSummary) {
-  const timestamp = Date.parse(record.recordDate ?? record.createdAt);
-  return Number.isNaN(timestamp) ? 0 : timestamp;
-}
 
 function isWideEntryField(fieldType: string) {
   return ["checkbox_group", "multi_select", "long_text", "selected_staff_list", "staff_multi_select", "team_bulk_add", "learning_walk_theme_group", "practice_rubric_1_5", "focus_rubrics_1_5", "environment_rubric_1_5"].includes(
@@ -2049,11 +2098,9 @@ function validateLearningWalkFocusRatings(
     : "Choose a practice level for every selected focus before submitting the Learning Walk.";
 }
 
-function toggleDelimitedValue(currentValue: string, option: string) {
-  const values = splitDelimitedValues(currentValue);
-  return values.includes(option)
-    ? values.filter((value) => value !== option).join("|")
-    : [...values, option].join("|");
+function toggleDelimitedValue(currentValue: string, option: string, fieldKey: string) {
+  const values = fieldKey.startsWith("custom_") ? parseChoiceAnswers(currentValue) : splitDelimitedValues(currentValue);
+  return serializeChoiceAnswers(fieldKey, values.includes(option) ? values.filter(value => value !== option) : [...values, option]);
 }
 
 function updateResponseMap(
@@ -2101,15 +2148,10 @@ function flattenResponses(
 ) {
   return sections
     .flatMap((section) => section.fields)
-    .map((field) => ({ fieldId: field.id, value: responses[field.id] }))
+    .map((field) => ({ fieldId: field.id, value: normalizeFormAnswer(field, responses[field.id]) }))
     .filter((response) => includeEmpty || response.value);
 }
 
-function hasMissingRequired(sections: Array<{ fields: FormFieldDefinition[] }>, responses: Record<string, string>) {
-  return sections
-    .flatMap((section) => section.fields)
-    .some((field) => field.isRequired && !responses[field.id]);
-}
 
 function findField(sections: Array<{ fields: FormFieldDefinition[] }>, fieldKey: string) {
   return sections.flatMap((section) => section.fields).find((item) => item.fieldKey === fieldKey);

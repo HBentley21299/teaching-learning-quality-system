@@ -1,0 +1,7 @@
+.skills-scan-result-graphic { min-width: 0; align-self: center; }
+.skills-scan-result-meter { padding: .45rem .65rem; }
+.skills-scan-result-track { position: relative; height: .65rem; border-radius: 999px; background: var(--surface-muted); }
+.skills-scan-result-fill { display: block; height: 100%; border-radius: inherit; background: var(--teal); transition: width 160ms ease; }
+.skills-scan-result-ball { position: absolute; top: 50%; width: 1.15rem; height: 1.15rem; border: .18rem solid var(--surface); border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 1px var(--teal); transform: translate(-50%, -50%); transition: left 160ms ease; }
+.skills-scan-result-axis { display: flex; justify-content: space-between; padding: 0 .65rem; color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .skills-scan-result-fill, .skills-scan-result-ball { transition: none; } }

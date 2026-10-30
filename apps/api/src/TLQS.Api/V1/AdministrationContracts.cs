@@ -191,7 +191,8 @@ public sealed record AdminRecordSummary(
     DateTimeOffset? UpdatedAt,
     DateTimeOffset? ArchivedAt,
     string? DeletedByName,
-    string? DeletionReason);
+    string? DeletionReason,
+    string? AcademicYear = null);
 
 public sealed record SharedThemeSummary(
     Guid Id,

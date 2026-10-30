@@ -1,5 +1,6 @@
 import type { LearningWalkDeliveryArea } from "./learningWalkDeliveryAreas";
 import { ApiHttpError } from "./apiHttpError";
+import type { ProcessReviewKey, ProcessReviewConfiguration, ProcessReviewSummary, ProcessReviewDetail, ProcessReviewAction, SaveProcessReviewRequest, SaveProcessReviewActionRequest, ResolveActivateReviewContextRequest, ActivateReviewContext, CreateActivateFollowUpRequest } from "./processReviewTypes";
 import { apiFailureMessage } from "./apiFailure";
 import type {
   QaOutcomeLabels,
@@ -12,6 +13,10 @@ import type {
   ActionExtensionSummary,
   ActionOwnerOption,
   AdminManagedList,
+  AdminCsvImportKind,
+  AdminCsvImportMetadata,
+  AdminCsvImportPreview,
+  AdminCsvImportResult,
   AdminOrganisationStructure,
   AdminOrganisationStaff,
   MembershipChangeImpact,
@@ -26,6 +31,7 @@ import type {
   OrganisationChangeImpact,
   OrganisationMigrationReview,
   PagedResult,
+  ListQuery,
   AdminRecord,
   AdminWorkScrutinyRecord,
   AdminWorkScrutinyAction,
@@ -48,8 +54,10 @@ import type {
   DashboardActionSummary,
   DashboardConfiguration,
   DashboardDimensionFact,
+  DashboardRecordData,
   DashboardProcessConfiguration,
   ElevateStatusDashboardSummary,
+  ElevateStatusStaffSummary,
   ElevateStatusBadgeAssetSummary,
   LivLifecycleDashboardSummary,
   ElevateEnvironmentPillarSummary,
@@ -59,6 +67,10 @@ import type {
   ElevatePracticeWorkspace,
   FormDefinition,
   FormTemplateSummary,
+  FormTemplateAdministration,
+  SaveFormVersionRequest,
+  WorkflowFormContent,
+  WorkflowFormContentField,
   LearningWalkThemeMappingSummary,
   LearningWalkThemeGroup,
   LearningWalkRollupSummary,
@@ -175,6 +187,7 @@ export type ExportFilters = {
   reviewerId?: string;
   status?: string;
   recordType?: string;
+  statusLevel?: string;
 };
 
 async function buildHeaders(hasBody: boolean): Promise<HeadersInit | undefined> {
@@ -314,7 +327,36 @@ async function downloadApiFile(url: string): Promise<ApiResult> {
   }
 }
 
+function listQueryString(query?: ListQuery): string {
+  if (!query) return "";
+  const parameters = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => { if (value !== undefined && value !== "") parameters.set(key, value); });
+  const suffix = parameters.toString();
+  return suffix ? `&${suffix}` : "";
+}
+
 export const api = {
+  activateReviewContext: (request: ResolveActivateReviewContextRequest) =>
+    sendJson<ResolveActivateReviewContextRequest, ActivateReviewContext>("/api/v1/process-reviews/activate/context", "POST", request),
+  processReviewConfiguration: (key: ProcessReviewKey) => getJson<ProcessReviewConfiguration>(`/api/v1/process-reviews/${key}/configuration`),
+  saveProcessReviewConfiguration: (key: ProcessReviewKey, request: ProcessReviewConfiguration) =>
+    sendJson<ProcessReviewConfiguration, ProcessReviewConfiguration>(`/api/v1/admin/process-reviews/${key}/configuration`, "PUT", request),
+  processReviews: (key: ProcessReviewKey, academicYear?: string) =>
+    getJson<ProcessReviewSummary[]>(`/api/v1/process-reviews/${key}${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
+  processReviewActions: (key: ProcessReviewKey, academicYear?: string) =>
+    getJson<ProcessReviewAction[]>(`/api/v1/process-reviews/${key}/actions${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
+  processReview: (id: string) => getJson<ProcessReviewDetail>(`/api/v1/process-reviews/records/${encodeURIComponent(id)}`),
+  createActivateFollowUp: (id: string, request: CreateActivateFollowUpRequest) =>
+    sendJson<CreateActivateFollowUpRequest, ProcessReviewDetail>(`/api/v1/process-reviews/records/${encodeURIComponent(id)}/follow-up`, "POST", request),
+  processReviewAction: (id: string) => getJson<ProcessReviewAction>(`/api/v1/process-reviews/actions/${encodeURIComponent(id)}`),
+  updateAssignedProcessReviewAction: (id: string, request: SaveProcessReviewActionRequest) =>
+    sendJson<SaveProcessReviewActionRequest, ProcessReviewAction>(`/api/v1/process-reviews/actions/${encodeURIComponent(id)}`, "PUT", request),
+  saveProcessReview: (key: ProcessReviewKey, id: string | null, request: SaveProcessReviewRequest) =>
+    sendJson<SaveProcessReviewRequest, ProcessReviewDetail>(id ? `/api/v1/process-reviews/records/${encodeURIComponent(id)}` : `/api/v1/process-reviews/${key}`, id ? "PUT" : "POST", request),
+  saveProcessReviewAction: (recordId: string, actionId: string | null, request: SaveProcessReviewActionRequest) =>
+    sendJson<SaveProcessReviewActionRequest, ProcessReviewDetail>(`/api/v1/process-reviews/records/${encodeURIComponent(recordId)}/actions${actionId ? `/${encodeURIComponent(actionId)}` : ""}`, actionId ? "PUT" : "POST", request),
+  exportProcessReviews: (key: ProcessReviewKey, academicYear?: string) =>
+    downloadApiFile(`/api/v1/process-reviews/${key}/export${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
   ucoTlaAccess: () => getJson<UcoTlaAccessSummary>("/api/v1/uco-tla-reviews/access"),
   ucoTlaReviews: () => getJson<UcoTlaReviewDetail["review"][]>("/api/v1/uco-tla-reviews"),
   ucoTlaDashboard: (academicYear?: string) => {
@@ -377,6 +419,12 @@ export const api = {
     if (facultyOrgUnitId) query.set("facultyOrgUnitId", facultyOrgUnitId);
     if (teamOrgUnitId) query.set("teamOrgUnitId", teamOrgUnitId);
     return getJson<QaDashboardSummary>(`/api/v1/qa-hub/reviews/${reviewId}/dashboard${query.size ? `?${query}` : ""}`);
+  },
+  qaDashboardRecordData: (reviewId: string, facultyOrgUnitId?: string, teamOrgUnitId?: string) => {
+    const query = new URLSearchParams();
+    if (facultyOrgUnitId) query.set("facultyOrgUnitId", facultyOrgUnitId);
+    if (teamOrgUnitId) query.set("teamOrgUnitId", teamOrgUnitId);
+    return getJson<DashboardRecordData>(`/api/v1/qa-hub/reviews/${encodeURIComponent(reviewId)}/report-data${query.size ? `?${query}` : ""}`);
   },
   qaReviewActionOptions: (reviewId: string) => getJson<QaReviewActionOptions>(`/api/v1/qa-hub/reviews/${reviewId}/action-options`),
   qaActionReviewOptions: () => getJson<QaReviewActionOptions[]>("/api/v1/qa-hub/action-options"),
@@ -499,6 +547,13 @@ export const api = {
     getJson<DashboardDimensionFact[]>(`/api/v1/reports/eli-statement-dimensions?academicYear=${encodeURIComponent(academicYear)}`),
   elevateStatusDashboard: (academicYear: string) =>
     getJson<ElevateStatusDashboardSummary[]>(`/api/v1/reports/elevate-status?academicYear=${encodeURIComponent(academicYear)}`),
+  elevateStatusStaffDashboard: (academicYear: string) =>
+    getJson<ElevateStatusStaffSummary[]>(`/api/v1/reports/elevate-status-staff?academicYear=${encodeURIComponent(academicYear)}`),
+  dashboardRecordData: (academicYear: string, dashboardKey: string, filters: ExportFilters = {}) => {
+    const query = new URLSearchParams({ academicYear, dashboardKey });
+    Object.entries(filters).forEach(([key, value]) => { if (value) query.set(key, value); });
+    return getJson<DashboardRecordData>(`/api/v1/reports/report-record-data?${query}`);
+  },
   staffParticipationDashboard: (academicYear: string) =>
     getJson<StaffParticipationDashboardSummary[]>(`/api/v1/reports/staff-participation?academicYear=${encodeURIComponent(academicYear)}`),
   eliSubmissionsDashboard: (academicYear: string) =>
@@ -512,6 +567,20 @@ export const api = {
   learningWalkRollup: () =>
     getJson<LearningWalkRollupSummary[]>("/api/v1/reports/learning-walk-rollup"),
   formTemplates: () => getJson<FormTemplateSummary[]>("/api/v1/form-templates"),
+  formContent: (formKey: string) => getJson<WorkflowFormContent>(`/api/v1/form-content/${encodeURIComponent(formKey)}`),
+  adminFormContent: () => getJson<WorkflowFormContent[]>("/api/v1/admin/forms/content"),
+  saveFormContent: (formKey: string, fields: WorkflowFormContentField[], rowVersion?: string) =>
+    sendJson(`/api/v1/admin/forms/content/${encodeURIComponent(formKey)}`, "PUT", { fields, rowVersion }),
+  formTemplateAdministration: (templateId: string, versionId?: string) =>
+    getJson<FormTemplateAdministration>(`/api/v1/form-templates/${templateId}/administration${versionId ? `?versionId=${encodeURIComponent(versionId)}` : ""}`),
+  createFormTemplateDraft: (templateId: string, sourceVersionId: string) =>
+    sendJson<{ sourceVersionId: string }, { versionId: string }>(`/api/v1/form-templates/${templateId}/draft`, "POST", { sourceVersionId }),
+  saveFormTemplateVersion: (templateId: string, versionId: string, request: SaveFormVersionRequest) =>
+    sendJson(`/api/v1/form-templates/${templateId}/versions/${versionId}`, "PUT", request),
+  publishFormTemplateVersion: (templateId: string, versionId: string, rowVersion: string) =>
+    sendJson(`/api/v1/form-templates/${templateId}/versions/${versionId}/publish`, "POST", { rowVersion }),
+  discardFormTemplateDraft: (templateId: string, versionId: string, rowVersion: string) =>
+    sendJson(`/api/v1/form-templates/${templateId}/versions/${versionId}/discard`, "POST", { rowVersion }),
   formDefinition: (templateKey: string) =>
     getJson<FormDefinition>(`/api/v1/form-templates/${templateKey}/definition`),
   workScrutinyTemplate: (orgUnitId: string) =>
@@ -566,6 +635,8 @@ export const api = {
     ),
   updateLivStage: (id: string, stageId: string, request: SaveLivStageRequest, process = "liv") =>
     sendJson(`/api/v1/liv-records/${id}/stages/${stageId}?process=${encodeURIComponent(process)}`, "PUT", request),
+  updateLivStageVisibility: (id: string, stageId: string, visibleToStaff: boolean, process = "liv") =>
+    sendJson(`/api/v1/liv-records/${id}/stages/${stageId}/visibility?process=${encodeURIComponent(process)}`, "PUT", { visibleToStaff }),
   completeLivCycle: (id: string, openFollowUp = true, process = "liv") =>
     sendJson<{ openFollowUp: boolean }, LivCycle>(`/api/v1/liv-records/${id}/cycles/current/complete?process=${encodeURIComponent(process)}`, "POST", { openFollowUp }),
   changeLivStatus: (id: string, action: "close" | "reopen" | "archive", process = "liv") =>
@@ -619,29 +690,29 @@ export const api = {
       `/api/v1/staff-profiles/${staffId}/reflections?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
       signal
     ),
-  staffProfileCpd: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+  staffProfileCpd: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal, query?: ListQuery) =>
     getJson<PagedResult<StaffCpdRecordSummary>>(
-      `/api/v1/staff-profiles/${staffId}/cpd?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      `/api/v1/staff-profiles/${staffId}/cpd?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}${listQueryString(query)}`,
       signal
     ),
-  staffProfileCoaching: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+  staffProfileCoaching: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal, query?: ListQuery) =>
     getJson<PagedResult<StaffProfileCoachingSummary>>(
-      `/api/v1/staff-profiles/${staffId}/coaching?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      `/api/v1/staff-profiles/${staffId}/coaching?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}${listQueryString(query)}`,
       signal
     ),
-  staffProfileLiv: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+  staffProfileLiv: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal, query?: ListQuery) =>
     getJson<PagedResult<StaffProfileLivSummary>>(
-      `/api/v1/staff-profiles/${staffId}/liv?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      `/api/v1/staff-profiles/${staffId}/liv?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}${listQueryString(query)}`,
       signal
     ),
-  staffProfileProbation: (staffId: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+  staffProfileProbation: (staffId: string, page = 1, pageSize = 20, signal?: AbortSignal, query?: ListQuery) =>
     getJson<PagedResult<StaffProfileProbationSummary>>(
-      `/api/v1/staff-profiles/${staffId}/probation?page=${page}&pageSize=${pageSize}`,
+      `/api/v1/staff-profiles/${staffId}/probation?page=${page}&pageSize=${pageSize}${listQueryString(query)}`,
       signal
     ),
-  staffProfileActions: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+  staffProfileActions: (staffId: string, academicYear: string, page = 1, pageSize = 20, signal?: AbortSignal, query?: ListQuery) =>
     getJson<PagedResult<StaffProfileActionSummary>>(
-      `/api/v1/staff-profiles/${staffId}/actions?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}`,
+      `/api/v1/staff-profiles/${staffId}/actions?academicYear=${encodeURIComponent(academicYear)}&page=${page}&pageSize=${pageSize}${listQueryString(query)}`,
       signal
     ),
   saveElevateStatusLevel: (staffId: string, levelNumber: number, request: SaveElevateStatusLevelRequest) =>
@@ -653,7 +724,7 @@ export const api = {
   elevatePracticeMe: () => getJson<ElevatePracticeWorkspace>("/api/v1/elevate-practice/me"),
   saveElevatePractice: (request: SaveElevatePracticeAssessmentRequest) =>
     sendJson<SaveElevatePracticeAssessmentRequest, ElevatePracticeWorkspace>("/api/v1/elevate-practice/me", "PUT", request),
-  elevatePracticeProgress: () => getJson<ElevatePracticeProgress[]>("/api/v1/elevate-practice/progress"),
+  elevatePracticeProgress: (academicYear?: string) => getJson<ElevatePracticeProgress[]>(`/api/v1/elevate-practice/progress${academicYear ? `?academicYear=${encodeURIComponent(academicYear)}` : ""}`),
   elevatePracticeValidationProgress: () => getJson<ElevatePracticeValidationProgress[]>("/api/v1/elevate-practice/validation-progress"),
   reviewElevatePractice: (staffId: string, assessmentId: string, request: { action: "validate" | "return"; note?: string; rowVersion: string }) =>
     sendJson<typeof request, ElevatePracticeWorkspace>(`/api/v1/elevate-practice/staff/${staffId}/records/${assessmentId}/validation`, "PUT", request),
@@ -751,6 +822,12 @@ export const api = {
   archiveManagerRelationship: (staffId: string, relationshipId: string, reason: string) =>
     sendJson(`/api/v1/admin/organisation/staff/${staffId}/managers/${relationshipId}/archive`, "POST", { reason }),
   adminManagedLists: () => getJson<AdminManagedList[]>("/api/v1/admin/lists"),
+  csvImportMetadata: (kind: AdminCsvImportKind) => getJson<AdminCsvImportMetadata>(`/api/v1/admin/csv-imports/${kind}`),
+  csvImportTemplate: (kind: AdminCsvImportKind) => downloadApiFile(`/api/v1/admin/csv-imports/${kind}/template`),
+  previewCsvImport: (kind: AdminCsvImportKind, csv: string) =>
+    sendJson<{ csv: string }, AdminCsvImportPreview>(`/api/v1/admin/csv-imports/${kind}/preview`, "POST", { csv }),
+  applyCsvImport: (kind: AdminCsvImportKind, csv: string, previewToken: string) =>
+    sendJson<{ csv: string; previewToken: string }, AdminCsvImportResult>(`/api/v1/admin/csv-imports/${kind}/apply`, "POST", { csv, previewToken }),
   updateManagedListValue: (lookupKey: string, id: string, displayName: string) =>
     sendJson(`/api/v1/admin/lists/${encodeURIComponent(lookupKey)}/values/${id}`, "PUT", { displayName }),
   setManagedListValueStatus: (lookupKey: string, id: string, isActive: boolean) =>
@@ -776,7 +853,7 @@ export const api = {
     sendJson(id ? `/api/v1/admin/custom-roles/${id}` : "/api/v1/admin/custom-roles", id ? "PUT" : "POST", request),
   updateFormTemplateStructure: (id: string, request: UpdateFormTemplateStructureRequest) =>
     sendJson(`/api/v1/form-templates/${id}/structure`, "PUT", request),
-  publishFormTemplate: (id: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST"),
+  publishFormTemplate: (id: string, rowVersion: string) => sendJson(`/api/v1/form-templates/${id}/publish`, "POST", { rowVersion }),
   messageTemplates: (includeDeleted = false) =>
     getJson<MessageTemplateSummary[]>(`/api/v1/admin/messaging/templates?includeDeleted=${includeDeleted}`),
   messagingConfiguration: () =>
@@ -802,6 +879,8 @@ export const api = {
     sendJson(`/api/v1/admin/messaging/templates/${id}/test`, "POST", { recipientEmail }),
   messageDeliveries: (take = 100) =>
     getJson<MessageDeliverySummary[]>(`/api/v1/admin/messaging/deliveries?take=${take}`),
+  messageDeliveriesPage: (query: ListQuery, page = 1, pageSize = 25, signal?: AbortSignal) =>
+    getJson<PagedResult<MessageDeliverySummary>>(`/api/v1/admin/messaging/deliveries/page?page=${page}&pageSize=${pageSize}${listQueryString(query)}`, signal),
   retryMessageDelivery: (id: string, reason: string) =>
     sendJson(`/api/v1/admin/messaging/deliveries/${id}/retry`, "POST", { reason }),
   cancelMessageDelivery: (id: string, reason: string) =>

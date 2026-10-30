@@ -9,6 +9,7 @@ COPY apps/web/package.json apps/web/package-lock.json ./
 RUN npm ci
 
 COPY apps/web/ ./
+COPY shared/ /src/shared/
 
 ARG VITE_ENTRA_CLIENT_ID
 ARG VITE_ENTRA_TENANT_ID
@@ -25,7 +26,7 @@ RUN test -n "$VITE_ENTRA_CLIENT_ID" \
     && npm run build
 
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0-bookworm-slim AS api-build
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS api-build
 WORKDIR /src
 
 COPY global.json Directory.Packages.props NuGet.Config ./
@@ -36,6 +37,7 @@ COPY apps/api/src/TLQS.Api/TLQS.Api.csproj apps/api/src/TLQS.Api/
 RUN dotnet restore apps/api/src/TLQS.Api/TLQS.Api.csproj
 
 COPY apps/api/src/ apps/api/src/
+COPY shared/ shared/
 RUN dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj \
     --configuration Release \
     --no-restore \
@@ -45,7 +47,7 @@ RUN dotnet publish apps/api/src/TLQS.Api/TLQS.Api.csproj \
 COPY --from=web-build /src/apps/web/dist/ /app/publish/wwwroot/
 
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-bookworm-slim AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
 
 # curl drives the container health check. The GSSAPI library supports a future
 # Kerberos-integrated OC-DB connection if the college configures a keytab.

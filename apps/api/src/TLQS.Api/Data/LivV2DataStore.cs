@@ -155,8 +155,10 @@ public sealed partial class SqlFoundationDataStore
                    source_secondary.value_key, source_secondary.display_name,
                     source_information.secondary_focus_other,
                     probation_case.id, probation_observation.observation_number,
-                    CONVERT(bit, CASE WHEN liv.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END)
+                    CONVERT(bit, CASE WHEN liv.created_by_user_account_id = @currentUserAccountId THEN 1 ELSE 0 END),
+                    core_record.academic_year_key
             FROM quality.liv_records liv
+            JOIN core.records core_record ON core_record.id = liv.record_id
             JOIN people.staff subject ON subject.id = liv.subject_staff_id
             LEFT JOIN people.staff reviewer ON reviewer.id = liv.reviewer_staff_id
             LEFT JOIN org.org_units area ON area.id = liv.org_unit_id
@@ -199,7 +201,7 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 24), GetStringOrNull(reader, 25), GetStringOrNull(reader, 26), [],
                 GetStringOrNull(reader, 27), GetStringOrNull(reader, 28), GetStringOrNull(reader, 29),
                 GetStringOrNull(reader, 30), GetGuidOrNull(reader, 31),
-                reader.IsDBNull(32) ? null : reader.GetByte(32), reader.GetBoolean(33)),
+                reader.IsDBNull(32) ? null : reader.GetByte(32), reader.GetBoolean(33), GetStringOrNull(reader, 34)),
             cancellationToken);
 
         if (cases.Count == 0)
@@ -240,7 +242,7 @@ public sealed partial class SqlFoundationDataStore
                    stage.stage_status, stage.context_text, stage.aims_text,
                    stage.learner_activity_text, stage.reflection_text,
                    stage.intended_follow_up_date, stage.distance_impact_text,
-                   stage.development_opportunity_keys_json, stage.liv_visit_id
+                   stage.development_opportunity_keys_json, stage.liv_visit_id, stage.visible_to_staff
             FROM quality.liv_stages stage
             JOIN quality.liv_cycles cycle ON cycle.id = stage.liv_cycle_id
             WHERE stage.archived_at IS NULL
@@ -254,7 +256,7 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetInt32(3),
                 reader.GetString(4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6),
                 GetStringOrNull(reader, 7), GetStringOrNull(reader, 8), GetDateOnlyOrNull(reader, 9),
-                GetStringOrNull(reader, 10), ParseLivStringList(GetStringOrNull(reader, 11)), GetGuidOrNull(reader, 12)),
+                GetStringOrNull(reader, 10), ParseLivStringList(GetStringOrNull(reader, 11)), GetGuidOrNull(reader, 12), reader.GetBoolean(13)),
             cancellationToken);
         var visitRatings = await QueryAsync(
             """
@@ -325,19 +327,17 @@ public sealed partial class SqlFoundationDataStore
                                 stage.Id, stage.StageType, stage.StageOrder, stage.StageStatus,
                                 stage.ContextText, stage.AimsText, stage.LearnerActivityText,
                                 stage.ReflectionText, stage.IntendedFollowUpDate, stage.DistanceImpactText,
-                                stage.DevelopmentOpportunityKeys, stage.VisitId,
-                                item.CanEdit || (item.SubjectStaffId == currentUser.StaffId
-                                    && stage.StageType is "pre_discussion" or "distance_impact")))
+                                stage.DevelopmentOpportunityKeys, stage.VisitId, false, stage.VisibleToStaff))
                             .ToArray()))
                     .ToArray();
-                return item with
+                return LivSectionVisibility.ForReader(item with
                 {
                     AreaOfPracticeThemeIds = item.CanViewSensitive
                         ? themes.Where(theme => theme.LivRecordId == item.Id).Select(theme => theme.ThemeId).ToArray()
                         : [],
-                    Visits = item.CanViewSensitive ? visitsByCase.GetValueOrDefault(item.Id, []) : [],
+                    Visits = visitsByCase.GetValueOrDefault(item.Id, []),
                     Cycles = itemCycles
-                };
+                }, currentUser.StaffId);
             })
             .ToArray();
     }
@@ -595,10 +595,12 @@ public sealed partial class SqlFoundationDataStore
             var metadata = await GetLivCaseMetadataV2Async(connection, transaction, livId, cancellationToken);
             if (metadata is null) return FormSubmissionUpdateResult.NotFound;
             if (metadata.ProcessKey != processKey) return FormSubmissionUpdateResult.Forbidden;
-            string? stageType;
+            string? stageType = null;
+            var cycleNumber = 0;
+            var visibleToStaff = false;
             await using (var read = new SqlCommand(
                 """
-                SELECT stage.stage_type
+                SELECT stage.stage_type, cycle.cycle_number, stage.visible_to_staff
                 FROM quality.liv_stages stage
                 JOIN quality.liv_cycles cycle ON cycle.id = stage.liv_cycle_id
                 WHERE stage.id = @stageId AND cycle.liv_record_id = @livId AND stage.archived_at IS NULL;
@@ -606,13 +608,19 @@ public sealed partial class SqlFoundationDataStore
             {
                 read.Parameters.AddWithValue("@stageId", stageId);
                 read.Parameters.AddWithValue("@livId", livId);
-                stageType = await read.ExecuteScalarAsync(cancellationToken) as string;
+                await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+                if (await reader.ReadAsync(cancellationToken))
+                {
+                    stageType = reader.GetString(0);
+                    cycleNumber = reader.GetInt32(1);
+                    visibleToStaff = reader.GetBoolean(2);
+                }
             }
             if (stageType is null) return FormSubmissionUpdateResult.NotFound;
-            var subjectCanEdit = metadata.SubjectStaffId == currentUser.StaffId
+            var subjectCanEdit = visibleToStaff && metadata.SubjectStaffId == currentUser.StaffId
                 && stageType is "pre_discussion" or "distance_impact";
             if (!subjectCanEdit && !CanEditLivMetadata(metadata, currentUser)) return FormSubmissionUpdateResult.Forbidden;
-            var stageStatus = NormalizeLivStageStatus(request.StageStatus, stageType);
+            var stageStatus = LivAccessPolicy.NormalizeStageStatus(request.StageStatus, stageType, cycleNumber);
 
             await ValidateLivOpportunityKeysAsync(
                 connection, transaction, request.DevelopmentOpportunityKeys, processKey, cancellationToken);
@@ -727,6 +735,7 @@ public sealed partial class SqlFoundationDataStore
             if (metadata is null || metadata.ProcessKey != processKey || !CanEditLivMetadata(metadata, currentUser)) return null;
             var cycle = await GetActiveLivCycleAsync(connection, transaction, livId, cancellationToken)
                 ?? throw new WorkflowValidationException("The LIV case has no active cycle.");
+            LivAccessPolicy.ValidateCycleCompletion(cycle.CycleNumber, openFollowUp);
             var stageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             await using (var read = new SqlCommand(
                 "SELECT stage_type FROM quality.liv_stages WHERE liv_cycle_id = @cycleId AND archived_at IS NULL;",
@@ -761,7 +770,7 @@ public sealed partial class SqlFoundationDataStore
                     probationLink = new ProbationLivCompletionLink(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2));
             }
 
-            if (probationLink is not null)
+            if (probationLink is not null && !openFollowUp)
             {
                 await using (var command = new SqlCommand(
                     """
@@ -1086,16 +1095,6 @@ public sealed partial class SqlFoundationDataStore
         return normalized;
     }
 
-    private static string NormalizeLivStageStatus(string? value, string stageType)
-    {
-        var normalized = value?.Trim().ToLowerInvariant() ?? "in_progress";
-        if (normalized == "not_applicable" && stageType != "follow_up_review")
-            throw new WorkflowValidationException("Not applicable is only available for the follow-up review stage.");
-        return normalized is "in_progress" or "completed" or "not_applicable"
-            ? normalized
-            : throw new WorkflowValidationException("The selected LIV stage status is invalid.");
-    }
-
     private static int LivStageOrder(string stageType) => stageType switch
     {
         "pre_discussion" or "distance_impact" => 1,
@@ -1237,7 +1236,7 @@ public sealed partial class SqlFoundationDataStore
         Guid CycleId, Guid Id, string StageType, int StageOrder, string StageStatus,
         string? ContextText, string? AimsText, string? LearnerActivityText,
         string? ReflectionText, DateOnly? IntendedFollowUpDate, string? DistanceImpactText,
-        IReadOnlyList<string> DevelopmentOpportunityKeys, Guid? VisitId);
+        IReadOnlyList<string> DevelopmentOpportunityKeys, Guid? VisitId, bool VisibleToStaff);
     private sealed record LivVisitV2Row(Guid LivRecordId, LivVisitSummary Visit);
     private sealed record LivVisitRatingV2Row(Guid VisitId, LivVisitRatingSummary Rating);
     private sealed record ElevateLivSourceV2Row(Guid AssessmentId, string? PrimaryFocusKey, string? PrimaryFocusName, string? DesiredOutcome, Guid? ExistingLivId);

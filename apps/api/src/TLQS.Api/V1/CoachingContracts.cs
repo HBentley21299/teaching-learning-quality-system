@@ -75,7 +75,8 @@ public sealed record CoachingSessionSummary(
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
     bool CanEdit,
-    bool IsCreatedByCurrentUser);
+    bool IsCreatedByCurrentUser,
+    string? AcademicYear = null);
 
 public sealed record CoachingSessionDetail(
     Guid Id,

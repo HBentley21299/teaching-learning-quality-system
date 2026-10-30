@@ -21,6 +21,29 @@ public sealed class ExcelDataExportTests
     }
 
     [Fact]
+    public void Wide_form_exports_freeze_named_context_and_wrap_readable_headers_without_freezing_information_columns()
+    {
+        var source=new ExportSheet("Form entries",["Record ID","Staff member","Evidence [walk/one]","Evidence [walk/two]","A much longer saved form question that needs several lines to remain readable [walk/three]"],
+            [new string?[] {"record","Alex","N/A","Not seen","Complete evidence"}],false);
+        using var document=OpenWorkbook(source);
+        var worksheet=GetDataWorksheet(document);
+        var pane=worksheet.Descendants<Pane>().Single();
+        Assert.Equal(2D,pane.HorizontalSplit!.Value);
+        Assert.Equal(1D,pane.VerticalSplit!.Value);
+        Assert.Equal("C2",pane.TopLeftCell!.Value);
+        var header=worksheet.Descendants<Row>().First();
+        Assert.True(header.Height!.Value>=36D);
+        Assert.True(header.CustomHeight!.Value);
+        Assert.Equal(new[] {"Entry reference","Staff member","Evidence","Evidence (2)","A much longer saved form question that needs several lines to remain readable"},header.Elements<Cell>().Select(cell=>cell.InnerText));
+        var info=document.WorkbookPart!.Workbook.Sheets!.Elements<Sheet>().Single(sheet=>sheet.Name=="Export Information");
+        var information=((WorksheetPart)document.WorkbookPart.GetPartById(info.Id!)).Worksheet;
+        Assert.Equal(0D,information.Descendants<Pane>().Single().HorizontalSplit!.Value);
+        var styles=document.WorkbookPart.WorkbookStylesPart!.Stylesheet.CellFormats!.Elements<CellFormat>().ToArray();
+        Assert.True(styles[1].Alignment!.WrapText!.Value);
+        Assert.True(styles[2].Alignment!.WrapText!.Value);
+    }
+
+    [Fact]
     public void Explicit_column_types_support_calculation_dates_and_literal_form_answers()
     {
         var sheet = new ExportSheet("Form entries", ["Learners", "Review date", "Submitted at", "Complete", "Staff code", "Comment"],
