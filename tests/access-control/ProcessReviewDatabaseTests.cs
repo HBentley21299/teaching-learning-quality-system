@@ -28,11 +28,17 @@ public sealed class ProcessReviewDatabaseTests
         Assert.Equal(author.StaffId,draft.OwnerStaffId);Assert.Equal("draft",draft.Status);Assert.Equal("Partially completed",draft.Data.Fields["scope"]);
         Assert.Equal("",draft.Data.Samples[0].Title);Assert.Equal("https:",draft.Data.Samples[0].EvidenceLink);
         Assert.Empty(draft.Configuration.RatingOptions);
+        Assert.Null(draft.Data.Digital);
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewActionAsync(draft.RecordId,null,
+            new("New action on an older draft",draft.Configuration.Standards[0].Key,db.StaffIds[1],new DateOnly(2026,12,1),"",""),author,Token));
+        Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
+        Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM ops.domain_events;"));
         var formsEditor=db.User(1,PermissionKeys.FormsManage);
         Assert.Null(await store.GetProcessReviewAsync(draft.RecordId,formsEditor,Token));
         Assert.Null(await store.GetRecordNavigationAsync(draft.RecordId,formsEditor,Token));
         Assert.Empty(await store.GetProcessReviewsAsync(ProcessReviewRules.Digital,"2026/27",db.User(1,PermissionKeys.ReportsViewAll),Token));
         var config=await store.GetProcessReviewConfigurationAsync(ProcessReviewRules.Digital,Token);
+        await db.SetPracticeRubricAsync(("a","College category A",1),("b","College category B",2));
         var configured=await store.SaveProcessReviewConfigurationAsync(ProcessReviewRules.Digital,config with{RatingOptions=[new("a","College category A"),new("b","College category B")]},formsEditor,Token);
         Assert.Equal(2,configured.Version);
         await Assert.ThrowsAsync<DBConcurrencyException>(()=>store.SaveProcessReviewConfigurationAsync(ProcessReviewRules.Digital,config,formsEditor,Token));
@@ -83,27 +89,28 @@ public sealed class ProcessReviewDatabaseTests
         var assignee=db.User(1);
         Assert.Null(await store.GetProcessReviewAsync(review.RecordId,assignee,Token));
         Assert.Null(await store.GetRecordNavigationAsync(review.RecordId,assignee,Token));
-        var mine=(await store.GetProcessReviewActionAsync(action.ActionId,assignee,Token))!;Assert.True(mine.CanEdit);
+        var mine=(await store.GetProcessReviewActionAsync(action.ActionId,assignee,Token))!;Assert.False(mine.CanEdit);
         Assert.Null(await store.GetProcessReviewActionAsync(action.ActionId,db.User(2),Token));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{OwnerStaffId=db.StaffIds[2],RowVersion=mine.RowVersion},assignee,Token));
-        var completed=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Resources revised",RowVersion=mine.RowVersion},assignee,Token);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Resources revised",RowVersion=mine.RowVersion},assignee,Token));
+        var completed=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Resources revised",RowVersion=mine.RowVersion},admin,Token);
         Assert.Equal("complete",completed.Progress);Assert.Equal("awaiting_evidence",completed.ImpactStatus);Assert.Equal(2,completed.Updates.Count);
-        Assert.Equal(assignee.UserAccountId,await db.ScalarAsync<Guid>($"SELECT completed_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
+        Assert.Equal(admin.UserAccountId,await db.ScalarAsync<Guid>($"SELECT completed_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
         var evidenceUpdate=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Coordinator added evidence",RowVersion=completed.RowVersion},admin,Token);
-        Assert.Equal(assignee.UserAccountId,await db.ScalarAsync<Guid>($"SELECT completed_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
+        Assert.Equal(admin.UserAccountId,await db.ScalarAsync<Guid>($"SELECT completed_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
         var reopened=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{RowVersion=evidenceUpdate.RowVersion},admin,Token);
         Assert.Equal(1,await db.ScalarAsync<int>($"SELECT COUNT(*) FROM quality.actions WHERE id='{action.ActionId}' AND completed_date IS NULL AND completed_by_user_account_id IS NULL AND completion_note IS NULL;"));
-        var cancelled=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="cancelled",ProgressNote="Support no longer required",RowVersion=reopened.RowVersion},assignee,Token);
-        Assert.Equal(assignee.UserAccountId,await db.ScalarAsync<Guid>($"SELECT cancelled_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
+        var cancelled=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="cancelled",ProgressNote="Support no longer required",RowVersion=reopened.RowVersion},admin,Token);
+        Assert.Equal(admin.UserAccountId,await db.ScalarAsync<Guid>($"SELECT cancelled_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
         reopened=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{RowVersion=cancelled.RowVersion},admin,Token);
         Assert.Equal(1,await db.ScalarAsync<int>($"SELECT COUNT(*) FROM quality.actions WHERE id='{action.ActionId}' AND cancelled_at IS NULL AND cancelled_by_user_account_id IS NULL AND cancellation_comments IS NULL;"));
-        await Assert.ThrowsAsync<DBConcurrencyException>(()=>store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{RowVersion=mine.RowVersion},assignee,Token));
-        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{ImpactStatus="demonstrated",RowVersion=completed.RowVersion},assignee,Token));
+        await Assert.ThrowsAsync<DBConcurrencyException>(()=>store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{RowVersion=mine.RowVersion},admin,Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{ImpactStatus="demonstrated",RowVersion=reopened.RowVersion},admin,Token));
         // Native date changes keep the shared central action row and its extension history aligned.
         await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{DueDate=new DateOnly(2027,2,1),DeadlineChangeReason="Further specialist support required",RowVersion=reopened.RowVersion},admin,Token);
         Assert.Equal(new DateTime(2027,2,1),await db.ScalarAsync<DateTime>($"SELECT revised_due_date FROM quality.actions WHERE id='{action.ActionId}';"));
         var live=(await store.GetProcessReviewActionAsync(action.ActionId,assignee,Token))!;Assert.Equal("open",live.Progress);Assert.Equal(new DateOnly(2027,2,1),live.DueDate);
-        var assessed=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{DueDate=live.DueDate,ImpactStatus="demonstrated",ImpactEvidence="Learners confirm increased independence",RowVersion=live.RowVersion},assignee,Token);
+        var assessed=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{DueDate=live.DueDate,ImpactStatus="demonstrated",ImpactEvidence="Learners confirm increased independence",RowVersion=live.RowVersion},admin,Token);
         Assert.Equal("demonstrated",assessed.ImpactStatus);Assert.Equal("open",assessed.Progress);
         var export=BusinessWorkbookExportBuilder.Build(await store.GetProcessReviewExportAsync(ProcessReviewRules.Activate,"2026/27",admin,Token,"https://college.example/i-elevate"));
         Assert.Equal(2,export.Sheets.Single(x=>x.Name=="Snapshots").Rows.Count);Assert.Single(export.Sheets.Single(x=>x.Name=="Actions").Rows);
@@ -163,10 +170,11 @@ public sealed class ProcessReviewDatabaseTests
         Assert.Equal(2,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.process_review_action_assignees;"));
         Assert.Equal(actionRequest.Detail,await db.ScalarAsync<string>($"SELECT detail FROM quality.actions WHERE id='{action.ActionId}';"));
         var secondary=db.User(2);var assigned=(await store.GetProcessReviewActionAsync(action.ActionId,secondary,Token))!;
-        Assert.True(assigned.CanEdit);Assert.Null(await store.GetProcessReviewAsync(review.RecordId,secondary,Token));
-        action=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Guidance delivered",RowVersion=assigned.RowVersion},secondary,Token);
+        Assert.False(assigned.CanEdit);Assert.Null(await store.GetProcessReviewAsync(review.RecordId,secondary,Token));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Guidance delivered",RowVersion=assigned.RowVersion},secondary,Token));
+        action=await store.SaveProcessReviewActionAsync(review.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Guidance delivered",RowVersion=assigned.RowVersion},admin,Token);
         Assert.Equal("complete",action.Progress);Assert.Equal("awaiting_evidence",action.ImpactStatus);
-        Assert.Equal(secondary.UserAccountId,await db.ScalarAsync<Guid>($"SELECT completed_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
+        Assert.Equal(admin.UserAccountId,await db.ScalarAsync<Guid>($"SELECT completed_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
         var export=BusinessWorkbookExportBuilder.Build(await store.GetProcessReviewExportAsync(ProcessReviewRules.Activate,"2026/27",admin,Token));
         Assert.Contains(export.Sheets,x=>x.Name=="Review scope");Assert.Contains(export.Sheets,x=>x.Name=="Participants");
         var scan=export.Sheets.Single(x=>x.Name=="Skills Scan");Assert.Equal(15,scan.Rows.Count);
@@ -246,10 +254,11 @@ public sealed class ProcessReviewDatabaseTests
         var restricted=(await store.GetProcessReviewAsync(followUp.RecordId,db.User(1),Token))!;
         Assert.True(restricted.IsFollowUp);Assert.Null(restricted.ParentReview);Assert.Null(restricted.ParentReviewContext);
         Assert.Null(await store.GetProcessReviewAsync(parent.RecordId,db.User(1),Token));
-        Assert.Equal(action.ActionId,Assert.Single(restricted.Actions).ActionId);Assert.True(restricted.Actions[0].CanEdit);
+        Assert.Equal(action.ActionId,Assert.Single(restricted.Actions).ActionId);Assert.False(restricted.Actions[0].CanEdit);
         var restrictedReported=Assert.Single(await store.GetProcessReviewActionsAsync(ProcessReviewRules.Activate,"2027/28",db.User(1),Token));
         Assert.Equal(action.ActionId,restrictedReported.ActionId);Assert.Equal(followUp.RecordId,Assert.Single(restrictedReported.AssociatedReviewIds!));
-        await store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Reviewed at the linked meeting",RowVersion=action.RowVersion},db.User(1),Token);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Reviewed at the linked meeting",RowVersion=action.RowVersion,ReviewRecordId=followUp.RecordId},db.User(1),Token));
+        await store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,actionRequest with{Progress="complete",ProgressNote="Reviewed at the linked meeting",RowVersion=action.RowVersion,ReviewRecordId=followUp.RecordId},admin,Token);
         followUp=(await store.GetProcessReviewAsync(followUp.RecordId,admin,Token))!;Assert.Equal("complete",Assert.Single(followUp.Actions).Progress);
         Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
         var export=BusinessWorkbookExportBuilder.Build(await store.GetProcessReviewExportAsync(ProcessReviewRules.Activate,"2027/28",admin,Token));
@@ -267,6 +276,291 @@ public sealed class ProcessReviewDatabaseTests
         var third=await store.CreateActivateFollowUpAsync(followUp.RecordId,new("2028/29",new DateOnly(2028,11,4),followUp.RowVersion),admin,Token);
         Assert.Equal(action.ActionId,Assert.Single(third.Actions).ActionId);Assert.Empty(third.Data.Activate!.SkillsScanScores);
         Assert.Equal(followUp.RecordId,third.ParentReview!.RecordId);Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
+    }
+
+    [AccountAdministrationDatabaseFact]
+    public async Task Digital_selected_focus_drafts_stage_actions_and_formal_submission_promotes_them_once()
+    {
+        await using var db=await ReviewDatabase.CreateAsync();var store=db.Store();var admin=db.Admin();
+        var configuration=await store.GetProcessReviewConfigurationAsync(ProcessReviewRules.Digital,Token);
+        Assert.Empty(configuration.RatingOptions);
+        await db.SetPracticeRubricAsync(("a","College A",1),("b","College B",2));
+        configuration=await store.SaveProcessReviewConfigurationAsync(ProcessReviewRules.Digital,configuration with{RatingOptions=[new("a","College A"),new("b","College B")]},admin,Token);
+        var selected=new[]{configuration.Standards[0].Statements[0].Key,configuration.Standards[1].Statements[0].Key};
+        var omitted=configuration.Standards[2].Statements[0].Key;var actionId=Guid.NewGuid();var sampleId=Guid.NewGuid().ToString();
+        var action=new DigitalLearningWalkDraftAction(actionId,"","",null,null);
+        var data=Empty with{Digital=new(selected,[action]),Fields=new Dictionary<string,string>{{"deliveryAreaKey","campus"},{"deliveryAreaName","Client supplied wording"},{"strengths","Good practice"},{"development","Development needs"}},
+            Samples=[new(sampleId,"Shared digital classroom","digital_classroom",null,null,[],"https://college.example/evidence","Evidence")],
+            Responses=[new(selected[0],"a",[sampleId],"Selected evidence"),new(omitted,"b",[sampleId],"Earlier unselected rating")]};
+        var request=new SaveProcessReviewRequest("","2026/27",db.Faculty,db.TeamA,new DateOnly(2026,10,30),data);
+        var draft=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request,admin,Token);
+        // This scenario represents a record saved before category selection existed.
+        await db.SeedLegacyDigitalDataAsync(draft.RecordId,draft.Data with{Digital=data.Digital});
+        draft=(await store.GetProcessReviewAsync(draft.RecordId,admin,Token))!;
+        Assert.Equal("Campus delivery",draft.Data.Fields["deliveryAreaName"]);Assert.Contains("Team A",draft.Title);
+        Assert.Single(draft.Data.Responses);Assert.Single(draft.Data.Digital!.DraftActions);Assert.Null(draft.Data.Digital.DraftActions[0].OwnerStaffId);
+        Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM ops.domain_events;"));
+        var summary=Assert.Single(await store.GetProcessReviewsAsync(ProcessReviewRules.Digital,"2026/27",admin,Token));
+        Assert.Equal(2,summary.StatementCount);Assert.Equal(1,summary.RatedStatementCount);
+        Assert.Null(summary.SelectedStandardKeys);Assert.All(summary.SelectedStandards!,standard=>Assert.Equal(1,standard.SelectedStatementCount));
+        action=action with{ThemeKey=configuration.Standards[0].Key,Title="Make the shared resources accessible",OwnerStaffId=db.StaffIds[1],DueDate=new DateOnly(2026,12,1)};
+        draft=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,draft.RecordId,request with{Data=draft.Data with{Digital=new(selected,[action])},RowVersion=draft.RowVersion},admin,Token);
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewActionAsync(draft.RecordId,null,
+            new(action.Title,action.ThemeKey,action.OwnerStaffId!.Value,action.DueDate!.Value,"",""),admin,Token));
+        var generic=new CreateActionRequest(draft.RecordId,null,db.StaffIds[1],"Theme",action.Title,null,null,null,action.DueDate,true,SourceFormType:"manual");
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.CreateActionAsync(generic,admin,Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.CreateActionAsync(generic with{SourceRecordId=null,SourceFormType=" DIGITAL_LEARNING_WALK "},admin,Token));
+        var export=BusinessWorkbookExportBuilder.Build(await store.GetProcessReviewExportAsync(ProcessReviewRules.Digital,"2026/27",admin,Token));
+        Assert.Equal(2,export.Sheets.Single(sheet=>sheet.Name=="Responses").Rows.Count);
+        var legacyEntries=export.Sheets.Single(sheet=>sheet.Name=="Form entries");var legacyRow=Assert.Single(legacyEntries.Rows);
+        Assert.Null(legacyRow[legacyEntries.Columns.ToList().IndexOf("Selected categories")]);
+        Assert.Contains("earlier partial selection",legacyRow[legacyEntries.Columns.ToList().IndexOf("Category coverage")]);
+        var proposed=Assert.Single(export.Sheets.Single(sheet=>sheet.Name=="Draft actions").Rows);
+        Assert.Contains("Test staff 1",proposed);Assert.Empty(export.Sheets.Single(sheet=>sheet.Name=="Actions").Rows);
+        Assert.DoesNotContain(export.Sheets.SelectMany(sheet=>sheet.Rows).SelectMany(row=>row),value=>value==actionId.ToString()||value==sampleId);
+        Assert.NotEmpty(new ExcelExportService().CreateWorkbook(export).Content);
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,draft.RecordId,
+            request with{Data=draft.Data,Submit=true,RowVersion=draft.RowVersion},admin,Token));
+        Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
+        var complete=draft.Data with{Responses=[..draft.Data.Responses,new(selected[1],"b",[sampleId],"Other selected evidence")]};
+        var submitted=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,draft.RecordId,request with{Data=complete,Submit=true,RowVersion=draft.RowVersion},admin,Token);
+        Assert.Equal("submitted",submitted.Status);Assert.Empty(submitted.Data.Digital!.DraftActions);
+        Assert.Equal(actionId,Assert.Single(submitted.Actions).ActionId);Assert.Empty(submitted.Actions[0].SuccessEvidence);
+        Assert.Equal(action.Title,await db.ScalarAsync<string>($"SELECT detail FROM quality.actions WHERE id='{actionId}';"));
+        Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM ops.domain_events;"));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,submitted.RecordId,
+            request with{Data=submitted.Data with{Responses=[]},RowVersion=submitted.RowVersion},admin,Token));
+        // A stale client can resend a promoted action's reference, but cannot clone or overwrite the live action through it.
+        submitted=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,submitted.RecordId,request with{Data=submitted.Data with
+            {Digital=new([selected[0]],[action with{Title="Attempted duplicate overwrite",OwnerStaffId=db.StaffIds[2]}])},RowVersion=submitted.RowVersion},admin,Token);
+        Assert.Single(submitted.Data.Responses);Assert.Empty(submitted.Data.Digital!.DraftActions);
+        Assert.Equal(action.Title,Assert.Single(submitted.Actions).Title);Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
+        Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM ops.domain_events;"));
+        Assert.Equal(1,await db.ScalarAsync<int>($"SELECT COUNT(*) FROM ops.audit_logs WHERE entity_name=N'process_review' AND entity_id='{submitted.RecordId}' AND JSON_VALUE(before_json,'$.responses[1].statementKey')=N'{selected[1]}' AND JSON_QUERY(after_json,'$.responses') NOT LIKE N'%{selected[1]}%';"));
+        // Progress updates preserve the actual four-field action detail and permit an unchanged owner after a role change.
+        await db.ExecuteAsync($"UPDATE assignment SET role_id=(SELECT id FROM auth.roles WHERE role_key=N'tutor') FROM auth.user_roles assignment JOIN auth.user_accounts account ON account.id=assignment.user_account_id WHERE account.staff_id='{db.StaffIds[1]}';");
+        var live=Assert.Single(submitted.Actions);
+        await store.SaveProcessReviewActionAsync(submitted.RecordId,actionId,new(live.Title,live.ThemeKey,live.OwnerStaffId,live.DueDate,"","",Progress:"complete",ProgressNote:"Reviewed",RowVersion:live.RowVersion),admin,Token);
+        Assert.Equal(action.Title,await db.ScalarAsync<string>($"SELECT detail FROM quality.actions WHERE id='{actionId}';"));
+        var foreign=request with{Data=complete,Submit=true};
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,foreign,admin,Token));
+        Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM core.records;"));
+        // New owners must be eligible leaders within the caller's visible staff scope, including while staging a draft.
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request with{Data=data with{Digital=new(selected,[action with{Id=Guid.NewGuid(),OwnerStaffId=db.StaffIds[2]}])}},admin,Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request with{Data=data with{Digital=new(selected,[action with{Id=Guid.NewGuid(),OwnerStaffId=db.StaffIds[0]}])}},db.User(2,ProcessReviewRules.Digital+".submit"),Token));
+        // Existing saved wording survives lookup retirement, while a new record cannot select the retired choice.
+        await db.ExecuteAsync("UPDATE core.lookup_values SET is_active=0,display_name=N'Renamed retired area' WHERE value_key=N'campus';");
+        submitted=(await store.GetProcessReviewAsync(submitted.RecordId,admin,Token))!;
+        submitted=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,submitted.RecordId,request with{Data=submitted.Data,RowVersion=submitted.RowVersion},admin,Token);
+        Assert.Equal("Campus delivery",submitted.Data.Fields["deliveryAreaName"]);
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request with{Data=data with{Digital=new([],[])}},admin,Token));
+        export=BusinessWorkbookExportBuilder.Build(await store.GetProcessReviewExportAsync(ProcessReviewRules.Digital,"2026/27",admin,Token));
+        Assert.DoesNotContain(export.Sheets,sheet=>sheet.Name=="Draft actions");Assert.Single(export.Sheets.Single(sheet=>sheet.Name=="Actions").Rows);
+        Assert.All(export.Sheets,sheet=>Assert.All(sheet.Rows,row=>Assert.Equal(sheet.Columns.Count,row.Count)));
+    }
+
+    [AccountAdministrationDatabaseFact]
+    public async Task Digital_categories_are_authoritative_durable_pinned_and_cannot_be_downgraded_by_older_payloads()
+    {
+        await using var db=await ReviewDatabase.CreateAsync();var store=db.Store();var admin=db.Admin();
+        await db.SetPracticeRubricAsync(("level_1","Emerging practice",1));
+        var config=await store.GetProcessReviewConfigurationAsync(ProcessReviewRules.Digital,Token);
+        var categories=config.Standards.Take(2).Select(standard=>standard.Key).ToArray();
+        var keys=config.Standards.Take(2).SelectMany(standard=>standard.Statements).Select(statement=>statement.Key).ToArray();
+        var action=new DigitalLearningWalkDraftAction(Guid.NewGuid(),categories[0],"Review the shared digital resources",db.StaffIds[1],new DateOnly(2026,12,1));
+        var request=new SaveProcessReviewRequest("Category walk","2026/27",db.Faculty,db.TeamA,new DateOnly(2026,10,30),Empty with
+            {Fields=new Dictionary<string,string>{{"deliveryAreaKey","campus"}},Digital=new([keys[0]],[action],categories),Responses=[new(keys[0],"level_1",[],"Initial evidence")]});
+        var draft=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request,admin,Token);
+        Assert.Equal(categories,draft.Data.Digital!.SelectedStandardKeys);Assert.Equal(keys,draft.Data.Digital.SelectedStatementKeys);Assert.Single(draft.Data.Responses);
+        var summary=Assert.Single(await store.GetProcessReviewsAsync(ProcessReviewRules.Digital,"2026/27",admin,Token));
+        Assert.Equal(7,summary.StatementCount);Assert.Equal(1,summary.RatedStatementCount);Assert.Equal(categories,summary.SelectedStandardKeys);
+        Assert.Equal(new[]{3,4},summary.SelectedStandards!.Select(standard=>standard.SelectedStatementCount));
+        Assert.Equal(config.Standards.Take(2).Select(standard=>standard.Title),summary.SelectedStandards!.Select(standard=>standard.Title));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,draft.RecordId,request with{Submit=true,RowVersion=draft.RowVersion},admin,Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,draft.RecordId,request with
+            {Data=request.Data with{Digital=new([keys[0]],[])},RowVersion=draft.RowVersion},admin,Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,draft.RecordId,request with
+            {Data=request.Data with{Digital=null},RowVersion=draft.RowVersion},admin,Token));
+        Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
+        var unchanged=(await store.GetProcessReviewAsync(draft.RecordId,admin,Token))!;Assert.Equal(draft.RowVersion,unchanged.RowVersion);Assert.Equal("draft",unchanged.Status);
+        // Old client metadata omissions on creation infer full categories, never a new partial-category review.
+        var inferred=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request with{Title="Older client walk",Data=request.Data with
+            {Digital=new([keys[0]],[])}},admin,Token);
+        Assert.Equal(new[]{categories[0]},inferred.Data.Digital!.SelectedStandardKeys);Assert.Equal(3,inferred.Data.Digital.SelectedStatementKeys.Count);
+        var empty=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request with{Title="Empty older client draft",Data=Empty with{Digital=new([],[])}},admin,Token);
+        Assert.Empty(empty.Data.Digital!.SelectedStandardKeys!);Assert.Empty(empty.Data.Digital.SelectedStatementKeys);
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request with
+            {Title="Cannot bypass category completion",Submit=true,Data=request.Data with{Digital=new([keys[0]],[])}},admin,Token));
+        Assert.Equal(3,await db.ScalarAsync<int>("SELECT COUNT(*) FROM core.records;"));
+        // New framework edits cannot change the selected statement set or labels pinned to this existing walk.
+        var latest=config with{Standards=config.Standards.Select((standard,index)=>standard with{Title=standard.Title+" revised",
+            Statements=index==0?[..standard.Statements,new("new_future_statement","A future question")]:standard.Statements}).ToArray()};
+        await store.SaveProcessReviewConfigurationAsync(ProcessReviewRules.Digital,latest,admin,Token);
+        var complete=request.Data with{Responses=keys.Select(key=>new ProcessReviewResponse(key,"level_1",[],"Evidence for the whole category")).ToArray()};
+        var submitted=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,draft.RecordId,request with{Data=complete,Submit=true,RowVersion=draft.RowVersion},admin,Token);
+        Assert.Equal("submitted",submitted.Status);Assert.Equal(keys,submitted.Data.Digital!.SelectedStatementKeys);Assert.Equal(7,submitted.Data.Responses.Count);
+        Assert.Equal(config.Standards[0].Title,submitted.Configuration.Standards[0].Title);Assert.Empty(submitted.Data.Samples);
+        Assert.Equal(action.Id,Assert.Single(submitted.Actions).ActionId);Assert.Empty(submitted.Data.Digital.DraftActions);
+        var source=await store.GetProcessReviewExportAsync(ProcessReviewRules.Digital,"2026/27",admin,Token);
+        var exported=BusinessWorkbookExportBuilder.Build(source);
+        Assert.All(exported.Sheets,sheet=>Assert.All(sheet.Rows,row=>Assert.Equal(sheet.Columns.Count,row.Count)));
+        var forms=exported.Sheets.Single(sheet=>sheet.Name=="Form entries");
+        var row=Assert.Single(forms.Rows,values=>values.Contains("Category walk"));
+        Assert.Contains(config.Standards[0].Title,row[forms.Columns.ToList().IndexOf("Selected categories")]);
+        Assert.Equal("2",row[forms.Columns.ToList().IndexOf("Selected category count")]);
+        Assert.Equal(7,source.Sheets.Single(sheet=>sheet.Name=="Responses").Rows.Count(values=>values[0]==submitted.RecordId.ToString()));
+    }
+
+    [AccountAdministrationDatabaseFact]
+    public async Task Digital_action_promotion_failure_rolls_back_the_parent_submission_and_every_assignment()
+    {
+        await using var db=await ReviewDatabase.CreateAsync();var store=db.Store();var admin=db.Admin();
+        var config=await store.GetProcessReviewConfigurationAsync(ProcessReviewRules.Digital,Token);
+        await db.SetPracticeRubricAsync(("a","College category",1));
+        config=await store.SaveProcessReviewConfigurationAsync(ProcessReviewRules.Digital,config with{RatingOptions=[new("a","College category")]},admin,Token);
+        var selected=config.Standards[0].Statements.Select(statement=>statement.Key).ToArray();
+        var actions=new[]{new DigitalLearningWalkDraftAction(Guid.NewGuid(),config.Standards[0].Key,"First action",db.StaffIds[1],new DateOnly(2026,12,1)),
+            new DigitalLearningWalkDraftAction(Guid.NewGuid(),config.Standards[0].Key,"Force promotion failure",db.StaffIds[1],new DateOnly(2026,12,1))};
+        var request=new SaveProcessReviewRequest("Atomic walk","2026/27",db.Faculty,db.TeamA,new DateOnly(2026,10,30),Empty with
+            {Fields=new Dictionary<string,string>{{"deliveryAreaKey","campus"}},Digital=new(selected,actions,[config.Standards[0].Key]),Samples=[new("sample","Evidence","learner_work",null,null,[],null,null)],Responses=selected.Select(key=>new ProcessReviewResponse(key,"a",["sample"],null)).ToArray()});
+        var draft=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,request,admin,Token);
+        await db.ExecuteAsync("CREATE TRIGGER quality.test_digital_promotion_failure ON quality.actions AFTER INSERT AS BEGIN IF EXISTS(SELECT 1 FROM inserted WHERE title=N'Force promotion failure') THROW 51009,'Intentional isolated test failure',1; END;");
+        await Assert.ThrowsAsync<SqlException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,draft.RecordId,request with{Submit=true,RowVersion=draft.RowVersion},admin,Token));
+        draft=(await store.GetProcessReviewAsync(draft.RecordId,admin,Token))!;
+        Assert.Equal("draft",draft.Status);Assert.Equal(2,draft.Data.Digital!.DraftActions.Count);
+        Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
+        Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.process_review_action_updates;"));
+        Assert.Equal(0,await db.ScalarAsync<int>("SELECT COUNT(*) FROM ops.domain_events;"));
+    }
+
+    [AccountAdministrationDatabaseFact]
+    public async Task Digital_walks_share_the_managed_learning_walk_scale_and_submit_ratings_without_samples_or_rationale()
+    {
+        await using var db=await ReviewDatabase.CreateAsync();var store=db.Store();var admin=db.Admin();
+        var emptyConfiguration=await store.GetProcessReviewConfigurationAsync(ProcessReviewRules.Digital,Token);
+        Assert.Empty(emptyConfiguration.RatingOptions);Assert.Equal("learning_walk",emptyConfiguration.Settings["ratingScaleSource"]);
+        var statement=emptyConfiguration.Standards[0].Statements[0].Key;
+        var legacySample=new ProcessReviewSample("old_sample","","",null,null,[db.StaffIds[2]],"https:","Earlier unfinished evidence");
+        var oldRequest=new SaveProcessReviewRequest("Old draft","2026/27",db.Faculty,db.TeamA,new DateOnly(2026,10,30),Empty with
+            {Samples=[legacySample],Fields=new Dictionary<string,string>{{"deliveryAreaKey","campus"}},Digital=new([statement],[])});
+        var olderDraft=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,oldRequest,admin,Token);
+        await db.SeedLegacyDigitalDataAsync(olderDraft.RecordId,olderDraft.Data with{Digital=oldRequest.Data.Digital});
+        olderDraft=(await store.GetProcessReviewAsync(olderDraft.RecordId,admin,Token))!;
+        Assert.Empty(olderDraft.Configuration.RatingOptions);
+        await db.SetPracticeRubricAsync(Enumerable.Range(1,5).Select(score=>($"level_{score}",$"Managed college wording {score}",score)).ToArray());
+        await db.ExecuteAsync("""
+            DECLARE @active uniqueidentifier=(SELECT TOP(1) id FROM quality.elevate_practice_frameworks WHERE is_active=1);
+            INSERT quality.elevate_practice_rubric_descriptors(id,framework_id,descriptor_key,visible_wording,guidance_text,display_order,is_active)
+            VALUES(NEWID(),@active,N'out_of_range',N'Not a Learning Walk level',N'Not used',6,1),
+                (NEWID(),@active,N'inactive',N'Inactive descriptor',N'Not used',2,0),
+                (NEWID(),@active,N'archived',N'Archived descriptor',N'Not used',3,1);
+            UPDATE quality.elevate_practice_rubric_descriptors SET archived_at=sysutcdatetime() WHERE descriptor_key=N'archived';
+            DECLARE @old uniqueidentifier=NEWID();INSERT quality.elevate_practice_frameworks(id,is_active)VALUES(@old,0);
+            INSERT quality.elevate_practice_rubric_descriptors(id,framework_id,descriptor_key,visible_wording,guidance_text,display_order,is_active)
+            VALUES(NEWID(),@old,N'old_framework',N'Inactive framework descriptor',N'Not used',1,1);
+            """);
+        var coaching=await store.GetCoachingConfigurationAsync(Token);
+        var normalWalkScale=coaching.CurrentPracticeRubric.Where(option=>option.DisplayOrder is >=1 and <=5).Take(5).ToArray();
+        var current=await store.GetProcessReviewConfigurationAsync(ProcessReviewRules.Digital,Token);
+        Assert.Equal(5,current.RatingOptions.Count);
+        Assert.Equal(normalWalkScale.Select(option=>option.DescriptorKey),current.RatingOptions.Select(option=>option.Key));
+        Assert.Equal(normalWalkScale.Select(option=>$"{option.DisplayOrder} – {option.VisibleWording}"),current.RatingOptions.Select(option=>option.Label));
+        Assert.Equal(normalWalkScale.Select(option=>option.DisplayOrder),current.RatingOptions.Select(option=>option.Score!.Value));
+        Assert.Equal(normalWalkScale.Select(option=>option.GuidanceText),current.RatingOptions.Select(option=>option.GuidanceText));
+        Assert.Equal(normalWalkScale.Select(option=>option.ColorHex),current.RatingOptions.Select(option=>option.ColorHex));
+        Assert.Equal("ratings_only",current.Settings["evidenceMode"]);Assert.Equal("false",current.Settings["requireSamplePerRating"]);Assert.Equal("false",current.Settings["requireRationale"]);
+        var savedConfiguration=await store.SaveProcessReviewConfigurationAsync(ProcessReviewRules.Digital,current with
+            {RatingOptions=[new("spoofed","Client-only scale")],Settings=new Dictionary<string,string>{{"requireSamplePerRating","true"},{"requireRationale","true"},{"ratingScaleSource","client"}}},admin,Token);
+        Assert.Equal(current.RatingOptions,savedConfiguration.RatingOptions);Assert.Equal("learning_walk",savedConfiguration.Settings["ratingScaleSource"]);
+        Assert.Equal("false",savedConfiguration.Settings["requireSamplePerRating"]);Assert.Equal("false",savedConfiguration.Settings["requireRationale"]);
+        await db.ExecuteAsync($"UPDATE people.staff SET archived_at=sysutcdatetime(),account_status=N'archived' WHERE id='{db.StaffIds[2]}';");
+        // A previously unconfigured draft can select the now-shared scale and submit immediately; historical partial evidence is retained.
+        olderDraft=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,olderDraft.RecordId,oldRequest with
+            {Data=olderDraft.Data with{Responses=[new(statement,"level_1",[legacySample.Id],"Current criterion notes")]},Submit=true,RowVersion=olderDraft.RowVersion},admin,Token);
+        Assert.Equal("submitted",olderDraft.Status);Assert.Equal(JsonSerializer.Serialize(legacySample),JsonSerializer.Serialize(Assert.Single(olderDraft.Data.Samples)));
+        Assert.Equal(current.RatingOptions,olderDraft.Configuration.RatingOptions);
+        // A fresh walk needs no sample records or links; draft actions promote with the same submission.
+        var action=new DigitalLearningWalkDraftAction(Guid.NewGuid(),current.Standards[0].Key,"Review digital explanations",db.StaffIds[1],new DateOnly(2026,12,1));
+        var categoryKeys=current.Standards[0].Statements.Select(item=>item.Key).ToArray();
+        var newRequest=oldRequest with{Title="No sample walk",Data=Empty with{Fields=oldRequest.Data.Fields,Digital=new(categoryKeys,[action],[current.Standards[0].Key]),Responses=categoryKeys.Select(key=>new ProcessReviewResponse(key,"level_2",[],null)).ToArray()},Submit=true};
+        var submitted=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,newRequest,admin,Token);
+        Assert.Empty(submitted.Data.Samples);Assert.All(submitted.Data.Responses,response=>Assert.Empty(response.SampleIds));Assert.Equal(3,submitted.Data.Responses.Count);
+        Assert.Equal(action.Id,Assert.Single(submitted.Actions).ActionId);Assert.Empty(submitted.Data.Digital!.DraftActions);
+        // Removing the input must not leave a hidden requirement on an earlier pinned configuration.
+        await db.ExecuteAsync($"UPDATE quality.process_reviews SET configuration_json=JSON_MODIFY(configuration_json,'$.settings.requireRationale','true') WHERE record_id='{submitted.RecordId}';");
+        submitted=(await store.GetProcessReviewAsync(submitted.RecordId,admin,Token))!;
+        submitted=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,submitted.RecordId,newRequest with
+            {Data=submitted.Data,Submit=false,RowVersion=submitted.RowVersion},admin,Token);
+        Assert.Equal("true",submitted.Configuration.Settings["requireRationale"]);Assert.All(submitted.Data.Responses,response=>Assert.Null(response.Rationale));
+        var exported=BusinessWorkbookExportBuilder.Build(await store.GetProcessReviewExportAsync(ProcessReviewRules.Digital,"2026/27",admin,Token));
+        Assert.Contains(exported.Sheets.Single(sheet=>sheet.Name=="Responses").Rows,row=>row.Contains("2 – Managed college wording 2"));
+        Assert.Contains("Earlier criterion notes",exported.Sheets.Single(sheet=>sheet.Name=="Responses").Columns);
+        Assert.Contains(exported.Sheets.Single(sheet=>sheet.Name=="Responses").Rows,row=>row.Contains("Current criterion notes"));
+        Assert.NotEmpty(new ExcelExportService().CreateWorkbook(exported).Content);
+        await db.ExecuteAsync("UPDATE quality.elevate_practice_rubric_descriptors SET visible_wording=N'Updated managed wording',colour_hex=N'#ABCDEF' WHERE descriptor_key=N'level_2';");
+        var latest=await store.GetProcessReviewConfigurationAsync(ProcessReviewRules.Digital,Token);
+        Assert.Equal("2 – Updated managed wording",latest.RatingOptions[1].Label);Assert.Equal("#ABCDEF",latest.RatingOptions[1].ColorHex);
+        var pinned=(await store.GetProcessReviewAsync(submitted.RecordId,admin,Token))!;
+        Assert.Equal("2 – Managed college wording 2",pinned.Configuration.RatingOptions[1].Label);Assert.Equal("#123456",pinned.Configuration.RatingOptions[1].ColorHex);
+        var future=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,newRequest with{Title="Future walk",Data=newRequest.Data with{Digital=new([statement],[])},Submit=false},admin,Token);
+        Assert.Equal(latest.RatingOptions,future.Configuration.RatingOptions);
+        var legacyConfiguration=future.Configuration with{RatingOptions=[new("older_category","Earlier recorded category")]};
+        var legacyData=future.Data with{Responses=[new(statement,"older_category",[],"Already rated under the earlier scale")]};
+        await using(var legacyConnection=new SqlConnection(db.ConnectionString))
+        {
+            await legacyConnection.OpenAsync();await using var legacyCommand=new SqlCommand("UPDATE quality.process_reviews SET configuration_json=@configuration,data_json=@data WHERE record_id=@id;",legacyConnection);
+            var json=new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            legacyCommand.Parameters.AddWithValue("@configuration",JsonSerializer.Serialize(legacyConfiguration,json));legacyCommand.Parameters.AddWithValue("@data",JsonSerializer.Serialize(legacyData,json));
+            legacyCommand.Parameters.AddWithValue("@id",future.RecordId);await legacyCommand.ExecuteNonQueryAsync();
+        }
+        future=(await store.GetProcessReviewAsync(future.RecordId,admin,Token))!;
+        future=await store.SaveProcessReviewAsync(ProcessReviewRules.Digital,future.RecordId,newRequest with{Title=future.Title,Data=future.Data,Submit=false,RowVersion=future.RowVersion},admin,Token);
+        Assert.Equal("older_category",Assert.Single(future.Configuration.RatingOptions).Key);Assert.Equal("Earlier recorded category",future.Configuration.RatingOptions[0].Label);
+        Assert.Equal("older_category",Assert.Single(future.Data.Responses).RatingKey);
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,null,newRequest with
+            {Data=newRequest.Data with{Digital=new([statement],[]),Responses=[new(statement,"level_2",["outside_walk_sample"],"Invalid link")]}},admin,Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewAsync(ProcessReviewRules.Digital,submitted.RecordId,newRequest with
+            {Data=submitted.Data with{Samples=[legacySample with{Id="new_reference"} ]},RowVersion=submitted.RowVersion,Submit=false},admin,Token));
+        // Retained evidence sheets are present only where historical records actually contain that data.
+        await db.ExecuteAsync($"UPDATE core.records SET academic_year_key=N'2025/26' WHERE id IN('{olderDraft.RecordId}','{future.RecordId}');");
+        exported=BusinessWorkbookExportBuilder.Build(await store.GetProcessReviewExportAsync(ProcessReviewRules.Digital,"2026/27",admin,Token));
+        Assert.DoesNotContain(exported.Sheets,sheet=>sheet.Name is "Samples" or "Sample links");
+        Assert.DoesNotContain("Earlier criterion notes",exported.Sheets.Single(sheet=>sheet.Name=="Responses").Columns);
+    }
+
+    [AccountAdministrationDatabaseFact]
+    public async Task Activate_follow_up_action_outcomes_keep_one_origin_validate_meeting_and_preserve_audited_extensions()
+    {
+        await using var db=await ReviewDatabase.CreateAsync();var store=db.Store();var admin=db.Admin();var date=new DateOnly(2026,11,1);
+        var data=Empty with{Activate=new(true,[],[],[],new Dictionary<string,decimal?>())};
+        var parent=await store.SaveProcessReviewAsync(ProcessReviewRules.Activate,null,new("Initial review","2026/27",db.Faculty,null,date,data),admin,Token);
+        var request=new SaveProcessReviewActionRequest("",parent.Configuration.ActionThemes![0].Key,Guid.Empty,date.AddMonths(2),"","Learners apply feedback independently",
+            ResponsibleStaffIds:[db.StaffIds[1]],ImpactAreaKey:"digital_productivity",Detail:"Model and review independent practice",ReviewDate:date.AddMonths(2));
+        var action=await store.SaveProcessReviewActionAsync(parent.RecordId,null,request,admin,Token);
+        var followUp=await store.CreateActivateFollowUpAsync(parent.RecordId,new("2026/27",date.AddMonths(2)),db.Admin(1),Token);
+        var unrelated=await store.SaveProcessReviewAsync(ProcessReviewRules.Activate,null,new("Unrelated review","2025/26",db.Faculty,null,date,data),admin,Token);
+        var outcome=request with{Progress="complete",ProgressNote="Learner work now shows independent corrections",ReviewRecordId=followUp.RecordId,RowVersion=action.RowVersion};
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,outcome,db.User(1),Token));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,outcome,db.User(0),Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,outcome with{ProgressNote=" "},admin,Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,outcome with{ReviewRecordId=unrelated.RecordId},admin,Token));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,outcome with{ReviewRecordId=Guid.NewGuid()},admin,Token));
+        await Assert.ThrowsAsync<WorkflowValidationException>(()=>store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,outcome with{Progress="extended"},admin,Token));
+        var extension=outcome with{Progress="extended",DueDate=action.DueDate.AddDays(30),ReviewDate=action.DueDate.AddDays(30),DeadlineChangeReason="Allow another practice cycle"};
+        var creator=db.User(0,ProcessReviewRules.Activate+".view_all");
+        action=await store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,extension,creator,Token);
+        Assert.Equal("extended",action.Progress);Assert.Equal(parent.RecordId,action.RecordId);
+        Assert.Equal(followUp.RecordId,action.Updates[0].ReviewRecordId);Assert.Equal(extension.ProgressNote,action.Updates[0].ProgressNote);
+        Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
+        Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.action_extensions;"));
+        Assert.Equal(request.ReviewDate,DateOnly.FromDateTime(await db.ScalarAsync<DateTime>($"SELECT original_due_date FROM quality.actions WHERE id='{action.ActionId}';")));
+        await Assert.ThrowsAsync<DBConcurrencyException>(()=>store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,outcome,creator,Token));
+        action=await store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,extension with{ProgressNote="Progress recorded while the extended deadline remains unchanged",RowVersion=action.RowVersion},creator,Token);
+        Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.action_extensions;"));
+        action=await store.SaveProcessReviewActionAsync(parent.RecordId,action.ActionId,extension with{Progress="complete",ProgressNote="The additional cycle confirms the intended change",RowVersion=action.RowVersion},creator,Token);
+        Assert.Equal("complete",action.Progress);Assert.Equal(4,action.Updates.Count);Assert.Equal(followUp.RecordId,action.Updates[0].ReviewRecordId);
+        Assert.Equal(creator.UserAccountId,await db.ScalarAsync<Guid>($"SELECT completed_by_user_account_id FROM quality.actions WHERE id='{action.ActionId}';"));
+        Assert.Equal(1,await db.ScalarAsync<int>("SELECT COUNT(*) FROM quality.actions;"));
     }
 
     private sealed class ReviewDatabase:IAsyncDisposable
@@ -292,23 +586,29 @@ public sealed class ProcessReviewDatabaseTests
             {
                 foreach(var schema in new[]{"core","people","auth","org","quality","ops"})await db.ExecuteAsync($"CREATE SCHEMA {schema};");
                 await db.ExecuteAsync("""
-                    CREATE TABLE people.staff(id uniqueidentifier PRIMARY KEY,display_name nvarchar(200),account_status nvarchar(50) DEFAULT N'active',archived_at datetimeoffset NULL);
-                    CREATE TABLE auth.user_accounts(id uniqueidentifier PRIMARY KEY,staff_id uniqueidentifier REFERENCES people.staff(id));
+                    CREATE TABLE people.staff(id uniqueidentifier PRIMARY KEY,display_name nvarchar(200),account_status nvarchar(50) DEFAULT N'active',primary_org_unit_id uniqueidentifier NULL,archived_at datetimeoffset NULL);
+                    CREATE TABLE auth.user_accounts(id uniqueidentifier PRIMARY KEY,staff_id uniqueidentifier REFERENCES people.staff(id),account_status nvarchar(50) DEFAULT N'active',is_disabled bit DEFAULT 0,archived_at datetimeoffset NULL);
+                    CREATE TABLE auth.roles(id uniqueidentifier PRIMARY KEY,role_key nvarchar(100),precedence int,is_active bit DEFAULT 1,archived_at datetimeoffset NULL);
+                    CREATE TABLE auth.user_roles(user_account_id uniqueidentifier,role_id uniqueidentifier,active_from datetimeoffset DEFAULT '2020-01-01',active_to datetimeoffset NULL);
                     CREATE TABLE auth.permissions(id uniqueidentifier PRIMARY KEY,permission_key nvarchar(150),name nvarchar(200),description nvarchar(1000),category nvarchar(100),is_system bit);
                     CREATE TABLE core.modules(id uniqueidentifier PRIMARY KEY,module_key nvarchar(100),name nvarchar(200),description nvarchar(1000),route_prefix nvarchar(200),display_order int,is_enabled bit);
                     CREATE TABLE org.org_units(id uniqueidentifier PRIMARY KEY,parent_org_unit_id uniqueidentifier NULL,org_unit_type nvarchar(50),name nvarchar(200),is_active bit DEFAULT 1,archived_at datetimeoffset NULL);
                     CREATE TABLE org.test_scopes(user_id uniqueidentifier,org_unit_id uniqueidentifier);
+                    CREATE TABLE org.staff_org_memberships(staff_id uniqueidentifier,org_unit_id uniqueidentifier,active_from date DEFAULT '2020-01-01',active_to date NULL,archived_at datetimeoffset NULL);
                     CREATE TABLE org.org_unit_leaderships(org_unit_id uniqueidentifier,leader_staff_id uniqueidentifier,leadership_role nvarchar(50),active_from date,active_to date NULL,archived_at datetimeoffset NULL);
-                    CREATE TABLE core.records(id uniqueidentifier PRIMARY KEY,module_id uniqueidentifier REFERENCES core.modules(id),record_type nvarchar(100),title nvarchar(300),owner_staff_id uniqueidentifier REFERENCES people.staff(id),org_unit_id uniqueidentifier,record_date date,created_by_user_account_id uniqueidentifier,updated_by_user_account_id uniqueidentifier,academic_year_key nvarchar(20),created_at datetimeoffset DEFAULT sysutcdatetime(),updated_at datetimeoffset NULL,archived_at datetimeoffset NULL);
-                    CREATE TABLE core.lookup_types(id uniqueidentifier PRIMARY KEY,lookup_key nvarchar(100));
-                    CREATE TABLE core.lookup_values(id uniqueidentifier PRIMARY KEY,lookup_type_id uniqueidentifier,value_key nvarchar(100));
+                    CREATE TABLE core.records(id uniqueidentifier PRIMARY KEY,module_id uniqueidentifier REFERENCES core.modules(id),record_type nvarchar(100),title nvarchar(300),subject_staff_id uniqueidentifier NULL,owner_staff_id uniqueidentifier REFERENCES people.staff(id),org_unit_id uniqueidentifier,record_date date,created_by_user_account_id uniqueidentifier,updated_by_user_account_id uniqueidentifier,academic_year_key nvarchar(20),created_at datetimeoffset DEFAULT sysutcdatetime(),updated_at datetimeoffset NULL,archived_at datetimeoffset NULL);
+                    CREATE TABLE core.lookup_types(id uniqueidentifier PRIMARY KEY,lookup_key nvarchar(100),is_active bit DEFAULT 1,archived_at datetimeoffset NULL);
+                    CREATE TABLE core.lookup_values(id uniqueidentifier PRIMARY KEY,lookup_type_id uniqueidentifier,value_key nvarchar(100),display_name nvarchar(300),display_order int DEFAULT 1,is_active bit DEFAULT 1,archived_at datetimeoffset NULL);
                     CREATE TABLE quality.actions(id uniqueidentifier PRIMARY KEY,source_record_id uniqueidentifier REFERENCES core.records(id),source_form_type nvarchar(100),owner_staff_id uniqueidentifier REFERENCES people.staff(id),action_theme nvarchar(300),title nvarchar(300),detail nvarchar(max),status_lookup_value_id uniqueidentifier,due_date date,review_date date,original_due_date date,revised_due_date date,published_to_staff bit,visibility_setting nvarchar(50),created_by_user_account_id uniqueidentifier,intended_evidence nvarchar(max),intended_impact nvarchar(max),completed_date date,completed_by_user_account_id uniqueidentifier,completion_note nvarchar(max),cancelled_at datetimeoffset,cancelled_by_user_account_id uniqueidentifier,cancellation_comments nvarchar(max),updated_at datetimeoffset,updated_by_user_account_id uniqueidentifier,archived_at datetimeoffset,row_version rowversion);
                     CREATE TABLE quality.action_extensions(id uniqueidentifier DEFAULT NEWID(),action_id uniqueidentifier,previous_due_date date,extended_due_date date,reason nvarchar(1000),created_by_user_account_id uniqueidentifier);
                     CREATE TABLE ops.audit_logs(user_account_id uniqueidentifier,record_id uniqueidentifier,entity_name nvarchar(100),entity_id uniqueidentifier,action nvarchar(100),summary nvarchar(max),before_json nvarchar(max),after_json nvarchar(max));
                     CREATE TABLE ops.domain_events(event_type nvarchar(100),aggregate_type nvarchar(100),aggregate_id uniqueidentifier,source_record_id uniqueidentifier,payload_json nvarchar(max),published_by_user_account_id uniqueidentifier);
+                    CREATE TABLE quality.elevate_practice_frameworks(id uniqueidentifier PRIMARY KEY,is_active bit,archived_at datetimeoffset NULL);
+                    CREATE TABLE quality.elevate_practice_rubric_descriptors(id uniqueidentifier PRIMARY KEY,framework_id uniqueidentifier REFERENCES quality.elevate_practice_frameworks(id),descriptor_key nvarchar(100),visible_wording nvarchar(200),guidance_text nvarchar(4000),display_order int,colour_classification nvarchar(100),colour_hex nvarchar(30),is_active bit,archived_at datetimeoffset NULL);
+                    CREATE TABLE quality.coaching_configuration(configuration_id int,max_actions_per_session int);
                     """);
                 await db.ExecuteAsync("CREATE FUNCTION org.fn_visible_org_units(@user uniqueidentifier) RETURNS TABLE AS RETURN SELECT org_unit_id FROM org.test_scopes WHERE user_id=@user;");
-                await db.ExecuteAsync("CREATE FUNCTION org.fn_visible_staff(@user uniqueidentifier) RETURNS TABLE AS RETURN SELECT staff_id FROM auth.user_accounts WHERE id=@user;");
+                await db.ExecuteAsync("CREATE FUNCTION org.fn_visible_staff(@user uniqueidentifier) RETURNS TABLE AS RETURN SELECT staff_id,CONVERT(bit,0) AS is_managed,CONVERT(int,NULL) AS manager_depth FROM auth.user_accounts WHERE id=@user;");
                 for(var i=0;i<3;i++)await db.ExecuteAsync($"INSERT people.staff(id,display_name)VALUES('{db.StaffIds[i]}',N'Test staff {i}');INSERT auth.user_accounts(id,staff_id)VALUES('{db.Accounts[i]}','{db.StaffIds[i]}');");
                 await db.ExecuteAsync($"""
                     INSERT org.org_units(id,org_unit_type,name)VALUES('{db.Faculty}',N'faculty',N'Faculty A');
@@ -318,6 +618,11 @@ public sealed class ProcessReviewDatabaseTests
                     VALUES('{db.Faculty}','{db.StaffIds[1]}',N'manager','2020-01-01'),('{db.TeamA}','{db.StaffIds[2]}',N'manager','2020-01-01'),('{db.TeamB}','{db.StaffIds[2]}',N'manager','2020-01-01');
                     DECLARE @type uniqueidentifier=NEWID();INSERT core.lookup_types(id,lookup_key)VALUES(@type,N'action_status');
                     INSERT core.lookup_values(id,lookup_type_id,value_key)VALUES(NEWID(),@type,N'open'),(NEWID(),@type,N'complete'),(NEWID(),@type,N'extended'),(NEWID(),@type,N'cancelled');
+                    SET @type=NEWID();INSERT core.lookup_types(id,lookup_key)VALUES(@type,N'liv_delivery_area');
+                    INSERT core.lookup_values(id,lookup_type_id,value_key,display_name)VALUES(NEWID(),@type,N'campus',N'Campus delivery'),(NEWID(),@type,N'remote',N'Remote delivery');
+                    DECLARE @adminRole uniqueidentifier=NEWID(),@leaderRole uniqueidentifier=NEWID(),@tutorRole uniqueidentifier=NEWID();
+                    INSERT auth.roles(id,role_key,precedence)VALUES(@adminRole,N'system_admin',1000),(@leaderRole,N'programme_leader',200),(@tutorRole,N'tutor',100);
+                    INSERT auth.user_roles(user_account_id,role_id)VALUES('{db.Accounts[0]}',@adminRole),('{db.Accounts[1]}',@leaderRole),('{db.Accounts[2]}',@tutorRole);
                     """);
                 var root=new DirectoryInfo(AppContext.BaseDirectory);while(root is not null&&!File.Exists(Path.Combine(root.FullName,"database","migrations","094_process_reviews.sql")))root=root.Parent;
                 var migration=await File.ReadAllTextAsync(Path.Combine(root!.FullName,"database","migrations","094_process_reviews.sql"));
@@ -332,6 +637,26 @@ public sealed class ProcessReviewDatabaseTests
         }
         public async Task ExecuteAsync(string sql){await using var connection=new SqlConnection(ConnectionString);await connection.OpenAsync();await using var command=new SqlCommand(sql,connection){CommandTimeout=120};await command.ExecuteNonQueryAsync();}
         public async Task<T> ScalarAsync<T>(string sql){await using var connection=new SqlConnection(ConnectionString);await connection.OpenAsync();await using var command=new SqlCommand(sql,connection);return(T)(await command.ExecuteScalarAsync())!;}
+        public async Task SeedLegacyDigitalDataAsync(Guid recordId,ProcessReviewData data)
+        {
+            Assert.Null(data.Digital!.SelectedStandardKeys);
+            await using var connection=new SqlConnection(ConnectionString);await connection.OpenAsync();
+            await using var command=new SqlCommand("UPDATE quality.process_reviews SET data_json=@data WHERE record_id=@id;",connection);
+            command.Parameters.AddWithValue("@data",JsonSerializer.Serialize(data,new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            command.Parameters.AddWithValue("@id",recordId);await command.ExecuteNonQueryAsync();
+        }
+        public async Task SetPracticeRubricAsync(params (string Key,string Wording,int Order)[] options)
+        {
+            await ExecuteAsync("DELETE quality.elevate_practice_rubric_descriptors;DELETE quality.elevate_practice_frameworks;");
+            var framework=Guid.NewGuid();await ExecuteAsync($"INSERT quality.elevate_practice_frameworks(id,is_active)VALUES('{framework}',1);");
+            await using var connection=new SqlConnection(ConnectionString);await connection.OpenAsync();
+            foreach(var option in options)
+            {
+                await using var command=new SqlCommand("INSERT quality.elevate_practice_rubric_descriptors(id,framework_id,descriptor_key,visible_wording,guidance_text,display_order,colour_hex,is_active)VALUES(NEWID(),@framework,@key,@wording,@guidance,@order,N'#123456',1);",connection);
+                command.Parameters.AddWithValue("@framework",framework);command.Parameters.AddWithValue("@key",option.Key);command.Parameters.AddWithValue("@wording",option.Wording);
+                command.Parameters.AddWithValue("@guidance",$"Guidance for {option.Wording}");command.Parameters.AddWithValue("@order",option.Order);await command.ExecuteNonQueryAsync();
+            }
+        }
         public async Task UseLegacyActivateConfigurationAsync()
         {
             var legacy=ProcessReviewRules.DefaultConfiguration(ProcessReviewRules.Activate) with{Version=1,SkillsScanPillars=null,ActionThemes=null};

@@ -50,7 +50,10 @@ public sealed record DashboardActionSummary(
     DateTimeOffset CreatedAt,
     string? FacultyCode,
     string? TeamCode,
-    bool IsDeleted);
+    bool IsDeleted,
+    string? SourceRecordTitle = null,
+    DateOnly? SourceRecordDate = null,
+    IReadOnlyList<string>? ResponsibleStaffNames = null);
 
 public sealed record ElevateStatusDashboardSummary(
     Guid? OrgUnitId,

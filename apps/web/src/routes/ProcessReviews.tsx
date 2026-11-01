@@ -1,9 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, Plus, Save, Send, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ExternalLink, Plus, Save, Send } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { LoadingState } from "../components/LoadingState";
 import { StaffSearchSelect } from "../components/StaffSearchSelect";
 import { SkillsScanResultBar } from "../components/SkillsScanResultBar";
+import { DigitalLearningWalkForm } from "../components/DigitalLearningWalkForm";
+import { ProcessReviewActionPanel, type ActivateActionOutcome } from "../components/ProcessReviewActionPanel";
 import { WorkflowFeedback } from "../components/WorkflowFeedback";
 import { WorkflowFilters } from "../components/WorkflowFilters";
 import { useWorkflowPagination, WorkflowPagination } from "../components/WorkflowPagination";
@@ -13,10 +15,10 @@ import { actionPath } from "../app/routing";
 import type { CurrentUser, OrgUnitSummary, StaffSummary } from "../services/types";
 import {
   emptyProcessReviewRequest, emptyActivateGrowthReviewData, activatePillarAverage, activateParticipantIds, activateSubTeamGroups, activateContextPatch,
-  processReviewFingerprint, processReviewRequest, processReviewSafeLink,
-  removeProcessReviewSample, type ProcessReviewAction, type ProcessReviewConfiguration,
-  type ProcessReviewData, type ProcessReviewDetail, type ProcessReviewKey, type ProcessReviewResponse,
-  type ProcessReviewSample, type ProcessReviewSummary, type SaveProcessReviewActionRequest,
+  processReviewFingerprint, processReviewRequest, processReviewSafeLink, digitalLearningWalkTitle, digitalLearningWalkConfiguration,
+  type ProcessReviewAction, type ProcessReviewConfiguration,
+  type ProcessReviewDetail, type ProcessReviewKey,
+  type ProcessReviewSummary, type SaveProcessReviewActionRequest,
   type SaveProcessReviewRequest, type ActivateGrowthReviewData, type ActivateReviewContext
 } from "../services/processReviewTypes";
 import "./ProcessReviews.css";
@@ -27,10 +29,8 @@ export type ProcessReviewsProps = {
   onRecordClosed?: () => void; onActionsChanged?: () => Promise<void>;
 };
 
-const digitalSteps = ["Review context", "Samples", "Six standards", "Strengths & actions", "Check & submit"];
 const activateSteps = ["Review & participants", "Skills Scan results", "Meeting minutes", "Actions", "Check & submit"];
 const progressLabels: Record<string, string> = { open: "Open", complete: "Completed", extended: "Extended", cancelled: "Cancelled" };
-const impactLabels: Record<string, string> = { awaiting_evidence: "Awaiting evidence", assessing: "Evidence being assessed", demonstrated: "Impact demonstrated", further_change: "Further change needed" };
 
 function displayDate(value?: string | null) {
   if (!value) return "Not recorded";
@@ -40,6 +40,9 @@ function displayDate(value?: string | null) {
 
 function editorRequest(detail: ProcessReviewDetail) {
   const request = processReviewRequest(detail);
+  if (detail.processKey === "digital_learning_walk" && !request.data.digital) {
+    request.data.digital = { selectedStatementKeys: [...new Set(request.data.responses.map(response => response.statementKey))], draftActions: [] };
+  }
   if (detail.processKey === "activate_growth_review" && !request.data.activate) {
     const selected = detail.selectedSubTeams?.map(team => team.orgUnitId) || (detail.teamOrgUnitId ? [detail.teamOrgUnitId] : []);
     request.data.activate = emptyActivateGrowthReviewData(selected, detail.participants?.map(person => person.staffId) || []);
@@ -56,7 +59,7 @@ function activateScopeKey(request: SaveProcessReviewRequest) {
 export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear, initialRecordId = "", onRecordOpened, onRecordClosed, onActionsChanged }: ProcessReviewsProps) {
   const digital = processKey === "digital_learning_walk";
   const title = digital ? "Digital Learning Walks" : "Activate+ Growth Reviews";
-  const steps = digital ? digitalSteps : activateSteps;
+  const steps = activateSteps;
   const [configuration, setConfiguration] = useState<ProcessReviewConfiguration | null>(null);
   const [records, setRecords] = useState<ProcessReviewSummary[]>([]);
   const [detail, setDetail] = useState<ProcessReviewDetail | null>(null);
@@ -64,7 +67,6 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
   const [request, setRequest] = useState(() => emptyProcessReviewRequest(academicYear));
   const [baseline, setBaseline] = useState(() => processReviewFingerprint(request));
   const [step, setStep] = useState(0);
-  const [standard, setStandard] = useState(0);
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -84,12 +86,12 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
   const saveLock = useRef(false);
   const followUpLock = useRef(false);
   const headingId = useId();
-  const activeConfiguration = digital ? detail?.configuration ?? configuration : detail?.configuration.skillsScanPillars?.length ? detail.configuration : configuration ?? detail?.configuration;
+  const activeConfiguration = digital ? digitalLearningWalkConfiguration(detail, configuration) : detail?.configuration.skillsScanPillars?.length ? detail.configuration : configuration ?? detail?.configuration;
   const dirty = editorOpen && processReviewFingerprint(request) !== baseline;
   const canCreate = Boolean(user.staffId) && ["forms.manage", `${processKey}.submit`, `${processKey}.manage`].some(key => user.permissions.includes(key));
   const canEdit = detail ? detail.canEdit : canCreate;
   const scaleMissing = digital && !activeConfiguration?.ratingOptions.length;
-  const clearNavigation = useUnsavedChanges({ label: title, dirty, saving: saving || actionBusy || Boolean(followUpBusy),
+  const clearNavigation = useUnsavedChanges({ label: title, dirty, saving: saving || (!digital && actionBusy) || Boolean(followUpBusy),
     submission: true, onSave: canEdit ? () => save(false) : undefined,
     onSubmit: canEdit && !scaleMissing ? () => save(true) : undefined,
     submitLabel: "Submit review",
@@ -110,7 +112,7 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
   }
 
   useEffect(() => {
-    setDetail(null); setEditorOpen(false); setOpening(false); setMessage(""); setStep(0); setStandard(0);
+    setDetail(null); setEditorOpen(false); setOpening(false); setMessage(""); setStep(0);
     const next = emptyProcessReviewRequest(academicYear); setRequest(next); setBaseline(processReviewFingerprint(next));
     void loadRegister();
     return () => { loadVersion.current++; detailVersion.current++; };
@@ -133,7 +135,7 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
       if (version !== detailVersion.current) return;
       if (loaded.processKey !== processKey) { setMessageTone("error"); setMessage("This record belongs to another review process."); return; }
       const next = editorRequest(loaded);
-      setDetail(loaded); setRequest(next); setBaseline(processReviewFingerprint(next)); setStep(0); setStandard(0); setEditorOpen(true);
+      setDetail(loaded); setRequest(next); setBaseline(processReviewFingerprint(next)); setStep(0); setEditorOpen(true);
       onRecordOpened?.(recordId);
     } catch (error) { if (version === detailVersion.current) reportError(error, "That review could not be opened, or you no longer have access."); }
     finally { if (version === detailVersion.current) setOpening(false); }
@@ -144,7 +146,8 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
     const next = emptyProcessReviewRequest(academicYear);
     detailVersion.current++;
     if (!digital) next.data.activate = emptyActivateGrowthReviewData();
-    setDetail(null); setRequest(next); setBaseline(processReviewFingerprint(next)); setEditorOpen(true); setStep(0); setStandard(0); setMessage("");
+    else next.data.digital = { selectedStandardKeys: [], selectedStatementKeys: [], draftActions: [] };
+    setDetail(null); setRequest(next); setBaseline(processReviewFingerprint(next)); setEditorOpen(true); setStep(0); setMessage("");
     onRecordClosed?.();
   }
 
@@ -164,7 +167,7 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
       if (version !== detailVersion.current) return;
       if (!result.ok || !result.data) { setMessageTone("error"); setMessage(result.message || "The follow-up could not be created. The previous review is unchanged."); return; }
       const next = editorRequest(result.data);
-      clearNavigation(); setDetail(result.data); setRequest(next); setBaseline(processReviewFingerprint(next)); setEditorOpen(true); setStep(0); setStandard(0);
+      clearNavigation(); setDetail(result.data); setRequest(next); setBaseline(processReviewFingerprint(next)); setEditorOpen(true); setStep(0);
       onRecordOpened?.(result.data.recordId); setMessageTone("success"); setMessage("Linked follow-up review opened. Previous results are available as reference and existing actions remain shared.");
       void api.processReviews(processKey, academicYear).then(updatedRecords => {
         if (version === detailVersion.current) setRecords(updatedRecords);
@@ -174,15 +177,19 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
   }
 
   async function save(submit: boolean): Promise<boolean> {
-    if (!canEdit || saveLock.current || followUpLock.current || actionBusy || (submit && scaleMissing)) return false;
-    if (submit && actionDirty) { setMessageTone("error"); setMessage("Save or cancel the action edits before submitting this review."); return false; }
+    if (!canEdit || saveLock.current || followUpLock.current || (!digital && actionBusy) || (submit && scaleMissing)) return false;
+    if (!digital && submit && actionDirty) { setMessageTone("error"); setMessage("Save or cancel the action edits before submitting this review."); return false; }
     saveLock.current = true; setSaving(true); setMessage("");
     try {
-      const result = await api.saveProcessReview(processKey, detail?.recordId ?? null, { ...request, submit, rowVersion: detail?.rowVersion ?? undefined });
+      const title = digital ? digitalLearningWalkTitle(request, detail, orgUnits) : request.title;
+      const result = await api.saveProcessReview(processKey, detail?.recordId ?? null, { ...request, title, submit, rowVersion: detail?.rowVersion ?? undefined });
       if (!result.ok || !result.data) { setMessageTone("error"); setMessage(result.message ?? "The review could not be saved. Your entries are still here."); return false; }
       const next = editorRequest(result.data);
       setDetail(result.data); setRequest(next); setBaseline(processReviewFingerprint(next)); clearNavigation();
       setMessageTone("success"); setMessage(submit ? "Review submitted." : "Review saved.");
+      if (digital && request.data.digital?.draftActions.length && result.data.status === "submitted") {
+        try { await onActionsChanged?.(); } catch { /* The submitted actions remain saved if a sibling summary cannot refresh. */ }
+      }
       onRecordOpened?.(result.data.recordId);
       try { setRecords(await api.processReviews(processKey, academicYear)); } catch { /* The saved record remains open if the register refresh fails. */ }
       return true;
@@ -191,7 +198,6 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
   }
 
   function field(key: string, value: string) { setRequest(current => ({ ...current, data: { ...current.data, fields: { ...current.data.fields, [key]: value } } })); }
-  function patchData(patch: Partial<ProcessReviewData>) { setRequest(current => ({ ...current, data: { ...current.data, ...patch } })); }
   function patchRequest(patch: Partial<SaveProcessReviewRequest> | ((current: SaveProcessReviewRequest) => Partial<SaveProcessReviewRequest>)) { setRequest(current => ({ ...current, ...(typeof patch === "function" ? patch(current) : patch) })); }
   const label = (key: string, fallback: string) => activeConfiguration?.fieldLabels[key] || fallback;
 
@@ -216,7 +222,7 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
 
   if (loading || opening) return <div className="route-stack"><LoadingState size="page" label={editorOpen || initialRecordId ? "Opening the review…" : `Loading ${title.toLowerCase()}…`} /></div>;
   if (!editorOpen) return <div className="route-stack process-reviews">
-    <section className="panel"><div className="panel-heading"><div><span className="eyebrow">Forms & reviews</span><h1>{title}</h1><p className="muted-copy">{digital ? "Team or area reviews across six standards, informed by linked samples." : "Faculty reviews, Skills Scan averages, meeting minutes and agreed actions."}</p></div>{canCreate ? <Button icon={Plus} variant="primary" disabled={!configuration || Boolean(followUpBusy)} onClick={() => void startReview()}>New {digital ? "digital learning walk" : "growth review"}</Button> : null}</div>
+    <section className="panel"><div className="panel-heading"><div><span className="eyebrow">Forms & reviews</span><h1>{title}</h1><p className="muted-copy">{digital ? "Team or area reviews covering every criterion in the selected DLW categories, using the Learning Walk rating scale." : "Faculty reviews, Skills Scan averages, meeting minutes and agreed actions."}</p></div>{canCreate ? <Button icon={Plus} variant="primary" disabled={!configuration || Boolean(followUpBusy)} onClick={() => void startReview()}>New {digital ? "digital learning walk" : "growth review"}</Button> : null}</div>
       <WorkflowFeedback message={message} tone={messageTone} onDismiss={() => setMessage("")} />
       {loadFailed ? <div className="process-review-empty"><p>The register is currently unavailable.</p><Button onClick={() => void loadRegister()}>Try again</Button></div> : <>
         <WorkflowFilters activeCount={[statusFilter, facultyFilter, ownerFilter].filter(value => value !== "all").length} hasQuery={Boolean(search)} onClear={() => { setSearch(""); setStatusFilter("all"); setFacultyFilter("all"); setOwnerFilter("all"); }} primary={<><label className="entry-field"><span>Search reviews</span><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Title, faculty, team or review owner" /></label><label className="entry-field"><span>Sort by</span><select value={sort} onChange={event => setSort(event.target.value)}><option value="newest">Review date · newest</option><option value="title">Title A–Z</option><option value="owner">Review owner A–Z</option><option value="faculty">Faculty A–Z</option>{!digital ? <option value="followup">Follow-up review date · soonest</option> : null}</select></label></>}>
@@ -225,16 +231,19 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
           <label className="entry-field"><span>Review owner</span><select value={ownerFilter} onChange={event => setOwnerFilter(event.target.value)}><option value="all">All owners</option>{Array.from(new Map(records.map(record => [record.ownerStaffId, record.ownerName]))).sort((a,b) => a[1].localeCompare(b[1])).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
         </WorkflowFilters>
         <p className="muted-copy" role="status">{filteredRecords.length} {filteredRecords.length === 1 ? "review" : "reviews"} · {academicYear}</p>
-        {!filteredRecords.length ? <div className="process-review-empty"><h2>{records.length ? "No reviews match these filters" : "No reviews yet"}</h2><p>{records.length ? "Change the search or filters to see more reviews." : "Saved drafts and submitted reviews will appear here."}</p></div> : <div className="process-review-register" role="region" aria-label={`${title} register`} tabIndex={0}><table className="data-table"><thead><tr><th scope="col">Review</th><th scope="col">Review owner</th><th scope="col">Date</th><th scope="col">Status</th><th scope="col">{digital ? "Evidence" : "Follow-up review"}</th><th scope="col">Open actions</th></tr></thead><tbody>{pagination.items.map(record => <tr key={record.recordId}><td><button type="button" className="quiet-link" onClick={() => void openRecord(record.recordId)}>{record.title}</button><span className="process-review-cell-note">{[record.facultyName, record.teamName].filter(Boolean).join(" · ") || "Context not yet recorded"}</span></td><td>{record.ownerName}</td><td>{displayDate(record.recordDate)}</td><td><span className={`status-chip ${record.status === "submitted" ? "status-good" : ""}`}>{record.status === "submitted" ? "Submitted" : "Draft"}</span></td><td>{digital ? `${record.sampleCount} samples · ${record.ratedStatementCount}/${record.statementCount} rated` : <div className="form-stack">{record.followUpReviews?.map(followUp => <button type="button" className="quiet-link" key={followUp.recordId} onClick={() => void openRecord(followUp.recordId)}>{followUp.title} · {displayDate(followUp.recordDate)}</button>)}{!record.followUpReviews?.length && canCreate && (record.ownerStaffId === user.staffId || user.isAdministrator || user.permissions.includes(`${processKey}.manage`)) ? <Button icon={Plus} busy={followUpBusy === record.recordId} disabled={Boolean(followUpBusy)} onClick={() => void addFollowUp(record)}>Add follow-up review</Button> : !record.followUpReviews?.length ? <span>None added</span> : null}</div>}</td><td>{record.openActionCount}</td></tr>)}</tbody></table></div>}
+        {!filteredRecords.length ? <div className="process-review-empty"><h2>{records.length ? "No reviews match these filters" : "No reviews yet"}</h2><p>{records.length ? "Change the search or filters to see more reviews." : "Saved drafts and submitted reviews will appear here."}</p></div> : <div className="process-review-register" role="region" aria-label={`${title} register`} tabIndex={0}><table className="data-table"><thead><tr><th scope="col">Review</th><th scope="col">Review owner</th><th scope="col">Date</th><th scope="col">Status</th><th scope="col">{digital ? "Criteria" : "Follow-up review"}</th><th scope="col">Open actions</th></tr></thead><tbody>{pagination.items.map(record => <tr key={record.recordId}><td><button type="button" className="quiet-link" onClick={() => void openRecord(record.recordId)}>{record.title}</button><span className="process-review-cell-note">{[record.facultyName, record.teamName].filter(Boolean).join(" · ") || "Context not yet recorded"}</span></td><td>{record.ownerName}</td><td>{displayDate(record.recordDate)}</td><td><span className={`status-chip ${record.status === "submitted" ? "status-good" : ""}`}>{record.status === "submitted" ? "Submitted" : "Draft"}</span></td><td>{digital ? `${record.ratedStatementCount}/${record.statementCount} criteria rated` : <div className="form-stack">{record.followUpReviews?.map(followUp => <button type="button" className="quiet-link" key={followUp.recordId} onClick={() => void openRecord(followUp.recordId)}>{followUp.title} · {displayDate(followUp.recordDate)}</button>)}{!record.followUpReviews?.length && canCreate && (record.ownerStaffId === user.staffId || user.isAdministrator || user.permissions.includes(`${processKey}.manage`)) ? <Button icon={Plus} busy={followUpBusy === record.recordId} disabled={Boolean(followUpBusy)} onClick={() => void addFollowUp(record)}>Add follow-up review</Button> : !record.followUpReviews?.length ? <span>None added</span> : null}</div>}</td><td>{record.openActionCount}</td></tr>)}</tbody></table></div>}
         <WorkflowPagination {...pagination} label={`${title} register`} />
       </>}
     </section>
   </div>;
 
   if (!activeConfiguration) return <WorkflowFeedback tone="error" message="The form configuration is unavailable. Return to the register and try again." />;
+  if (digital) return <DigitalLearningWalkForm request={request} configuration={activeConfiguration} detail={detail} user={user} staff={staff} orgUnits={orgUnits}
+    readOnly={!canEdit} saving={saving} dirty={dirty}
+    message={message} messageTone={messageTone} onDismissMessage={() => setMessage("")} onChange={patchRequest} onSave={() => save(false)} onSubmit={() => save(true)} onCancel={closeEditor} />;
   const displayedSteps = !digital && detail?.isFollowUp ? ["Follow-up & participants", "Skills Scan reference", "Follow-up notes", "Review actions", "Check & submit"] : steps;
   const currentStep = displayedSteps[step] || displayedSteps[0];
-  const actionsStep = digital ? 3 : 3;
+  const actionsStep = 3;
   const snapshotCount = detail?.snapshots.length ?? 0;
   const commonProps: ReviewFieldsProps = { request, setRequest: patchRequest, field, label, orgUnits, staff, user, detail, configuration: activeConfiguration };
   return <div className="route-stack process-reviews">
@@ -246,10 +255,10 @@ export function ProcessReviews({ processKey, user, orgUnits, staff, academicYear
     {!digital && step === 0 ? <ActivateReviewFollowUps detail={detail} canCreate={canCreate} blocked={dirty || actionDirty} busy={Boolean(followUpBusy) || saving || actionBusy} onAdd={() => void addFollowUp()} onOpen={id => void openRecord(id)} onSave={() => void save(false)} /> : null}
     <div className="process-review-workspace"><nav className="process-review-steps" aria-label={`${title} form sections`}>{displayedSteps.map((name, index) => <button type="button" disabled={saving || Boolean(followUpBusy)} key={name} aria-current={step === index ? "step" : undefined} onClick={() => { setStep(index); window.requestAnimationFrame(() => document.getElementById(`${headingId}-section`)?.focus()); }}><span aria-hidden="true">{index + 1}</span>{name}</button>)}</nav><section className="panel process-review-editor" aria-labelledby={`${headingId}-section`}>
       <div className="panel-heading"><div><span className="eyebrow">Section {step + 1} of {steps.length}</span><h2 id={`${headingId}-section`} tabIndex={-1}>{currentStep}</h2></div>{dirty || actionDirty ? <span className="status-chip">{actionDirty ? "Unsaved action edits" : "Unsaved changes"}</span> : null}</div>
-      <div hidden={step !== actionsStep}>{digital ? <fieldset className="process-review-fields" disabled={!canEdit || saving || actionBusy || Boolean(followUpBusy)}><Narrative label={label("strengths", "Strengths and effective practice")} value={request.data.fields.strengths || ""} onChange={value => field("strengths", value)} /></fieldset> : null}<ProcessReviewActions key={detail?.recordId || "new-review"} detail={detail} configuration={activeConfiguration} staff={staff} onDirtyChange={setActionDirty} onSavingChange={setActionBusy} onChanged={actionsChanged} onSaveReview={() => save(false)} reviewSaving={saving || Boolean(followUpBusy)} reviewScopeDirty={!digital && Boolean(detail) && (!detail!.data.activate || activateScopeKey(request) !== activateScopeKey(editorRequest(detail!)))} /></div><div hidden={step === actionsStep}><fieldset className="process-review-fields" disabled={(!canEdit && !(digital && step === 2)) || saving || actionBusy || Boolean(followUpBusy)}>
-        {step === 0 ? digital ? <ReviewContext {...commonProps} digital={digital} /> : <ActivateReviewContextFields {...commonProps} /> : digital && step === 1 ? <DigitalSamples data={request.data} staff={staff} onChange={patchData} /> : digital && step === 2 ? <DigitalStatements readOnly={!canEdit} configuration={activeConfiguration} data={request.data} selected={standard} setSelected={setStandard} onChange={responses => patchData({ responses })} /> : !digital && step === 1 ? <ActivateSkillsScan {...commonProps} /> : !digital && step === 2 ? <ActivateMeetingMinutes {...commonProps} /> : <ReviewChecks {...commonProps} digital={digital} />}
+      <div hidden={step !== actionsStep}><ActivateReviewActions key={detail?.recordId || "new-review"} detail={detail} configuration={activeConfiguration} staff={staff} onDirtyChange={setActionDirty} onSavingChange={setActionBusy} onChanged={actionsChanged} onSaveReview={() => save(false)} reviewSaving={saving || Boolean(followUpBusy)} reviewScopeDirty={Boolean(detail) && (!detail!.data.activate || activateScopeKey(request) !== activateScopeKey(editorRequest(detail!)))} reviewContextDirty={Boolean(detail) && activateScopeKey(request) !== activateScopeKey(editorRequest(detail!))} /></div><div hidden={step === actionsStep}><fieldset className="process-review-fields" disabled={!canEdit || saving || actionBusy || Boolean(followUpBusy)}>
+        {step === 0 ? <ActivateReviewContextFields {...commonProps} /> : step === 1 ? <ActivateSkillsScan {...commonProps} /> : step === 2 ? <ActivateMeetingMinutes {...commonProps} /> : <ActivateReviewChecks {...commonProps} />}
       </fieldset></div>
-      {digital && scaleMissing ? <div className="notice-row process-review-scale-notice"><div><strong>College rating scale awaited</strong><p>Evidence and drafts can be saved now. An administrator must configure the college scale before this review can be submitted.</p>{detail && canEdit ? <Button disabled={saving} onClick={() => void save(false)}>Save draft and refresh form settings</Button> : null}</div></div> : null}
+
       <div className="process-review-footer"><div className="toolbar">{step > 0 ? <Button icon={ArrowLeft} disabled={saving || Boolean(followUpBusy)} onClick={() => setStep(step - 1)}>Previous</Button> : null}{step < steps.length - 1 ? <Button disabled={saving || Boolean(followUpBusy)} onClick={() => setStep(step + 1)}>Continue <ArrowRight size={16} aria-hidden="true" /></Button> : null}</div><div className="toolbar">{canEdit ? <><Button busy={saving} disabled={actionBusy || Boolean(followUpBusy)} icon={Save} onClick={() => void save(false)}>{detail?.status === "submitted" ? "Save changes" : "Save draft"}</Button>{step === steps.length - 1 ? <Button busy={saving} disabled={scaleMissing || actionBusy || Boolean(followUpBusy)} icon={Send} variant="primary" onClick={() => void save(true)}>Submit review</Button> : null}</> : null}</div></div>
     </section></div>
     {!digital && detail && (Object.keys(detail.data.fields).length > 0 || snapshotCount > 0) ? <ActivateHistoricalData detail={detail} /> : null}
@@ -290,44 +299,10 @@ function ExternalEvidence({ value, children }: { value?: string | null; children
   const href = processReviewSafeLink(value);
   return href ? <a className="process-review-external" href={href} target="_blank" rel="noreferrer">{children}<ExternalLink size={15} aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span></a> : null;
 }
-function Notes({ fieldKey, fallback, request, field, label, help }: Pick<ReviewFieldsProps, "request" | "field" | "label"> & { fieldKey: string; fallback: string; help?: string }) {
-  return <Narrative label={label(fieldKey, fallback)} value={request.data.fields[fieldKey] || ""} onChange={value => field(fieldKey, value)} help={help} />;
-}
 function StaffSetField({ label, staff, ids, onChange, removeLabel = "Remove attendee" }: { label: string; staff: StaffSummary[]; ids: string[]; onChange: (ids: string[]) => void; removeLabel?: string }) {
   const id = useId();
   return <div className="process-review-staff-selection"><span className="process-review-field-label">{label}</span>{ids.map(staffId => <div className="process-review-row" key={staffId}><span>{staff.find(person => person.id === staffId)?.displayName || "Saved staff member"}</span><Button variant="quiet" onClick={() => onChange(ids.filter(value => value !== staffId))}>{removeLabel}</Button></div>)}<StaffSearchSelect id={`${id}-attendees`} label={label} value="" staff={staff.filter(person => !ids.includes(person.id))} onChange={staffId => { if (staffId) onChange([...ids, staffId]); }} /></div>;
 }
-function ReviewContext(props: ReviewFieldsProps & { digital: boolean }) {
-  const { request, setRequest, orgUnits, label } = props;
-  const faculties = orgUnits.filter(unit => unit.orgUnitType.toLowerCase() === "faculty" && (unit.isActive || unit.id === request.facultyOrgUnitId));
-  const teams = orgUnits.filter(unit => unit.orgUnitType.toLowerCase() === "team" && (!request.facultyOrgUnitId || unit.parentOrgUnitId === request.facultyOrgUnitId || unit.id === request.teamOrgUnitId) && (unit.isActive || unit.id === request.teamOrgUnitId));
-  return <div className="form-stack"><p className="muted-copy">One team or area review, supported by several samples. The review owner is recorded automatically.</p><div className="form-grid form-grid-two">
-    <TextField label={label("title", "Review title")} value={request.title} onChange={title => setRequest({ title })} maxLength={300} />
-    <label className="entry-field"><span>{label("faculty", "Faculty")}</span><select value={request.facultyOrgUnitId || ""} onChange={event => setRequest({ facultyOrgUnitId: event.target.value || undefined, teamOrgUnitId: undefined })}><option value="">Select faculty</option>{request.facultyOrgUnitId && !faculties.some(unit => unit.id === request.facultyOrgUnitId) ? <option value={request.facultyOrgUnitId}>Saved faculty</option> : null}{faculties.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
-    <label className="entry-field"><span>{label("team", "Team / area")}</span><select value={request.teamOrgUnitId || ""} onChange={event => setRequest({ teamOrgUnitId: event.target.value || undefined })}><option value="">Select team / area</option>{request.teamOrgUnitId && !teams.some(unit => unit.id === request.teamOrgUnitId) ? <option value={request.teamOrgUnitId}>Saved team / area</option> : null}{teams.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
-    <TextField label={label("recordDate", "Review date")} type="date" value={request.recordDate || ""} onChange={recordDate => setRequest({ recordDate: recordDate || undefined })} />
-  </div><Notes {...props} fieldKey="scope" fallback="Scope and context" /></div>;
-}
-
-function DigitalSamples({ data, onChange, staff }: { data: ProcessReviewData; onChange: (patch: Partial<ProcessReviewData>) => void; staff: StaffSummary[] }) {
-  function update(id: string, patch: Partial<ProcessReviewSample>) { onChange({ samples: data.samples.map(sample => sample.id === id ? { ...sample, ...patch } : sample) }); }
-  return <div className="form-stack"><p className="muted-copy">Record the samples used across the review. A sample can support more than one statement; it does not receive a separate rating.</p>{data.samples.length === 0 ? <p className="process-review-empty">No samples have been added.</p> : data.samples.map((sample, index) => <section className="process-review-sample" key={sample.id}><div className="process-review-row"><h3>Sample {index + 1}</h3><Button icon={Trash2} variant="quiet" onClick={() => onChange(removeProcessReviewSample(data, sample.id))}>Remove sample {index + 1}</Button></div><div className="form-grid form-grid-two"><TextField label="Sample title" value={sample.title} onChange={title => update(sample.id, { title })} maxLength={300} /><label className="entry-field"><span>Sample type</span><select value={sample.sampleType} onChange={event => update(sample.id, { sampleType: event.target.value })}><option value="digital_classroom">Digital classroom</option><option value="learner_work">Learner work</option><option value="observation">Observation</option><option value="discussion">Discussion</option><option value="other">Other</option>{sample.sampleType && !["digital_classroom", "learner_work", "observation", "discussion", "other"].includes(sample.sampleType) ? <option value={sample.sampleType}>{sample.sampleType}</option> : null}</select></label><TextField label="Sample date" type="date" value={sample.sampleDate || ""} onChange={sampleDate => update(sample.id, { sampleDate: sampleDate || undefined })} /><TextField label="Course / group" value={sample.course || ""} onChange={course => update(sample.id, { course })} /></div><div className="process-review-staff-selection"><span className="process-review-field-label">Associated staff</span>{sample.staffIds.map(staffId => <div className="process-review-row" key={staffId}><span>{staff.find(person => person.id === staffId)?.displayName || "Saved staff member"}</span><Button variant="quiet" onClick={() => update(sample.id, { staffIds: sample.staffIds.filter(id => id !== staffId) })}>Remove staff</Button></div>)}<StaffSearchSelect id={`sample-${sample.id}-staff`} label={`Add staff to sample ${index + 1}`} staff={staff.filter(person => !sample.staffIds.includes(person.id))} value="" onChange={staffId => { if (staffId) update(sample.id, { staffIds: [...sample.staffIds, staffId] }); }} /></div><TextField label="Evidence link" type="url" value={sample.evidenceLink || ""} onChange={evidenceLink => update(sample.id, { evidenceLink })} /><ExternalEvidence value={sample.evidenceLink}>Open sample evidence</ExternalEvidence><Narrative label="Evidence notes" value={sample.notes || ""} onChange={notes => update(sample.id, { notes })} /></section>)}<Button icon={Plus} onClick={() => onChange({ samples: [...data.samples, { id: crypto.randomUUID(), title: "", sampleType: "learner_work", staffIds: [] }] })}>Add sample</Button></div>;
-}
-
-function DigitalStatements({ configuration, data, selected, setSelected, onChange, readOnly }: { readOnly: boolean; configuration: ProcessReviewConfiguration; data: ProcessReviewData; selected: number; setSelected: (value: number) => void; onChange: (responses: ProcessReviewResponse[]) => void }) {
-  const standards = configuration.standards;
-  const standard = standards[selected] || standards[0];
-  function update(key: string, patch: Partial<ProcessReviewResponse>) {
-    const existing = data.responses.find(response => response.statementKey === key);
-    const next: ProcessReviewResponse = { statementKey: key, sampleIds: [], ...existing, ...patch };
-    onChange(existing ? data.responses.map(response => response.statementKey === key ? next : response) : [...data.responses, next]);
-  }
-  return <div className="form-stack"><p className="muted-copy">One overall rating per statement, informed by its linked samples.</p><nav className="process-review-standards" aria-label="Digital standards">{standards.map((item, index) => <button type="button" aria-pressed={selected === index} aria-label={`Standard ${index + 1}: ${item.title}`} key={item.key} onClick={() => setSelected(index)}>{index + 1}</button>)}</nav>{standard ? <><h3>{selected + 1}. {standard.title}</h3>{standard.statements.map((statement, index) => {
-    const response = data.responses.find(item => item.statementKey === statement.key);
-    return <section className="process-review-statement" key={statement.key}><h3>{selected + 1}.{index + 1} · {statement.text}</h3><label className="entry-field"><span>Overall statement rating</span><select disabled={readOnly || !configuration.ratingOptions.length} aria-label={`Rating for statement ${selected + 1}.${index + 1}`} value={response?.ratingKey || ""} onChange={event => update(statement.key, { ratingKey: event.target.value || undefined })}><option value="">{configuration.ratingOptions.length ? "Select rating" : "College scale to be configured"}</option>{response?.ratingKey && !configuration.ratingOptions.some(rating => rating.key === response.ratingKey) ? <option value={response.ratingKey}>Saved rating · {response.ratingKey}</option> : null}{configuration.ratingOptions.map(rating => <option value={rating.key} key={rating.key}>{rating.label}</option>)}</select></label><details className="process-review-evidence" open={Boolean(response?.sampleIds.length)}><summary>Linked samples · {response?.sampleIds.length || 0}</summary>{!data.samples.length ? <p>Add a sample in the Samples section, then link it here.</p> : data.samples.map((sample, sampleIndex) => <label className="process-review-check" key={sample.id}><input type="checkbox" disabled={readOnly} checked={Boolean(response?.sampleIds.includes(sample.id))} onChange={event => update(statement.key, { sampleIds: event.target.checked ? [...new Set([...(response?.sampleIds || []), sample.id])] : (response?.sampleIds || []).filter(id => id !== sample.id) })} /><span>Sample {sampleIndex + 1} · {sample.title || "Untitled sample"}</span></label>)}</details><Narrative disabled={readOnly} label="Evidence and rationale" value={response?.rationale || ""} onChange={rationale => update(statement.key, { rationale })} /></section>;
-  })}</> : <p>No question framework is configured. Contact an administrator before submitting this review.</p>}</div>;
-}
-
 function ActivateReviewContextFields(props: ReviewFieldsProps) {
   const { request, setRequest, orgUnits, staff, detail, label } = props;
   const data = activateData(request);
@@ -449,14 +424,6 @@ function ActivateHistoricalData({ detail }: { detail: ProcessReviewDetail }) {
   return <details className="panel process-review-history"><summary>Historical review data · read only</summary><p className="muted-copy">Earlier review fields and snapshots are retained here.</p>{Object.entries(detail.data.fields).filter(([, value]) => value.trim()).map(([key, value]) => <div key={key}><h3>{labels[key] || key.replaceAll("_", " ")}</h3>{processReviewSafeLink(value) ? <ExternalEvidence value={value}>Open historical evidence</ExternalEvidence> : <p className="process-review-preserve">{value}</p>}</div>)}{detail.snapshots.map(snapshot => <details className="process-review-history" key={snapshot.snapshotId}><summary>{displayDate(snapshot.asOfDate)} · {snapshot.sourceMeeting} · {snapshot.recordedByName}</summary><ExternalEvidence value={snapshot.teamsLink}>Open historical source</ExternalEvidence>{Object.entries(snapshot.data.fields).filter(([, value]) => value.trim()).map(([key, value]) => <div key={key}><h3>{labels[key] || key.replaceAll("_", " ")}</h3><p className="process-review-preserve">{value}</p></div>)}</details>)}</details>;
 }
 
-function ReviewChecks({ request, detail, configuration, digital }: ReviewFieldsProps & { digital: boolean }) {
-  if (!digital) return <ActivateReviewChecks request={request} detail={detail} configuration={configuration} />;
-  const statements = configuration.standards.flatMap(standard => standard.statements);
-  const rated = statements.filter(statement => request.data.responses.some(response => response.statementKey === statement.key && configuration.ratingOptions.some(rating => rating.key === response.ratingKey))).length;
-  const evidenced = statements.filter(statement => request.data.responses.some(response => response.statementKey === statement.key && response.sampleIds.some(id => request.data.samples.some(sample => sample.id === id)))).length;
-  return <div className="form-stack"><p className="muted-copy">Check the review before formal submission. Saving a draft preserves unfinished work.</p><dl className="process-review-summary"><div><dt>Review</dt><dd>{request.title || "Title not yet entered"}</dd></div><div><dt>Faculty / area</dt><dd>{request.facultyOrgUnitId ? "Faculty selected" : "Faculty still required"}{request.teamOrgUnitId ? " · team / area selected" : " · team / area still required"}</dd></div><div><dt>Review owner</dt><dd>{detail?.ownerName || "Set from the signed-in person on creation"}</dd></div><div><dt>Samples</dt><dd>{request.data.samples.length}</dd></div><div><dt>Statements rated</dt><dd>{rated} / {statements.length}</dd></div><div><dt>Statements with linked evidence</dt><dd>{evidenced} / {statements.length}</dd></div><div><dt>Native actions</dt><dd>{detail?.actions.length || 0} · maintained separately from the review narrative</dd></div></dl>{configuration.settings.requireSamplePerRating !== "false" ? <p className="muted-copy">Each rating needs at least one linked sample. Sample volume does not weight the rating.</p> : null}{configuration.settings.requireRationale === "true" ? <p className="muted-copy">Rationale is required for every statement.</p> : null}</div>;
-}
-
 function emptyAction(): SaveProcessReviewActionRequest {
   return { title: "", themeKey: "", ownerStaffId: "", dueDate: "", supportRequired: "", successEvidence: "", progress: "open", impactStatus: "awaiting_evidence" };
 }
@@ -465,38 +432,40 @@ type ProcessReviewActionsProps = {
   detail: ProcessReviewDetail | null; configuration: ProcessReviewConfiguration; staff: StaffSummary[];
   onDirtyChange: (dirty: boolean) => void; onSavingChange: (saving: boolean) => void;
   onChanged: (detail: ProcessReviewDetail) => Promise<void>; onSaveReview: () => Promise<boolean>;
-  reviewSaving: boolean; reviewScopeDirty?: boolean;
+  reviewSaving: boolean; reviewScopeDirty?: boolean; reviewContextDirty?: boolean;
 };
-
-function ProcessReviewActions(props: ProcessReviewActionsProps) {
-  return props.configuration.processKey === "activate_growth_review" ? <ActivateReviewActions {...props} /> : <DigitalReviewActions {...props} />;
-}
 
 function ActivateReviewChecks({ request, detail, configuration }: Pick<ReviewFieldsProps, "request" | "detail" | "configuration">) {
   const data = activateData(request);
   const areas = configuration.skillsScanPillars?.flatMap(pillar => pillar.subAreas) || [];
   const entered = areas.filter(area => { const value = data.skillsScanScores[area.key]; return typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 5; }).length;
-  return <div className="form-stack"><p className="muted-copy">Check the scope, participants, Skills Scan results, minutes and agreed actions before submitting.</p><dl className="process-review-summary"><div><dt>Review</dt><dd>{request.title || "Title not yet entered"}</dd></div><div><dt>Area</dt><dd>{request.facultyOrgUnitId ? data.allSubTeams ? "All sub-teams in the selected faculty" : `${data.subTeamOrgUnitIds.length} selected sub-teams` : "Faculty not yet selected"}</dd></div><div><dt>Review conducted</dt><dd>{displayDate(request.recordDate)}</dd></div><div><dt>Follow-up reviews</dt><dd>{detail?.followUpReviews?.length || 0} linked</dd></div><div><dt>Participants</dt><dd>{data.participantStaffIds.length} · automatic roles follow the organisation structure</dd></div><div><dt>Skills Scan averages</dt><dd>{entered} / {areas.length || 15} entered · missing results stay blank</dd></div><div><dt>Meeting minutes</dt><dd>{data.meetingMinutes?.trim() ? "Recorded" : "Not yet recorded"}</dd></div><div><dt>Strengths</dt><dd>{data.strengths?.trim() ? "Recorded" : "Not yet recorded"}</dd></div><div><dt>Areas for development</dt><dd>{data.development?.trim() ? "Recorded" : "Not yet recorded"}</dd></div><div><dt>Actions</dt><dd>{detail?.actions.length || 0} · named responsible people, impact measures and review dates</dd></div></dl><p className="muted-copy">A pillar average is available only when all of its sub-area averages have been entered. Activity progress is maintained through Actions.</p></div>;
+  return <div className="form-stack"><p className="muted-copy">Check the scope, participants, Skills Scan results, minutes and agreed actions before submitting.</p><dl className="process-review-summary"><div><dt>Review</dt><dd>{request.title || "Title not yet entered"}</dd></div><div><dt>Area</dt><dd>{request.facultyOrgUnitId ? data.allSubTeams ? "All sub-teams in the selected faculty" : `${data.subTeamOrgUnitIds.length} selected sub-teams` : "Faculty not yet selected"}</dd></div><div><dt>Review conducted</dt><dd>{displayDate(request.recordDate)}</dd></div><div><dt>Follow-up reviews</dt><dd>{detail?.followUpReviews?.length || 0} linked</dd></div><div><dt>Participants</dt><dd>{data.participantStaffIds.length} · automatic roles follow the organisation structure</dd></div><div><dt>Skills Scan averages</dt><dd>{entered} / {areas.length || 15} entered · missing results stay blank</dd></div><div><dt>Meeting minutes</dt><dd>{data.meetingMinutes?.trim() ? "Recorded" : "Not yet recorded"}</dd></div><div><dt>Strengths</dt><dd>{data.strengths?.trim() ? "Recorded" : "Not yet recorded"}</dd></div><div><dt>Areas for development</dt><dd>{data.development?.trim() ? "Recorded" : "Not yet recorded"}</dd></div><div><dt>Actions</dt><dd>{detail?.actions.length || 0} · named responsible people, impact measures and review dates</dd></div>{detail?.isFollowUp ? <div><dt>Action reviews recorded</dt><dd>{detail.actions.filter(action => action.updates.some(update => update.reviewRecordId === detail.recordId)).length} / {detail.actions.length} actions have a dated review in this follow-up</dd></div> : null}</dl><p className="muted-copy">Review distance travelled and close or extend actions in Review actions. Each update is dated and retained on the original action.</p></div>;
 }
 
-function ActivateReviewActions({ detail, configuration, staff, onChanged, onSaveReview, reviewSaving, onDirtyChange, onSavingChange, reviewScopeDirty = false }: ProcessReviewActionsProps) {
+function ActivateReviewActions({ detail, configuration, staff, onChanged, onSaveReview, reviewSaving, onDirtyChange, onSavingChange, reviewScopeDirty = false, reviewContextDirty = reviewScopeDirty }: ProcessReviewActionsProps) {
   const [form, setForm] = useState<SaveProcessReviewActionRequest | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
   const [baseline, setBaseline] = useState("");
   const [saving, setSaving] = useState(false);
+  const [reviewing, setReviewing] = useState<{ id: string; outcome: ActivateActionOutcome } | null>(null);
+  const [reviewDirty, setReviewDirty] = useState(false);
+  const [reviewBusy, setReviewBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [tone, setTone] = useState<"success" | "error" | "neutral">("neutral");
   const lock = useRef(false);
   const dirty = form !== null && JSON.stringify(form) !== baseline;
   const clear = useUnsavedChanges({ label: "Activate+ action", dirty, saving, onSave: form ? saveAction : undefined,
     onDiscard: () => { setForm(null); setActionId(null); }, discardLabel: "Discard action edits" });
-  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
-  useEffect(() => { onSavingChange(saving); }, [saving, onSavingChange]);
+  useEffect(() => { onDirtyChange(dirty || reviewDirty); }, [dirty, reviewDirty, onDirtyChange]);
+  useEffect(() => { onSavingChange(saving || reviewBusy); }, [saving, reviewBusy, onSavingChange]);
   const themes = configuration.actionThemes || [];
   const pillars = configuration.skillsScanPillars || [];
   const impactAreas = pillars.flatMap(pillar => pillar.subAreas);
   const original = detail?.actions.find(action => action.actionId === actionId);
   function start(action?: ProcessReviewAction) {
+    if (!detail || reviewSaving || (action ? !action.canEdit : !detail.canEdit)) return;
+    if (reviewDirty || reviewBusy) { setTone("error"); setMessage("Save or discard the action review before amending another action."); return; }
+    setReviewing(null);
     const responsibleStaffIds = action?.responsibleStaffIds?.length ? action.responsibleStaffIds : action ? [action.ownerStaffId] : [];
     const next: SaveProcessReviewActionRequest = action ? {
       title: action.title, themeKey: action.themeKey, ownerStaffId: action.ownerStaffId, dueDate: action.dueDate,
@@ -507,9 +476,18 @@ function ActivateReviewActions({ detail, configuration, staff, onChanged, onSave
     } : { ...emptyAction(), responsibleStaffIds: [], detail: "", impactAreaKey: "", reviewDate: "" };
     setForm(next); setBaseline(JSON.stringify(next)); setActionId(action?.actionId || null); setMessage("");
   }
+  function reviewAction(action: ProcessReviewAction, outcome: ActivateActionOutcome) {
+    if (reviewSaving || reviewContextDirty) return;
+    if (form || reviewDirty || reviewBusy) { setTone("error"); setMessage("Save or discard your current action edits before reviewing another action."); return; }
+    setReviewing({ id: action.actionId, outcome }); setMessage("");
+  }
+  async function refreshReviewedAction() {
+    if (!detail) return;
+    await onChanged(await api.processReview(detail.recordId));
+  }
   function update(patch: Partial<SaveProcessReviewActionRequest>) { setForm(current => current ? { ...current, ...patch } : current); }
   async function saveAction(): Promise<boolean> {
-    if (!form || !detail || lock.current) return false;
+    if (!form || !detail || lock.current || reviewSaving || reviewBusy || (actionId ? !original?.canEdit : !detail.canEdit)) return false;
     if (reviewScopeDirty) { setTone("error"); setMessage("Save the review scope before assigning or amending its actions."); return false; }
     lock.current = true; setSaving(true); setMessage("");
     try {
@@ -531,62 +509,14 @@ function ActivateReviewActions({ detail, configuration, staff, onChanged, onSave
     } catch (error) { setTone("error"); setMessage(error instanceof Error ? error.message : "The action could not be saved. Your entries remain here."); return false; }
     finally { lock.current = false; setSaving(false); }
   }
-  return <div className="form-stack"><p className="muted-copy">Agree what will change, how its impact will be measured, who is responsible and when it will be reviewed.</p><WorkflowFeedback message={message} tone={tone} onDismiss={() => setMessage("")} />{!detail || reviewScopeDirty ? <div className="notice-row"><div><p>{detail ? "Save the updated review scope before changing its actions." : "Save this review as a draft before adding actions."}</p><Button disabled={reviewSaving || saving} icon={Save} onClick={() => void onSaveReview()}>Save review draft</Button></div></div> : null}{detail ? <>
+  return <div className="form-stack"><p className="muted-copy">{detail?.isFollowUp ? "Review the distance travelled against each carried-forward action. Close it when agreed or extend its review date with a reason. These are the original shared actions." : "Agree what will change, how its impact will be measured, who is responsible and when it will be reviewed."}</p><WorkflowFeedback message={message} tone={tone} onDismiss={() => setMessage("")} />{!detail || reviewScopeDirty ? <div className="notice-row"><div><p>{detail ? "Save the review scope before assigning or amending actions." : "Save this review as a draft before adding actions."}</p><Button disabled={reviewSaving || saving || reviewBusy} icon={Save} onClick={() => void onSaveReview()}>Save review draft</Button></div></div> : null}{detail ? <>
+    {detail.isFollowUp ? <p className="notice-row" role="status">{detail.actions.filter(action => action.updates.some(update => update.reviewRecordId === detail.recordId)).length} of {detail.actions.length} actions reviewed in this follow-up. Updates save immediately to the shared action record.</p> : null}
     {detail.status === "draft" ? <p className="muted-copy">Assigned actions are available to their responsible people straight away, even while the review remains a draft.</p> : null}
-    {!detail.actions.length ? <p className="process-review-empty">No actions have been agreed yet.</p> : detail.actions.map(action => <article className="process-review-action" key={action.actionId}><div className="process-review-row"><h3>{action.detail || action.title}</h3><span className="status-chip">{progressLabels[action.progress] || action.progress}</span></div><dl className="process-review-summary"><div><dt>Theme</dt><dd>{action.themeLabel || themes.find(theme => theme.key === action.themeKey)?.title || action.themeKey}</dd></div><div><dt>Area of impact</dt><dd>{action.impactAreaLabel || impactAreas.find(area => area.key === action.impactAreaKey)?.title || "Not recorded"}</dd></div><div><dt>Impact measures</dt><dd className="process-review-preserve">{action.successEvidence}</dd></div><div><dt>Responsible people</dt><dd>{action.responsibleStaff?.map(person => person.displayName).join(", ") || (action.responsibleStaffIds?.length ? action.responsibleStaffIds.map(id => staff.find(person => person.id === id)?.displayName || "Saved staff member").join(", ") : action.ownerName)}</dd></div><div><dt>Review date</dt><dd>{displayDate(action.reviewDate || action.dueDate)}</dd></div></dl><div className="toolbar">{action.canEdit ? <Button disabled={saving || reviewSaving || form !== null} onClick={() => start(action)}>Amend action</Button> : null}<a className="process-review-external" href={actionPath(action.actionId)} target="_blank" rel="noreferrer">Open in Actions <ExternalLink size={15} aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span></a></div></article>)}
-    {!form && detail.canEdit ? <Button icon={Plus} disabled={reviewSaving || saving || reviewScopeDirty} onClick={() => start()}>Add action</Button> : null}
-    {form ? <section className="process-review-action-editor"><h3>{actionId ? "Amend action" : "New action"}</h3><fieldset className="process-review-fields" disabled={saving || reviewSaving}><div className="form-stack"><div className="form-grid form-grid-two"><label className="entry-field"><span>Theme</span><select value={form.themeKey} onChange={event => update({ themeKey: event.target.value })}><option value="">Select theme</option>{form.themeKey && !themes.some(theme => theme.key === form.themeKey) ? <option value={form.themeKey}>{original?.themeLabel || "Historical theme"}</option> : null}{themes.map(theme => <option key={theme.key} value={theme.key}>{theme.title}</option>)}</select></label><label className="entry-field"><span>Area of impact</span><select value={form.impactAreaKey || ""} onChange={event => update({ impactAreaKey: event.target.value })}><option value="">Select Skills Scan area</option>{pillars.map(pillar => <optgroup key={pillar.key} label={pillar.title}>{pillar.subAreas.map(area => <option key={area.key} value={area.key}>{area.title}</option>)}</optgroup>)}</select></label></div><Narrative label="Action detail" value={form.detail || ""} onChange={value => update({ detail: value, title: value.trim().slice(0, 300) })} /><Narrative label="Impact measures" maxLength={4000} value={form.successEvidence} onChange={successEvidence => update({ successEvidence })} /><StaffSetField label="Responsible people" staff={staff} ids={form.responsibleStaffIds || []} removeLabel="Remove person" onChange={responsibleStaffIds => update({ responsibleStaffIds, ownerStaffId: responsibleStaffIds[0] || "" })} /><TextField label="Review date" type="date" value={form.reviewDate || ""} onChange={reviewDate => update({ reviewDate, dueDate: reviewDate })} />{original && (original.reviewDate || original.dueDate) !== form.reviewDate ? <Narrative label="Reason for changing the review date" maxLength={1000} value={form.deadlineChangeReason || ""} onChange={deadlineChangeReason => update({ deadlineChangeReason })} /> : null}</div></fieldset><div className="toolbar"><Button disabled={reviewSaving || reviewScopeDirty} busy={saving} icon={Check} variant="primary" onClick={() => void saveAction()}>{actionId ? "Save action" : "Assign action"}</Button><Button disabled={saving || reviewSaving} onClick={() => { clear(); setForm(null); setActionId(null); }}>Cancel action edits</Button></div></section> : null}
+    {!detail.actions.length ? <p className="process-review-empty">No actions have been agreed yet.</p> : detail.actions.map(action => <article className="process-review-action" key={action.actionId}><div className="process-review-row"><h3>{action.detail || action.title}</h3><span className="status-chip">{progressLabels[action.progress] || action.progress}</span></div><dl className="process-review-summary"><div><dt>Theme</dt><dd>{action.themeLabel || themes.find(theme => theme.key === action.themeKey)?.title || action.themeKey}</dd></div><div><dt>Area of impact</dt><dd>{action.impactAreaLabel || impactAreas.find(area => area.key === action.impactAreaKey)?.title || "Not recorded"}</dd></div><div><dt>Impact measures</dt><dd className="process-review-preserve">{action.successEvidence}</dd></div><div><dt>Responsible people</dt><dd>{action.responsibleStaff?.map(person => person.displayName).join(", ") || (action.responsibleStaffIds?.length ? action.responsibleStaffIds.map(id => staff.find(person => person.id === id)?.displayName || "Saved staff member").join(", ") : action.ownerName)}</dd></div><div><dt>Review date</dt><dd>{displayDate(action.reviewDate || action.dueDate)}</dd></div></dl>{action.recordId !== detail.recordId ? <p className="process-review-cell-note">Carried forward from {action.recordTitle}</p> : null}
+      {action.updates.find(update => update.progressNote?.trim()) ? <div className="process-review-update"><strong>Latest distance travelled</strong><p className="process-review-preserve">{action.updates.find(update => update.progressNote?.trim())!.progressNote}</p><small>{displayDate(action.updates.find(update => update.progressNote?.trim())!.updatedAt)} · {action.updates.find(update => update.progressNote?.trim())!.updatedByName}</small></div> : null}
+      <div className="toolbar">{action.canEdit ? <><Button disabled={saving || reviewBusy || reviewSaving || reviewContextDirty || form !== null || reviewDirty} onClick={() => reviewAction(action, "progress")}>Record progress</Button>{!["complete", "cancelled"].includes(action.progress) ? <><Button disabled={saving || reviewBusy || reviewSaving || reviewContextDirty || form !== null || reviewDirty} onClick={() => reviewAction(action, "close")}>Close action</Button><Button disabled={saving || reviewBusy || reviewSaving || reviewContextDirty || form !== null || reviewDirty} onClick={() => reviewAction(action, "extend")}>Extend action</Button></> : <Button disabled={saving || reviewBusy || reviewSaving || reviewContextDirty || form !== null || reviewDirty} onClick={() => reviewAction(action, "reopen")}>Reopen action</Button>}<Button disabled={saving || reviewBusy || reviewSaving || form !== null || reviewDirty} onClick={() => start(action)}>Amend action</Button></> : <><span className="muted-copy">Action updates are managed by its creator and their management hierarchy.</span><Button disabled={saving || reviewBusy || form !== null || reviewDirty} onClick={() => reviewAction(action, "progress")}>View action history</Button></>}<a className="process-review-external" href={actionPath(action.actionId)} target="_blank" rel="noreferrer">Open in Actions <ExternalLink size={15} aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span></a></div>
+      {reviewing?.id === action.actionId ? <section className="process-review-action-editor" aria-label={`Review action: ${action.title}`}><ProcessReviewActionPanel key={`${detail.recordId}:${action.actionId}:${reviewing.outcome}`} actionId={action.actionId} revision={action.rowVersion} reviewRecordId={detail.recordId} initialOutcome={reviewing.outcome} blocked={reviewSaving || reviewContextDirty} onDirtyChange={setReviewDirty} onSavingChange={setReviewBusy} onChanged={refreshReviewedAction} /><Button disabled={reviewBusy} onClick={async () => { if (await confirmUnsavedNavigation()) setReviewing(null); }}>Finish reviewing action</Button></section> : null}</article>)}
+    {!form && detail.canEdit ? <Button icon={Plus} disabled={reviewSaving || saving || reviewBusy || reviewDirty || reviewScopeDirty} onClick={() => start()}>Add action</Button> : null}
+    {form ? <section className="process-review-action-editor"><h3>{actionId ? "Amend action" : "New action"}</h3><fieldset className="process-review-fields" disabled={saving || reviewSaving || (actionId ? !original?.canEdit : !detail.canEdit)}><div className="form-stack"><div className="form-grid form-grid-two"><label className="entry-field"><span>Theme</span><select value={form.themeKey} onChange={event => update({ themeKey: event.target.value })}><option value="">Select theme</option>{form.themeKey && !themes.some(theme => theme.key === form.themeKey) ? <option value={form.themeKey}>{original?.themeLabel || "Historical theme"}</option> : null}{themes.map(theme => <option key={theme.key} value={theme.key}>{theme.title}</option>)}</select></label><label className="entry-field"><span>Area of impact</span><select value={form.impactAreaKey || ""} onChange={event => update({ impactAreaKey: event.target.value })}><option value="">Select Skills Scan area</option>{pillars.map(pillar => <optgroup key={pillar.key} label={pillar.title}>{pillar.subAreas.map(area => <option key={area.key} value={area.key}>{area.title}</option>)}</optgroup>)}</select></label></div><Narrative label="Action detail" value={form.detail || ""} onChange={value => update({ detail: value, title: value.trim().slice(0, 300) })} /><Narrative label="Impact measures" maxLength={4000} value={form.successEvidence} onChange={successEvidence => update({ successEvidence })} /><StaffSetField label="Responsible people" staff={staff} ids={form.responsibleStaffIds || []} removeLabel="Remove person" onChange={responsibleStaffIds => update({ responsibleStaffIds, ownerStaffId: responsibleStaffIds[0] || "" })} /><TextField label="Review date" type="date" value={form.reviewDate || ""} onChange={reviewDate => update({ reviewDate, dueDate: reviewDate })} />{original && (original.reviewDate || original.dueDate) !== form.reviewDate ? <Narrative label="Reason for changing the review date" maxLength={1000} value={form.deadlineChangeReason || ""} onChange={deadlineChangeReason => update({ deadlineChangeReason })} /> : null}</div></fieldset><div className="toolbar"><Button disabled={reviewSaving || reviewScopeDirty || (actionId ? !original?.canEdit : !detail.canEdit)} busy={saving} icon={Check} variant="primary" onClick={() => void saveAction()}>{actionId ? "Save action" : "Assign action"}</Button><Button disabled={saving || reviewSaving} onClick={() => { clear(); setForm(null); setActionId(null); }}>Cancel action edits</Button></div></section> : null}
   </> : null}</div>;
-}
-
-function DigitalReviewActions({ detail, configuration, staff, onChanged, onSaveReview, reviewSaving, onDirtyChange, onSavingChange }: { detail: ProcessReviewDetail | null; configuration: ProcessReviewConfiguration; staff: StaffSummary[]; onDirtyChange: (dirty: boolean) => void; onSavingChange: (saving: boolean) => void; onChanged: (detail: ProcessReviewDetail) => Promise<void>; onSaveReview: () => Promise<boolean>; reviewSaving: boolean }) {
-  const [form, setForm] = useState<SaveProcessReviewActionRequest | null>(null);
-  const [actionId, setActionId] = useState<string | null>(null);
-  const [baseline, setBaseline] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-  const [tone, setTone] = useState<"success" | "error" | "neutral">("neutral");
-  const lock = useRef(false);
-  const dirty = form !== null && JSON.stringify(form) !== baseline;
-  const clear = useUnsavedChanges({ label: "Review action", dirty, saving,
-    onSave: form ? saveAction : undefined, onDiscard: () => { setForm(null); setActionId(null); },
-    discardLabel: "Discard action edits", discardMessage: "Unsaved action edits are discarded. Previously saved actions remain in i-Elevate." });
-
-  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
-  useEffect(() => { onSavingChange(saving); }, [saving, onSavingChange]);
-
-  async function editAction(action?: ProcessReviewAction) {
-    const next = action ? {
-      title: action.title, themeKey: action.themeKey, ownerStaffId: action.ownerStaffId, dueDate: action.dueDate,
-      supportRequired: action.supportRequired, successEvidence: action.successEvidence, progress: action.progress,
-      impactStatus: action.impactStatus, impactEvidence: action.impactEvidence, impactEvidenceLink: action.impactEvidenceLink,
-      rowVersion: action.rowVersion
-    } : emptyAction();
-    setForm(next); setBaseline(JSON.stringify(next)); setActionId(action?.actionId || null); setMessage("");
-  }
-  function cancelEdit() { clear(); setForm(null); setActionId(null); }
-  async function saveAction(): Promise<boolean> {
-    if (!form || !detail || lock.current) return false;
-    lock.current = true; setSaving(true); setMessage("");
-    try {
-      const response = await api.saveProcessReviewAction(detail.recordId, actionId, form);
-      if (!response.ok || !response.data) { setTone("error"); setMessage(response.message || "The action could not be saved. Your entries remain here."); return false; }
-      clear(); setForm(null); setActionId(null); setTone("success"); setMessage("Action saved in i-Elevate."); await onChanged(response.data); return true;
-    } catch (error) { setTone("error"); setMessage(error instanceof Error ? error.message : "The action could not be saved. Your entries remain here."); return false; }
-    finally { lock.current = false; setSaving(false); }
-  }
-  async function copyLink(id: string) {
-    const url = new URL(actionPath(id), window.location.origin).href;
-    try { await navigator.clipboard.writeText(url); setTone("success"); setMessage("Action link copied."); }
-    catch { setTone("neutral"); setMessage(`Copy this action link: ${url}`); }
-  }
-  const themeOptions = configuration.standards;
-  const original = detail?.actions.find(action => action.actionId === actionId);
-  function set(key: keyof SaveProcessReviewActionRequest, value: string) { setForm(current => current ? { ...current, [key]: value } : current); }
-  return <div className="form-stack"><p className="muted-copy">{"Agree improvement actions against the relevant Digital standard."}</p><WorkflowFeedback message={message} tone={tone} onDismiss={() => setMessage("")} />{!detail ? <div className="notice-row"><div><p>Save the review as a draft before assigning actions.</p><Button disabled={reviewSaving} icon={Save} onClick={() => void onSaveReview()}>Save review draft</Button></div></div> : <>
-    {detail.status === "draft" ? <p className="notice-row">Assigning an action makes it available to its owner straight away, even while this review remains a draft.</p> : null}
-    {!detail.actions.length ? <p className="process-review-empty">No actions have been assigned to this review.</p> : detail.actions.map(action => <article className="process-review-action" key={action.actionId}><div className="process-review-row"><h3>{action.title}</h3><span className="status-chip">{progressLabels[action.progress] || action.progress}</span></div><p className="muted-copy">{action.themeLabel || themeOptions.find(theme => theme.key === action.themeKey)?.title || action.themeKey}</p><dl className="process-review-summary"><div><dt>Owner</dt><dd>{action.ownerName}</dd></div><div><dt>Due date</dt><dd>{displayDate(action.dueDate)}</dd></div><div><dt>Support required</dt><dd className="process-review-preserve">{action.supportRequired || "None recorded"}</dd></div><div><dt>Success evidence</dt><dd className="process-review-preserve">{action.successEvidence}</dd></div><div><dt>Impact</dt><dd>{impactLabels[action.impactStatus] || action.impactStatus}</dd></div></dl>{action.impactEvidence ? <p className="process-review-preserve">{action.impactEvidence}</p> : null}<ExternalEvidence value={action.impactEvidenceLink}>Open impact evidence</ExternalEvidence>{action.progress === "complete" && action.impactStatus !== "demonstrated" ? <p className="notice-row">Activity completed · impact still needs assessment.</p> : null}<div className="toolbar">{action.canEdit ? <Button disabled={saving || reviewSaving || form !== null} onClick={() => void editAction(action)}>Update action</Button> : null}<Button icon={Copy} disabled={saving} onClick={() => void copyLink(action.actionId)}>Copy action link</Button></div>{action.updates.length ? <details><summary>Dated updates · {action.updates.length}</summary>{action.updates.map(update => <div className="process-review-update" key={update.updateId}><strong>{displayDate(update.updatedAt)} · {update.updatedByName}</strong><p>{progressLabels[update.progress] || update.progress} · Impact: {impactLabels[update.impactStatus] || update.impactStatus}</p>{update.progressNote ? <p className="process-review-preserve">{update.progressNote}</p> : null}{update.barriers ? <p className="process-review-preserve"><strong>Barriers:</strong> {update.barriers}</p> : null}{update.nextStep ? <p className="process-review-preserve"><strong>Next step:</strong> {update.nextStep}</p> : null}<ExternalEvidence value={update.evidenceLink}>Open progress evidence</ExternalEvidence>{update.deadlineChangeReason ? <p><strong>Deadline:</strong> {displayDate(update.dueDate)} · {update.deadlineChangeReason}</p> : null}{update.impactEvidence ? <p className="process-review-preserve"><strong>Impact evidence:</strong> {update.impactEvidence}</p> : null}<ExternalEvidence value={update.impactEvidenceLink}>Open impact evidence</ExternalEvidence></div>)}</details> : null}</article>)}
-    {!form && detail.canEdit ? <Button icon={Plus} disabled={reviewSaving || saving} onClick={() => void editAction()}>Add action</Button> : null}
-    {form ? <section className="process-review-action-editor"><h3>{actionId ? "Update action" : "New action"}</h3><fieldset className="process-review-fields" disabled={saving || reviewSaving}><div className="form-stack"><Narrative maxLength={300} label="What will change?" value={form.title} onChange={value => set("title", value)} /><div className="form-grid form-grid-two"><label className="entry-field"><span>{"Related Digital standard"}</span><select value={form.themeKey} onChange={event => set("themeKey", event.target.value)}><option value="">Select area</option>{form.themeKey && !themeOptions.some(theme => theme.key === form.themeKey) ? <option value={form.themeKey}>{form.themeKey}</option> : null}{themeOptions.map(theme => <option key={theme.key} value={theme.key}>{theme.title}</option>)}</select></label><label className="entry-field"><span>Action owner</span><StaffSearchSelect id="process-review-action-owner" label="Action owner" value={form.ownerStaffId} staff={staff} onChange={value => set("ownerStaffId", value)} /></label><TextField label="Completion date" type="date" value={form.dueDate} onChange={value => set("dueDate", value)} /><label className="entry-field"><span>Activity progress</span><select value={form.progress} onChange={event => set("progress", event.target.value)}>{Object.entries(progressLabels).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></label></div><Narrative maxLength={4000} label="Support required" value={form.supportRequired} onChange={value => set("supportRequired", value)} /><Narrative maxLength={4000} label="What evidence will show success?" value={form.successEvidence} onChange={value => set("successEvidence", value)} /><Narrative maxLength={4000} label="Dated progress update" value={form.progressNote || ""} onChange={value => set("progressNote", value)} /><TextField label="Progress evidence link" type="url" value={form.evidenceLink || ""} onChange={value => set("evidenceLink", value)} /><div className="form-grid form-grid-two"><Narrative maxLength={4000} label="Barriers" value={form.barriers || ""} onChange={value => set("barriers", value)} /><Narrative maxLength={4000} label="Next step" value={form.nextStep || ""} onChange={value => set("nextStep", value)} /></div>{original && original.dueDate !== form.dueDate ? <Narrative maxLength={4000} label="Reason for deadline change" value={form.deadlineChangeReason || ""} onChange={value => set("deadlineChangeReason", value)} /> : null}<h3>Impact assessment</h3><p className="muted-copy">Completing the activity does not automatically demonstrate its impact.</p><label className="entry-field"><span>Impact assessment</span><select value={form.impactStatus} onChange={event => set("impactStatus", event.target.value)}>{Object.entries(impactLabels).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></label><Narrative maxLength={4000} label="Impact evidence and observed change" value={form.impactEvidence || ""} onChange={value => set("impactEvidence", value)} /><TextField label="Impact evidence link" type="url" value={form.impactEvidenceLink || ""} onChange={value => set("impactEvidenceLink", value)} /></div></fieldset><div className="toolbar"><Button busy={saving} disabled={reviewSaving} icon={Check} variant="primary" onClick={() => void saveAction()}>{actionId ? "Save action update" : "Assign action"}</Button><Button disabled={saving || reviewSaving} onClick={() => void cancelEdit()}>Cancel action edits</Button></div></section> : null}
-  </>}</div>;
 }

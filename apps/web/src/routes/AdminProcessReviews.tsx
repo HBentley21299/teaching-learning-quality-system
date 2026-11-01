@@ -7,19 +7,13 @@ import { confirmUnsavedNavigation, useUnsavedChanges } from "../components/Unsav
 import { CollapsibleSection } from "../components/CollapsibleSection";
 import { api } from "../services/api";
 import type { ProcessReviewConfiguration, ProcessReviewKey, ProcessReviewStandard } from "../services/processReviewTypes";
-import { processReviewCodeLabel, processReviewFieldLabel, validateProcessReviewConfiguration } from "../services/processReviewReporting";
+import { processReviewFieldLabel, validateProcessReviewConfiguration } from "../services/processReviewReporting";
 import { matchesListSearch } from "../services/listQuery";
 import "./ProcessReviewReporting.css";
 
 type Props = { processKey: ProcessReviewKey; onDirtyChange?: (dirty: boolean, saving?: boolean) => void };
 const clone = <T,>(value: T): T => structuredClone(value);
 const reference = (prefix: string) => `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
-const settingLabels: Record<string, string> = {
-  initialWindow: "Initial review window", progressWindow: "Progress review window", meetingMinutes: "Meeting duration (minutes)",
-  skillsScanLeadDays: "Skills Scan closure · days before initial review", initialPackLeadDays: "Initial pack · days before review",
-  progressPackLeadDays: "Progress pack · days before review", requireSamplePerRating: "Require a linked sample for each rating",
-  requireRationale: "Require an evidence rationale for each rating"
-};
 const legacyActivateFields = new Set(["teamsUrl", "headOfFacultyStaffId", "initialPlannedDate", "initialHeldDate", "progressPlannedDate", "progressHeldDate", "attendeeStaffIds", "snapshotDate", "sourceCheckedDate", "sourceMeeting", "reportedNeeds", "supportRequested", "supportAgreed", "impactSummary", "skillsScanTargetDate", "skillsScanCompletedDate", "period", "summaryUrl", "responsesReceived", "eligibleStaff", "packTargetDate", "packCompletedDate", "gaps", "changedPriorities", "impactEvidence", "impactLinks", "outcomes", "carryForward", "escalations", "followUpDate"]);
 
 /** A saved configuration creates a new version; historical reviews retain their own framework. */
@@ -97,13 +91,9 @@ export function AdminProcessReviews({ processKey, onDirtyChange }: Props) {
   const matches = (...values: unknown[]) => matchesListSearch(search, ...values);
   const visibleStandards = draft.standards.map((standard, index) => ({ standard, index }))
     .filter(({ standard }) => matches("framework questions review areas standards", standard.title, standard.statements.map(statement => statement.text)));
-  const labels = Object.entries(draft.fieldLabels).filter(([key, label]) => (digital || !legacyActivateFields.has(key) && !key.endsWith("_summary"))
+  const labels = Object.entries(draft.fieldLabels).filter(([key, label]) => (digital ? !["deliveryAreaKey", "scope", "strengths", "development"].includes(key) : !legacyActivateFields.has(key) && !key.endsWith("_summary"))
     && matches("form labels prompts wording", processReviewFieldLabel(draft, key), label));
-  const digitalOnlySettings = new Set(["requireSamplePerRating", "requireRationale"]);
-  const activateOnlySettings = new Set(["initialWindow", "progressWindow", "meetingMinutes", "skillsScanLeadDays", "initialPackLeadDays", "progressPackLeadDays"]);
-  const settings = Object.entries(draft.settings).filter(([key, value]) => !(digital ? activateOnlySettings : digitalOnlySettings).has(key)
-    && matches("defaults evidence cycle meeting preparation", settingLabels[key] ?? processReviewCodeLabel(key), value));
-  const ratingsVisible = digital && matches("rating categories college scale", draft.ratingOptions.map(option => option.label));
+  const ratingsVisible = digital && matches("rating categories college scale shared learning walk practice rubric", draft.ratingOptions.map(option => [option.label, option.guidanceText]));
   const pillars = draft.skillsScanPillars ?? [];
   const visiblePillars = pillars.map((pillar, index) => ({ pillar, index })).filter(({ pillar }) => matches("Skills Scan pillars sub-areas manual averages", pillar.title, pillar.subAreas.map(area => area.title)));
   const themes = draft.actionThemes ?? [];
@@ -114,7 +104,7 @@ export function AdminProcessReviews({ processKey, onDirtyChange }: Props) {
       <div className="panel-heading"><div><h2>{draft.title} settings</h2><p className="muted-copy">Current version {configuration?.version ?? draft.version}. Changes create a new version for future reviews.</p></div>
         <div className="toolbar"><Button icon={RefreshCw} disabled={busy || loading} onClick={async () => { if (await confirmUnsavedNavigation()) await load(); }}>Reload saved version</Button>
           <Button variant="primary" icon={Save} busy={busy} disabled={!dirty || loading || needsReload} onClick={() => void save()}>Save new version</Button></div></div>
-      <label className="entry-field"><span>Find a setting</span><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder={digital ? "Search questions, wording, ratings or defaults" : "Search Skills Scan pillars, sub-areas, themes or wording"} /></label>
+      <label className="entry-field"><span>Find a setting</span><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder={digital ? "Search questions, wording or ratings" : "Search Skills Scan pillars, sub-areas, themes or wording"} /></label>
       <WorkflowFeedback message={message} tone={tone} />
       {needsReload ? <p role="status">The new version was saved. Reload its current version before making another change.</p> : null}
       {errors.length ? <div className="process-review-error-summary" role="alert"><strong>Check these settings before saving.</strong><ul>{errors.map(error => <li key={error}>{error}</li>)}</ul></div> : null}
@@ -123,7 +113,7 @@ export function AdminProcessReviews({ processKey, onDirtyChange }: Props) {
       <legend className="sr-only">Process configuration</legend>
       {matches("process title", draft.title) ? <section className="panel"><label className="entry-field"><span>Process title</span><input maxLength={250} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label></section> : null}
       {digital && (!search || visibleStandards.length) ? <CollapsibleSection storageKey={`process-admin-framework-${processKey}`} title="Framework & questions" count={draft.standards.reduce((sum, standard) => sum + standard.statements.length, 0)} defaultExpanded>
-        <p className="muted-copy">{digital ? "This question set is separate from Learning Walks and the QA Hub activity bank. Each statement receives one overall rating." : "Teams holds the full review narrative. These areas and prompts structure the dated reporting snapshot."}</p>
+        <p className="muted-copy">{digital ? "Reviewers choose whole DLW categories. Every criterion in each selected category receives its own rating. This question set is separate from ordinary Learning Walks and the QA Hub activity bank." : "Teams holds the full review narrative. These areas and prompts structure the dated reporting snapshot."}</p>
         {visibleStandards.length ? visibleStandards.map(({ standard, index }) => <article className="process-review-config-area" key={standard.key}>
           <div className="panel-heading"><label className="entry-field"><span>{digital ? `Standard ${index + 1}` : `Review area ${index + 1}`}</span><input maxLength={250} value={standard.title} onChange={event => updateStandard(index, { title: event.target.value })} /></label>
             <div className="toolbar"><Button icon={ArrowUp} disabled={index === 0} aria-label={`Move ${standard.title} up`} onClick={() => moveStandard(index, -1)}>Up</Button><Button icon={ArrowDown} disabled={index === draft.standards.length - 1} aria-label={`Move ${standard.title} down`} onClick={() => moveStandard(index, 1)}>Down</Button><Button icon={Trash2} onClick={() => setDraft({ ...draft, standards: draft.standards.filter((_, i) => i !== index) })}>Remove area</Button></div></div>
@@ -147,19 +137,13 @@ export function AdminProcessReviews({ processKey, onDirtyChange }: Props) {
         <p className="muted-copy">These five themes organise action support. Each action also names a separate Skills Scan sub-area where its impact is intended.</p>
         <div className="form-grid form-grid-two">{themes.map((theme, index) => <label className="entry-field" key={theme.key}><span>Action theme {index + 1}</span><input maxLength={300} value={theme.title} onChange={event => setDraft({ ...draft, actionThemes: themes.map((item, position) => position === index ? { ...item, title: event.target.value } : item) })} /></label>)}</div>
       </CollapsibleSection> : null}
-      {ratingsVisible ? <CollapsibleSection storageKey={`process-admin-ratings-${processKey}`} title="College rating scale" count={draft.ratingOptions.length} defaultExpanded>
-        {!draft.ratingOptions.length ? <p className="record-context-note">No college rating scale is configured. Reviews can be saved as drafts; formal Digital submission remains unavailable until the agreed scale is entered.</p> : <p className="muted-copy">Enter the college’s agreed category labels. Categories are reported as counts; no score or average is assumed.</p>}
-        {draft.ratingOptions.map((option, index) => <div className="process-review-question-row" key={option.key}><label className="entry-field"><span>Rating category {index + 1}</span><input maxLength={250} value={option.label} onChange={event => setDraft({ ...draft, ratingOptions: draft.ratingOptions.map((item, i) => i === index ? { ...item, label: event.target.value } : item) })} /></label><Button icon={Trash2} aria-label={`Remove rating category ${index + 1}`} onClick={() => setDraft({ ...draft, ratingOptions: draft.ratingOptions.filter((_, i) => i !== index) })}>Remove</Button></div>)}
-        <Button icon={Plus} onClick={() => setDraft({ ...draft, ratingOptions: [...draft.ratingOptions, { key: reference("rating"), label: "" }] })}>Add rating category</Button>
+      {ratingsVisible ? <CollapsibleSection storageKey={`process-admin-ratings-${processKey}`} title="Shared Learning Walk rating scale" count={draft.ratingOptions.length} defaultExpanded>
+        <p className="muted-copy">Digital Learning Walks use the same managed practice rubric as Learning Walks. Its wording, guidance and colours are shown here for reference; this form does not maintain a separate scale. Saved reviews retain their original scale.</p>
+        {!draft.ratingOptions.length ? <p className="record-context-note">The shared Learning Walk scale is unavailable. Drafts can still be saved; formal submission becomes available when the shared rubric is configured.</p> : <ol className="process-review-shared-scale">{draft.ratingOptions.map(option => <li key={option.key}><span className="process-review-shared-scale-colour" style={{ backgroundColor: option.colorHex || "var(--teal)" }} aria-hidden="true" /><div><strong>{option.label}</strong>{option.guidanceText ? <p className="muted-copy">{option.guidanceText}</p> : null}</div></li>)}</ol>}
       </CollapsibleSection> : null}
       {labels.length ? <CollapsibleSection storageKey={`process-admin-labels-${processKey}`} title="Form wording" count={labels.length} defaultExpanded={Boolean(search)}>
         <p className="muted-copy">Change the displayed labels while preserving the same saved answer and reporting field.</p>
         <div className="form-grid form-grid-two">{labels.map(([key, label]) => <label className="entry-field" key={key}><span>{processReviewFieldLabel(configuration ?? draft, key)}</span><input maxLength={300} value={label} onChange={event => setDraft({ ...draft, fieldLabels: { ...draft.fieldLabels, [key]: event.target.value } })} /></label>)}</div>
-      </CollapsibleSection> : null}
-      {digital && settings.length ? <CollapsibleSection storageKey={`process-admin-defaults-${processKey}`} title="Evidence requirements" defaultExpanded>
-        <div className="form-grid form-grid-two">{settings.map(([key, value]) => value === "true" || value === "false"
-          ? <label className="process-review-setting-toggle" key={key}><span>{settingLabels[key] ?? processReviewCodeLabel(key.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span><input type="checkbox" role="switch" checked={value === "true"} onChange={event => setDraft({ ...draft, settings: { ...draft.settings, [key]: String(event.target.checked) } })} /></label>
-          : <label className="entry-field" key={key}><span>{settingLabels[key] ?? processReviewCodeLabel(key.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span><input maxLength={500} type={/Days|Minutes/.test(key) ? "number" : "text"} min={0} value={value} onChange={event => setDraft({ ...draft, settings: { ...draft.settings, [key]: event.target.value } })} /></label>)}</div>
       </CollapsibleSection> : null}
       {matches("access permissions participants head of faculty programme leaders action responsible people review owner") ? <section className="panel"><h3>Access & ownership</h3><p>The signed-in person creating the review is its recorded owner. Ownership is not entered on the form and does not change when another authorised person updates it.</p>{!digital ? <p>Review scope determines the Head of Faculty and programme leaders from Organisation structure. The creator and Head of Faculty stay in the participant list; programme leaders can be removed and additional participants can be added.</p> : null}<p className="muted-copy">Assign process permissions through Roles & permissions. Configuration access does not automatically grant access to every review.</p></section> : null}
     </fieldset>

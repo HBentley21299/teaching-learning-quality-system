@@ -8,13 +8,14 @@ public static class AccessBoundaryPolicy
         currentUser.HasPermission(PermissionKeys.FormsManage);
 
     public static bool CanManageVisibleAction(CurrentUser currentUser, bool actionIsVisible) =>
-        actionIsVisible && currentUser.HasPermission(PermissionKeys.ActionsManage);
+        CanManageVisibleAction(currentUser,actionIsVisible,false,false);
 
     public static bool CanManageVisibleAction(CurrentUser currentUser, bool actionIsVisible, string? sourceFormType) =>
-        actionIsVisible
-        && (currentUser.HasPermission(PermissionKeys.ActionsManage)
-            || (UcoTlaReviewAccessPolicy.CanManageAll(currentUser)
-                && string.Equals(sourceFormType, "uco_tla_review", StringComparison.OrdinalIgnoreCase)));
+        CanManageVisibleAction(currentUser,actionIsVisible,false,false);
+
+    public static bool CanManageVisibleAction(CurrentUser currentUser,bool actionIsVisible,bool isCreator,bool managesCreator) =>
+        actionIsVisible && currentUser.UserAccountId.HasValue
+        && (currentUser.IsAdministrator || currentUser.IsTeachingLearning || isCreator || managesCreator);
 
     public static bool IsTemplateCompatible(string recordType, string moduleKey)
     {

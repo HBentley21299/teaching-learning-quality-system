@@ -7,6 +7,19 @@ namespace TLQS.AccessControl.Tests;
 public sealed class DashboardExportScopeTests
 {
     [Fact]
+    public void Action_origin_report_counts_shared_actions_once_and_keeps_unlinked_history_distinct()
+    {
+        var linked=new DashboardActionSummary(Guid.NewGuid(),Guid.NewGuid(),"cpd_event",null,Guid.NewGuid(),"Primary owner","Reflection","Follow up","open",null,null,false,DateTimeOffset.UtcNow,null,null,false,
+            "Subject CPD",new DateOnly(2026,10,1),["Primary owner","Second responsible"]);
+        var legacy=linked with {Id=Guid.NewGuid(),SourceRecordId=null,SourceFormType="learning_walk",SourceRecordTitle=null,IsOverdue=true};
+        var report=DashboardExportScope.ActionOrigins([linked,linked,legacy,linked with {Id=Guid.NewGuid(),IsDeleted=true}]);
+        var cpd=Assert.Single(report.Items,item=>item.Title=="CPD");
+        Assert.Equal("1",Assert.Single(cpd.Fields,field=>field.Label=="Actions").Value);
+        var missing=Assert.Single(report.Items,item=>item.Title=="Origin not recorded");
+        Assert.Equal("1",Assert.Single(missing.Fields,field=>field.Label=="Overdue").Value);
+        Assert.Equal(2,report.Items.Count);
+    }
+    [Fact]
     public void OverviewReportsCompletionWithoutPoolingDifferentProcessScores()
     {
         var records = new[] { Record(Guid.NewGuid()), Record(Guid.NewGuid(), "completed"), Record(Guid.NewGuid(), "closed"), Record(Guid.NewGuid(), "draft") };

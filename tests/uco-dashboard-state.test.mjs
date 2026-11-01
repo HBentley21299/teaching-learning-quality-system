@@ -15,6 +15,10 @@ const listQuery = await loadService('listQuery'), { DashboardRequestCache } = aw
 const loadingSource = await readFile(new URL('../apps/web/src/components/LoadingState.tsx', import.meta.url), 'utf8');
 const loadingModule = { exports: {} };
 new Function('require', 'exports', 'module', ts.transpileModule(loadingSource, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(name => ({ 'react/jsx-runtime': jsxRuntime })[name], loadingModule.exports, loadingModule);
+const visualsSource = await readFile(new URL('../apps/web/src/components/DashboardVisuals.tsx', import.meta.url), 'utf8');
+const visualsModule = { exports: {} };
+new Function('require', 'exports', 'module', ts.transpileModule(visualsSource, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(name => name === 'react/jsx-runtime' ? jsxRuntime : {}, visualsModule.exports, visualsModule);
+const { DashboardMetricCard, DashboardProgressRing } = visualsModule.exports;
 
 const access = { canAccess: true, canManage: true, canExport: true };
 const review = (recordId, lecturerName, workflowStatus = 'completed', overrides = {}) => ({
@@ -54,14 +58,13 @@ async function component(initialProps, getData) {
   const Button = ({ icon, variant, children, ...rest }) => react.createElement('button', rest, children);
   const DashboardReportButton = () => react.createElement('button', null, 'Export UCO report');
   const DashboardDataExplorer = () => react.createElement('section', { 'aria-label': 'Saved UCO form data' });
-  const KpiStrip = ({ items }) => react.createElement('div', null, items.map(item => react.createElement('span', { key: item.label }, `${item.label}: ${item.value}`)));
   const modules = {
     react: hooks, 'react/jsx-runtime': jsxRuntime,
     'lucide-react': new Proxy({}, { get: () => () => null }),
     '../components/ExportButtons': { DashboardReportButton },
     '../components/DashboardDataExplorer': { DashboardDataExplorer },
     '../components/LoadingState': loadingModule.exports,
-    '../components/KpiStrip': { KpiStrip },
+    '../components/DashboardVisuals': { DashboardMetricCard, DashboardProgressRing },
     '../components/CollapsibleSection': { Pagination: () => null },
     '../services/listQuery': listQuery,
     '../services/dashboardRequestCache': { DashboardRequestCache },
@@ -94,7 +97,8 @@ async function component(initialProps, getData) {
     markup: () => renderToStaticMarkup(tree),
     exportButton: () => nodes().find(node => node.type === DashboardReportButton),
     explorer: () => nodes().find(node => node.type === DashboardDataExplorer),
-    kpis: () => nodes().find(node => node.type === KpiStrip)?.props.items,
+    kpis: () => { const items = nodes().filter(node => node.type === DashboardMetricCard).map(node => node.props); return items.length ? items : undefined; },
+    async clickMetric(label) { const node = nodes().find(node => node.type === DashboardMetricCard && node.props.label === label); assert.ok(node?.props.onSelect, `Missing selectable ${label}`); node.props.onSelect(); await settle(); },
     renderBeforeEffects(nextProps) { props = nextProps; render(); return renderToStaticMarkup(tree); },
     async rerender(nextProps) { props = nextProps; renderNeeded = true; await settle(); },
     async refresh() {
@@ -256,4 +260,34 @@ test('UCO scope changes hide the previous account before effects and cached same
   const immediate = page.renderBeforeEffects(props('2026/27', { accessScope: 'account-b' }));
   assert.doesNotMatch(immediate, /Scope Lecturer|Export UCO report/);
   await page.settle(); assert.equal(page.calls.length, 3);
+});
+
+test('UCO metric exploration focuses named reviews without changing annual coverage, source counts or export scope', async () => {
+  const page = await component(props('2026/27'), () => dashboard([
+    review('overdue', 'Lecturer with three overdue actions', 'completed', { overdueActionCount: 3, openActionCount: 3 }),
+    review('waiting', 'Lecturer awaiting discussion', 'awaiting_lecturer')
+  ]));
+  await page.clickMetric('Overdue actions');
+  assert.deepEqual(page.reviewIds(), ['overdue']);
+  assert.match(page.markup(), /Register focus: Reviews with overdue actions/);
+  assert.equal(page.kpis().find(item => item.label === 'Overdue actions').value, 3, 'the action count is not silently changed to a review count');
+  assert.equal(page.kpis().find(item => item.label === 'Annual coverage').value, '5/10 (50%)');
+  assert.equal(page.exportButton().props.filters.status, undefined);
+  await page.clickMetric('Overdue actions');
+  assert.equal(page.reviewIds().length, 2);
+  await page.clickMetric('In progress');
+  assert.deepEqual(page.reviewIds(), ['waiting']);
+  await page.rerender(props('2027/28'));
+  assert.equal(page.reviewIds().length, 2, 'local exploration resets when the academic-year scope changes');
+  assert.match(page.markup(), /Register focus: All reviews in report scope/);
+});
+
+test('UCO empty eligible cohort has unavailable coverage and section readiness instead of invented percentages', async () => {
+  const page = await component(props('2026/27'), () => dashboard([], { activeUcoStaff: 0, coveredUcoStaff: 0, coveragePercent: 0 }));
+  assert.equal(page.kpis().find(item => item.label === 'Annual coverage').value, '—');
+  assert.match(page.markup(), /coverage: not available/);
+  assert.match(page.markup(), /Sections marked<\/span><strong>—<\/strong>/);
+  const personal = await component(props('2026/27', { access: { canAccess: true, canManage: false, canExport: false } }), () => dashboard([]));
+  assert.match(personal.markup(), /complete: not available/);
+  assert.equal(personal.exportButton(), undefined);
 });

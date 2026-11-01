@@ -23,6 +23,7 @@ public sealed class BusinessWorkbookExportTests
     [InlineData("uco-tla-reviews", "Development Actions")]
     [InlineData("elevate-status", "Elevate Status Awards")]
     [InlineData("actions", "Extensions")]
+    [InlineData("digital_learning_walk", "Draft actions")]
     [InlineData("activate_growth_review", "Skills Scan")]
     [InlineData("activate_growth_review", "Review links")]
     [InlineData("activate_growth_review", "Previous review")]

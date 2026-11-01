@@ -168,8 +168,13 @@ public sealed partial class SqlFoundationDataStore
         if (process is "learning_walk" or "als_learning_walk")
             reportSections.Add(new("Learning walk delivery areas", "Each form counts once. Wording follows the latest saved label for each delivery-area key.", [new("Delivery area", [], records.GroupBy(row => row.DeliveryAreaKey ?? "__not_recorded__").OrderBy(group => group.Key).Select(group => new DashboardReportDistribution(group.OrderByDescending(row => row.CreatedAt).First().DeliveryAreaName ?? "Not recorded", group.Count())).ToArray())]));
         if (configuration?.ShowActions != false)
-            reportSections.Add(new("Actions", "Every action in the dashboard scope, with its owner, due date and completion state.", actions.Select(action => new DashboardReportItem(action.Title,
-                [new("Theme", action.ActionTheme), new("Owner", action.OwnerStaffName), new("Status", CultureInfo.InvariantCulture.TextInfo.ToTitleCase(DashboardExportScope.ActionState(action))), new("Due date", action.DueDate?.ToString("dd MMM yyyy")), new("Completed date", action.CompletedDate?.ToString("dd MMM yyyy"))])).ToArray()));
+            reportSections.Add(new("Actions", "Every action counts once in the dashboard scope, with its origin, responsible people and completion state.", actions.Select(action => new DashboardReportItem(action.Title,
+                [new("Origin", TLQS.Application.Workflows.ActionOriginLabels.ForAction(action.SourceRecordId,action.SourceFormType)),
+                 new("Source record", action.SourceRecordId.HasValue?action.SourceRecordTitle??"Linked source record":"Earlier action without a linked source record"),
+                 new("Source date",action.SourceRecordDate?.ToString("dd MMM yyyy")),new("Theme", action.ActionTheme),
+                 new("Responsible",action.ResponsibleStaffNames?.Count>0?string.Join("; ",action.ResponsibleStaffNames):action.OwnerStaffName),
+                 new("Status", CultureInfo.InvariantCulture.TextInfo.ToTitleCase(DashboardExportScope.ActionState(action))), new("Due date", action.DueDate?.ToString("dd MMM yyyy")), new("Completed date", action.CompletedDate?.ToString("dd MMM yyyy"))])).ToArray()));
+        if(process is "overview" or "actions")reportSections.Add(DashboardExportScope.ActionOrigins(actions));
 
         if (process == "overview")
             reportSections.Add(new("Process mix", "All processes contributing to this dashboard.", [new("Records by process", [], records.GroupBy(row => row.ProcessKey).OrderBy(group => group.Key).Select(group => new DashboardReportDistribution(group.Key, group.Count())).ToArray())]));
@@ -299,6 +304,15 @@ public static class DashboardExportScope
         }).ToArray();
     }
     public static bool Completed(string value) => new[] { "completed", "submitted", "closed" }.Contains(value.ToLowerInvariant());
+    public static DashboardReportSection ActionOrigins(IReadOnlyList<DashboardActionSummary> actions)
+    {
+        var groups=actions.Where(action=>!action.IsDeleted).DistinctBy(action=>action.Id)
+            .GroupBy(action=>TLQS.Application.Workflows.ActionOriginLabels.ForAction(action.SourceRecordId,action.SourceFormType))
+            .OrderByDescending(group=>group.Count()).ThenBy(group=>group.Key)
+            .Select(group=>new DashboardReportItem(group.Key,[new("Actions",group.Count().ToString()),
+                new("Open",group.Count(IsActiveAction).ToString()),new("Overdue",group.Count(action=>ActionState(action)=="overdue").ToString())])).ToArray();
+        return new("Action origins","Each central action counts once. Earlier actions without a recorded source remain a separate historical group.",groups);
+    }
     public static string ActionState(DashboardActionSummary action) => action.StatusKey=="cancelled" ? "cancelled"
         : action.CompletedDate.HasValue || action.StatusKey=="complete" ? "complete" : action.IsOverdue ? "overdue" : "open";
     private static bool IsActiveAction(DashboardActionSummary action) => ActionState(action) is "open" or "overdue";

@@ -37,12 +37,11 @@ public sealed partial class SqlFoundationDataStore
         if (!user.UserAccountId.HasValue || !user.StaffId.HasValue) return [];
         if (processKey is not null && !ProcessReviewRules.IsProcess(processKey)) throw new WorkflowValidationException("Select a supported review process.");
         var actions=await QueryAsync($"""
+            WITH {ActionAuthorityCteSql}
             SELECT a.id,r.id,p.process_key,r.title,r.academic_year_key,faculty.name,team.name,a.title,metadata.theme_key,
                 a.owner_staff_id,owner.display_name,a.due_date,metadata.support_required,metadata.success_evidence,
                 COALESCE(status.value_key,N'open'),metadata.impact_status,metadata.impact_evidence,metadata.impact_evidence_link,a.row_version,
-                CONVERT(bit,CASE WHEN a.owner_staff_id=@processStaffId OR r.owner_staff_id=@processStaffId OR @formsManage=1
-                    OR EXISTS(SELECT 1 FROM quality.process_review_action_assignees assignee WHERE assignee.action_id=a.id AND assignee.staff_id=@processStaffId)
-                    OR ((p.process_key=N'digital_learning_walk' AND @digitalManage=1 OR p.process_key=N'activate_growth_review' AND @activateManage=1) AND {ProcessScopeSql}) THEN 1 ELSE 0 END),a.action_theme,
+                CONVERT(bit,CASE WHEN {ActionCreatorAuthoritySql} THEN 1 ELSE 0 END),a.action_theme,
                 metadata.impact_area_key,metadata.action_detail,metadata.review_date,p.configuration_json
             FROM quality.process_review_actions metadata JOIN quality.actions a ON a.id=metadata.action_id
             JOIN quality.process_reviews p ON p.record_id=a.source_record_id JOIN core.records r ON r.id=p.record_id
@@ -51,7 +50,7 @@ public sealed partial class SqlFoundationDataStore
             WHERE a.archived_at IS NULL AND r.archived_at IS NULL AND (@key IS NULL OR p.process_key=@key)
                 AND (@year IS NULL OR r.academic_year_key=@year) AND (@record IS NULL OR r.id=@record) AND (@action IS NULL OR a.id=@action)
                 AND (@sourceRecords IS NULL OR r.id IN(SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@sourceRecords)))
-                AND (a.owner_staff_id=@processStaffId OR r.owner_staff_id=@processStaffId
+                AND ({ActionCreatorAuthoritySql} OR a.owner_staff_id=@processStaffId OR r.owner_staff_id=@processStaffId
                     OR EXISTS(SELECT 1 FROM quality.process_review_action_assignees assignee WHERE assignee.action_id=a.id AND assignee.staff_id=@processStaffId)
                     OR p.process_key=N'digital_learning_walk' AND (@digitalAll=1 OR @digitalScoped=1 AND {ProcessScopeSql})
                     OR p.process_key=N'activate_growth_review' AND (@activateAll=1 OR @activateScoped=1 AND {ProcessScopeSql}))
@@ -64,6 +63,7 @@ public sealed partial class SqlFoundationDataStore
                 command.Parameters.AddWithValue("@formsManage",user.IsAdministrator);
                 command.Parameters.AddWithValue("@digitalManage",user.HasPermission(ProcessReviewRules.Digital+".manage"));
                 command.Parameters.AddWithValue("@activateManage",user.HasPermission(ProcessReviewRules.Activate+".manage"));
+                AddActionAuthorityParameters(command,user);
             },reader=>new ProcessReviewAction(reader.GetGuid(0),reader.GetGuid(1),reader.GetString(2),reader.GetString(3),reader.GetString(4),
                 GetStringOrNull(reader,5),GetStringOrNull(reader,6),reader.GetString(7),reader.GetString(8),reader.GetGuid(9),reader.GetString(10),
                 DateOnly.FromDateTime(reader.GetDateTime(11)),reader.GetString(12),reader.GetString(13),reader.GetString(14),reader.GetString(15),
@@ -102,7 +102,10 @@ public sealed partial class SqlFoundationDataStore
         var review=await GetProcessReviewAsync(recordId,user,ct);
         var existing=actionId.HasValue?await GetProcessReviewActionAsync(actionId.Value,user,ct):null;
         if (actionId.HasValue && (existing is null || existing.RecordId!=recordId || !existing.CanEdit)) throw new UnauthorizedAccessException("You cannot edit this action.");
+        if (existing is not null && request.RowVersion!=existing.RowVersion) throw new DBConcurrencyException("This action changed. Reload it before saving your update.");
         if (!actionId.HasValue && review?.CanEdit!=true) throw new UnauthorizedAccessException("Only the review owner or an authorised coordinator can assign actions.");
+        if(!actionId.HasValue&&review?.ProcessKey==ProcessReviewRules.Digital&&review.Status=="draft")
+            throw new WorkflowValidationException("Add this action to the Digital Learning Walk draft. Actions are assigned when the walk is submitted.");
         ProcessReviewConfiguration configuration;
         if (review is not null) configuration=review.Configuration;
         else
@@ -121,16 +124,30 @@ public sealed partial class SqlFoundationDataStore
             request=request with{OwnerStaffId=primary,DueDate=request.ReviewDate!.Value,Title=title.Length>300?title[..300]:title,SupportRequired=""};
         }
         ProcessReviewRules.ValidateAction(request,configuration,existing?.DueDate);
+        if(request.ReviewRecordId.HasValue)
+        {
+            if(existing is null)throw new WorkflowValidationException("Create the action before recording its review outcome.");
+            if(string.IsNullOrWhiteSpace(request.ProgressNote))throw new WorkflowValidationException("Record the distance travelled and outcome of this action review.");
+            if(request.Progress=="extended"&&existing.Progress is "complete" or "cancelled")
+                throw new WorkflowValidationException("Reopen the action before extending its deadline.");
+            if(request.Progress=="extended"&&(existing.Progress!="extended"||request.DueDate!=existing.DueDate)&&request.DueDate<=existing.DueDate)
+                throw new WorkflowValidationException("Choose a review date after the action's current deadline when extending it.");
+        }
         if (existing is null && request.Progress!="open") throw new WorkflowValidationException("Assign a new action as open, then record its progress in a dated update.");
-        var canManageSource=review?.CanEdit==true;
+        var canManageSource=existing?.CanEdit==true||review?.CanEdit==true;
         if (!canManageSource && existing!.OwnerStaffId!=request.OwnerStaffId) throw new UnauthorizedAccessException("Only the review owner or coordinator can reassign this action.");
         if(!canManageSource&&modern&&!(existing!.ResponsibleStaffIds??[existing.OwnerStaffId]).Order().SequenceEqual(request.ResponsibleStaffIds!.Order()))
             throw new UnauthorizedAccessException("Only the review owner or coordinator can change responsible staff.");
-        if (existing is not null && request.RowVersion!=existing.RowVersion) throw new DBConcurrencyException("This action changed. Reload it before saving your update.");
         await using var connection=await OpenConnectionAsync(ct);
         await using var transaction=(SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable,ct);
+        if(existing is not null)await EnsureCanManageActionAsync(connection,transaction,existing.ActionId,user,ct);
+        await ValidateActionReviewContextAsync(connection,transaction,recordId,request.ReviewRecordId,configuration.ProcessKey,user,ct);
         if (existing is null || existing.OwnerStaffId!=request.OwnerStaffId)
+        {
             await ValidateProcessSampleStaffAsync(connection,transaction,[new ProcessReviewSample("action_owner","Action owner","staff",null,null,[request.OwnerStaffId],null,null)],user,ct);
+            if(configuration.ProcessKey==ProcessReviewRules.Digital)
+                await ValidateDigitalActionOwnersAsync(connection,transaction,[request.OwnerStaffId],user,ct);
+        }
         if(modern)
         {
             var additions=request.ResponsibleStaffIds!.Except(existing?.ResponsibleStaffIds??[]).ToArray();
@@ -187,7 +204,7 @@ public sealed partial class SqlFoundationDataStore
             }
         }
         var updateData=new ProcessReviewActionUpdate(Guid.Empty,DateTimeOffset.UtcNow,user.DisplayName,request.Progress,request.ProgressNote,request.EvidenceLink,
-            request.Barriers,request.NextStep,request.DueDate,request.DeadlineChangeReason,request.ImpactStatus,request.ImpactEvidence,request.ImpactEvidenceLink);
+            request.Barriers,request.NextStep,request.DueDate,request.DeadlineChangeReason,request.ImpactStatus,request.ImpactEvidence,request.ImpactEvidenceLink,request.ReviewRecordId);
         await using var history=new SqlCommand("""
             INSERT INTO quality.process_review_action_updates(action_id,updated_by_user_account_id,update_json) VALUES(@id,@user,@json);
             """,connection,transaction);
@@ -205,12 +222,38 @@ public sealed partial class SqlFoundationDataStore
         return await GetProcessReviewActionAsync(id,user,ct)??throw new InvalidOperationException("The saved action could not be read.");
     }
 
+    private async Task ValidateActionReviewContextAsync(SqlConnection connection,SqlTransaction transaction,Guid sourceRecordId,
+        Guid? reviewRecordId,string processKey,CurrentUser user,CancellationToken ct)
+    {
+        await using(var source=new SqlCommand("SELECT COUNT(*) FROM core.records WITH(HOLDLOCK) WHERE id=@id AND archived_at IS NULL;",connection,transaction))
+        {
+            source.Parameters.AddWithValue("@id",sourceRecordId);
+            if(Convert.ToInt32(await source.ExecuteScalarAsync(ct))==0)throw new UnauthorizedAccessException("The originating review is no longer available.");
+        }
+        if(!reviewRecordId.HasValue)return;
+        if(processKey!=ProcessReviewRules.Activate)throw new WorkflowValidationException("Only Activate+ actions can be reviewed in a linked growth review.");
+        var context=await GetProcessReviewAsync(reviewRecordId.Value,user,ct);
+        if(context?.ProcessKey!=ProcessReviewRules.Activate)throw new UnauthorizedAccessException("You cannot access this action-review meeting.");
+        await using var linked=new SqlCommand("""
+            WITH ancestry AS (
+                SELECT @review AS record_id,0 AS depth
+                UNION ALL SELECT link.parent_record_id,ancestry.depth+1
+                FROM ancestry JOIN quality.process_review_follow_ups link WITH(HOLDLOCK) ON link.child_record_id=ancestry.record_id
+                WHERE ancestry.depth<1000)
+            SELECT COUNT(*) FROM ancestry WHERE record_id=@source OPTION(MAXRECURSION 1000);
+            """,connection,transaction);
+        linked.Parameters.AddWithValue("@review",reviewRecordId.Value);linked.Parameters.AddWithValue("@source",sourceRecordId);
+        if(Convert.ToInt32(await linked.ExecuteScalarAsync(ct))==0)
+            throw new WorkflowValidationException("This action does not belong to this growth review or its previous reviews.");
+    }
+
     private static void AddProcessActionParameters(SqlCommand command,Guid id,Guid recordId,string processKey,string theme,SaveProcessReviewActionRequest request,CurrentUser user)
     {
         command.Parameters.AddWithValue("@id",id);command.Parameters.AddWithValue("@record",recordId);command.Parameters.AddWithValue("@key",processKey);
         command.Parameters.AddWithValue("@owner",request.OwnerStaffId);command.Parameters.AddWithValue("@theme",theme);command.Parameters.AddWithValue("@title",request.Title.Trim());
         command.Parameters.AddWithValue("@themeKey",request.ThemeKey);
-        command.Parameters.AddWithValue("@detail",processKey==ProcessReviewRules.Activate&&request.ResponsibleStaffIds is not null?request.Detail??"":$"Support required: {request.SupportRequired}\nSuccess evidence: {request.SuccessEvidence}");
+        command.Parameters.AddWithValue("@detail",processKey==ProcessReviewRules.Digital&&string.IsNullOrWhiteSpace(request.SupportRequired)&&string.IsNullOrWhiteSpace(request.SuccessEvidence)?request.Detail??request.Title:
+            processKey==ProcessReviewRules.Activate&&request.ResponsibleStaffIds is not null?request.Detail??"":$"Support required: {request.SupportRequired}\nSuccess evidence: {request.SuccessEvidence}");
         command.Parameters.AddWithValue("@support",request.SupportRequired??"");command.Parameters.AddWithValue("@success",request.SuccessEvidence);
         command.Parameters.AddWithValue("@due",request.DueDate.ToDateTime(TimeOnly.MinValue));command.Parameters.AddWithValue("@progress",request.Progress);
         command.Parameters.AddWithValue("@progressNote",ToDbValue(request.ProgressNote));command.Parameters.AddWithValue("@impact",request.ImpactStatus);

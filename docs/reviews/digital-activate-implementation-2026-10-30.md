@@ -1,6 +1,6 @@
 # Digital Learning Walks and Activate+ Growth Reviews
 
-Implemented the guided journeys approved on 30 October 2026. Contributors are not collected. The API derives the review owner from the signed-in creator and preserves that identity when another authorised person amends the record.
+Implemented the review processes approved on 30 October 2026. Contributors are not collected. The API derives the review owner from the signed-in creator and preserves that identity when another authorised person amends the record.
 
 ## Entry points
 
@@ -12,9 +12,15 @@ Implemented the guided journeys approved on 30 October 2026. Contributors are no
 
 ## Digital Learning Walks
 
-The initial framework contains the supplied 24 statements across six standards. It is independent of ordinary Learning Walks and QA Hub questions. A review concerns a team or area; each statement has one overall rating and can reference several evidence samples. Removing a sample clears its links without deleting the statement's other answers.
+The initial framework contains the supplied 24 statements across six standards. Its criteria are independent of ordinary Learning Walks and QA Hub questions. A review concerns a team or area; the reviewer chooses one or more of the six DLW categories. Every statement in each chosen category is included, with its own rating.
 
-The college rating scale remains unconfigured. Incomplete drafts, including partially entered sample information, can be saved. Formal submission requires the configured scale, all statement ratings and the configured evidence rules. Submitted reviews retain their original framework and continue to enforce submission requirements when corrected. An unrated draft can adopt a newly configured scale when its statement wording is unchanged.
+The Digital form follows the continuous Learning Walk layout: context and focus, selected criteria with rating cards, inline actions, and Cancel / Save draft / Submit controls. Date, faculty, team and delivery area use the familiar Learning Walk presentation. The Scope and context text box, Findings section and per-criterion Evidence and rationale boxes have been removed, along with their obsolete wording/requirement settings; earlier saved text remains available as read-only history and in reporting and exports. The record title is derived from its context; the creator remains recorded automatically. Team choices include the organisation's faculty child units as well as teams. New DLWs have no sample section or sample-link controls; earlier samples remain available as read-only history.
+
+Following Harry's later instruction, DLW uses the same managed 1–5 scale as Learning Walks: Emerging Practice, Developing Practice, Secure Practice, Strong Practice and Exceptional Practice. Wording, ordering, guidance and colours come from the shared practice rubric. DLW settings display this scale read only rather than maintaining a second copy. A review retains the scale snapshot used for its ratings; an unrated draft can safely adopt the shared scale when its criteria are unchanged.
+
+Incomplete drafts and actions can be saved. Formal submission requires at least one selected category and a rating for every statement in each selected category. It does not require rationale or samples. Statements in unselected categories do not count as missing or unrated. Earlier partial selections, sample data and original rating wording are preserved when historical records are viewed or amended; changing a category selection explicitly adopts complete category coverage.
+
+New inline actions have a theme, action text, owner and implementation date. They remain part of the review draft and become central assigned actions atomically on submission. Repeating a submission or correcting the review does not duplicate them. Existing live actions retain their identities and history. Saving a submitted review assigns any newly agreed actions as part of the same save. Reporting and exports distinguish unassigned draft actions from live actions, and preserve the selected criteria and named delivery area.
 
 ## Activate+
 
@@ -28,7 +34,7 @@ Actions have a configurable specialist theme, a Skills Scan impact area, action 
 
 ## Administration and access
 
-Form managers maintain versioned Digital frameworks, statement wording, rating labels and evidence requirements. Activate+ settings expose the six pillar and fifteen sub-area labels, five action-theme labels and meeting prompts independently. Historical records retain their configured wording and resolved participant/scope context. The new process permissions support creation, scoped viewing, all-process viewing and scoped management. Existing system administrators retain their administrative authority; delegated form configuration permission does not grant access to everyone else's review narrative.
+Form managers maintain versioned Digital frameworks and statement wording; the shared Learning Walk rating scale is displayed read only. Activate+ settings expose the six pillar and fifteen sub-area labels, five action-theme labels and meeting prompts independently. Historical records retain their configured wording and resolved participant/scope context. The new process permissions support creation, scoped viewing, all-process viewing and scoped management. Existing system administrators retain their administrative authority; delegated form configuration permission does not grant access to everyone else's review narrative.
 
 Assigning an action does not grant full review visibility. Permissions and organisation scope are checked on the server. Excel export also requires the existing `exports.create` capability.
 
@@ -75,3 +81,47 @@ Migration `096_activate_linked_follow_ups.sql` adds only the link table and its 
 Final linked-follow-up verification passed all 442 frontend and 641 backend checks, with no skips. The production frontend build and Release backend build passed. The existing main-bundle size advisory remains. Marker checks cover scores 1, 3 and 5, accessible meter values and reduced-motion styling. No remote repository change, publication or deployment was performed.
 
 Local services were restarted with `-SkipDatabase`. Read-only review-list, detail and action requests passed; both Excel workbooks were opened in memory and the Activate+ Review links sheet was verified. The web app returned HTTP 200, readiness reported the database connected, and application counts remained 2 staff, 5 records, 0 actions and 0 follow-up links. Real follow-up creation was tested only in disposable integration databases.
+
+## Digital Learning Walk form parity
+
+The later DLW amendment follows Harry's confirmed choice of relevant criteria. It replaces the five-step Digital workspace with the normal Learning Walk's continuous form, while retaining the six standards, twenty-four available DLW criteria and linked sample model. Unselected responses are excluded from the current record/reporting on save; the audit retains the previous and revised data so earlier evidence remains traceable. Legacy records and existing live actions remain readable.
+
+Draft actions stay within the DLW JSON until submission. The parent review, all promoted actions, histories, audit entries and assignment events commit together; a failed action promotion rolls back the whole submission. Stable draft action identities prevent duplicate assignments on retries. New native action creation is blocked on every Digital draft, including older records, and generic action creation cannot bypass the native workflow. Assigned owners are active Programme Leaders or above in scope. A new action's implementation date cannot precede the visit date on formal submission.
+
+No additional database migration is required. All 454 frontend checks and 646 backend checks passed with no skips. The production web build and backend Release compilation passed. Desktop and 390-pixel mobile previews used the actual component with dummy data and a clearly marked example scale; no page errors or mobile horizontal overflow were found. The actual DLW scale remains unconfigured. These preview checks did not alter authentication or create application records.
+
+After restarting with `-SkipDatabase`, read-only API checks confirmed the six standards and twenty-four available criteria, the unconfigured rating scale, updated wording settings, delivery-area choices, eligible owners and existing review reads. Digital and Activate+ Excel downloads were opened in memory and their detail sheets verified. Application counts remained 2 staff, 5 records and 0 actions. This amendment remains local on `codex/dlw-learning-walk-form`; no remote repository write or deployment was performed for it.
+
+## Shared Learning Walk scale and criterion notes
+
+Harry subsequently requested the same scale as Learning Walks and removal of the sample section. The shared managed practice-rubric query now supplies both processes. DLW copies the active 1–5 category keys, displayed wording, guidance and colours into each review's configuration snapshot. Current DLW settings display that source read only and cannot create a divergent scale. Historical rated records retain their pinned wording; an empty, unrated draft with unchanged criteria can adopt the shared scale when its first rating is saved or submitted.
+
+New DLWs have no sample editor, sample-link checklists, sample reporting counts or empty sample export sheets. Criterion evidence notes remain. Submission does not require samples, and earlier sample evidence is retained as read-only history where present. Old partial sample titles, incomplete URLs and unchanged historical staff references cannot block the notes-only form; structural sample-reference validation and validation of newly introduced staff references remain enforced. Unsafe earlier URLs are displayed as plain text.
+
+All 458 frontend checks and 647 backend checks passed, with no skips. The web production build and Release backend compilation passed, and the actual component was checked at desktop and mobile widths using the shared five-category scale. No database migration is required; integration submissions were exercised only in disposable databases. The earlier statements that the DLW scale was awaited describe the preceding implementation and are superseded by this amendment.
+
+Local services were restarted with database preparation skipped. Read-only live checks confirmed exact parity with the Learning Walk scale for all five category keys, labels, scores, guidance texts and colours, and confirmed criterion-notes mode with no sample requirement. The live DLW Excel contained Form entries, Responses, Actions, Updates and Export Information, with no empty sample sheets. Activate+ exports and web readiness also passed. Application counts remained 2 staff, 5 records and 0 actions; no remote push or deployment was performed.
+
+## Whole-category Digital Learning Walk focus
+
+Harry's 31 October amendment replaces individual statement checkboxes with one checkbox for each of the six DLW categories. Selecting a category includes every statement in its pinned framework; each included statement still receives its own Learning Walk scale rating and evidence notes. Multiple categories can be selected. Removing and reselecting a category retains the in-memory answers until save, while saved reporting excludes unselected statements.
+
+The API expands category keys to the complete statement set and rejects formal submission if any included statement remains unrated. Earlier clients creating a walk without category metadata have their represented categories expanded automatically, and a category-based saved walk cannot be downgraded to an earlier partial-selection payload. Existing pre-amendment records retain their exact saved criterion selections until a reviewer explicitly changes a category. Earlier partial categories have a mixed checkbox and clear explanation; viewing them does not add statements, ratings or unsaved changes.
+
+Dashboard and Excel category labels, counts and statement coverage come from the review's pinned framework. Exports include all statements in selected categories, including unanswered draft statements. Historical partial coverage is labelled explicitly, rather than presented as complete category coverage. Administration guidance explains that reviewers choose whole categories. No schema change or application-data rewrite is required.
+
+Verification passed all 468 frontend checks and 651 backend checks with no skips, plus the production web build and Release backend compilation. The actual component was exercised at desktop and 390-pixel mobile widths: six category selectors, complete child expansion, retained answers on deselect/reselect, and explicit legacy partial-selection adoption all passed without browser errors or horizontal overflow. The final guidance wording also passed its focused administration/editor checks. The existing main-bundle size advisory remains.
+
+Local services were restarted with `scripts/start-local.ps1 -SkipDatabase`. Read-only live checks confirmed six categories, twenty-four statements, five shared Learning Walk ratings, criterion-notes mode, the new category Excel headings, healthy Activate+ exports and HTTP 200 for the web app. The application database currently has no Digital reviews; persisted category selections, pinned-framework coverage, legacy round trips and submissions were verified in disposable integration databases. Application counts remained 2 staff, 5 records and 0 actions. No remote repository write or deployment was performed.
+
+Harry subsequently removed the Scope and context field from the DLW form. Its admin wording control and default label are removed too. DLW exports omit the obsolete column unless the exported records contain earlier nonblank answers; those answers remain intact. The focused checks passed 25 frontend and 61 backend tests, the web production build and Release backend compilation. The component preview confirmed the box is absent and category interactions still work at desktop and mobile widths.
+
+The following amendment also removes Findings (good practice and areas for development) from the DLW form, leaving criterion ratings and notes followed by Actions. Their admin wording controls and default labels are removed. Each retired export field appears only when earlier records contain a nonblank answer; saved data and Activate+ findings are retained. The updated existing checks passed 25 frontend and 61 backend tests with no skips, both builds passed, and the desktop/mobile component preview confirmed Findings is absent with category interactions intact.
+
+## Ratings-only criterion cards
+
+Harry subsequently removed Evidence and rationale beneath each DLW criterion. Current cards contain the shared 1–5 rating controls only. Ordinary and ALS Learning Walks were reviewed and already use rating-only focus cards, so their overall findings and actions were left unchanged.
+
+The obsolete admin rationale requirement is removed, and current DLW configuration reports `evidenceMode=ratings_only`, `requireRationale=false` and no sample requirement. Earlier pinned `requireRationale=true` settings no longer block submission. Each selected category still requires every child rating. Saved earlier rationale remains in a separate collapsed read-only history section, survives ordinary rating updates, and remains reportable/exportable under an explicit historical label. New exports omit empty rationale columns. Historical sample compatibility, the shared rubric, staged actions and Activate+ remain intact.
+
+Verification passed 39 focused form/admin/editor/report checks and 63 backend/export checks without skips, plus the reporting agent's focused helper/access checks. The production web build and Release backend compilation passed. Actual-component desktop and 390-pixel mobile previews confirmed no per-criterion textareas, retained historical notes, working category/rating controls and no overflow or browser errors. No migration was needed. Services were refreshed with database preparation skipped; read-only live settings and DLW/Activate+ Excel checks passed. Application counts remained 2 staff, 5 records and 0 actions, with no fixture loading, remote push or deployment.

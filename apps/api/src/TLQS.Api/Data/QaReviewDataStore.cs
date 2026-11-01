@@ -532,10 +532,11 @@ public sealed partial class SqlFoundationDataStore
         var wasSubmitted = false;
         var ownerAccountId = user.UserAccountId.Value;
         var version = 1;
+        string? previousCommentary = null;
         if (evidenceId.HasValue)
         {
             await using var read = new SqlCommand(
-                "SELECT status, created_by_user_account_id, version_number, review_activity_id FROM qa.evidence_submissions WITH (UPDLOCK, ROWLOCK) WHERE record_id = @id AND review_id = @reviewId AND removed_at IS NULL;",
+                "SELECT status, created_by_user_account_id, version_number, review_activity_id, written_commentary FROM qa.evidence_submissions WITH (UPDLOCK, ROWLOCK) WHERE record_id = @id AND review_id = @reviewId AND removed_at IS NULL;",
                 connection, transaction);
             read.Parameters.AddWithValue("@id", id);
             read.Parameters.AddWithValue("@reviewId", reviewId);
@@ -544,6 +545,7 @@ public sealed partial class SqlFoundationDataStore
             wasSubmitted = reader.GetString(0) == "submitted";
             ownerAccountId = reader.GetGuid(1);
             version = reader.GetInt32(2);
+            previousCommentary = GetStringOrNull(reader,4);
             if (!formAccess.GetValueOrDefault(reader.GetGuid(3)))
                 throw new UnauthorizedAccessException("You no longer have access to edit this QA form. Ask a QA administrator to check its staff whitelist.");
             await reader.DisposeAsync();
@@ -553,6 +555,11 @@ public sealed partial class SqlFoundationDataStore
                 throw new WorkflowValidationException("Add an audit reason for changing submitted evidence.");
             if (request.RowVersion is null) throw new WorkflowValidationException("The evidence row version is required.");
         }
+
+        // Null is an older client's omitted field; clearing the new box sends an explicit empty string.
+        if(evidenceId.HasValue&&request.WrittenCommentary is null)
+            request=request with{WrittenCommentary=previousCommentary};
+        QaReviewPolicy.ValidateWrittenCommentary(access!.WrittenCommentaryEnabled,request.WrittenCommentary,previousCommentary);
 
         var deliveryArea = await ResolveQaEvidenceDeliveryAreaAsync(connection, transaction,
             evidenceId, request.DeliveryAreaKey, submit && !wasSubmitted, cancellationToken);
@@ -576,14 +583,14 @@ public sealed partial class SqlFoundationDataStore
                     course_programme, course_level, delivery_area_key, delivery_area_name_snapshot,
                     subject_staff_id, reviewer_staff_id, activity_at, sample_size,
                     contextual_notes, evidence_links_json, key_strengths, areas_for_improvement,
-                    recommended_actions, additional_context, status, submitted_at, submitted_by_user_account_id,
+                    recommended_actions, additional_context, written_commentary, status, submitted_at, submitted_by_user_account_id,
                     version_number, created_by_user_account_id, updated_by_user_account_id
                 )
                 SELECT @id, @reviewId, @activity, team.parent_org_unit_id, team.id,
                        faculty.code, faculty.name, team.code, team.name,
                        @programme, @level, @deliveryAreaKey, @deliveryAreaName,
                        @subject, @reviewer, @activityAt, @sampleSize,
-                       @context, @links, @strengths, @improvements, @actions, @additional,
+                       @context, @links, @strengths, @improvements, @actions, @additional, @commentary,
                        @status, CASE WHEN @submit = 1 THEN sysutcdatetime() END,
                        CASE WHEN @submit = 1 THEN @user END, @version, @user, @user
                 FROM org.org_units team JOIN org.org_units faculty ON faculty.id = team.parent_org_unit_id
@@ -606,7 +613,7 @@ public sealed partial class SqlFoundationDataStore
                     subject_staff_id = @subject,
                     activity_at = @activityAt, sample_size = @sampleSize, contextual_notes = @context,
                     evidence_links_json = @links, key_strengths = @strengths, areas_for_improvement = @improvements,
-                    recommended_actions = @actions, additional_context = @additional,
+                    recommended_actions = @actions, additional_context = @additional, written_commentary = @commentary,
                     status = CASE WHEN @submit = 1 THEN N'submitted' ELSE evidence.status END,
                     submitted_at = CASE WHEN @submit = 1 THEN sysutcdatetime() ELSE evidence.submitted_at END,
                     submitted_by_user_account_id = CASE WHEN @submit = 1 THEN @user ELSE evidence.submitted_by_user_account_id END,
@@ -666,7 +673,8 @@ public sealed partial class SqlFoundationDataStore
         await WriteAuditWithReasonAsync(connection, transaction, user.UserAccountId, id, "qa_evidence", id,
             submit ? "submitted" : evidenceId.HasValue ? "updated" : "created",
             submit ? "Submitted QA evidence." : evidenceId.HasValue ? "Updated QA evidence." : "Created QA evidence draft.",
-            null, JsonSerializer.Serialize(new { reviewId, request.ReviewActivityId, teamOrgUnitIds = teamIds, version = nextVersion }),
+            evidenceId.HasValue?JsonSerializer.Serialize(new{WrittenCommentary=previousCommentary}):null,
+            JsonSerializer.Serialize(new { reviewId, request.ReviewActivityId, teamOrgUnitIds = teamIds, version = nextVersion, request.WrittenCommentary }),
             request.CorrectionReason, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return await GetQaEvidenceAsync(id, user, cancellationToken)
@@ -687,7 +695,8 @@ public sealed partial class SqlFoundationDataStore
                    evidence.areas_for_improvement, evidence.recommended_actions, evidence.additional_context,
                    evidence.subject_staff_id, evidence.created_by_user_account_id, review.status,
                    CAST(CASE WHEN evidence.created_by_user_account_id = @userAccountId THEN 1 ELSE 0 END AS bit),
-                   evidence.delivery_area_key, evidence.delivery_area_name_snapshot
+                   evidence.delivery_area_key, evidence.delivery_area_name_snapshot,
+                   evidence.written_commentary, activity.written_commentary_enabled
             FROM qa.evidence_submissions evidence
             JOIN qa.reviews review ON review.record_id = evidence.review_id
             JOIN qa.review_activities activity ON activity.id = evidence.review_activity_id
@@ -728,7 +737,8 @@ public sealed partial class SqlFoundationDataStore
                     QaReviewPolicy.IsEvidenceWritable(reader.GetString(27)) && (reader.GetBoolean(28) || QaReviewPolicy.CanCorrect(user)),
                     QaReviewPolicy.CanRemove(user), GetStringOrNull(reader, 29), GetStringOrNull(reader, 30)),
                 GetStringOrNull(reader, 19), GetStringOrNull(reader, 20), GetStringOrNull(reader, 21), GetStringOrNull(reader, 22),
-                GetStringOrNull(reader, 23), GetStringOrNull(reader, 24), GetGuidOrNull(reader, 25)),
+                GetStringOrNull(reader, 23), GetStringOrNull(reader, 24), GetGuidOrNull(reader, 25),
+                GetStringOrNull(reader,31),reader.GetBoolean(32)),
             cancellationToken);
         var row = rows.SingleOrDefault();
         if (row is null) return null;
@@ -794,7 +804,7 @@ public sealed partial class SqlFoundationDataStore
         return new QaEvidenceDetail(row.Evidence, evidenceTeams.Select(team => team.Id).ToArray(), evidenceTeams.Select(team => team.Name).ToArray(),
             row.ContextualNotes, ParseStringArray(row.EvidenceLinksJson),
             row.KeyStrengths, row.AreasForImprovement, row.RecommendedActions, row.AdditionalContext,
-            row.SubjectStaffId, responses, revisions);
+            row.SubjectStaffId, responses, revisions,row.WrittenCommentary,row.WrittenCommentaryEnabled);
     }
 
     public async Task RemoveQaEvidenceAsync(
@@ -1067,7 +1077,7 @@ public sealed partial class SqlFoundationDataStore
         var activities = await QueryAsync(
             """
             SELECT activity.id, activity.activity_type_id, type.activity_key, type.name,
-                   activity.activity_template_id, template.name, activity.display_order
+                   activity.activity_template_id, template.name, activity.display_order, activity.written_commentary_enabled
             FROM qa.review_activities activity
             JOIN qa.activity_types type ON type.id = activity.activity_type_id
             JOIN qa.activity_templates template ON template.id = activity.activity_template_id
@@ -1075,7 +1085,7 @@ public sealed partial class SqlFoundationDataStore
             """,
             command => command.Parameters.AddWithValue("@id", reviewId),
             reader => new QaReviewActivityRow(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3),
-                reader.GetGuid(4), reader.GetString(5), reader.GetInt32(6)), cancellationToken);
+                reader.GetGuid(4), reader.GetString(5), reader.GetInt32(6),reader.GetBoolean(7)), cancellationToken);
         var result = new List<QaReviewActivitySummary>();
         foreach (var activity in activities)
         {
@@ -1120,7 +1130,8 @@ public sealed partial class SqlFoundationDataStore
                     command => command.Parameters.AddWithValue("@id", activity.Id), MapQaQuestion, cancellationToken);
             }
             result.Add(new QaReviewActivitySummary(activity.Id, activity.ActivityTypeId, activity.ActivityKey,
-                activity.Name, activity.TemplateId, activity.TemplateName, activity.DisplayOrder, questions));
+                activity.Name, activity.TemplateId, activity.TemplateName, activity.DisplayOrder, questions,
+                WrittenCommentaryEnabled:activity.WrittenCommentaryEnabled));
         }
         return result;
     }
@@ -1423,7 +1434,7 @@ public sealed partial class SqlFoundationDataStore
     private static QaPublishedReviewStructure ToQaPublishedStructure(SaveQaReviewRequest request) => new(
         request.AcademicYear.Trim(), NormalizeQaTag(request.QuestionTag), request.PlannedOpenDate,
         request.TeamOrgUnitIds, request.Activities.Select(activity => new QaPublishedReviewActivity(
-            activity.ActivityTypeId, activity.TemplateId, activity.QuestionIds)).ToArray());
+            activity.ActivityTypeId, activity.TemplateId, activity.QuestionIds,activity.WrittenCommentaryEnabled)).ToArray());
 
     private static async Task<SaveQaReviewRequest> ReadQaReviewConfigurationAsync(
         SqlConnection connection, SqlTransaction transaction, Guid reviewId, bool frozen, CancellationToken cancellationToken)
@@ -1459,7 +1470,8 @@ public sealed partial class SqlFoundationDataStore
         await using (var command = new SqlCommand(
             """
             SELECT activity.activity_type_id, activity.activity_template_id,
-                   CASE WHEN @frozen = 1 THEN snapshot.id ELSE selection.question_id END
+                   CASE WHEN @frozen = 1 THEN snapshot.id ELSE selection.question_id END,
+                   activity.written_commentary_enabled
             FROM qa.review_activities activity
             LEFT JOIN qa.review_questions snapshot ON snapshot.review_activity_id = activity.id AND @frozen = 1
             LEFT JOIN qa.review_question_selections selection ON selection.review_activity_id = activity.id AND @frozen = 0
@@ -1474,7 +1486,7 @@ public sealed partial class SqlFoundationDataStore
             {
                 var typeId = reader.GetGuid(0);
                 if (activities.Count == 0 || activities[^1].ActivityTypeId != typeId)
-                    activities.Add(new SaveQaReviewActivityRequest(typeId, reader.GetGuid(1), new List<Guid>()));
+                    activities.Add(new SaveQaReviewActivityRequest(typeId, reader.GetGuid(1), new List<Guid>(),reader.GetBoolean(3)));
                 if (!reader.IsDBNull(2)) ((List<Guid>)activities[^1].QuestionIds).Add(reader.GetGuid(2));
             }
         }
@@ -1523,8 +1535,8 @@ public sealed partial class SqlFoundationDataStore
             var activityId = Guid.NewGuid();
             await using var activity = new SqlCommand(
                 """
-                INSERT INTO qa.review_activities (id, review_id, activity_type_id, activity_template_id, display_order)
-                SELECT @id, @review, @type, template.id, @order
+                INSERT INTO qa.review_activities (id, review_id, activity_type_id, activity_template_id, display_order, written_commentary_enabled)
+                SELECT @id, @review, @type, template.id, @order, @commentaryEnabled
                 FROM qa.activity_templates template
                 WHERE template.id = @template AND template.activity_type_id = @type AND template.is_active = 1 AND template.archived_at IS NULL;
                 """, connection, transaction);
@@ -1533,6 +1545,7 @@ public sealed partial class SqlFoundationDataStore
             activity.Parameters.AddWithValue("@type", activityRequest.ActivityTypeId);
             activity.Parameters.AddWithValue("@template", activityRequest.TemplateId);
             activity.Parameters.AddWithValue("@order", order++);
+            activity.Parameters.AddWithValue("@commentaryEnabled",activityRequest.WrittenCommentaryEnabled);
             if (await activity.ExecuteNonQueryAsync(cancellationToken) != 1)
                 throw new WorkflowValidationException("Select a current template for every activity.");
 
@@ -1618,7 +1631,7 @@ public sealed partial class SqlFoundationDataStore
                          SELECT 1 FROM qa.review_contributors contributor WHERE contributor.review_id = review.record_id
                            AND contributor.staff_id = @staffId AND contributor.is_active = 1 AND contributor.active_to IS NULL
                            AND (contributor.assigned_org_unit_id IS NULL OR contributor.assigned_org_unit_id IN (scope.org_unit_id, scope.parent_org_unit_id))) THEN 1
-                     ELSE 0 END
+                     ELSE 0 END, activity.written_commentary_enabled
             FROM qa.reviews review
             JOIN qa.review_scopes scope ON scope.review_id = review.record_id AND scope.org_unit_id = @teamId
             JOIN qa.review_activities activity ON activity.review_id = review.record_id AND activity.id = @activityId
@@ -1635,7 +1648,7 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@submitAssigned", false);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) throw new WorkflowValidationException("The review or selected team was not found.");
-        return new QaEvidenceAccess(reader.GetString(0), GetStringOrNull(reader, 1) ?? "QA activity", reader.GetInt32(2) == 1);
+        return new QaEvidenceAccess(reader.GetString(0), GetStringOrNull(reader, 1) ?? "QA activity", reader.GetInt32(2) == 1,reader.GetBoolean(3));
     }
 
     private static async Task<IReadOnlyList<QaEvidenceQuestion>> ReadQaEvidenceQuestionsAsync(
@@ -1851,6 +1864,7 @@ public sealed partial class SqlFoundationDataStore
         command.Parameters.AddWithValue("@improvements", ToDbValue(request.AreasForImprovement));
         command.Parameters.AddWithValue("@actions", ToDbValue(request.RecommendedActions));
         command.Parameters.AddWithValue("@additional", ToDbValue(request.AdditionalContext));
+        command.Parameters.AddWithValue("@commentary",ToDbValue(request.WrittenCommentary));
         command.Parameters.AddWithValue("@status", submit ? "submitted" : "draft");
         command.Parameters.AddWithValue("@submit", submit);
         command.Parameters.AddWithValue("@version", version);
@@ -1922,9 +1936,10 @@ public sealed partial class SqlFoundationDataStore
         Guid ActivityTypeId, string ActivityKey, string ActivityName, string? ActivityDescription,
         int DisplayOrder, bool ActivityActive, Guid? TemplateId, string? TemplateKey, string? TemplateName,
         string? TemplateDescription, bool? TemplateActive, byte[]? TemplateRowVersion, int QuestionCount);
-    private sealed record QaReviewActivityRow(Guid Id, Guid ActivityTypeId, string ActivityKey, string Name, Guid TemplateId, string TemplateName, int DisplayOrder);
+    private sealed record QaReviewActivityRow(Guid Id, Guid ActivityTypeId, string ActivityKey, string Name, Guid TemplateId, string TemplateName, int DisplayOrder,bool WrittenCommentaryEnabled);
     private sealed record QaEvidenceDetailRow(QaEvidenceSummary Evidence, string? ContextualNotes, string? EvidenceLinksJson,
-        string? KeyStrengths, string? AreasForImprovement, string? RecommendedActions, string? AdditionalContext, Guid? SubjectStaffId);
+        string? KeyStrengths, string? AreasForImprovement, string? RecommendedActions, string? AdditionalContext, Guid? SubjectStaffId,
+        string? WrittenCommentary,bool WrittenCommentaryEnabled);
     private sealed record QaEvidenceQuestion(Guid Id, string QuestionText, bool IsRequired, bool AllowsNotApplicable, bool CommentRequiredAtExpected, bool AllowsNotSeen, string? SavedOutcome);
-    private sealed record QaEvidenceAccess(string ReviewStatus, string ActivityName, bool CanSubmit);
+    private sealed record QaEvidenceAccess(string ReviewStatus, string ActivityName, bool CanSubmit,bool WrittenCommentaryEnabled);
 }

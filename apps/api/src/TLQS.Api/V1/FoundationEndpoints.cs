@@ -669,6 +669,11 @@ public static partial class FoundationEndpoints
                 return Results.Forbid();
             }
 
+            if (!request.SourceRecordId.HasValue || request.SourceRecordId == Guid.Empty)
+            {
+                return Results.BadRequest(new { Message = "Create actions from their originating form or review. A source record is required." });
+            }
+
             if (string.IsNullOrWhiteSpace(request.Title))
             {
                 return Results.BadRequest(new { Message = "An action title is required." });
@@ -2089,7 +2094,9 @@ public sealed record ActionSummary(
     Guid? ParentActionId,
     string AcademicYear,
     IReadOnlyList<Guid>? ResponsibleStaffIds=null,
-    IReadOnlyList<string>? ResponsibleStaffNames=null)
+    IReadOnlyList<string>? ResponsibleStaffNames=null,
+    bool SourceWorkflowLocked=false,
+    bool CanManageAction=false)
 {
     public bool IsDeleted => DeletedAt.HasValue;
 }

@@ -1,7 +1,7 @@
 export type ProcessReviewKey = "digital_learning_walk" | "activate_growth_review";
 export type ProcessReviewStatement = { key: string; text: string };
 export type ProcessReviewStandard = { key: string; title: string; statements: ProcessReviewStatement[] };
-export type ProcessReviewRatingOption = { key: string; label: string };
+export type ProcessReviewRatingOption = { key: string; label: string; score?: number | null; guidanceText?: string | null; colorHex?: string | null };
 export type ProcessReviewSkillSubArea = { key: string; title: string };
 export type ProcessReviewSkillsPillar = { key: string; title: string; subAreas: ProcessReviewSkillSubArea[] };
 export type ProcessReviewActionTheme = { key: string; title: string };
@@ -42,13 +42,22 @@ export type ProcessReviewSample = {
 export type ProcessReviewResponse = {
   statementKey: string; ratingKey?: string | null; sampleIds: string[]; rationale?: string | null;
 };
+export type DigitalLearningWalkDraftAction = {
+  id: string; themeKey: string; title: string; ownerStaffId?: string | null; dueDate?: string | null;
+};
+export type DigitalLearningWalkData = {
+  selectedStatementKeys: string[]; draftActions: DigitalLearningWalkDraftAction[];
+  selectedStandardKeys?: string[] | null;
+};
 export type ProcessReviewData = {
   fields: Record<string, string>; samples: ProcessReviewSample[]; responses: ProcessReviewResponse[]; activate?: ActivateGrowthReviewData | null;
+  digital?: DigitalLearningWalkData | null;
 };
 export type SaveProcessReviewRequest = {
   title: string; academicYear: string; facultyOrgUnitId?: string | null; teamOrgUnitId?: string | null;
   recordDate?: string | null; data: ProcessReviewData; submit: boolean; rowVersion?: string | null;
 };
+export type ProcessReviewSelectedStandard = { key: string; title: string; statementCount: number; selectedStatementCount: number };
 export type ProcessReviewSummary = {
   recordId: string; processKey: ProcessReviewKey; title: string; academicYear: string;
   facultyOrgUnitId?: string | null; facultyName?: string | null; teamOrgUnitId?: string | null; teamName?: string | null;
@@ -58,6 +67,7 @@ export type ProcessReviewSummary = {
   selectedSubTeams?: ProcessReviewOrgScope[] | null; participants?: ProcessReviewParticipant[] | null;
   skillsScanScores?: Record<string, number | null> | null; followUpDate?: string | null; allSubTeams?: boolean | null;
   isFollowUp?: boolean; parentReview?: ProcessReviewLink | null; followUpReviews?: ProcessReviewLink[] | null;
+  selectedStandardKeys?: string[] | null; selectedStandards?: ProcessReviewSelectedStandard[] | null;
 };
 export type ProcessReviewSnapshot = {
   snapshotId: string; asOfDate: string; recordedAt: string; recordedByName: string;
@@ -68,6 +78,7 @@ export type ProcessReviewActionUpdate = {
   progressNote?: string | null; evidenceLink?: string | null; barriers?: string | null;
   nextStep?: string | null; dueDate: string; deadlineChangeReason?: string | null;
   impactStatus: string; impactEvidence?: string | null; impactEvidenceLink?: string | null;
+  reviewRecordId?: string | null;
 };
 export type ProcessReviewAction = {
   actionId: string; recordId: string; processKey: ProcessReviewKey; recordTitle: string; academicYear: string;
@@ -85,6 +96,7 @@ export type SaveProcessReviewActionRequest = {
   barriers?: string | null; nextStep?: string | null; impactStatus: string; impactEvidence?: string | null;
   impactEvidenceLink?: string | null; deadlineChangeReason?: string | null; rowVersion?: string | null;
   responsibleStaffIds?: string[] | null; impactAreaKey?: string | null; detail?: string | null; reviewDate?: string | null;
+  reviewRecordId?: string | null;
 };
 export type ProcessReviewDetail = Omit<ProcessReviewSummary, "sampleCount" | "ratedStatementCount" | "statementCount" | "openActionCount" | "snapshotAsOf"> & {
   configuration: ProcessReviewConfiguration; data: ProcessReviewData; snapshots: ProcessReviewSnapshot[];
@@ -108,12 +120,34 @@ export function emptyProcessReviewRequest(academicYear: string): SaveProcessRevi
   return { title: "", academicYear, recordDate: processReviewDate(), data: { fields: {}, samples: [], responses: [] }, submit: false };
 }
 
+/** Keep automatic context titles current without replacing a previously named review. */
+export function digitalLearningWalkTitle(request: SaveProcessReviewRequest, detail: ProcessReviewDetail | null, units: readonly { id: string; name: string }[]) {
+  const savedAutomaticTitle = detail ? `Digital Learning Walk · ${detail.teamName || detail.facultyName || "Team / area"} · ${detail.recordDate || detail.academicYear}` : null;
+  if (request.title.trim() && request.title !== savedAutomaticTitle) return request.title;
+  const unitId = request.teamOrgUnitId || request.facultyOrgUnitId;
+  const savedName = request.teamOrgUnitId
+    ? request.teamOrgUnitId === detail?.teamOrgUnitId ? detail?.teamName : null
+    : request.facultyOrgUnitId === detail?.facultyOrgUnitId ? detail?.facultyName : null;
+  const name = units.find(unit => unit.id === unitId)?.name || savedName || "Team / area";
+  return `Digital Learning Walk · ${name} · ${request.recordDate || request.academicYear}`;
+}
+
 export function processReviewRequest(detail: ProcessReviewDetail): SaveProcessReviewRequest {
   return {
     title: detail.title, academicYear: detail.academicYear, facultyOrgUnitId: detail.facultyOrgUnitId,
     teamOrgUnitId: detail.teamOrgUnitId, recordDate: detail.recordDate,
     data: structuredClone(detail.data), rowVersion: detail.rowVersion, submit: false
   };
+}
+
+/** An unrated draft can adopt the shared scale when its criterion wording is unchanged. */
+export function digitalLearningWalkConfiguration(detail: ProcessReviewDetail | null, current: ProcessReviewConfiguration | null) {
+  if (!detail) return current;
+  const pinned = detail.configuration;
+  if (detail.status === "draft" && !pinned.ratingOptions.length && current?.ratingOptions.length
+    && !detail.data.responses.some(response => response.ratingKey)
+    && JSON.stringify(pinned.standards.flatMap(item => item.statements)) === JSON.stringify(current.standards.flatMap(item => item.statements))) return current;
+  return pinned;
 }
 
 /** Compare editable content; refreshed concurrency tokens do not create false dirty states. */

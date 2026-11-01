@@ -110,6 +110,16 @@ public sealed class QaPublishedReviewTests
         });
     }
 
+    [Fact]
+    public void PublishedCommentarySettingIsFrozenAlongsideTheQuestions()
+    {
+        var existing=Structure();
+        var requested=existing with{Activities=[existing.Activities[0] with{WrittenCommentaryEnabled=false}]};
+        Assert.Contains("commentary settings",Assert.Throws<WorkflowValidationException>(()=>
+            QaReviewPolicy.ValidatePublishedStructure(existing,requested)).Message);
+        QaReviewPolicy.ValidatePublishedStructure(requested,requested);
+    }
+
     private static QaPublishedReviewStructure Structure() => new(
         "2026/27", "general", new DateOnly(2026, 9, 1), [Guid.NewGuid(), Guid.NewGuid()],
         [new QaPublishedReviewActivity(Guid.NewGuid(), Guid.NewGuid(), [Guid.NewGuid(), Guid.NewGuid()])]);

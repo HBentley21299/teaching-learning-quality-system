@@ -769,17 +769,20 @@ public sealed partial class SqlFoundationDataStore
     private async Task<IReadOnlyList<ExportSheet>> BuildActionExportAsync(
         SqlConnection connection, ExportFilter filter, CurrentUser user, CancellationToken cancellationToken)
     {
+        var yearBounds=filter.DashboardActionIds is null&&!string.IsNullOrWhiteSpace(filter.AcademicYear)
+            ? await GetAcademicYearBoundsAsync(filter.AcademicYear,cancellationToken):((DateOnly StartDate,DateOnly EndDate)?)null;
         var actions = await ReadExportSheetAsync(connection, "Actions", $"""
             WITH visible_staff AS (SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)),
                  visible_org AS (SELECT org_unit_id FROM org.fn_visible_org_units(@currentUserAccountId))
             SELECT TOP (@exportTake)
                    CONVERT(nvarchar(36), action_row.id) AS [Action ID], action_row.title AS [Action],
                    action_row.detail AS [Description], subject.display_name AS [Staff member],
-                   owner.display_name AS [Owner], COALESCE(action_row.source_form_type, record_row.record_type, N'Standalone') AS [Source],
+                   owner.display_name AS [Owner], COALESCE(NULLIF(action_row.source_form_type,N''), record_row.record_type) AS [Source],
                    action_row.action_theme AS [Action theme], action_row.review_date AS [Review date],
                    action_row.intended_evidence AS [Intended evidence], action_row.intended_impact AS [Intended impact],
                    action_row.progress_status AS [Progress status],
-                   record_row.title AS [Source record], action_row.original_due_date AS [Original due date],
+                   record_row.title AS [Source record], CONVERT(nvarchar(36),action_row.source_record_id) AS [Source record ID],
+                   record_row.record_date AS [Source date], action_row.original_due_date AS [Original due date],
                    action_row.revised_due_date AS [Revised due date], action_row.due_date AS [Due date],
                    COALESCE(status_value.display_name, status_value.value_key, N'Open') AS [Status],
                    priority_value.display_name AS [Priority], action_row.completed_date AS [Completed date],
@@ -811,7 +814,8 @@ public sealed partial class SqlFoundationDataStore
                   OR (action_row.visibility_setting = N'source_editors' AND (action_row.created_by_user_account_id = @currentUserAccountId OR record_row.owner_staff_id = @currentStaffId))
                   OR (action_row.visibility_setting = N'management_only' AND @canViewScopedActivities = 1)
               )
-              AND (@academicYear IS NULL OR record_row.academic_year_key = @academicYear)
+              AND (@academicYear IS NULL OR record_row.academic_year_key = @academicYear
+                   OR (record_row.id IS NULL AND action_row.created_at >= @actionYearStart AND action_row.created_at < @actionYearEnd))
               AND ((@facultyCode IS NULL AND @teamCode IS NULL)
                    OR faculty.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@facultyCode, N','))
                    OR team.code IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@teamCode, N',')))
@@ -821,7 +825,13 @@ public sealed partial class SqlFoundationDataStore
               AND (@status IS NULL OR status_value.value_key = @status)
               AND (@recordType IS NULL OR COALESCE(action_row.source_form_type, record_row.record_type) = @recordType)
             ORDER BY action_row.due_date, action_row.created_at DESC;
-            """, command => AddExportParameters(command, user, filter), cancellationToken);
+            """, command =>
+            {
+                AddExportParameters(command,user,filter);
+                AddNullableDate(command,"@actionYearStart",yearBounds?.StartDate);
+                AddNullableDate(command,"@actionYearEnd",yearBounds?.EndDate.AddDays(1));
+            }, cancellationToken);
+        actions=ActionOriginExportProjection.Project(actions);
         var extensions = await ReadExportSheetAsync(connection, "Extensions", $"""
             WITH visible_staff AS (SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId))
             SELECT TOP (@exportTake)

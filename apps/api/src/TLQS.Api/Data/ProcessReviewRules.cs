@@ -63,7 +63,7 @@ public static partial class ProcessReviewRules
             group.Statements.Select((text, statement) => new ProcessReviewStatement($"standard_{index + 1}_{statement + 1}", text)).ToArray())).ToArray();
         var labels = digital ? new Dictionary<string, string>
         {
-            ["scope"] = "Scope and context", ["strengths"] = "Strengths and effective practice"
+            ["deliveryAreaName"] = "Learning Walk delivery area"
         } : new Dictionary<string, string>
         {
             ["teamsUrl"] = "Full proforma in Teams", ["headOfFacultyStaffId"] = "Head of faculty",
@@ -134,7 +134,10 @@ public static partial class ProcessReviewRules
         if (request.Submit && !request.FacultyOrgUnitId.HasValue) Fail("Select the faculty before submitting.");
         if (request.Data is null || request.Data.Fields is null || request.Data.Samples is null || request.Data.Responses is null) Fail("Provide the saved form fields, samples and responses.");
         var data = request.Data!;
+        if(configuration.ProcessKey==Digital&&data.Activate is not null)Fail("Activate+ data cannot be used in a Digital Learning Walk.");
         if(data.Samples.Any(x=>x is null)||data.Responses.Any(x=>x is null))Fail("Provide valid samples and statement responses.");
+        ValidateDigitalData(data,configuration,request.Submit,request.RecordDate);
+        if(data.Digital is not null)data=NormalizeDigitalData(data,configuration);
         Dictionary(data.Fields, 250, 10000);
         _=ParticipantStaffIds(data);
         if (data.Fields.Keys.Any(x => x.Equals("contributors", StringComparison.OrdinalIgnoreCase)
@@ -143,15 +146,16 @@ public static partial class ProcessReviewRules
             || x.Equals("ownerStaffId", StringComparison.OrdinalIgnoreCase) || x.Equals("ownerName", StringComparison.OrdinalIgnoreCase))) Fail("Review ownership is taken from the signed-in creator; contributor fields are not used.");
         if (data.Samples.Count > 100 || data.Responses.Count > 500) Fail("Use at most 100 samples and 500 statement responses.");
         if (data.Samples.Select(x => x.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != data.Samples.Count) Fail("Each sample needs a unique reference.");
+        var sampleHistoryOnly=configuration.ProcessKey==Digital&&(data.Digital is not null||configuration.Settings.GetValueOrDefault("evidenceMode") is "criterion_notes" or "ratings_only");
         foreach (var sample in data.Samples)
         {
             Key(sample.Id); Optional(sample.Title,300); Optional(sample.SampleType,100);
-            if(request.Submit){Required(sample.Title,300,"Enter a name for each sample.");Required(sample.SampleType,100,"Select each sample’s type.");}
+            if(request.Submit&&!sampleHistoryOnly){Required(sample.Title,300,"Enter a name for each sample.");Required(sample.SampleType,100,"Select each sample’s type.");}
             Optional(sample.Course, 1000); Optional(sample.Notes, 10000); Optional(sample.EvidenceLink,2000);
-            if(request.Submit)Link(sample.EvidenceLink);
+            if(request.Submit&&!sampleHistoryOnly)Link(sample.EvidenceLink);
             if (sample.StaffIds is null || sample.StaffIds.Count > 100 || sample.StaffIds.Contains(Guid.Empty)) Fail("Select valid associated staff for each sample.");
         }
-        var statements = configuration.Standards.SelectMany(x => x.Statements).Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+        var statements = (configuration.ProcessKey==Digital?SelectedDigitalStatements(configuration,data):configuration.Standards.SelectMany(x => x.Statements)).Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
         var ratings = configuration.RatingOptions.Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
         var samples = data.Samples.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
         if (data.Responses.Select(x => x.StatementKey).Distinct(StringComparer.Ordinal).Count() != data.Responses.Count) Fail("Each statement has one overall rating, regardless of sample count.");
@@ -165,10 +169,12 @@ public static partial class ProcessReviewRules
         if (configuration.ProcessKey == Digital && request.Submit)
         {
             if (ratings.Count == 0) Fail("The college rating scale must be configured before a Digital Learning Walk can be submitted. Your draft can still be saved.");
-            if (data.Samples.Count == 0 || !request.TeamOrgUnitId.HasValue) Fail("Select the team or area and add evidence samples before submitting.");
-            if (data.Responses.Count != statements.Count || data.Responses.Any(x => string.IsNullOrEmpty(x.RatingKey))) Fail("Rate every statement before submitting.");
-            if (configuration.Settings.GetValueOrDefault("requireSamplePerRating", "true") == "true" && data.Responses.Any(x => x.SampleIds.Count == 0)) Fail("Link a supporting sample to every rated statement.");
-            if (configuration.Settings.GetValueOrDefault("requireRationale", "false") == "true" && data.Responses.Any(x => string.IsNullOrWhiteSpace(x.Rationale))) Fail("Add evidence and rationale for every statement.");
+            if(data.Digital is not null&&!request.RecordDate.HasValue)Fail("Enter the date of the Digital Learning Walk before submitting.");
+            if (!request.TeamOrgUnitId.HasValue) Fail("Select the team or area before submitting.");
+            if(!sampleHistoryOnly&&data.Samples.Count==0)Fail("Add evidence samples before submitting.");
+            if (data.Responses.Count != statements.Count || data.Responses.Any(x => string.IsNullOrEmpty(x.RatingKey))) Fail(data.Digital?.SelectedStandardKeys is not null
+                ?"Rate every statement in the selected categories before submitting.":data.Digital is null?"Rate every statement before submitting.":"Rate every selected criterion before submitting.");
+            if (!sampleHistoryOnly&&configuration.Settings.GetValueOrDefault("requireSamplePerRating", "true") == "true" && data.Responses.Any(x => x.SampleIds.Count == 0)) Fail("Link a supporting sample to every rated statement.");
         }
         if (configuration.ProcessKey == Activate)
         {
@@ -193,7 +199,9 @@ public static partial class ProcessReviewRules
         {ValidateActivateAction(request,configuration,previousDueDate);return;}
         if (!configuration.Standards.Any(x => x.Key == request.ThemeKey)) Fail("Select a standard or specialist area from this review’s framework.");
         if (request.OwnerStaffId == Guid.Empty || request.DueDate == default) Fail("Select an action owner and completion date.");
-        Required(request.SuccessEvidence, 4000, "Describe the evidence that will show success."); Optional(request.SupportRequired, 4000);
+        if(configuration.ProcessKey==Digital)Optional(request.SuccessEvidence,4000);
+        else Required(request.SuccessEvidence, 4000, "Describe the evidence that will show success.");
+        Optional(request.SupportRequired, 4000);
         if (request.Progress is not ("open" or "complete" or "extended" or "cancelled")) Fail("Select a valid action progress state.");
         if (request.ImpactStatus is not ("awaiting_evidence" or "assessing" or "demonstrated" or "further_change")) Fail("Select a valid impact assessment.");
         if (request.ImpactStatus == "demonstrated" && string.IsNullOrWhiteSpace(request.ImpactEvidence) && string.IsNullOrWhiteSpace(request.ImpactEvidenceLink)) Fail("Add evidence before recording demonstrated impact.");

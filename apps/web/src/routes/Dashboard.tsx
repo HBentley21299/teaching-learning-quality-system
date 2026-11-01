@@ -5,6 +5,9 @@ import { writeAppPath } from "../app/history";
 import { DashboardNavigator } from "../components/DashboardNavigator";
 import { LoadingState } from "../components/LoadingState";
 import { DashboardDataExplorer, ElevateStatusStaffExplorer } from "../components/DashboardDataExplorer";
+import { ActionDashboard } from "../components/ActionDashboard";
+import { ProcessIntelligence } from "../components/ProcessIntelligence";
+import { actionOriginKey, actionOriginLabel, actionOriginRecordLabel, actionSourceLabel } from "../services/actionOrigin";
 import { statusRowsFromStaff } from "../services/elevateStatusRoster";
 import { dashboardActionState, dashboardActionStates, isDashboardActionOpen, matchesDashboardActionState } from "../services/dashboardActionState";
 import { buildFormOutcomeGroups } from "../services/formOutcomeGroups";
@@ -473,15 +476,15 @@ export function Dashboard({ academicYear, orgUnits, staff = [], ucoAccess, user,
   const loadRecordData = useCallback(() => requestCache.get(`form-data:${datasetKey}:${JSON.stringify(reportFilters)}`, () => api.dashboardRecordData(academicYear, selectedProcess, reportFilters)), [requestCache, datasetKey, reportFilters, academicYear, selectedProcess]);
 
   const visibleActions = useMemo(() => {
-    const value = (action: ActionSummary) => actionSortBy === "status" ? formatLabel(dashboardActionState(action)) : actionSortBy === "source" ? formatLabel(action.sourceFormType ?? "standalone") : actionSortBy === "area" ? action.teamCode ?? action.facultyCode : ["createdAt", "dueDate", "completedDate"].includes(actionSortBy) ? action[actionSortBy as "createdAt"] ? new Date(action[actionSortBy as "createdAt"]!) : null : action[actionSortBy as "title"];
+    const value = (action: ActionSummary) => actionSortBy === "status" ? formatLabel(dashboardActionState(action)) : actionSortBy === "source" ? actionOriginLabel(action) : actionSortBy === "area" ? action.teamCode ?? action.facultyCode : ["createdAt", "dueDate", "completedDate"].includes(actionSortBy) ? action[actionSortBy as "createdAt"] ? new Date(action[actionSortBy as "createdAt"]!) : null : action[actionSortBy as "title"];
     return analysisActions.filter(action => (actionOwnerFilter === "all" || (action.ownerStaffName ?? "Unassigned") === actionOwnerFilter)
-      && (actionSourceFilter === "all" || (action.sourceFormType ?? "standalone") === actionSourceFilter)
+      && (actionSourceFilter === "all" || actionOriginKey(action) === actionSourceFilter)
       && matchesDashboardActionState(action, actionStateFilter)
-      && matchesListSearch(searchTerm, action.title, action.actionTheme, action.ownerStaffName, action.subjectStaffName, action.facultyCode, action.teamCode, formatLabel(action.sourceFormType ?? "standalone"), formatLabel(dashboardActionState(action)), formatDate(action.createdAt), formatDate(action.dueDate), action.completedDate ? formatDate(action.completedDate) : ""))
+      && matchesListSearch(searchTerm, action.title, action.actionTheme, action.ownerStaffName, action.subjectStaffName, action.facultyCode, action.teamCode, actionOriginLabel(action), actionOriginRecordLabel(action), action.sourceRecordDate, formatLabel(dashboardActionState(action)), formatDate(action.createdAt), formatDate(action.dueDate), action.completedDate ? formatDate(action.completedDate) : ""))
       .sort((left, right) => compareListValues(value(left), value(right), actionSortDirection) || left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
   }, [analysisActions, searchTerm, actionOwnerFilter, actionSourceFilter, actionStateFilter, actionSortBy, actionSortDirection]);
   const actionOwners = useMemo(() => distinctListValues(analysisActions.map(action => action.ownerStaffName ?? "Unassigned")), [analysisActions]);
-  const actionSources = useMemo(() => distinctListValues(analysisActions.map(action => action.sourceFormType ?? "standalone")), [analysisActions]);
+  const actionSources = useMemo(() => distinctListValues(analysisActions.map(actionOriginKey)), [analysisActions]);
 
   const filteredFacts = useMemo(() => {
     const recordIds = new Set(analysisRecords.map((record) => record.id));
@@ -619,7 +622,28 @@ export function Dashboard({ academicYear, orgUnits, staff = [], ucoAccess, user,
       <div className="reporting-results" hidden={invalidDateRange}>
       <nav className="dashboard-section-tabs" aria-label="Report sections">{sectionOptions.map(option => <button type="button" key={option.key} aria-current={activeSection === option.key ? "page" : undefined} onClick={() => setSection(option.key)}>{option.label}{option.key === "data" ? <span>{selectedProcess === "elevate_status" ? elevateStatusStaffInScope.length : selectedProcess === "actions" ? analysisActions.length : analysisRecords.length}</span> : option.key === "actions" ? <span>{analysisActions.length}</span> : null}</button>)}</nav>
 
-      {activeSection === "summary" ? <>{selectedProcess === "overview" ? (
+      {activeSection === "summary" ? selectedProcess === "actions" ? <ActionDashboard actions={analysisActions} scopeKey={JSON.stringify([datasetKey, reportFilters])} onOpenAction={onOpenAction} /> : <>
+      <ProcessIntelligence
+        processKey={selectedProcess}
+        label={selectedDefinition.label}
+        records={analysisRecords}
+        facts={filteredFacts}
+        actions={analysisActions}
+        eliStaff={eliSubmissionsInScope}
+        cpdStaff={cpdAttendanceInScope}
+        statusStaff={elevateStatusStaffInScope}
+        lifecycle={livLifecycleInScope}
+        participation={staffParticipationTotals.activeStaffCount ? staffParticipationTotals : undefined}
+        showOutcomes={selectedConfiguration.showOutcomes}
+        showActions={selectedConfiguration.showActions}
+        showAreaComparison={selectedConfiguration.showAreaComparison}
+        scopeKey={JSON.stringify([datasetKey, reportFilters])}
+        onOpenRecord={onOpenRecord}
+        onOpenStaff={onOpenStaff}
+        onOpenAction={onOpenAction}
+      />
+      <CollapsibleSection storageKey={`dashboard-${selectedProcess}-detailed-analysis`} title={selectedProcess === "elevate_status" ? "Detailed analysis and cumulative badge attainment" : "Detailed analysis, trends and comparisons"} statusSummary="Existing process measures, outcome matrices, trends and organisation comparisons">
+      {selectedProcess === "overview" ? (
         <ExecutiveOverview
           actions={processActionsInScope}
           facts={dateAndAreaFacts}
@@ -649,7 +673,7 @@ export function Dashboard({ academicYear, orgUnits, staff = [], ucoAccess, user,
           trendData={trendData}
           trendGranularity={trendGranularity}
         />
-      )}</> : null}
+      )}</CollapsibleSection></> : null}
 
       {selectedProcess === "eli" && activeSection === "coverage" ? <EliSubmissionBreakdown academicYear={academicYear} rows={eliSubmissionsInScope} onOpenStaff={onOpenStaff} onOpenRecord={onOpenRecord} /> : null}
 
@@ -668,7 +692,7 @@ export function Dashboard({ academicYear, orgUnits, staff = [], ucoAccess, user,
         title={`${selectedDefinition.label} action detail`}
       >
         <label className="search-box dashboard-record-search"><Search size={16} aria-hidden="true" /><input aria-label="Search linked actions" placeholder="Find an action, owner, associated person or theme" value={searchTerm} onChange={event => { setSearchTerm(event.target.value); setActionDetailPage(1); }} /></label>
-        <div className="dashboard-explorer-toolbar"><label className="dashboard-explorer-filter"><span>Owner</span><select aria-label="Linked action owner" value={actionOwnerFilter} onChange={event => setActionOwnerFilter(event.target.value)}><option value="all">All recorded owners</option>{actionOwners.map(value => <option key={value} value={value}>{value}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Source</span><select aria-label="Linked action source" value={actionSourceFilter} onChange={event => setActionSourceFilter(event.target.value)}><option value="all">All recorded sources</option>{actionSources.map(value => <option key={value} value={value}>{formatLabel(value)}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Action status</span><select aria-label="Linked action status" value={actionStateFilter} onChange={event => setActionStateFilter(event.target.value)}><option value="all">All action statuses</option>{dashboardActionStates.map(value => <option key={value} value={value}>{formatLabel(value)}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Sort by</span><select aria-label="Sort linked actions by" value={actionSortBy} onChange={event => setActionSortBy(event.target.value)}>{[["title", "Action"], ["actionTheme", "Theme"], ["ownerStaffName", "Owner"], ["subjectStaffName", "Associated staff"], ["source", "Source"], ["area", "Area"], ["createdAt", "Raised"], ["dueDate", "Due"], ["completedDate", "Completed"], ["status", "Status"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Order</span><select aria-label="Linked action sort order" value={actionSortDirection} onChange={event => setActionSortDirection(event.target.value as "asc" | "desc")}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label></div>
+        <div className="dashboard-explorer-toolbar"><label className="dashboard-explorer-filter"><span>Owner</span><select aria-label="Linked action owner" value={actionOwnerFilter} onChange={event => setActionOwnerFilter(event.target.value)}><option value="all">All recorded owners</option>{actionOwners.map(value => <option key={value} value={value}>{value}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Source</span><select aria-label="Linked action source" value={actionSourceFilter} onChange={event => setActionSourceFilter(event.target.value)}><option value="all">All recorded sources</option>{actionSources.map(value => <option key={value} value={value}>{actionSourceLabel(value)}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Action status</span><select aria-label="Linked action status" value={actionStateFilter} onChange={event => setActionStateFilter(event.target.value)}><option value="all">All action statuses</option>{dashboardActionStates.map(value => <option key={value} value={value}>{formatLabel(value)}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Sort by</span><select aria-label="Sort linked actions by" value={actionSortBy} onChange={event => setActionSortBy(event.target.value)}>{[["title", "Action"], ["actionTheme", "Theme"], ["ownerStaffName", "Owner"], ["subjectStaffName", "Associated staff"], ["source", "Source"], ["area", "Area"], ["createdAt", "Raised"], ["dueDate", "Due"], ["completedDate", "Completed"], ["status", "Status"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="dashboard-explorer-filter"><span>Order</span><select aria-label="Linked action sort order" value={actionSortDirection} onChange={event => setActionSortDirection(event.target.value as "asc" | "desc")}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label></div>
         <p className="dashboard-explorer-scope-note">Action search, owner, source, action status and sorting refine this table. Excel uses the dashboard filters above.</p>
         <ActionDetailTable actions={actionDetailActions} onOpenAction={onOpenAction} />
         <Pagination onPageChange={setActionDetailPage} page={actionDetailPage} totalPages={actionDetailTotalPages} />
@@ -1107,7 +1131,7 @@ function ActionDetailTable({ actions, onOpenAction }: { actions: ActionSummary[]
     { key: "title", header: "Action", render: (action) => <a className="dashboard-detail-link" href={actionPath(action.id)} onClick={(event) => { event.preventDefault(); onOpenAction(action.id, action.ownerStaffId); }}>{action.title}<ArrowUpRight aria-hidden="true" size={14} /></a> },
     { key: "owner", header: "Owner", render: (action) => action.ownerStaffName ?? "Unassigned" },
     { key: "staff", header: "Associated staff", render: (action) => action.subjectStaffName ?? "Not recorded" },
-    { key: "source", header: "Source", render: (action) => formatLabel(action.sourceFormType ?? "standalone") },
+    { key: "source", header: "Origin", render: (action) => <span>{actionOriginLabel(action)}<small className="table-subline">{actionOriginRecordLabel(action)}{action.sourceRecordDate ? ` · ${formatDate(action.sourceRecordDate)}` : ""}</small></span> },
     { key: "area", header: "Area", render: (action) => action.teamCode ?? action.facultyCode ?? "Unassigned" },
     { key: "created", header: "Raised", render: (action) => formatDate(action.createdAt) },
     { key: "due", header: "Due", render: (action) => formatDate(action.dueDate) },

@@ -3,18 +3,19 @@ import { Download, ExternalLink, RefreshCw, X } from "lucide-react";
 import { Button } from "../design-system/Button";
 import { DataTable } from "../components/DataTable";
 import { CollapsibleSection } from "../components/CollapsibleSection";
-import { KpiStrip } from "../components/KpiStrip";
 import { LoadingState } from "../components/LoadingState";
 import { SkillsScanResultBar } from "../components/SkillsScanResultBar";
+import { ProcessActionInsights, ProcessReviewInsights } from "../components/ProcessReviewInsights";
 import { WorkflowFeedback } from "../components/WorkflowFeedback";
 import { WorkflowPagination, useWorkflowPagination } from "../components/WorkflowPagination";
 import { api } from "../services/api";
 import type { OrgUnitSummary, StaffSummary } from "../services/types";
-import type { ProcessReviewAction, ProcessReviewConfiguration, ProcessReviewDetail, ProcessReviewKey, ProcessReviewSummary } from "../services/processReviewTypes";
+import type { ProcessReviewAction, ProcessReviewConfiguration, ProcessReviewDetail, ProcessReviewKey, ProcessReviewSelectedStandard, ProcessReviewSummary } from "../services/processReviewTypes";
 import { processReviewAreas, processReviewSet } from "../services/processReviewTypes";
 import { distinctListValues } from "../services/listQuery";
+import { emptyProcessReviewExploration, filterActionExploration, filterReviewExploration, type ProcessReviewExploration } from "../services/processReviewInsights";
 import { emptyProcessReviewReportQuery, processReviewCodeLabel, processReviewEvidenceHref, processReviewFieldLabel,
-  activateSkillsPillarResults, activateSkillsScore, formatActivatePillarMean, processReviewResponsibleNames,
+  activateSkillsPillarResults, activateSkillsScore, formatActivatePillarMean, processReviewResponsibleNames, digitalReviewCriteria, digitalReviewCategoryCoverage,
   selectProcessReviewActions, selectProcessReviewRows, type ProcessReviewReportQuery } from "../services/processReviewReporting";
 import "./ProcessReviewReporting.css";
 
@@ -38,6 +39,7 @@ export function ProcessReviewDashboard({ processKey, academicYear, orgUnits, sta
   const [actions, setActions] = useState<ProcessReviewAction[]>([]);
   const [tab, setTab] = useState<"records" | "actions">("records");
   const [query, setQuery] = useState<ProcessReviewReportQuery>({ ...emptyProcessReviewReportQuery });
+  const [exploration, setExploration] = useState<ProcessReviewExploration>({ ...emptyProcessReviewExploration });
   const [detail, setDetail] = useState<ProcessReviewDetail | null>(null);
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -72,7 +74,7 @@ export function ProcessReviewDashboard({ processKey, academicYear, orgUnits, sta
         api.processReviewConfiguration(processKey), api.processReviews(processKey, academicYear), api.processReviewActions(processKey, academicYear)
       ]);
       if (token !== request.current) return;
-      setConfiguration(nextConfiguration); setRecords(nextRecords); setActions(nextActions);
+      setConfiguration(nextConfiguration); setRecords(nextRecords); setActions(nextActions); setExploration({ ...emptyProcessReviewExploration });
     } catch {
       if (token === request.current) { setFailed(true); setMessage("This reporting view could not be loaded. Try again; no figures have been substituted."); }
     } finally { if (token === request.current) setLoading(false); }
@@ -80,7 +82,7 @@ export function ProcessReviewDashboard({ processKey, academicYear, orgUnits, sta
   useEffect(() => {
     setConfiguration(null); setRecords([]); setActions([]); setDetail(null); setSelectedId(""); setDetailLoading(false);
     detailRequest.current += 1; exportRequest.current += 1; setExporting(false);
-    setQuery({ ...emptyProcessReviewReportQuery }); setTab("records"); void load();
+    setQuery({ ...emptyProcessReviewReportQuery }); setExploration({ ...emptyProcessReviewExploration }); setTab("records"); void load();
     return () => { request.current += 1; detailRequest.current += 1; exportRequest.current += 1; };
   }, [processKey, academicYear]);
 
@@ -103,12 +105,12 @@ export function ProcessReviewDashboard({ processKey, academicYear, orgUnits, sta
     finally { if (token === exportRequest.current) setExporting(false); }
   }
 
-  const selectedReviews = useMemo(() => selectProcessReviewRows(records, query), [records, query]);
-  const selectedReviewIds = new Set(selectedReviews.map(review => review.recordId));
-  const openActionsInReviews = new Set(actions.filter(action => (selectedReviewIds.has(action.recordId) || action.associatedReviewIds?.some(id => selectedReviewIds.has(id))) && !["complete", "cancelled"].includes(action.progress)).map(action => action.actionId)).size;
+  const today = new Date().toLocaleDateString("en-CA");
+  const filteredReviews = useMemo(() => selectProcessReviewRows(records, query), [records, query]);
+  const selectedReviews = useMemo(() => filterReviewExploration(filteredReviews, exploration, actions, today), [filteredReviews, exploration, actions, today]);
   const facultyRecordIds = query.faculty ? new Set(records.filter(row => row.facultyOrgUnitId === query.faculty).map(row => row.recordId)) : null;
-  const selectedActions = useMemo(() => selectProcessReviewActions(actions, query, facultyRecordIds), [actions, query, records]);
-  const filterKey = JSON.stringify([processKey, academicYear, tab, query]);
+  const selectedActions = useMemo(() => filterActionExploration(selectProcessReviewActions(actions, query, facultyRecordIds), exploration, today), [actions, query, records, exploration, today]);
+  const filterKey = JSON.stringify([processKey, academicYear, tab, query, exploration]);
   const recordPage = useWorkflowPagination(selectedReviews, filterKey), actionPage = useWorkflowPagination(selectedActions, filterKey);
   const ownerOptions = tab === "records" ? records.map(row => ({ id: row.ownerStaffId, name: row.ownerName })) : actions.flatMap(row => !digital && row.responsibleStaff?.length ? row.responsibleStaff.map(person => ({ id: person.staffId, name: person.displayName })) : [{ id: row.ownerStaffId, name: row.ownerName }]);
   const owners = [...new Map(ownerOptions.map(owner => [owner.id, owner])).values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -125,7 +127,7 @@ export function ProcessReviewDashboard({ processKey, academicYear, orgUnits, sta
     <section className="panel">
       <div className="panel-heading"><div><h2>{title}</h2><p className="muted-copy">{academicYear} · Records and actions available within your access.</p></div><div className="toolbar"><Button icon={RefreshCw} disabled={loading} onClick={() => { setDetail(null); setSelectedId(""); setDetailLoading(false); detailRequest.current += 1; void load(); }}>Refresh</Button>{canExport ? <Button icon={Download} busy={exporting} disabled={loading || failed} onClick={() => void exportData()}>Export Excel</Button> : null}</div></div>
       {canExport ? <p className="muted-copy process-review-detail-notice">Excel exports all permitted reviews in {academicYear}, with linked detail sheets. The table search and local filters below do not limit the workbook.</p> : null}
-      <div className="toolbar" aria-label="Reporting section"><Button className="process-review-tab-button" aria-pressed={tab === "records"} onClick={() => { setTab("records"); setQuery({ ...emptyProcessReviewReportQuery }); }}>Review register</Button><Button className="process-review-tab-button" aria-pressed={tab === "actions"} onClick={() => { setTab("actions"); setQuery({ ...emptyProcessReviewReportQuery, sort: "date_asc" }); }}>Native actions</Button></div>
+      <div className="toolbar" aria-label="Reporting section"><Button className="process-review-tab-button" aria-pressed={tab === "records"} onClick={() => { setTab("records"); setExploration({ ...emptyProcessReviewExploration }); setQuery({ ...emptyProcessReviewReportQuery }); }}>Review register</Button><Button className="process-review-tab-button" aria-pressed={tab === "actions"} onClick={() => { setTab("actions"); setExploration({ ...emptyProcessReviewExploration }); setQuery({ ...emptyProcessReviewReportQuery, sort: "date_asc" }); }}>Native actions</Button></div>
       <WorkflowFeedback message={message} tone="error" />
       {directoryMessage ? <div className="toolbar"><p className="muted-copy" role="status">{directoryMessage}</p><Button variant="quiet" onClick={() => void loadDirectory()}>Retry staff names</Button></div> : null}
       {failed ? <Button onClick={() => void load()}>Try loading again</Button> : null}
@@ -141,20 +143,14 @@ export function ProcessReviewDashboard({ processKey, academicYear, orgUnits, sta
           <label className="entry-field"><span>{tab === "records" ? digital ? "Review date from" : "Conducted from" : digital ? "Due date from" : "Action review date from"}</span><input type="date" value={query.fromDate} onChange={event => update({ fromDate: event.target.value })} aria-invalid={Boolean(dateError)} /></label>
           <label className="entry-field"><span>{tab === "records" ? digital ? "Review date to" : "Conducted to" : digital ? "Due date to" : "Action review date to"}</span><input type="date" value={query.toDate} onChange={event => update({ toDate: event.target.value })} aria-invalid={Boolean(dateError)} /></label>
           <label className="entry-field"><span>Sort by</span><select value={query.sort} onChange={event => update({ sort: event.target.value })}><option value="date_desc">{tab === "records" ? "Review date · newest" : "Due date · latest"}</option><option value="date_asc">{tab === "records" ? "Review date · oldest" : "Due date · soonest"}</option><option value="title">Title A–Z</option><option value="faculty">Faculty A–Z</option><option value="owner">Owner A–Z</option>{tab === "records" ? <><option value="updated">Last updated · newest</option>{!digital ? <option value="follow_up">Latest follow-up · newest</option> : null}</> : null}</select></label>
-          <Button variant="quiet" onClick={() => setQuery({ ...emptyProcessReviewReportQuery, sort: tab === "records" ? "date_desc" : "date_asc" })}>Clear filters</Button>
+          <Button variant="quiet" onClick={() => { setQuery({ ...emptyProcessReviewReportQuery, sort: tab === "records" ? "date_desc" : "date_asc" }); setExploration({ ...emptyProcessReviewExploration }); }}>Clear filters</Button>
         </div>
         {dateError ? <p role="alert" className="error-copy">{dateError}</p> : null}
         {tab === "records" ? <>
-          <KpiStrip items={digital ? [
-            { label: "Reviews in view", value: selectedReviews.length, tone: "blue" },
-            { label: "Samples in those reviews", value: selectedReviews.reduce((sum, review) => sum + review.sampleCount, 0), tone: "green" },
-            { label: "Statements rated", value: `${selectedReviews.reduce((sum, review) => sum + review.ratedStatementCount, 0)} / ${selectedReviews.reduce((sum, review) => sum + review.statementCount, 0)}`, tone: "amber" }
-          ] : [
-            { label: "Reviews in view", value: selectedReviews.length, tone: "blue" },
-            { label: "Submitted reviews", value: selectedReviews.filter(review => review.status === "submitted").length, tone: "green" },
-            { label: "Open actions", value: openActionsInReviews, tone: "amber" }
-          ]} />
-          {digital && !configuration?.ratingOptions.length ? <p className="record-context-note">The college rating scale is not configured. Draft evidence can be collected; no rating distribution or overall score has been invented.</p> : null}
+          <ProcessReviewInsights digital={digital} rows={filteredReviews} selectedRows={selectedReviews} actions={actions} query={query} exploration={exploration} today={today}
+            detail={detail} selectedId={selectedId} detailLoading={detailLoading} onQuery={update} onExplore={changes => setExploration(current => ({ ...current, ...changes }))}
+            onInspect={id => void openDetail(id)} onOpenAction={action => onOpenAction ? onOpenAction(action.actionId, action.ownerStaffId) : onOpenRecord(action.recordId)} />
+          {digital && !configuration?.ratingOptions.length ? <p className="record-context-note">The shared Learning Walk rating scale is unavailable. Drafts can be saved; no rating distribution or overall score has been invented.</p> : null}
           <p className="muted-copy" role="status">{selectedReviews.length} of {records.length} permitted reviews match these filters.</p>
           <DataTable rows={recordPage.items} rowKey={review => review.recordId} caption={`${title} review register`} columns={[
             { key: "title", header: digital ? "Review / team" : "Growth review", render: review => <><Button variant="quiet" onClick={() => void openDetail(review.recordId)} aria-expanded={selectedId === review.recordId}>{review.title}</Button><small className="muted-copy">{digital ? review.teamName : review.participants?.map(person => person.displayName).join("; ")}</small></> },
@@ -165,17 +161,15 @@ export function ProcessReviewDashboard({ processKey, academicYear, orgUnits, sta
             ...(!digital ? [{ key: "kind", header: "Review type", render: (review: ProcessReviewSummary) => review.isFollowUp ? "Follow-up" : "Initial" },
               { key: "followup", header: "Linked reviews", render: (review: ProcessReviewSummary) => <ReviewLinks review={review} onOpen={onOpenRecord} /> }] : []),
             { key: "status", header: "Stage", render: review => processReviewCodeLabel(review.status) },
-            ...(digital ? [{ key: "samples", header: "Samples", render: (review: ProcessReviewSummary) => review.sampleCount }, { key: "ratings", header: "Statements rated", render: (review: ProcessReviewSummary) => `${review.ratedStatementCount} / ${review.statementCount}` }] : [{ key: "scan", header: "Skills Scan results entered", render: (review: ProcessReviewSummary) => review.skillsScanScores == null ? "Earlier workflow" : `${Object.values(review.skillsScanScores).filter(value => activateSkillsScore(value) !== null).length} / 15` }]),
+            ...(digital ? [{ key: "categories", header: "Categories / coverage", render: (review: ProcessReviewSummary) => <DigitalReviewCategoryScope selectedStandardKeys={review.selectedStandardKeys} standards={review.selectedStandards} /> }] : []),
+            ...(digital ? [{ key: "ratings", header: "Selected criteria rated", render: (review: ProcessReviewSummary) => `${review.ratedStatementCount} / ${review.statementCount}` }] : [{ key: "scan", header: "Skills Scan results entered", render: (review: ProcessReviewSummary) => review.skillsScanScores == null ? "Earlier workflow" : `${Object.values(review.skillsScanScores).filter(value => activateSkillsScore(value) !== null).length} / 15` }]),
             { key: "actions", header: "Open actions", render: review => review.openActionCount },
             { key: "updated", header: "Last updated", render: review => dateTime(review.updatedAt) }
           ]} emptyMessage={records.length ? "No reviews match these filters." : "No reviews have been saved in this academic year."} />
           <WorkflowPagination {...recordPage} label="Review register" />
         </> : <>
-          <KpiStrip items={[
-            { label: "Actions in view", value: selectedActions.length, tone: "blue" },
-            { label: "Activity completed", value: selectedActions.filter(action => action.progress === "complete").length, tone: "green" },
-            { label: "Impact demonstrated", value: selectedActions.filter(action => action.impactStatus === "demonstrated").length, tone: "amber" }
-          ]} />
+          <ProcessActionInsights rows={selectedActions} digital={digital} query={query} exploration={exploration} today={today} onQuery={update}
+            onExplore={changes => setExploration(current => ({ ...current, ...changes }))} onOpen={action => onOpenAction ? onOpenAction(action.actionId, action.ownerStaffId) : onOpenRecord(action.recordId)} />
           <p className="muted-copy">Action activity and demonstrated impact are separate. A completed activity may still need impact evidence.</p>
           <DataTable rows={actionPage.items} rowKey={action => action.actionId} caption={`${title} native actions`} columns={[
             { key: "action", header: "Action", render: action => <Button variant="quiet" onClick={() => onOpenAction ? onOpenAction(action.actionId, action.ownerStaffId) : onOpenRecord(action.recordId)}>{action.title}</Button> },
@@ -215,7 +209,7 @@ function FieldValue({ fieldKey, value, staff, configuration }: { fieldKey: strin
 }
 
 function ReviewFields({ fields, configuration, staff }: { fields: Record<string, string>; configuration: ProcessReviewConfiguration; staff: StaffSummary[] }) {
-  const rows = Object.entries(fields).filter(([, value]) => value?.trim());
+  const rows = Object.entries(fields).filter(([key, value]) => value?.trim() && (configuration.processKey !== "digital_learning_walk" || key !== "deliveryAreaKey"));
   return rows.length ? <dl className="process-review-report-field-list">{rows.map(([key, value]) => <div className="process-review-field-pair" key={key}><dt>{processReviewFieldLabel(configuration, key)}</dt><dd><FieldValue fieldKey={key} value={value} staff={staff} configuration={configuration} /></dd></div>)}</dl> : <p className="muted-copy">No additional tracking answers have been saved.</p>;
 }
 
@@ -227,20 +221,47 @@ export function ReviewLinks({ review, onOpen }: { review: Pick<ProcessReviewSumm
   </div>;
 }
 
-function ProcessReviewReportDetail({ detail, staff, onOpenRecord }: { detail: ProcessReviewDetail; staff: StaffSummary[]; onOpenRecord: (recordId: string) => void }) {
+function DigitalReviewCategoryScope({ selectedStandardKeys, standards }: { selectedStandardKeys?: string[] | null; standards?: ProcessReviewSelectedStandard[] | null }) {
+  if (!standards) return <span className="muted-copy">Category coverage not recorded</span>;
+  const categorySelection = selectedStandardKeys != null;
+  if (!standards.length) return <span className="muted-copy">{categorySelection ? "No categories selected" : "No criteria selected"}</span>;
+  return <div className="process-review-category-scope"><p>{categorySelection ? `${standards.length} ${standards.length === 1 ? "category" : "categories"} selected` : `Earlier criterion selection · ${standards.length} ${standards.length === 1 ? "category" : "categories"} represented`}</p>
+    <ul>{standards.map(standard => <li key={standard.key}><span>{standard.title}</span><small>{standard.selectedStatementCount} / {standard.statementCount} criteria included{standard.selectedStatementCount < standard.statementCount ? " · earlier partial selection" : ""}</small></li>)}</ul>
+  </div>;
+}
+
+export function ProcessReviewReportDetail({ detail, staff, onOpenRecord }: { detail: ProcessReviewDetail; staff: StaffSummary[]; onOpenRecord: (recordId: string) => void }) {
   const digital = detail.processKey === "digital_learning_walk";
+  const selectedCriteria = digitalReviewCriteria(detail.configuration, detail.data);
+  const categoryCoverage = digitalReviewCategoryCoverage(detail.configuration, detail.data);
+  const earlierCriterionNotes = digital ? selectedCriteria.flatMap(standard => standard.statements.map(statement => ({
+    standard: standard.title, statement: statement.text, key: statement.key,
+    rationale: detail.data.responses.find(response => response.statementKey === statement.key)?.rationale
+  }))).filter(note => note.rationale?.trim()) : [];
+  const stagedActions = digital && detail.status === "draft" ? detail.data.digital?.draftActions ?? [] : [];
   return <>
     {digital ? <ReviewFields fields={detail.data.fields} configuration={detail.configuration} staff={staff} /> : <ActivateReviewReport detail={detail} staff={staff} onOpenRecord={onOpenRecord} />}
     {digital ? <>
-      <CollapsibleSection storageKey={`process-report-samples-${detail.recordId}`} title="Samples & associated staff" count={detail.data.samples.length} defaultExpanded>
-        {detail.data.samples.length ? detail.data.samples.map((sample, index) => <article className="process-review-report-sample" key={sample.id}><h3>{index + 1}. {sample.title}</h3><p className="muted-copy">{sample.sampleType}{sample.sampleDate ? ` · ${date(sample.sampleDate)}` : ""}{sample.course ? ` · ${sample.course}` : ""}</p><p>Associated staff: {sample.staffIds.map(id => staff.find(person => person.id === id)?.displayName || "Staff member is not in the available directory").join("; ") || "None recorded"}</p>{sample.notes ? <p>{sample.notes}</p> : null}<EvidenceLink value={sample.evidenceLink} label="Open sample evidence" /></article>) : <p className="muted-copy">No samples have been saved.</p>}
-      </CollapsibleSection>
-      <CollapsibleSection storageKey={`process-report-statements-${detail.recordId}`} title="All statement responses" count={detail.configuration.standards.reduce((sum, standard) => sum + standard.statements.length, 0)} defaultExpanded>
-        {detail.configuration.standards.map(standard => <section key={standard.key}><h3>{standard.title}</h3>{standard.statements.map(statement => {
+      {detail.data.samples.length ? <CollapsibleSection storageKey={`process-report-samples-${detail.recordId}`} title="Earlier sample evidence · read only" count={detail.data.samples.length} defaultExpanded={false}>
+        <p className="muted-copy">Sample evidence from the earlier form is retained as history. New Digital Learning Walks record ratings for their selected criteria.</p>
+        {detail.data.samples.map((sample, index) => <article className="process-review-report-sample" key={sample.id}><h3>{index + 1}. {sample.title}</h3><p className="muted-copy">{sample.sampleType}{sample.sampleDate ? ` · ${date(sample.sampleDate)}` : ""}{sample.course ? ` · ${sample.course}` : ""}</p><p>Associated staff: {sample.staffIds.map(id => staff.find(person => person.id === id)?.displayName || "Staff member is not in the available directory").join("; ") || "None recorded"}</p>{sample.notes ? <p>{sample.notes}</p> : null}<EvidenceLink value={sample.evidenceLink} label="Open earlier sample evidence" /></article>)}
+      </CollapsibleSection> : null}
+      <CollapsibleSection storageKey={`process-report-statements-${detail.recordId}`} title="Selected criteria & responses" count={selectedCriteria.reduce((sum, standard) => sum + standard.statements.length, 0)} defaultExpanded>
+        <DigitalReviewCategoryScope selectedStandardKeys={detail.data.digital?.selectedStandardKeys} standards={categoryCoverage} />
+        {!selectedCriteria.length ? <p className="muted-copy">No DLW criteria have been selected.</p> : null}
+        {selectedCriteria.map(standard => <section key={standard.key}><h3>{standard.title}</h3><p className="muted-copy">{categoryCoverage.find(category => category.key === standard.key)?.ratedStatementCount ?? 0} / {standard.statements.length} included criteria rated</p>{standard.statements.map(statement => {
           const response = detail.data.responses.find(answer => answer.statementKey === statement.key);
-          return <article className="process-review-report-response" key={statement.key}><p>{statement.text}</p><p><strong>Rating:</strong> {detail.configuration.ratingOptions.find(option => option.key === response?.ratingKey)?.label || "Not rated"}</p>{response?.rationale ? <p>{response.rationale}</p> : null}<p className="muted-copy">Linked samples: {response?.sampleIds.map(id => detail.data.samples.find(sample => sample.id === id)?.title || "Sample no longer available").join("; ") || "None recorded"}</p></article>;
+          return <article className="process-review-report-response" key={statement.key}><p>{statement.text}</p><p><strong>Rating:</strong> {detail.configuration.ratingOptions.find(option => option.key === response?.ratingKey)?.label || "Not rated"}</p>{response?.sampleIds.length ? <p className="muted-copy">Earlier linked samples: {response.sampleIds.map(id => detail.data.samples.find(sample => sample.id === id)?.title || "Sample no longer available").join("; ")}</p> : null}</article>;
         })}</section>)}
       </CollapsibleSection>
+      {earlierCriterionNotes.length ? <CollapsibleSection storageKey={`process-report-notes-${detail.recordId}`} title="Earlier criterion notes · read only" count={earlierCriterionNotes.length} defaultExpanded={false}>
+        <p className="muted-copy">These notes were recorded on an earlier form and are retained with their original criteria.</p>
+        {earlierCriterionNotes.map(note => <article className="process-review-report-response" key={note.key}><p className="muted-copy">{note.standard}</p><h3>{note.statement}</h3><p>{note.rationale}</p></article>)}
+      </CollapsibleSection> : null}
+      {stagedActions.length ? <CollapsibleSection storageKey={`process-report-draft-actions-${detail.recordId}`} title="Draft actions · not assigned" count={stagedActions.length} defaultExpanded>
+        <p className="muted-copy">These proposed actions remain part of the draft. They are assigned when the walk is formally submitted and are excluded from live action counts.</p>
+        {stagedActions.map((action, index) => <article className="process-review-report-response" key={action.id}><h3>{index + 1}. {action.title || "Action details not yet entered"}</h3><dl className="process-review-report-field-list"><dt>Action theme</dt><dd>{detail.configuration.standards.find(standard => standard.key === action.themeKey)?.title || "Not selected"}</dd><dt>Owner</dt><dd>{action.ownerStaffId ? staff.find(person => person.id === action.ownerStaffId)?.displayName || "Staff member is not in the available directory" : "Not selected"}</dd><dt>Date to be implemented by</dt><dd>{date(action.dueDate)}</dd></dl></article>)}
+      </CollapsibleSection> : null}
     </> : null}
     <CollapsibleSection storageKey={`process-report-actions-${detail.recordId}`} title="Native actions & update history" count={detail.actions.length} defaultExpanded>
       {!digital && detail.actions.some(action => action.recordId !== detail.recordId) ? <p className="muted-copy">Earlier actions remain linked as shared live records. They retain their original responsible people, review dates and update history.</p> : null}

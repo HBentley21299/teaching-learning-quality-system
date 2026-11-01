@@ -1,0 +1,21 @@
+.qa-selected-activity-config .qa-commentary-toggle { align-items: center; display: flex; gap: 1rem; justify-content: space-between; padding: .9rem 0; }
+.qa-commentary-toggle > span { display: grid; gap: .3rem; min-width: 0; }
+.qa-commentary-toggle strong { color: var(--text); font-size: .9rem; }
+.qa-commentary-toggle small { color: var(--text-muted); line-height: 1.5; }
+.qa-hub .qa-commentary-toggle input { appearance: none; background: var(--line-strong); block-size: 1.75rem; border: 0; border-radius: 1rem; cursor: pointer; flex: 0 0 2.875rem; height: 1.75rem; inline-size: 2.875rem; margin: 0; padding: 0; position: relative; transition: background .2s ease; width: 2.875rem; }
+.qa-commentary-toggle input::after { background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgb(0 0 0 / .2); content: ""; height: 1.375rem; left: .1875rem; position: absolute; top: .1875rem; transition: transform .2s ease; width: 1.375rem; }
+.qa-commentary-toggle input:checked { background: var(--teal); }
+.qa-commentary-toggle input:checked::after { transform: translateX(1.125rem); }
+.qa-commentary-toggle input:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+.qa-commentary-toggle input:disabled { cursor: default; opacity: .6; }
+.qa-published-commentary { display: grid; gap: .3rem; }
+.qa-published-commentary span { color: var(--text-muted); }
+.qa-form-commentary { border-top: 1px solid var(--line); margin-top: 1.5rem; padding-top: 1.25rem; }
+.qa-form-commentary h2 { margin: 0 0 .5rem; }
+.qa-form-commentary .entry-field { margin-top: .8rem; }
+.qa-earlier-commentary { border-top: 1px solid var(--line); margin-top: 1.5rem; padding-top: 1.25rem; }
+.qa-earlier-commentary summary { color: var(--teal-strong); cursor: pointer; font-weight: 700; }
+.qa-earlier-commentary dl { display: grid; gap: 1rem; }
+.qa-earlier-commentary dt { font-weight: 700; }
+.qa-earlier-commentary dd { margin: .4rem 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+@media (prefers-reduced-motion: reduce) { .qa-commentary-toggle input, .qa-commentary-toggle input::after { transition: none; } }

@@ -26,7 +26,7 @@ const configuration = {
   settings: { formJourney: 'activate_growth_v2', initialWindow: 'November–December', skillsScanLeadDays: '14' }
 };
 
-async function admin() {
+async function admin(loadedConfiguration = configuration) {
   let cursor = 0, tree, needsRender = true;
   const slots = [], effects = [], saves = [];
   const hooks = {
@@ -42,11 +42,11 @@ async function admin() {
     '../components/WorkflowFeedback': { WorkflowFeedback: ({ message }) => message ? react.createElement('p', {}, message) : null },
     '../components/UnsavedChangesGuard': { useUnsavedChanges: () => () => {}, confirmUnsavedNavigation: async () => true },
     '../components/CollapsibleSection': { CollapsibleSection: ({ title, children }) => react.createElement('section', {}, react.createElement('h3', {}, title), children) },
-    '../services/api': { api: { processReviewConfiguration: async () => structuredClone(configuration), saveProcessReviewConfiguration: async (key, request) => { saves.push({ key, request: structuredClone(request) }); return { ok: true, data: { ...request, version: 3, rowVersion: 'next-version' } }; } } },
+    '../services/api': { api: { processReviewConfiguration: async () => structuredClone(loadedConfiguration), saveProcessReviewConfiguration: async (key, request) => { saves.push({ key, request: structuredClone(request) }); return { ok: true, data: { ...request, version: 3, rowVersion: 'next-version' } }; } } },
     '../services/processReviewReporting': reporting, '../services/listQuery': listQuery, './ProcessReviewReporting.css': {}
   };
   const component = await compile('routes/AdminProcessReviews.tsx', modules);
-  async function settle() { for (let round = 0; round < 30; round++) { if (needsRender) { needsRender = false; cursor = 0; tree = component.AdminProcessReviews({ processKey: 'activate_growth_review' }); } while (effects.length) effects.shift()(); await new Promise(resolve => setImmediate(resolve)); if (!needsRender) return; } throw new Error('Admin settings did not settle'); }
+  async function settle() { for (let round = 0; round < 30; round++) { if (needsRender) { needsRender = false; cursor = 0; tree = component.AdminProcessReviews({ processKey: loadedConfiguration.processKey }); } while (effects.length) effects.shift()(); await new Promise(resolve => setImmediate(resolve)); if (!needsRender) return; } throw new Error('Admin settings did not settle'); }
   function nodes() { const result = []; function walk(node) { if (Array.isArray(node)) return node.forEach(walk); if (!node || typeof node !== 'object') return; result.push(node); walk(node.props?.children); } walk(tree); return result; }
   function input(label) { const group = nodes().find(node => node.type === 'label' && text(Array.isArray(node.props.children) ? node.props.children[0] : node.props.children) === label); assert.ok(group, `Missing label ${label}`); return (Array.isArray(group.props.children) ? group.props.children : [group.props.children]).find(node => ['input', 'textarea', 'select'].includes(node?.type)); }
   await settle();
@@ -77,4 +77,27 @@ test('saving changed Skills Scan wording preserves pillar/sub-area identities an
   assert.equal(request.skillsScanPillars[0].subAreas[0].title, 'Updated college sub-area wording');
   assert.deepEqual(request.actionThemes, configuration.actionThemes);
   assert.deepEqual(request.ratingOptions, []);
+});
+
+test('DLW administration displays the shared Learning Walk scale without a duplicate editor or sample requirement', async () => {
+  const ratingOptions = ['Emerging Practice', 'Developing Practice', 'Secure Practice', 'Strong Practice', 'Exceptional Practice'].map((wording, index) => ({
+    key: `shared_${index + 1}`, label: `${index + 1} – ${wording}`, score: index + 1, colorHex: '#176B3A', guidanceText: `Shared guidance ${index + 1}`
+  }));
+  const digital = { processKey: 'digital_learning_walk', title: 'Digital Learning Walks', version: 2, rowVersion: 'digital-config',
+    standards: [{ key: 'agency', title: 'Learner agency', statements: [{ key: 'independent', text: 'Learners work independently.' }] }],
+    ratingOptions, fieldLabels: { development: 'Areas for development' },
+    settings: { ratingScaleSource: 'learning_walk', evidenceMode: 'criterion_notes', requireSamplePerRating: 'false', requireRationale: 'false' } };
+  const page = await admin(digital);
+  const markup = page.markup();
+  assert.match(markup, /Shared Learning Walk rating scale/);
+  assert.match(markup, /1 – Emerging Practice/); assert.match(markup, /5 – Exceptional Practice/);
+  assert.match(markup, /Shared guidance 5/);
+  assert.equal((markup.match(/process-review-shared-scale-colour/g) ?? []).length, 5);
+  assert.doesNotMatch(markup, /Add rating category|Remove rating category|Require a linked sample|value="criterion_notes"|value="learning_walk"/);
+  assert.doesNotMatch(markup, /Require an evidence rationale|Evidence requirements/);
+  await page.change('Process title', 'Digital Learning Walk review');
+  await page.save();
+  assert.deepEqual(page.saves[0].request.ratingOptions, ratingOptions);
+  await page.change('Find a setting', 'shared learning walk');
+  assert.match(page.markup(), /Shared Learning Walk rating scale/);
 });

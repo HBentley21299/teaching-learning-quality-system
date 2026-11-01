@@ -99,7 +99,7 @@ public static class BusinessWorkbookExportBuilder
             "learning-walks" or "als-learning-walks" or "work-scrutiny" => ["Actions"],
             "elevate-environments" => ["Pillar Ratings", "Actions"],
             "uco-tla-reviews" => ["Development Actions"],
-            "digital_learning_walk" => ["Samples", "Responses", "Sample links", "Actions", "Updates"],
+            "digital_learning_walk" => ["Samples", "Responses", "Sample links", "Draft actions", "Actions", "Updates"],
             "activate_growth_review" => ["Skills Scan", "Review links", "Previous review", "Previous Skills Scan", "Review scope", "Participants", "Historical form", "Snapshots", "Actions", "Updates", "Historical action detail", "Historical impact updates"],
             // QA criteria are scalar fields of an evidence item and already appear on the first sheet.
             "qa-review" or "qa-reviews" or "qa-review-report" => ["Linked Actions"],

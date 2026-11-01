@@ -98,7 +98,7 @@ public sealed partial class SqlFoundationDataStore
             }
 
             await ClearLegacyElevateDraftAsync(
-                connection, transaction, assessmentId, currentUser.UserAccountId, cancellationToken);
+                connection, transaction, assessmentId, currentUser, cancellationToken);
 
             foreach (var rating in ratings)
             {
@@ -260,9 +260,18 @@ public sealed partial class SqlFoundationDataStore
         SqlConnection connection,
         System.Data.Common.DbTransaction transaction,
         Guid assessmentId,
-        Guid? userAccountId,
+        CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var linkedActions = new List<Guid>();
+        await using (var read = new SqlCommand("SELECT action_id FROM quality.elevate_practice_development_plans WITH(UPDLOCK,HOLDLOCK) WHERE assessment_id=@id AND action_id IS NOT NULL;",connection,(SqlTransaction)transaction))
+        {
+            read.Parameters.AddWithValue("@id",assessmentId);
+            await using var reader=await read.ExecuteReaderAsync(cancellationToken);
+            while(await reader.ReadAsync(cancellationToken))linkedActions.Add(reader.GetGuid(0));
+        }
+        foreach(var actionId in linkedActions.Distinct())
+            await EnsureCanManageActionAsync(connection,(SqlTransaction)transaction,actionId,currentUser,cancellationToken);
         await using var command = new SqlCommand(
             """
             UPDATE action_row
@@ -285,7 +294,7 @@ public sealed partial class SqlFoundationDataStore
             connection,
             (SqlTransaction)transaction);
         command.Parameters.AddWithValue("@assessmentId", assessmentId);
-        command.Parameters.AddWithValue("@userAccountId", ToDbValue(userAccountId));
+        command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

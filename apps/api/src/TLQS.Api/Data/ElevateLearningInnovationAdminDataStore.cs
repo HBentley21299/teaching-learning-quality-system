@@ -136,7 +136,7 @@ public sealed partial class SqlFoundationDataStore
 
             var beforeJson = JsonSerializer.Serialize(current);
             await ClearLegacyElevateDraftAsync(
-                connection, transaction, assessmentId, currentUser.UserAccountId, cancellationToken);
+                connection, transaction, assessmentId, currentUser, cancellationToken);
 
             foreach (var rating in ratings)
             {

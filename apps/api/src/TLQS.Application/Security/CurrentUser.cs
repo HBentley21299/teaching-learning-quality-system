@@ -11,6 +11,7 @@ public sealed record CurrentUser(
     IReadOnlyList<AccessScopeDto> Scopes)
 {
     public bool IsAdministrator { get; init; }
+    public bool IsTeachingLearning { get; init; }
 
     public bool HasPermission(string permissionKey) => Permissions.Contains(permissionKey);
 

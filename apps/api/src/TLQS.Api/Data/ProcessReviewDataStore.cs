@@ -37,7 +37,14 @@ public sealed partial class SqlFoundationDataStore
             """, command => command.Parameters.AddWithValue("@key", processKey),
             reader => JsonSerializer.Deserialize<ProcessReviewConfiguration>(reader.GetString(0), ProcessJson)! with
             { Version = reader.GetInt32(1), RowVersion = Convert.ToBase64String((byte[])reader[2]) }, ct);
-        return rows.FirstOrDefault() ?? ProcessReviewRules.DefaultConfiguration(processKey);
+        var result=rows.FirstOrDefault() ?? ProcessReviewRules.DefaultConfiguration(processKey);
+        if(processKey==ProcessReviewRules.Digital)
+        {
+            var labels=new Dictionary<string,string>(result.FieldLabels,StringComparer.Ordinal);
+            foreach(var label in ProcessReviewRules.DefaultConfiguration(processKey).FieldLabels)labels.TryAdd(label.Key,label.Value);
+            result=await ApplyDigitalLearningWalkScaleAsync(result with{FieldLabels=labels},ct);
+        }
+        return result;
     }
 
     public async Task<ProcessReviewConfiguration> SaveProcessReviewConfigurationAsync(string processKey,
@@ -46,6 +53,7 @@ public sealed partial class SqlFoundationDataStore
         if (!ProcessReviewRules.CanManageConfiguration(user)) throw new UnauthorizedAccessException("Form administration access is required.");
         if(processKey==ProcessReviewRules.Activate&&request.SkillsScanPillars is null)
             throw new WorkflowValidationException("Activate+ settings require the six Skills Scan pillars and five specialist action themes.");
+        if(processKey==ProcessReviewRules.Digital)request=await ApplyDigitalLearningWalkScaleAsync(request,ct);
         ProcessReviewRules.ValidateConfiguration(processKey, request);
         await using var connection = await OpenConnectionAsync(ct);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable, ct);
@@ -85,12 +93,19 @@ public sealed partial class SqlFoundationDataStore
     public async Task<IReadOnlyList<ProcessReviewSummary>> GetProcessReviewsAsync(string processKey, string? academicYear, CurrentUser user, CancellationToken ct)
     {
         var rows = await ReadProcessRowsAsync(processKey, academicYear, null, user, ct);
-        return rows.Select(row => new ProcessReviewSummary(row.RecordId,row.ProcessKey,row.Title,row.AcademicYear,
+        return rows.Select(row =>
+        {
+            var digitalStatements=row.ProcessKey==ProcessReviewRules.Digital?ProcessReviewRules.SelectedDigitalStatements(row.Configuration,row.Data):null;
+            var digitalKeys=digitalStatements?.Select(statement=>statement.Key).ToHashSet(StringComparer.Ordinal);
+            return new ProcessReviewSummary(row.RecordId,row.ProcessKey,row.Title,row.AcademicYear,
             row.FacultyId,row.FacultyName,row.TeamId,row.TeamName,row.RecordDate,row.OwnerId,row.OwnerName,row.Status,
-            row.UpdatedAt,row.RowVersion,row.Data.Samples.Count,row.Data.Responses.Count(x=>!string.IsNullOrEmpty(x.RatingKey)),
-            row.Configuration.Standards.Sum(x=>x.Statements.Count),row.OpenActions,row.SnapshotAsOf,row.SelectedSubTeams,row.Participants,
+            row.UpdatedAt,row.RowVersion,row.Data.Samples.Count,row.Data.Responses.Count(x=>!string.IsNullOrEmpty(x.RatingKey)
+                &&(digitalKeys is null||digitalKeys.Contains(x.StatementKey))),
+            digitalStatements?.Count??row.Configuration.Standards.Sum(x=>x.Statements.Count),row.OpenActions,row.SnapshotAsOf,row.SelectedSubTeams,row.Participants,
             row.Data.Activate?.SkillsScanScores,row.Data.Activate?.FollowUpDate,row.Data.Activate?.AllSubTeams,
-            row.IsFollowUp,row.ParentReview,row.FollowUpReviews)).ToArray();
+            row.IsFollowUp,row.ParentReview,row.FollowUpReviews,row.Data.Digital?.SelectedStandardKeys,
+            digitalStatements is null?null:ProcessReviewRules.SelectedDigitalStandards(row.Configuration,row.Data));
+        }).ToArray();
     }
 
     private async Task<IReadOnlyList<ProcessRow>> ReadProcessRowsAsync(string? processKey, string? academicYear, Guid? recordId, CurrentUser user, CancellationToken ct,
@@ -176,15 +191,36 @@ public sealed partial class SqlFoundationDataStore
         if (existing?.Status == "draft")
         {
             var latest = await GetProcessReviewConfigurationAsync(processKey,ct);
-            if (ProcessReviewRules.CanRefreshUnratedDraft(configuration,latest,request.Data)) configuration=latest;
+            if (ProcessReviewRules.CanRefreshUnratedDraft(configuration,latest,existing.Data)) configuration=latest;
         }
+        if(processKey==ProcessReviewRules.Digital&&existing?.Data.Digital?.SelectedStandardKeys is not null&&request.Data.Digital is null)
+            throw new WorkflowValidationException("Keep the category selection when saving this Digital Learning Walk. Reload the form before saving.");
+        if(processKey==ProcessReviewRules.Digital&&request.Data.Digital is not null)
+            request=await NormalizeDigitalReviewRequestAsync(request,existing,configuration,ct);
         ProcessReviewRules.ValidateSave(existing?.Status=="submitted" && (processKey==ProcessReviewRules.Digital||request.Data.Activate is not null)
             ? request with {Submit=true}:request,configuration);
         if (existing is not null && request.RowVersion!=existing.RowVersion) throw new DBConcurrencyException("This review changed. Reload it before saving; your unsaved changes remain in the form.");
         await using var connection=await OpenConnectionAsync(ct);
         await using var transaction=(SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable,ct);
+        var formal=request.Submit||existing?.Status=="submitted";
+        IReadOnlyList<DigitalLearningWalkDraftAction> digitalDraftActions=[];
+        if(processKey==ProcessReviewRules.Digital&&request.Data.Digital is {} digital)
+        {
+            request=await NormalizeDigitalDeliveryAreaAsync(connection,transaction,request,existing,formal,ct);
+            digitalDraftActions=digital.DraftActions;
+            var pending=formal?await PendingDigitalDraftActionsAsync(connection,transaction,digitalDraftActions,recordId,ct):digitalDraftActions;
+            var owners=pending.Where(action=>action.OwnerStaffId.HasValue).Select(action=>action.OwnerStaffId!.Value).Distinct().ToArray();
+            await ValidateDigitalActionOwnersAsync(connection,transaction,owners,user,ct);
+            if(formal)request=request with{Data=request.Data with{Digital=digital with{DraftActions=[]}}};
+        }
         if(request.Data.Activate is null)await ValidateProcessOrganisationAsync(connection,transaction,request.FacultyOrgUnitId,request.TeamOrgUnitId,user,ct);
-        await ValidateProcessSampleStaffAsync(connection,transaction,request.Data.Samples,user,ct);
+        var sampleReferences=request.Data.Samples;
+        if(processKey==ProcessReviewRules.Digital&&existing is not null&&(request.Data.Digital is not null||configuration.Settings.GetValueOrDefault("evidenceMode") is "criterion_notes" or "ratings_only"))
+        {
+            var retainedStaff=existing.Data.Samples.SelectMany(sample=>sample.StaffIds).ToHashSet();
+            sampleReferences=request.Data.Samples.Select(sample=>sample with{StaffIds=sample.StaffIds.Where(id=>!retainedStaff.Contains(id)).ToArray()}).ToArray();
+        }
+        await ValidateProcessSampleStaffAsync(connection,transaction,sampleReferences,user,ct);
         var participants=request.Data.Activate is null?ProcessReviewRules.ParticipantStaffIds(request.Data):[];
         if(participants.Count>0)await ValidateProcessSampleStaffAsync(connection,transaction,
             [new ProcessReviewSample("participants","Review participants","staff",null,null,participants,null,null)],user,ct);
@@ -219,6 +255,8 @@ public sealed partial class SqlFoundationDataStore
         }
         if(request.Data.Activate is not null)
             await SaveActivateReviewContextAsync(connection,transaction,id,activateScopes,activateParticipants,ct);
+        if(processKey==ProcessReviewRules.Digital&&formal&&digitalDraftActions.Count>0)
+            await PromoteDigitalDraftActionsAsync(connection,transaction,id,digitalDraftActions,configuration,user,ct);
         if(upgrading)
         {
             await using var legacy=new SqlCommand("UPDATE quality.process_reviews SET legacy_configuration_json=COALESCE(legacy_configuration_json,@legacy) WHERE record_id=@id;",connection,transaction);
@@ -236,7 +274,9 @@ public sealed partial class SqlFoundationDataStore
             await snapshot.ExecuteNonQueryAsync(ct);
         }
         await WriteAuditAsync(connection,transaction,user.UserAccountId,id,"process_review",id,request.Submit?"process_review.submitted":"process_review.saved",
-            $"{title} {(request.Submit?"recorded":"saved")} by {user.DisplayName}.",null,null,ct);
+            $"{title} {(request.Submit?"recorded":"saved")} by {user.DisplayName}.",
+            processKey==ProcessReviewRules.Digital&&existing is not null?JsonSerializer.Serialize(existing.Data,ProcessJson):null,
+            processKey==ProcessReviewRules.Digital?JsonSerializer.Serialize(request.Data,ProcessJson):null,ct);
         await transaction.CommitAsync(ct);
         return await GetProcessReviewAsync(id,user,ct) ?? throw new InvalidOperationException("The saved review could not be read.");
     }

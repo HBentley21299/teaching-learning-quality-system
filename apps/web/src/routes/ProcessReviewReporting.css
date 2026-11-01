@@ -24,6 +24,11 @@
 .process-review-report .toolbar { flex-wrap: wrap; }
 .process-review-report .process-review-tab-button[aria-pressed="true"] { background: var(--teal-soft, #e2f4ee); color: var(--teal, #056e64); }
 .process-review-report .process-review-report-statements { display: grid; gap: .5rem; }
+.process-review-category-scope { min-width: min(100%, 14rem); }
+.process-review-category-scope > p { margin: 0 0 .5rem; font-size: .875rem; }
+.process-review-category-scope ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.process-review-category-scope li { display: grid; gap: .2rem; white-space: normal; overflow-wrap: anywhere; }
+.process-review-category-scope small { color: var(--text-muted); }
 @media (max-width: 560px) {
   .process-review-question-row { align-items: stretch; flex-direction: column; }
   .process-review-question-row > button { align-self: start; }
@@ -52,3 +57,7 @@
 .activate-report-pillar dl > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; padding: .5rem 0; }
 .activate-report-pillar dt, .activate-report-pillar dd { margin: 0; }
 .activate-report-pillar dd { font-variant-numeric: tabular-nums; }
+.process-review-shared-scale { list-style: none; margin: 0; padding: 0; display: grid; gap: .65rem; }
+.process-review-shared-scale > li { display: flex; align-items: stretch; gap: .75rem; padding: .65rem 0; }
+.process-review-shared-scale-colour { flex: 0 0 .4rem; border-radius: .2rem; }
+.process-review-shared-scale p { margin: .3rem 0 0; }

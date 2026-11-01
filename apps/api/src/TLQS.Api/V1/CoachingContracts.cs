@@ -56,7 +56,8 @@ public sealed record CoachingPreviousActionSummary(
     string? IntendedEvidence,
     string? IntendedImpact,
     string? LatestProgressUpdate,
-    string? LatestImpactObserved);
+    string? LatestImpactObserved,
+    bool CanManageAction = false);
 
 public sealed record CoachingSessionSummary(
     Guid Id,
@@ -130,7 +131,8 @@ public sealed record CoachingSessionActionSummary(
     string? IntendedImpact,
     DateOnly? ReviewDate,
     string Status,
-    Guid? ParentActionId);
+    Guid? ParentActionId,
+    bool CanManageAction = false);
 
 public sealed record SaveCoachingSessionRequest(
     Guid StaffId,
