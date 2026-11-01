@@ -53,11 +53,13 @@ async function view(name, initialProps, api = {}) {
   const Button = ({ icon, variant, busy, children, ...rest }) => react.createElement('button', { ...rest, disabled: rest.disabled || busy }, children);
   const Feedback = ({ message, tone }) => message ? react.createElement('p', { role: tone === 'error' ? 'alert' : 'status' }, message) : null;
   const Staff = ({ label }) => react.createElement('input', { 'aria-label': label || 'Staff search' });
+  const ActionReview = ({ actionId }) => react.createElement('section', { 'aria-label': `Native action review ${actionId}` });
   const modules = {
     react: hooks, 'react/jsx-runtime': jsx, 'lucide-react': new Proxy({}, { get: () => () => null }),
     '../design-system/Button': { Button }, '../components/StaffSearchSelect': { StaffSearchSelect: Staff },
     '../components/WorkflowFeedback': { WorkflowFeedback: Feedback }, '../services/processReviewTypes': helpers,
     '../components/SkillsScanResultBar': barModule.exports,
+    '../components/ProcessReviewActionPanel': { ProcessReviewActionPanel: ActionReview },
     '../components/WorkflowPagination': { useWorkflowPagination: rows => ({ items: rows }), WorkflowPagination: () => null },
     '../components/WorkflowFilters': { WorkflowFilters: ({ children, primary }) => react.createElement('div', null, primary, children) },
     '../components/LoadingState': { LoadingState: ({ label }) => react.createElement('p', null, label) },
@@ -71,7 +73,7 @@ async function view(name, initialProps, api = {}) {
   function nodes() { const result = []; function walk(node) { if (Array.isArray(node)) return node.forEach(walk); if (!node || typeof node !== 'object') return; result.push(node); walk(node.props?.children); } walk(tree); return result; }
   await settle();
   return {
-    nodes, settle, unsaved,
+    nodes, settle, unsaved, actionReview: () => nodes().find(node => node.type === ActionReview),
     markup: () => renderToStaticMarkup(tree),
     async click(label) { const button = nodes().find(node => node.type === Button && text(node.props.children) === label); assert.ok(button, `Missing button ${label}`); assert.equal(Boolean(button.props.disabled), false); button.props.onClick(); await settle(); },
     async change(label, value) {
@@ -282,4 +284,34 @@ test('amending an inherited action uses its shared action identity and preserves
   assert.equal(calls[0].id, 'shared-action'); assert.equal(changed[0].recordId, 'child');
   assert.equal(changed[0].data.activate.meetingMinutes, 'Unsaved follow-up meeting context');
   assert.equal(changed[0].actions.length, 1); assert.equal(changed[0].actions[0].recordId, 'parent'); assert.equal(changed[0].actions[0].detail, 'Updated shared action detail');
+});
+
+
+test('follow-up native outcome controls target the inherited action and dated child review, preserving dirty-state guards', async () => {
+  const inherited = { actionId: 'original-action', recordId: 'parent', recordTitle: 'Original growth review', title: 'Improve feedback', detail: 'Improve digital feedback', themeKey: 'area_1', ownerStaffId: 'creator', ownerName: 'Review Creator', dueDate: '2027-01-15', reviewDate: '2027-01-15', successEvidence: 'Learners act on feedback', progress: 'open', canEdit: true, updates: [] };
+  const child = detail(request(), { recordId: 'follow-up', isFollowUp: true, actions: [inherited] });
+  const changed = [], dirty = [], busy = [], loaded = [];
+  const props = { detail: child, configuration, staff: [], onDirtyChange: value => dirty.push(value), onSavingChange: value => busy.push(value), onChanged: async value => changed.push(value), onSaveReview: async () => true, reviewSaving: false };
+  const page = await view('Actions', props, { processReview: async id => { loaded.push(id); return { ...child, actions: [{ ...inherited, progress: 'complete', updates: [{ updateId: 'review-outcome', reviewRecordId: 'follow-up', progressNote: 'Feedback is now routinely acted on.', updatedAt: '2026-12-01', updatedByName: 'Review Creator' }] }] }; } });
+  assert.match(page.markup(), /Carried forward from Original growth review/);
+  await page.click('Close action');
+  const panel = page.actionReview(); assert.ok(panel);
+  assert.equal(panel.props.actionId, 'original-action'); assert.equal(panel.props.reviewRecordId, 'follow-up'); assert.equal(panel.props.initialOutcome, 'close');
+  panel.props.onDirtyChange(true); panel.props.onSavingChange(true); await page.settle();
+  assert.equal(dirty.at(-1), true); assert.equal(busy.at(-1), true);
+  assert.ok(page.nodes().filter(node => node.props?.onClick && ['Close action', 'Extend action', 'Add action'].includes(text(node.props.children))).every(node => node.props.disabled));
+  panel.props.onDirtyChange(false); panel.props.onSavingChange(false); await panel.props.onChanged(); await page.settle();
+  assert.deepEqual(loaded, ['follow-up']); assert.equal(changed[0].recordId, 'follow-up'); assert.equal(changed[0].actions[0].recordId, 'parent');
+  await page.rerender({ detail: changed[0] });
+  assert.match(page.markup(), /1 of 1 actions reviewed in this follow-up/);
+  assert.match(page.markup(), /Feedback is now routinely acted on/);
+  assert.doesNotMatch(page.markup(), />Close action</);
+});
+
+test('review visibility alone offers history without close or extend authority', async () => {
+  const saved = detail(request(), { isFollowUp: true, actions: [{ actionId: 'readonly', recordId: 'parent', title: 'Original action', themeKey: 'area_1', dueDate: '2027-01-15', successEvidence: 'Expected impact', progress: 'open', ownerName: 'Responsible Colleague', canEdit: false, updates: [] }] });
+  const page = await view('Actions', { detail: saved, configuration, staff: [], onDirtyChange() {}, onSavingChange() {}, onChanged: async () => {}, onSaveReview: async () => true, reviewSaving: false });
+  assert.doesNotMatch(page.markup(), /Close action|Extend action|Amend action/);
+  await page.click('View action history');
+  assert.equal(page.actionReview().props.actionId, 'readonly');
 });

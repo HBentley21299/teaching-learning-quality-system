@@ -3,7 +3,7 @@ import { AlertCircle, ArrowRight, BarChart3, BookOpenCheck, CalendarClock, Check
 import { DashboardReportButton } from "../components/ExportButtons";
 import { LoadingState } from "../components/LoadingState";
 import { DashboardDataExplorer } from "../components/DashboardDataExplorer";
-import { KpiStrip } from "../components/KpiStrip";
+import { DashboardMetricCard, DashboardProgressRing } from "../components/DashboardVisuals";
 import { Button } from "../design-system/Button";
 import { api } from "../services/api";
 import { DashboardRequestCache } from "../services/dashboardRequestCache";
@@ -20,6 +20,7 @@ type Props = {
   requestCache?: DashboardRequestCache;
   accessScope?: string;
 };
+type RegisterFocus = "all" | "completed" | "in_progress" | "follow_up_due" | "overdue_actions";
 
 export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: controlledSection, onSectionChange, requestCache: sharedCache, accessScope = JSON.stringify(access) }: Props) {
   const localCache = useRef(new DashboardRequestCache()).current;
@@ -31,6 +32,7 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: c
   const dashboard = loadedDashboard?.scope === scope ? loadedDashboard.value : null;
   const [reviewSearch, setReviewSearch] = useState("");
   const [reviewStatus, setReviewStatus] = useState("all");
+  const [registerFocus, setRegisterFocus] = useState<RegisterFocus>("all");
   const [lecturerFilter, setLecturerFilter] = useState("all");
   const [observerFilter, setObserverFilter] = useState("all");
   const [courseFilter, setCourseFilter] = useState("all");
@@ -61,7 +63,7 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: c
     }
   }
 
-  useEffect(() => { setLoadedDashboard(null); setPage(1); void refresh(false); return () => { ++loadSequence.current; }; }, [scope]);
+  useEffect(() => { setLoadedDashboard(null); setPage(1); setRegisterFocus("all"); void refresh(false); return () => { ++loadSequence.current; }; }, [scope]);
   const formFilterKey = JSON.stringify({ academicYear, status: reviewStatus === "all" ? undefined : reviewStatus });
   const loadFormData = useCallback(() => requestCache.get(`uco-data:${scope}:${formFilterKey}`, () => api.dashboardRecordData(academicYear, "uco_tla_review", JSON.parse(formFilterKey))), [requestCache, scope, formFilterKey]);
 
@@ -69,9 +71,9 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: c
   const completedReviews = reviews.filter((review) => review.workflowStatus === "completed").length;
   const inProgressReviews = reviews.length - completedReviews;
   const completedSectionMarks = reviews.reduce((total, review) => total + review.completedSectionCount, 0);
-  const sectionReadiness = reviews.length ? Math.round(completedSectionMarks * 100 / (reviews.length * 7)) : 0;
+  const sectionReadiness = reviews.length ? `${Math.round(completedSectionMarks * 100 / (reviews.length * 7))}%` : "—";
   const personalCompletion = reviews.length ? Math.round(completedReviews * 100 / reviews.length) : 0;
-  const headlineProgress = access.canManage ? dashboard?.coveragePercent ?? 0 : personalCompletion;
+  const headlineProgress = access.canManage ? dashboard && dashboard.activeUcoStaff > 0 ? dashboard.coveragePercent : null : reviews.length ? personalCompletion : null;
   const workflowDistribution = [
     { status: "observer_draft", label: "Observer review", detail: "Evidence being prepared", tone: "blue" },
     { status: "awaiting_lecturer", label: "With lecturer", detail: "Discussion and reflection", tone: "amber" },
@@ -95,7 +97,11 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: c
     return attention ? [{ review, attention }] : [];
   }).sort((left, right) => left.attention.priority - right.attention.priority || sortableDate(left.review.observationAt) - sortableDate(right.review.observationAt));
   const filteredReviews = reviews.filter((review) =>
-    (lecturerFilter === "all" || review.lecturerName === lecturerFilter)
+    (registerFocus === "all" || registerFocus === "completed" && review.workflowStatus === "completed"
+      || registerFocus === "in_progress" && review.workflowStatus !== "completed"
+      || registerFocus === "overdue_actions" && review.overdueActionCount > 0
+      || registerFocus === "follow_up_due" && review.followUpStatus === "scheduled" && Boolean(review.followUpAt && new Date(review.followUpAt).getTime() <= now + 14 * 24 * 60 * 60 * 1000))
+    && (lecturerFilter === "all" || review.lecturerName === lecturerFilter)
     && (observerFilter === "all" || review.observerName === observerFilter)
     && (courseFilter === "all" || (review.courseTitle || "Not recorded") === courseFilter)
     && (moduleFilter === "all" || (review.moduleTitle || "Not recorded") === moduleFilter)
@@ -113,6 +119,11 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: c
     { key: "module", label: "Module", value: moduleFilter, change: setModuleFilter, values: distinctListValues((dashboard?.reviews ?? []).map(review => review.moduleTitle || "Not recorded")) },
     { key: "follow-up", label: "Follow-up", value: followUpFilter, change: setFollowUpFilter, values: distinctListValues((dashboard?.reviews ?? []).map(review => review.followUpStatus || "Not recorded")) }
   ];
+  const focusLabels: Record<RegisterFocus, string> = { all: "All reviews in report scope", completed: "Completed reviews", in_progress: "Reviews in progress", follow_up_due: "Follow-ups due within 14 days or overdue", overdue_actions: "Reviews with overdue actions" };
+  function chooseRegisterFocus(focus: RegisterFocus) {
+    setRegisterFocus(current => current === focus ? "all" : focus); setPage(1);
+    if (typeof window !== "undefined") window.requestAnimationFrame(() => document.getElementById("uco-review-exploration")?.focus({ preventScroll: false }));
+  }
 
   return <>
     <header className="intelligence-header">
@@ -126,24 +137,24 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: c
     {access.canExport ? <nav className="dashboard-section-tabs" aria-label="UCO report sections"><button type="button" aria-current={section === "summary" ? "page" : undefined} onClick={() => (onSectionChange ?? setLocalSection)("summary")}>Summary</button><button type="button" aria-current={section === "data" ? "page" : undefined} onClick={() => (onSectionChange ?? setLocalSection)("data")}>Form data</button></nav> : null}
     {access.canExport && section === "data" ? <><p className="dashboard-explorer-scope-note">Saved report data includes released reviews. Unpublished observer drafts remain available through their original review workflow.</p><DashboardDataExplorer processKey="uco_tla_review" academicYear={academicYear} filters={{ academicYear, status: reviewStatus === "all" ? undefined : reviewStatus }} loadData={loadFormData} refreshKey={loadedDashboard?.revision} onOpenEntry={onOpenReview} /></> : <>
 
-    <KpiStrip items={[
-      access.canManage
-        ? { label: "Annual coverage", value: dashboard ? `${dashboard.coveredUcoStaff}/${dashboard.activeUcoStaff} (${dashboard.coveragePercent}%)` : "—", tone: "blue" }
-        : { label: "Reviews in my view", value: reviews.length, tone: "blue" },
-      { label: "Reviews complete", value: completedReviews, tone: "green" },
-      { label: "In progress", value: inProgressReviews, tone: "amber" },
-      { label: "Follow-ups due", value: followUpsDue, tone: "amber" },
-      { label: "Overdue actions", value: overdueActionCount, tone: "red" }
-    ]} />
+    <section className="dashboard-visual-metrics" aria-label="UCO review measures">
+      {access.canManage ? <DashboardMetricCard label="Annual coverage" value={dashboard.activeUcoStaff > 0 ? `${dashboard.coveredUcoStaff}/${dashboard.activeUcoStaff} (${dashboard.coveragePercent}%)` : "—"} detail="Final sign-off across eligible staff" tone="blue" />
+        : <DashboardMetricCard label="Reviews in my view" value={reviews.length} detail="Explore all reviews in report scope" tone="blue" active={registerFocus === "all"} onSelect={() => chooseRegisterFocus("all")} />}
+      <DashboardMetricCard label="Reviews complete" value={completedReviews} detail="Explore signed-off reviews" tone="green" active={registerFocus === "completed"} onSelect={() => chooseRegisterFocus("completed")} />
+      <DashboardMetricCard label="In progress" value={inProgressReviews} detail="Explore unfinished reviews" tone="amber" active={registerFocus === "in_progress"} onSelect={() => chooseRegisterFocus("in_progress")} />
+      <DashboardMetricCard label="Follow-ups due" value={followUpsDue} detail="Explore due and overdue follow-ups" tone="amber" active={registerFocus === "follow_up_due"} onSelect={() => chooseRegisterFocus("follow_up_due")} />
+      <DashboardMetricCard label="Overdue actions" value={overdueActionCount} detail="Explore reviews with overdue actions" tone="red" active={registerFocus === "overdue_actions"} onSelect={() => chooseRegisterFocus("overdue_actions")} />
+    </section>
+    <p className="dashboard-explorer-scope-note">Select a measure to focus the named review register. Annual coverage remains an annual staff measure; report filters and exports use the academic year and workflow stage.</p>
 
     <section className="uco-dashboard-grid" aria-label="UCO review dashboard">
       <article className="panel uco-dashboard-card uco-dashboard-progress-card">
         <header><div><p className="eyebrow">{academicYear || "Current year"}</p><h2>{access.canManage ? "Annual coverage" : "Review completion"}</h2><span>{access.canManage ? "Completed reviews across active UCO staff" : "Completed reviews available in your view"}</span></div><UsersRound size={20} /></header>
         <div className="uco-dashboard-progress-layout">
-          <div className="uco-dashboard-ring" role="img" aria-label={`${headlineProgress}% ${access.canManage ? "annual coverage" : "review completion"}`} style={{ background: `conic-gradient(var(--teal) 0 ${headlineProgress}%, var(--surface-muted) ${headlineProgress}% 100%)` }}><span><strong>{headlineProgress}%</strong><small>{access.canManage ? "coverage" : "complete"}</small></span></div>
+          <DashboardProgressRing value={headlineProgress} label={access.canManage ? "coverage" : "complete"} />
           <div className="uco-dashboard-progress-copy"><strong>{access.canManage ? `${dashboard?.coveredUcoStaff ?? 0} of ${dashboard?.activeUcoStaff ?? 0} staff covered` : `${completedReviews} of ${reviews.length} reviews complete`}</strong><p>Coverage means an authenticated review has reached final sign-off.</p></div>
         </div>
-        <div className="uco-dashboard-mini-metrics"><div><span>Sections marked</span><strong>{sectionReadiness}%</strong></div><div><span>Next 30 days</span><strong>{upcomingObservations}</strong></div><div><span>Open actions</span><strong>{openActionCount}</strong></div></div>
+        <div className="uco-dashboard-mini-metrics"><div><span>Sections marked</span><strong>{sectionReadiness}</strong></div><div><span>Next 30 days</span><strong>{upcomingObservations}</strong></div><div><span>Open actions</span><strong>{openActionCount}</strong></div></div>
       </article>
 
       <article className="panel uco-dashboard-card">
@@ -175,17 +186,18 @@ export function UcoTlaDashboard({ access, academicYear, onOpenReview, section: c
       </article>
     </section>
 
-    <section className="panel">
+    <section className="panel" id="uco-review-exploration" tabIndex={-1}>
       <div className="panel-heading"><div><h2>{access.canManage ? "UCO review register" : "Reviews in my view"}</h2><span>{filteredReviews.length} of {reviews.length} reviews in {academicYear || "the current academic year"}</span></div></div>
       <div className="filter-toolbar uco-dashboard-filter">
         <label className="search-box"><Search size={16} aria-hidden="true" /><input aria-label="Search UCO review register" onChange={(event) => { setReviewSearch(event.target.value); setPage(1); }} placeholder="Search people, sessions, dates or progress" value={reviewSearch} /></label>
         <label className="dashboard-explorer-filter"><span>Sort by</span><select aria-label="Sort UCO reviews by" value={sortBy} onChange={event => { setSortBy(event.target.value); setPage(1); }}>{[["lecturerName", "Lecturer"], ["observerName", "Observer"], ["title", "Review title"], ["courseTitle", "Course"], ["moduleTitle", "Module"], ["observationAt", "Observation date"], ["workflowStatus", "Workflow stage"], ["completedSectionCount", "Sections marked"], ["openActionCount", "Open actions"], ["overdueActionCount", "Overdue actions"], ["professionalDiscussionAt", "Discussion date"], ["followUpAt", "Follow-up date"], ["followUpStatus", "Follow-up status"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         <label className="dashboard-explorer-filter"><span>Order</span><select aria-label="UCO review sort order" value={sortDirection} onChange={event => { setSortDirection(event.target.value as "asc" | "desc"); setPage(1); }}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
-        <Button variant="secondary" onClick={() => { setLecturerFilter("all"); setObserverFilter("all"); setCourseFilter("all"); setModuleFilter("all"); setFollowUpFilter("all"); setReviewSearch(""); setPage(1); }}>Clear register filters</Button>
+        <Button variant="secondary" onClick={() => { setRegisterFocus("all"); setLecturerFilter("all"); setObserverFilter("all"); setCourseFilter("all"); setModuleFilter("all"); setFollowUpFilter("all"); setReviewSearch(""); setPage(1); }}>Clear register filters</Button>
       </div>
       <details className="reporting-register-more"><summary>People and session filters{[lecturerFilter, observerFilter, courseFilter, moduleFilter, followUpFilter].filter(value => value !== "all").length ? <span className="reporting-filter-count">{[lecturerFilter, observerFilter, courseFilter, moduleFilter, followUpFilter].filter(value => value !== "all").length} active</span> : null}</summary><div className="filter-toolbar reporting-register-filters">
         {choiceSets.map(choice => <label className="dashboard-explorer-filter" key={choice.key}><span>{choice.label}</span><select aria-label={`UCO register ${choice.key}`} value={choice.value} onChange={event => { choice.change(event.target.value); setPage(1); }}><option value="all">All {choice.label.toLocaleLowerCase()} values</option>{choice.values.map(value => <option key={value} value={value}>{choice.key === "follow-up" ? humanStatus(value) : value}</option>)}{choice.value !== "all" && !choice.values.includes(choice.value) ? <option value={choice.value}>{choice.value} · no matching records</option> : null}</select></label>)}
       </div></details>
+      <p className="uco-dashboard-method-note" role="status">Register focus: {focusLabels[registerFocus]}</p>
       <p className="dashboard-explorer-scope-note">These people, session and follow-up filters refine this register. Summary figures, form data and Excel use the academic year and workflow stage above. Choices include historical values from all permitted reviews.</p>
       <div className="uco-review-list">{filteredReviews.length === 0 ? <p className="muted-copy">No UCO TLA Reviews match this dashboard view.</p> : filteredReviews.slice((currentPage - 1) * 15, currentPage * 15).map((review) => <DashboardReviewRow key={review.recordId} review={review} onOpen={() => onOpenReview(review.recordId)} />)}</div>
       <Pagination page={currentPage} totalPages={totalPages} onPageChange={setPage} />

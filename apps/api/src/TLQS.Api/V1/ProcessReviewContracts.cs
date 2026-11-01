@@ -2,7 +2,7 @@ namespace TLQS.Api.V1;
 
 public sealed record ProcessReviewStatement(string Key, string Text);
 public sealed record ProcessReviewStandard(string Key, string Title, IReadOnlyList<ProcessReviewStatement> Statements);
-public sealed record ProcessReviewRatingOption(string Key, string Label);
+public sealed record ProcessReviewRatingOption(string Key,string Label,int? Score=null,string? GuidanceText=null,string? ColorHex=null);
 public sealed record ProcessReviewSkillSubArea(string Key,string Title);
 public sealed record ProcessReviewSkillsPillar(string Key,string Title,IReadOnlyList<ProcessReviewSkillSubArea> SubAreas);
 public sealed record ProcessReviewActionTheme(string Key,string Title);
@@ -30,9 +30,13 @@ public sealed record ProcessReviewSample(
     IReadOnlyList<Guid> StaffIds, string? EvidenceLink, string? Notes);
 public sealed record ProcessReviewResponse(
     string StatementKey, string? RatingKey, IReadOnlyList<string> SampleIds, string? Rationale);
+public sealed record DigitalLearningWalkDraftAction(Guid Id,string ThemeKey,string Title,Guid? OwnerStaffId=null,DateOnly? DueDate=null);
+public sealed record DigitalLearningWalkData(IReadOnlyList<string> SelectedStatementKeys,IReadOnlyList<DigitalLearningWalkDraftAction> DraftActions,
+    IReadOnlyList<string>? SelectedStandardKeys=null);
+public sealed record ProcessReviewSelectedStandard(string Key,string Title,int StatementCount,int SelectedStatementCount);
 public sealed record ProcessReviewData(
     IReadOnlyDictionary<string, string> Fields, IReadOnlyList<ProcessReviewSample> Samples,
-    IReadOnlyList<ProcessReviewResponse> Responses,ActivateGrowthReviewData? Activate=null);
+    IReadOnlyList<ProcessReviewResponse> Responses,ActivateGrowthReviewData? Activate=null,DigitalLearningWalkData? Digital=null);
 public sealed record SaveProcessReviewRequest(
     string Title, string AcademicYear, Guid? FacultyOrgUnitId, Guid? TeamOrgUnitId,
     DateOnly? RecordDate, ProcessReviewData Data, bool Submit = false, string? RowVersion = null);
@@ -49,7 +53,8 @@ public sealed record ProcessReviewSummary(
     int StatementCount, int OpenActionCount, DateOnly? SnapshotAsOf,
     IReadOnlyList<ProcessReviewOrgScope>? SelectedSubTeams=null,IReadOnlyList<ProcessReviewParticipant>? Participants=null,
     IReadOnlyDictionary<string,decimal?>? SkillsScanScores=null,DateOnly? FollowUpDate=null,bool? AllSubTeams=null,
-    bool IsFollowUp=false,ProcessReviewLink? ParentReview=null,IReadOnlyList<ProcessReviewLink>? FollowUpReviews=null);
+    bool IsFollowUp=false,ProcessReviewLink? ParentReview=null,IReadOnlyList<ProcessReviewLink>? FollowUpReviews=null,
+    IReadOnlyList<string>? SelectedStandardKeys=null,IReadOnlyList<ProcessReviewSelectedStandard>? SelectedStandards=null);
 public sealed record ProcessReviewSnapshot(
     Guid SnapshotId, DateOnly AsOfDate, DateTimeOffset RecordedAt, string RecordedByName,
     string SourceMeeting, string TeamsLink, ProcessReviewData Data);
@@ -57,7 +62,7 @@ public sealed record ProcessReviewActionUpdate(
     Guid UpdateId, DateTimeOffset UpdatedAt, string UpdatedByName, string Progress,
     string? ProgressNote, string? EvidenceLink, string? Barriers, string? NextStep,
     DateOnly DueDate, string? DeadlineChangeReason,
-    string ImpactStatus, string? ImpactEvidence, string? ImpactEvidenceLink);
+    string ImpactStatus, string? ImpactEvidence, string? ImpactEvidenceLink,Guid? ReviewRecordId=null);
 public sealed record ProcessReviewAction(
     Guid ActionId, Guid RecordId, string ProcessKey, string RecordTitle, string AcademicYear,
     string? FacultyName, string? TeamName, string Title, string ThemeKey,
@@ -74,7 +79,7 @@ public sealed record SaveProcessReviewActionRequest(
     string? NextStep = null, string ImpactStatus = "awaiting_evidence",
     string? ImpactEvidence = null, string? ImpactEvidenceLink = null,
     string? DeadlineChangeReason = null, string? RowVersion = null,
-    IReadOnlyList<Guid>? ResponsibleStaffIds=null,string? ImpactAreaKey=null,string? Detail=null,DateOnly? ReviewDate=null);
+    IReadOnlyList<Guid>? ResponsibleStaffIds=null,string? ImpactAreaKey=null,string? Detail=null,DateOnly? ReviewDate=null,Guid? ReviewRecordId=null);
 public sealed record ProcessReviewDetail(
     Guid RecordId, string ProcessKey, string Title, string AcademicYear,
     Guid? FacultyOrgUnitId, string? FacultyName, Guid? TeamOrgUnitId, string? TeamName,

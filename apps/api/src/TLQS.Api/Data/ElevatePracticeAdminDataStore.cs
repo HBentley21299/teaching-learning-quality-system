@@ -236,6 +236,7 @@ public sealed partial class SqlFoundationDataStore
                 {
                     if (existingActionId.HasValue)
                     {
+                        await EnsureCanManageActionAsync(connection,(SqlTransaction)transaction,existingActionId.Value,currentUser,cancellationToken);
                         await using var updateActionCommand = new SqlCommand(
                             """
                             UPDATE quality.actions
@@ -308,6 +309,7 @@ public sealed partial class SqlFoundationDataStore
                          .Where(value => value.ActionId.HasValue && !retainedActionIds.Contains(value.ActionId.Value))
                          .Select(value => value.ActionId!.Value))
             {
+                await EnsureCanManageActionAsync(connection,(SqlTransaction)transaction,actionId,currentUser,cancellationToken);
                 await using var archiveActionCommand = new SqlCommand(
                     """
                     UPDATE quality.actions

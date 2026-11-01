@@ -15,30 +15,36 @@ public sealed class AccessBoundaryPolicyTests
     }
 
     [Fact]
-    public void ActionManagementRequiresPermissionAndObjectVisibility()
+    public void ActionPermissionAndVisibilityAloneDoNotGrantCreatorAuthority()
     {
         Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(CreateUser(PermissionKeys.ActionsManage), false));
         Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(CreateUser(), true));
-        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(CreateUser(PermissionKeys.ActionsManage), true));
+        Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(CreateUser(PermissionKeys.ActionsManage), true));
+        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(CreateUser(),true,true,false));
+        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(CreateUser(),true,false,true));
+        Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(CreateUser(),false,true,true));
     }
 
     [Fact]
-    public void UcoPermissionOnlyManagesVisibleUcoActions()
+    public void UcoAndRecordPermissionsDoNotReplaceCreatorAuthority()
     {
         var user = CreateUser(PermissionKeys.UcoTlaManage);
 
-        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "uco_tla_review"));
+        Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "uco_tla_review"));
         Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "learning_walk"));
         Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user, false, "uco_tla_review"));
     }
 
     [Fact]
-    public void RecordAdministratorCanManageVisibleUcoActions()
+    public void ActualAdministratorAndTeachingLearningRolesCanManageVisibleActions()
     {
         var user = CreateUser(PermissionKeys.RecordsManage);
 
-        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "uco_tla_review"));
+        Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "uco_tla_review"));
         Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user, true, "learning_walk"));
+        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(user with{IsAdministrator=true},true));
+        Assert.True(AccessBoundaryPolicy.CanManageVisibleAction(user with{IsTeachingLearning=true},true));
+        Assert.False(AccessBoundaryPolicy.CanManageVisibleAction(user with{IsTeachingLearning=true},false));
     }
 
     [Theory]

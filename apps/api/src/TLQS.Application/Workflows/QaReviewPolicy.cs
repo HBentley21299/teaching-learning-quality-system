@@ -30,8 +30,9 @@ public static class QaReviewPolicy
             || existing.Activities.Zip(requested.Activities).Any(pair =>
                 pair.First.ActivityTypeId != pair.Second.ActivityTypeId
                 || pair.First.TemplateId != pair.Second.TemplateId
+                || pair.First.WrittenCommentaryEnabled != pair.Second.WrittenCommentaryEnabled
                 || !pair.First.QuestionIds.ToHashSet().SetEquals(pair.Second.QuestionIds)))
-            throw new WorkflowValidationException("Published activities, templates and questions are fixed to protect submitted evidence and reporting. Create another review for different questions.");
+            throw new WorkflowValidationException("Published activities, templates, questions and commentary settings are fixed to protect submitted evidence and reporting. Create another review for different questions or commentary settings.");
     }
 
     public static bool CanCorrect(CurrentUser user) => user.HasPermission(PermissionKeys.QaReviewsCorrect);
@@ -53,6 +54,14 @@ public static class QaReviewPolicy
         || user.HasPermission(PermissionKeys.QaReviewsSubmitScoped);
 
     public static bool IsEvidenceWritable(string reviewStatus) => OpenEvidenceStatuses.Contains(reviewStatus);
+
+    public static void ValidateWrittenCommentary(bool enabled,string? commentary,string? savedCommentary=null)
+    {
+        if(commentary?.Length>10000)
+            throw new WorkflowValidationException("Written commentary must be no more than 10,000 characters.");
+        if(!enabled&&!string.IsNullOrWhiteSpace(commentary)&&!string.Equals(commentary,savedCommentary,StringComparison.Ordinal))
+            throw new WorkflowValidationException("Written commentary is not enabled for this form in the QA Review setup.");
+    }
 
     public static bool CanTransition(string currentStatus, string action) =>
         (currentStatus.Trim().ToLowerInvariant(), action.Trim().ToLowerInvariant()) switch
@@ -151,4 +160,5 @@ public sealed record QaPublishedReviewStructure(
     IReadOnlyList<Guid> TeamOrgUnitIds,
     IReadOnlyList<QaPublishedReviewActivity> Activities);
 
-public sealed record QaPublishedReviewActivity(Guid ActivityTypeId, Guid TemplateId, IReadOnlyList<Guid> QuestionIds);
+public sealed record QaPublishedReviewActivity(Guid ActivityTypeId, Guid TemplateId, IReadOnlyList<Guid> QuestionIds,
+    bool WrittenCommentaryEnabled=true);

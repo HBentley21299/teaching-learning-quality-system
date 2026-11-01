@@ -20,6 +20,8 @@ const queries = await load('services/workflowListQueries.ts', { './listQuery': l
 const liv = await load('services/livWorkflow.ts');
 const choiceAnswers = await load('services/formChoiceAnswers.ts');
 const actionResponsibility = await load('services/actionResponsibility.ts');
+const actionOrigin = await load('services/actionOrigin.ts');
+const processReviewAccess = await load('services/processReviewAccess.ts');
 const workflowFilters = await load('components/WorkflowFilters.tsx', { 'react/jsx-runtime': jsx, 'lucide-react': new Proxy({}, { get: () => function Icon() { return null; } }) });
 const noOp = () => {};
 const staff = (id, name, orgUnitIds = []) => ({ id, displayName: name, externalId: `EMP-${id}`, email: `${id}@college.test`, orgUnitIds });
@@ -47,6 +49,8 @@ async function mount(path, exportName, props, data = {}) {
     '../services/api': { api }, '../services/listQuery': list, '../services/workflowListQueries': queries,
     '../services/livWorkflow': liv, '../services/formChoiceAnswers': choiceAnswers,
     '../services/actionResponsibility': actionResponsibility,
+    '../services/actionOrigin': actionOrigin,
+    '../services/processReviewAccess': processReviewAccess,
     '../components/WorkflowFilters': workflowFilters,
     '../services/formContent': { useFormContent: formKey => ({ field: (key, label, helpText) => ({ label, helpText, ...(data.formContentOverrides?.[formKey]?.[key] ?? {}) }) }) },
     '../services/workflowExperience': await load('services/workflowExperience.ts'),
@@ -193,6 +197,148 @@ test('a shared Activate action appears once for a secondary responsible person a
   assert.match(view.text(), /Secondary Colleague/);
   const table = view.nodes().find(node => Array.isArray(node.props.rows));
   assert.equal(table.props.columns.find(column => column.key === 'owner').render(table.props.rows[0]), 'Primary Colleague; Secondary Colleague');
+});
+
+test('action origins require a linked record and group historical process aliases without guessing missing origins', async () => {
+  const base = { ownerStaffId: 'reviewer', actionTheme: 'Planning', statusKey: 'open', createdAt: '2026-10-01', isDeleted: false };
+  const actions = [
+    { ...base, id: 'first', title: 'CPD follow-up', sourceRecordId: 'event-one', sourceFormType: 'cpd_event', sourceRecordTitle: 'Assessment training' },
+    { ...base, id: 'second', title: 'CPD review', sourceRecordId: 'event-two', sourceFormType: 'cpd', sourceRecordTitle: 'Feedback training' },
+    { ...base, id: 'unlinked', title: 'Earlier action', sourceFormType: 'liv', sourceRecordTitle: 'Unverified earlier title' }
+  ];
+  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions, staff: [], orgUnits: [], user, onChanged: async () => {} });
+  const table = () => view.nodes().find(node => Array.isArray(node.props.rows));
+  assert.equal(view.field('Origin').props.children.length, 2);
+  await view.change('Origin', 'cpd');
+  assert.deepEqual(table().props.rows.map(action => action.id), ['first', 'second']);
+  await view.change('Origin', actionOrigin.missingActionOriginKey);
+  assert.deepEqual(table().props.rows.map(action => action.id), ['unlinked']);
+  const originCell = table().props.columns.find(column => column.key === 'source').render(table().props.rows[0]);
+  assert.equal(originCell.props.children[0], 'Origin not recorded');
+  assert.equal(originCell.props.children[1].props.children, 'Earlier action without a linked source record');
+  await view.change('Origin', ''); await view.change('Search actions and people', 'origin not recorded');
+  assert.deepEqual(table().props.rows.map(action => action.id), ['unlinked']);
+});
+
+function actionRowButton(view, row, label) {
+  const table = view.nodes().find(node => Array.isArray(node.props.rows));
+  const command = table.props.columns.find(column => column.key === 'commands').render(row);
+  let match;
+  function visit(node) {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!node?.props) return;
+    if (node.props.children === label && node.props.onClick) match = node;
+    visit(node.props.children);
+  }
+  visit(command);
+  return match;
+}
+
+test('editing an originated action loads its owner context only on demand and preserves origin through the save', async t => {
+  browserForGuardTest(t);
+  const row = { id: 'action', sourceRecordId: 'walk', sourceFormType: 'learning_walk', sourceRecordTitle: 'Faculty walk', ownerStaffId: 'owner', actionTheme: 'Planning', title: 'Original action', statusKey: 'open', dueDate: '2026-12-01', visibilitySetting: 'staff_and_management', createdAt: '2026-10-01', isDeleted: false, canManageAction: true };
+  const ownerCalls = [], writes = [];
+  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions: [row], staff: [staff('owner', 'Programme Leader')], orgUnits: [], user: { ...user, permissions: ['actions.manage'] }, onChanged: async () => {} }, {
+    actionOwnerOptions: (...args) => { ownerCalls.push(args); return [{ staffId: 'owner' }]; },
+    updateAction: (id, value) => { writes.push({ id, value }); return { ok: true }; }, actions: [row]
+  });
+  assert.equal(ownerCalls.length, 0);
+  await actionRowButton(view, row, 'Edit').props.onClick(); await view.flush();
+  assert.deepEqual(ownerCalls, [['walk', undefined, 'learning_walk']]);
+  view.nodes().find(node => node.props.content?.label === 'Action' && node.props.onChange).props.onChange('Updated action'); await view.flush();
+  assert.equal(await view.runGuard('Action changes', 'onSave'), true);
+  assert.equal(writes.length, 1); assert.equal(writes[0].id, 'action'); assert.equal(writes[0].value.title, 'Updated action');
+  assert.equal('sourceRecordId' in writes[0].value, false); assert.equal('sourceFormType' in writes[0].value, false);
+  const processRow = { ...row, sourceFormType: 'activate_growth_review' };
+  assert.equal(actionRowButton(view, processRow, 'Edit'), undefined);
+  assert.equal(actionRowButton(view, processRow, 'Complete'), undefined);
+});
+
+test('native source plans retain central progress but route structural changes and locked QA groups to their source', async t => {
+  browserForGuardTest(t);
+  const base = { sourceRecordId: 'source', sourceRecordTitle: 'Saved source review', ownerStaffId: 'reviewer', actionTheme: 'Planning', title: 'Agreed action', statusKey: 'open', dueDate: '2026-12-01', visibilitySetting: 'staff_and_management', createdAt: '2026-10-01', isDeleted: false, canManageAction: true };
+  const nativeTypes = ['qa_review', 'uco_tla_review', 'coaching_mentoring', 'coaching_session', 'elevate_practice', 'elevate_practice_assessment'];
+  const rows = nativeTypes.map(sourceFormType => ({ ...base, id: sourceFormType, sourceFormType }));
+  const legacy = { ...base, id: 'legacy', sourceRecordId: undefined, sourceFormType: 'qa_review', title: 'Earlier action' };
+  const lockedQa = { ...rows[0], id: 'locked-qa', sourceWorkflowLocked: true };
+  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions: [...rows, legacy, lockedQa], staff: [], orgUnits: [], user: { ...user, permissions: ['actions.manage'] }, onChanged: async () => {}, onOpenSource() {} });
+  for (const row of rows) {
+    assert.equal(actionRowButton(view, row, 'Edit'), undefined, row.sourceFormType);
+    assert.equal(actionRowButton(view, { ...row, isDeleted: true }, 'Restore'), undefined, row.sourceFormType);
+    assert.ok(actionRowButton(view, row, 'Complete'), row.sourceFormType);
+    assert.ok(actionRowButton(view, row, 'Cancel'), row.sourceFormType);
+    assert.ok(actionRowButton(view, row, 'Extend'), row.sourceFormType);
+    await actionRowButton(view, row, 'View').props.onClick(); await view.flush();
+    assert.match(view.text(), /Update this action's wording, theme, responsible people and visibility in its source workflow/);
+    assert.equal(view.nodes().some(node => node.props.onClick && node.props.children === 'Delete action'), false);
+    assert.ok(view.nodes().some(node => node.props.onClick && node.props.children === 'Open source record'));
+  }
+  assert.ok(actionRowButton(view, { ...rows[0], statusKey: 'complete', sourceWorkflowLocked: false }, 'Reopen'), 'an individual completed QA assignment can reopen while its group remains open');
+  for (const command of ['Complete', 'Cancel', 'Extend', 'Edit', 'Restore', 'Reopen']) {
+    assert.equal(actionRowButton(view, lockedQa, command), undefined, `${command} is unavailable for a locked QA source`);
+  }
+  assert.equal(actionRowButton(view, { ...lockedQa, statusKey: 'complete' }, 'Reopen'), undefined);
+  await actionRowButton(view, lockedQa, 'View').props.onClick(); await view.flush();
+  assert.match(view.text(), /Progress and date changes are locked by the source workflow/);
+  const completedUco = { ...rows[1], statusKey: 'complete', completedDate: undefined };
+  assert.equal(actionRowButton(view, completedUco, 'Complete'), undefined);
+  assert.equal(actionRowButton(view, completedUco, 'Cancel'), undefined);
+  assert.equal(actionRowButton(view, completedUco, 'Extend'), undefined);
+  assert.ok(actionRowButton(view, completedUco, 'Reopen'));
+  assert.ok(actionRowButton(view, legacy, 'Edit'));
+  assert.ok(actionRowButton(view, { ...legacy, isDeleted: true }, 'Restore'));
+  await actionRowButton(view, legacy, 'View').props.onClick(); await view.flush();
+  assert.doesNotMatch(view.text(), /Update this action's wording/);
+  assert.ok(view.nodes().some(node => node.props.onClick && node.props.children === 'Delete action'));
+});
+
+test('action metric buttons and filters use the same exclusive lifecycle state', async () => {
+  const base = { ownerStaffId: 'reviewer', actionTheme: 'Planning', sourceRecordId: 'walk', sourceFormType: 'learning_walk', createdAt: '2026-10-01', isDeleted: false };
+  const actions = [
+    { ...base, id: 'overdue', title: 'Overdue extension', statusKey: 'extended', isOverdue: true },
+    { ...base, id: 'completed', title: 'Earlier completed action', statusKey: 'open', completedDate: '2026-10-30', isOverdue: true },
+    { ...base, id: 'cancelled', title: 'Cancelled action', statusKey: 'cancelled', isOverdue: true },
+    { ...base, id: 'deleted', title: 'Deleted action', statusKey: 'open', isDeleted: true, isOverdue: true }
+  ];
+  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions, staff: [], orgUnits: [], user, onChanged: async () => {} });
+  const metric = label => view.nodes().find(node => node.type === 'button' && node.props['aria-pressed'] !== undefined && node.props.children?.[1]?.props.children === label);
+  assert.equal(metric('Overdue').props.children[0].props.children, 1);
+  assert.equal(metric('Extended').props.children[0].props.children, 0);
+  assert.equal(metric('Completed').props.children[0].props.children, 1);
+  metric('Overdue').props.onClick(); await view.flush();
+  assert.deepEqual(view.nodes().find(node => Array.isArray(node.props.rows)).props.rows.map(action => action.id), ['overdue']);
+});
+
+test('action controls trust only server creator-hierarchy capability even for a responsible owner or broad UI role', async () => {
+  const row = { id: 'read-only', sourceRecordId: 'walk', sourceFormType: 'learning_walk', sourceRecordTitle: 'Saved walk', ownerStaffId: 'reviewer', subjectStaffId: 'reviewer', responsibleStaffIds: ['reviewer'], actionTheme: 'Planning', title: 'Read-only assigned action', statusKey: 'open', dueDate: '2026-12-01', createdAt: '2026-10-01', isDeleted: false, canManageAction: false };
+  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions: [row], staff: [], orgUnits: [], user: { ...user, permissions: ['actions.manage', 'uco_tla.manage', 'records.manage'] }, onChanged: async () => {} });
+  for (const candidate of [row, { ...row, canManageAction: undefined }, { ...row, sourceFormType: 'uco_tla_review' }]) {
+    for (const command of ['Edit', 'Extend', 'Complete', 'Cancel']) assert.equal(actionRowButton(view, candidate, command), undefined, `${command} needs explicit server authority`);
+    assert.equal(actionRowButton(view, { ...candidate, statusKey: 'complete' }, 'Reopen'), undefined);
+    assert.equal(actionRowButton(view, { ...candidate, isDeleted: true }, 'Restore'), undefined);
+    assert.ok(actionRowButton(view, candidate, 'View'));
+  }
+});
+
+test('action creators and their managers receive ordinary action controls through server capability without broad role grants', async () => {
+  const row = { id: 'permitted', sourceRecordId: 'walk', sourceFormType: 'learning_walk', sourceRecordTitle: 'Saved walk', ownerStaffId: 'someone-else', actionTheme: 'Planning', title: 'Permitted creator action', statusKey: 'open', dueDate: '2026-12-01', createdAt: '2026-10-01', isDeleted: false, canManageAction: true };
+  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions: [row], staff: [], orgUnits: [], user, onChanged: async () => {} });
+  for (const command of ['Edit', 'Extend', 'Complete', 'Cancel']) assert.ok(actionRowButton(view, row, command), command);
+  assert.ok(actionRowButton(view, { ...row, statusKey: 'complete' }, 'Reopen'));
+  assert.ok(actionRowButton(view, { ...row, isDeleted: true }, 'Restore'));
+  assert.ok(view.field('View'), 'permitted record exploration does not require a global manager role');
+});
+
+test('an older deleted-action request cannot replace the current inbox after its toggle is cleared', async () => {
+  const row = { id: 'current', sourceRecordId: 'walk', sourceFormType: 'learning_walk', title: 'Current permitted action', ownerStaffId: 'reviewer', actionTheme: 'Planning', statusKey: 'open', createdAt: '2026-10-01', isDeleted: false };
+  let finish;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions: [row], staff: [], orgUnits: [], user: { ...user, permissions: ['actions.manage'] }, onChanged: async () => {} }, { actions: () => pending });
+  const toggle = () => view.nodes().find(node => node.type === 'input' && node.props.type === 'checkbox');
+  toggle().props.onChange({ target: { checked: true } }); await view.flush();
+  toggle().props.onChange({ target: { checked: false } }); await view.flush();
+  finish([{ ...row, id: 'old-deleted', title: 'Deleted earlier action', isDeleted: true }]); await tick(); await view.flush();
+  assert.deepEqual(view.nodes().find(node => Array.isArray(node.props.rows)).props.rows.map(action => action.id), ['current']);
 });
 
 test('staff picker exposes all matches, combines email/job terms and supports keyboard selection after sort', async () => {
@@ -851,19 +997,14 @@ test('linked action exit never offers a draft API and creates only through the v
   assert.equal(requests[0].sourceRecordId, 'source'); assert.equal(requests[0].title, 'Plan retrieval');
 });
 
-test('standalone action exit cannot masquerade creation as a draft and discarding sends no request', async t => {
-  browserForGuardTest(t);
-  const requests = [];
-  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions: [], staff: [], orgUnits: [], user: { ...user, permissions: ['actions.manage'] }, onChanged: async () => {} }, {
-    actionOwnerOptions: [], actions: [], createAction: body => { requests.push(body); return { ok: true }; }
-  });
-  const setAction = async value => { view.nodes().find(node => node.props.content?.label === 'Action' && node.props.onChange).props.onChange(value); await view.flush(); };
-  await view.click('Create action'); await setAction('Unfinished action');
+test('the Actions inbox has no standalone creation form or submission path, including for managers', async () => {
+  const view = await mount('routes/ActionsView.tsx', 'ActionsView', { academicYear: '2026/27', actions: [], staff: [], orgUnits: [], user: { ...user, permissions: ['actions.manage'] }, onChanged: async () => {} });
   const guard = view.guards().find(editor => editor.label === 'Action changes');
-  assert.equal(guard.submission, true); assert.equal(guard.onSave, undefined); assert.equal(guard.submitLabel, 'Create action');
-  assert.equal(await view.runGuard('Action changes', 'onSubmit'), false);
-  await view.runGuard('Action changes', 'onDiscard'); assert.equal(requests.length, 0);
-  await view.click('Create action'); await setAction('Plan retrieval'); await view.set('standalone-action-theme', 'Planning'); await view.change('Date to be implemented by', '2026-11-30');
-  assert.equal(await view.runGuard('Action changes', 'onSubmit'), true);
-  assert.equal(requests.length, 1); assert.equal(requests[0].title, 'Plan retrieval'); assert.equal(requests[0].ownerStaffId, user.staffId);
+  assert.equal(guard.dirty, false); assert.equal(guard.onSave, undefined); assert.equal(guard.onSubmit, undefined);
+  assert.equal(guard.submission, undefined);
+  assert.equal(view.nodes().some(node => node.props.id === 'create-action-trigger' || node.props.id === 'standalone-action-theme'), false);
+  assert.equal(view.nodes().some(node => node.props.onClick && typeof node.props.children === 'string' && node.props.children === 'Create action'), false);
+  assert.match(view.text(), /Create actions from the form or review they relate to/);
+  await view.runGuard('Action changes', 'onDiscard');
+  assert.equal(view.guards().find(editor => editor.label === 'Action changes').dirty, false);
 });

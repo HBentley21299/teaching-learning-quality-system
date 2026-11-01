@@ -42,9 +42,10 @@ public sealed partial class SqlFoundationDataStore
     public async Task<bool> CanUseQaActionMonitoringAsync(CurrentUser user, CancellationToken cancellationToken)
     {
         if (!user.UserAccountId.HasValue || !user.StaffId.HasValue) return false;
-        if (QaReviewPolicy.CanReviewActions(user)) return true;
+        if (QaReviewPolicy.CanReviewActions(user) || user.IsAdministrator || user.IsTeachingLearning) return true;
         var matches = await QueryAsync(
-            """
+            $"""
+            WITH {ActionAuthorityCteSql}
             SELECT COUNT(*)
             FROM qa.reviews review
             WHERE review.status = N'closed'
@@ -59,11 +60,22 @@ public sealed partial class SqlFoundationDataStore
                      AND (leadership.active_to IS NULL OR leadership.active_to >= CONVERT(date, sysutcdatetime()))
                     WHERE scope.review_id = review.record_id AND scope.scope_type = N'team'
                   ) OR EXISTS (
+                    SELECT 1 FROM qa.action_groups action_group
+                    WHERE action_group.review_id = review.record_id
+                      AND ({ActionCreatorAuthoritySql.Replace("a.created_by_user_account_id", "action_group.created_by_user_account_id")} OR EXISTS (
+                            SELECT 1 FROM org.fn_visible_staff(@userAccountId) managed
+                            WHERE managed.staff_id = action_group.creator_staff_id
+                              AND managed.is_managed = 1 AND managed.manager_depth > 0))) OR EXISTS (
                     SELECT 1 FROM qa.action_group_assignments assignment
                     JOIN qa.action_groups action_group ON action_group.id = assignment.action_group_id
                     WHERE action_group.review_id = review.record_id AND assignment.staff_id = @staffId));
             """,
-            command => command.Parameters.AddWithValue("@staffId", user.StaffId.Value),
+            command =>
+            {
+                command.Parameters.AddWithValue("@staffId", user.StaffId.Value);
+                command.Parameters.AddWithValue("@userAccountId", user.UserAccountId.Value);
+                AddActionAuthorityParameters(command, user);
+            },
             reader => reader.GetInt32(0), cancellationToken);
         return matches.Single() > 0;
     }
@@ -447,11 +459,12 @@ public sealed partial class SqlFoundationDataStore
         {
             Guid reviewId;
             Guid? creatorStaffId;
+            Guid? creatorAccountId;
             string title;
             string status;
             byte[] rowVersion;
             await using (var read = new SqlCommand(
-                "SELECT review_id, creator_staff_id, title, workflow_status, row_version FROM qa.action_groups WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;",
+                "SELECT review_id, creator_staff_id, title, workflow_status, row_version, created_by_user_account_id FROM qa.action_groups WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;",
                 connection, transaction))
             {
                 read.Parameters.AddWithValue("@id", groupId);
@@ -462,11 +475,12 @@ public sealed partial class SqlFoundationDataStore
                 title = reader.GetString(2);
                 status = reader.GetString(3);
                 rowVersion = reader.GetFieldValue<byte[]>(4);
+                creatorAccountId = GetGuidOrNull(reader, 5);
             }
             if (!rowVersion.SequenceEqual(request.RowVersion))
                 throw new WorkflowValidationException("This QA action changed after it was opened. Refresh and try again.");
-            if (creatorStaffId != user.StaffId && !QaReviewPolicy.CanReviewActions(user))
-                throw new WorkflowValidationException("Only the creator, Teaching & Learning or an Administrator can review this action.");
+            if (!await CanManageActionCreatorAsync(connection, transaction, creatorAccountId, creatorStaffId, user, cancellationToken))
+                throw new UnauthorizedAccessException("Only the action creator, their management hierarchy, Teaching & Learning or an Administrator can review or close this action.");
             var expected = transition == "review" ? "open" : "reviewed";
             if (!string.Equals(status, expected, StringComparison.OrdinalIgnoreCase))
                 throw new WorkflowValidationException(transition == "review"
@@ -525,19 +539,23 @@ public sealed partial class SqlFoundationDataStore
         Guid? reviewId, CurrentUser user, CancellationToken cancellationToken)
     {
         var rows = await QueryAsync(
-            """
+            $"""
+            WITH {ActionAuthorityCteSql}
             SELECT action_group.id, action_group.review_id, record.title,
                    action_group.faculty_org_unit_id, COALESCE(action_group.faculty_name_snapshot, N'Whole review'),
                    action_group.title, action_group.detail, action_group.due_date,
                    action_group.workflow_status, action_group.created_at,
                    action_group.creator_staff_id, COALESCE(creator.display_name, N'System'),
                    action_group.reviewed_at, action_group.closed_at,
-                   action_group.forced_close_note, action_group.row_version
+                   action_group.forced_close_note, action_group.row_version, action_group.created_by_user_account_id
             FROM qa.action_groups action_group
             JOIN core.records record ON record.id = action_group.review_id
             LEFT JOIN people.staff creator ON creator.id = action_group.creator_staff_id
             WHERE (@reviewId IS NULL OR action_group.review_id = @reviewId)
-              AND (@monitorAll = 1 OR action_group.creator_staff_id = @staffId
+              AND (@monitorAll = 1 OR {ActionCreatorAuthoritySql.Replace("a.created_by_user_account_id", "action_group.created_by_user_account_id")}
+                   OR EXISTS (SELECT 1 FROM org.fn_visible_staff(@userAccountId) managed
+                              WHERE managed.staff_id = action_group.creator_staff_id
+                                AND managed.is_managed = 1 AND managed.manager_depth > 0)
                    OR EXISTS (SELECT 1 FROM qa.action_group_assignments assignment
                               WHERE assignment.action_group_id = action_group.id AND assignment.staff_id = @staffId)
                    OR EXISTS (
@@ -558,14 +576,16 @@ public sealed partial class SqlFoundationDataStore
             command =>
             {
                 command.Parameters.AddWithValue("@reviewId", ToDbValue(reviewId));
-                command.Parameters.AddWithValue("@monitorAll", QaReviewPolicy.CanReviewActions(user));
+                command.Parameters.AddWithValue("@monitorAll", QaReviewPolicy.CanReviewActions(user) || user.IsAdministrator || user.IsTeachingLearning);
                 command.Parameters.AddWithValue("@staffId", ToDbValue(user.StaffId));
+                command.Parameters.AddWithValue("@userAccountId", ToDbValue(user.UserAccountId));
+                AddActionAuthorityParameters(command, user);
             }, reader => new QaActionGroupRow(
                 reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), GetGuidOrNull(reader, 3), reader.GetString(4),
                 reader.GetString(5), GetStringOrNull(reader, 6), DateOnly.FromDateTime(reader.GetDateTime(7)),
                 reader.GetString(8), reader.GetFieldValue<DateTimeOffset>(9), GetGuidOrNull(reader, 10), reader.GetString(11),
                 GetDateTimeOffsetOrNull(reader, 12), GetDateTimeOffsetOrNull(reader, 13), GetStringOrNull(reader, 14),
-                reader.GetFieldValue<byte[]>(15)), cancellationToken);
+                reader.GetFieldValue<byte[]>(15), GetGuidOrNull(reader, 16)), cancellationToken);
         if (rows.Count == 0) return [];
         var groupIdsJson = JsonSerializer.Serialize(rows.Select(row => row.Id));
         var teams = await QueryAsync(
@@ -594,13 +614,15 @@ public sealed partial class SqlFoundationDataStore
                 reader.GetGuid(5), reader.GetString(6), reader.GetString(7), GetDateOnlyOrNull(reader, 8)), cancellationToken);
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        return rows.Select(row =>
+        var summaries = new List<QaActionGroupSummary>();
+        await using var authorityConnection = await OpenConnectionAsync(cancellationToken);
+        foreach (var row in rows)
         {
             var groupTeams = teams.Where(team => team.GroupId == row.Id).ToArray();
             var groupAssignments = assignments.Where(assignment => assignment.GroupId == row.Id).ToArray();
             var status = row.WorkflowStatus == "open" && row.DueDate < today ? "overdue" : row.WorkflowStatus;
-            var canTransition = row.CreatorStaffId == user.StaffId || QaReviewPolicy.CanReviewActions(user);
-            return new QaActionGroupSummary(
+            var canTransition = await CanManageActionCreatorAsync(authorityConnection, null, row.CreatorAccountId, row.CreatorStaffId, user, cancellationToken);
+            summaries.Add(new QaActionGroupSummary(
                 row.Id, row.ReviewId, row.ReviewTitle, row.FacultyId, row.FacultyName,
                 groupTeams.Select(team => team.TeamId).ToArray(), groupTeams.Select(team => team.TeamName).ToArray(),
                 row.Title, row.Detail, row.DueDate, status, row.CreatedAt, row.CreatorStaffId, row.CreatorName,
@@ -608,8 +630,9 @@ public sealed partial class SqlFoundationDataStore
                 groupAssignments.Select(assignment => new QaActionAssignmentSummary(
                     assignment.ActionId, assignment.StaffId, assignment.StaffName, assignment.AssignmentRole,
                     assignment.SourceOrgUnitId, assignment.SourceOrgUnitName, assignment.Status, assignment.CompletedDate)).ToArray(),
-                row.RowVersion, canTransition && status is "open" or "overdue", canTransition && status == "reviewed");
-        }).ToArray();
+                row.RowVersion, canTransition && status is "open" or "overdue", canTransition && status == "reviewed"));
+        }
+        return summaries;
     }
 
     private sealed record QaActionOptionRow(
@@ -626,7 +649,7 @@ public sealed partial class SqlFoundationDataStore
         Guid Id, Guid ReviewId, string ReviewTitle, Guid? FacultyId, string FacultyName,
         string Title, string? Detail, DateOnly DueDate, string WorkflowStatus, DateTimeOffset CreatedAt,
         Guid? CreatorStaffId, string CreatorName, DateTimeOffset? ReviewedAt,
-        DateTimeOffset? ClosedAt, string? CloseNote, byte[] RowVersion);
+        DateTimeOffset? ClosedAt, string? CloseNote, byte[] RowVersion, Guid? CreatorAccountId);
     private sealed record QaActionGroupTeamRow(Guid GroupId, Guid TeamId, string TeamName);
     private sealed record QaActionAssignmentRow(
         Guid GroupId, Guid ActionId, Guid StaffId, string StaffName, string AssignmentRole,

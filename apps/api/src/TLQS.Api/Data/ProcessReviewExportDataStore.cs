@@ -17,6 +17,7 @@ public sealed partial class SqlFoundationDataStore
         var actions=(await ReadProcessActionsAsync(processKey,processKey==ProcessReviewRules.Activate?null:academicYear,null,null,user,true,ct,sourceRecordIds:actionSources.ToArray()))
             .Where(x=>actionSources.Contains(x.RecordId)).ToArray();
         var staffIds=reviews.SelectMany(x=>x.Data.Samples.SelectMany(s=>s.StaffIds))
+            .Concat(reviews.SelectMany(x=>x.Data.Digital?.DraftActions??[]).Where(action=>action.OwnerStaffId.HasValue).Select(action=>action.OwnerStaffId!.Value))
             .Concat(reviews.SelectMany(x=>x.Data.Fields.Values.SelectMany(ProcessExportStaffIds))).Distinct().ToArray();
         var staff=staffIds.Length==0?new Dictionary<Guid,string>():
             (await QueryAsync("SELECT id,display_name FROM people.staff WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@ids));",
@@ -95,19 +96,50 @@ public sealed partial class SqlFoundationDataStore
         }
         if(processKey==ProcessReviewRules.Digital)
         {
-            sheets.Add(new("Samples",["Record ID","Sample reference","Sample","Type","Date","Course / group","Associated staff","Evidence link","Evidence notes"],
-                reviews.SelectMany(row=>row.Data.Samples.Select(sample=>(IReadOnlyList<string?>)new string?[]{row.RecordId.ToString(),sample.Id,sample.Title,sample.SampleType,
-                    sample.SampleDate?.ToString("yyyy-MM-dd"),sample.Course,string.Join("; ",sample.StaffIds.Select(id=>staff.GetValueOrDefault(id,"Staff member no longer available"))),sample.EvidenceLink,sample.Notes})).ToArray(),false));
-            sheets.Add(new("Responses",["Record ID","Standard","Statement","Overall rating","Evidence and rationale"],
-                reviews.SelectMany(row=>row.Configuration.Standards.SelectMany(standard=>standard.Statements.Select(statement=>
+            var retiredFields=new HashSet<string>(["scope","strengths","development"],StringComparer.Ordinal);
+            var digitalFields=fields.Concat(config.FieldLabels.Keys).Distinct(StringComparer.Ordinal)
+                .Where(key=>key!="deliveryAreaKey"&&(!retiredFields.Contains(key)
+                    ||reviews.Any(row=>!string.IsNullOrWhiteSpace(row.Data.Fields.GetValueOrDefault(key))))).ToArray();
+            sheets[0]=new("Form entries",new[]{"Record ID","Title","Academic year","Faculty","Team / area","Review owner","Date of visit","Status","Form version","Selected categories","Selected category count","Category coverage","Selected criteria","Selected criteria count","Criteria rated","Draft actions (not assigned)"}
+                .Concat(digitalFields.Select(key=>ProcessExportFieldLabel(key,reviews.Select(row=>row.Configuration).Append(config)))).ToArray(),
+                reviews.Select(row=>
                 {
-                    var response=row.Data.Responses.FirstOrDefault(x=>x.StatementKey==statement.Key);
-                    return (IReadOnlyList<string?>)new string?[]{row.RecordId.ToString(),standard.Title,statement.Text,
-                        row.Configuration.RatingOptions.FirstOrDefault(x=>x.Key==response?.RatingKey)?.Label,response?.Rationale};
-                }))).ToArray(),false));
-            sheets.Add(new("Sample links",["Record ID","Statement","Sample reference","Sample"],
-                reviews.SelectMany(row=>row.Data.Responses.SelectMany(response=>response.SampleIds.Select(sampleId=>(IReadOnlyList<string?>)new string?[]{row.RecordId.ToString(),
-                    row.Configuration.Standards.SelectMany(x=>x.Statements).FirstOrDefault(x=>x.Key==response.StatementKey)?.Text,sampleId,row.Data.Samples.FirstOrDefault(x=>x.Id==sampleId)?.Title}))).ToArray(),false));
+                    var selected=ProcessExportDigitalCriteria(row).ToArray();var categories=ProcessReviewRules.SelectedDigitalStandards(row.Configuration,row.Data);
+                    var categorySelection=row.Data.Digital?.SelectedStandardKeys is not null;
+                    return (IReadOnlyList<string?>)new string?[]{row.RecordId.ToString(),row.Title,row.AcademicYear,row.FacultyName,row.TeamName,row.OwnerName,
+                        row.RecordDate?.ToString("yyyy-MM-dd"),row.Status,row.Configuration.Version.ToString(),
+                        categorySelection?string.Join("\n",categories.Select(category=>category.Title)):null,categorySelection?categories.Count.ToString():null,
+                        string.Join("\n",categories.Select(category=>$"{category.Title}: {category.SelectedStatementCount} / {category.StatementCount} criteria included{(categorySelection?"":category.SelectedStatementCount<category.StatementCount?" (earlier partial selection)":" (earlier criterion selection)")}")),
+                        string.Join("\n",selected.Select(item=>$"{item.Standard.Title}: {item.Statement.Text}")),selected.Length.ToString(),selected.Count(item=>row.Data.Responses.Any(response=>response.StatementKey==item.Statement.Key&&row.Configuration.RatingOptions.Any(option=>option.Key==response.RatingKey))).ToString(),
+                        (row.Status=="draft"?row.Data.Digital?.DraftActions.Count??0:0).ToString()}
+                        .Concat(digitalFields.Select(key=>ProcessExportField(row.Data.Fields.GetValueOrDefault(key),row.Configuration,staff))).ToArray();
+                }).ToArray(),false,new[]{"text","text","text","text","text","text","date","text","number","text","number","text","text","number","number","number"}.Concat(digitalFields.Select(_=>"text")).ToArray());
+            if(reviews.Any(row=>row.Data.Samples.Count>0))sheets.Add(new("Samples",["Record ID","Sample reference","Sample","Type","Date","Course / group","Associated staff","Evidence link","Evidence notes"],
+                reviews.SelectMany(row=>row.Data.Samples.Select((sample,index)=>(IReadOnlyList<string?>)new string?[]{row.RecordId.ToString(),$"Sample {index+1}",sample.Title,sample.SampleType,
+                    sample.SampleDate?.ToString("yyyy-MM-dd"),sample.Course,string.Join("; ",sample.StaffIds.Select(id=>staff.GetValueOrDefault(id,"Staff member no longer available"))),sample.EvidenceLink,sample.Notes})).ToArray(),false,
+                ["text","text","text","text","date","text","text","text","text"]));
+            var hasEarlierCriterionNotes=reviews.Any(row=>ProcessExportDigitalCriteria(row).Any(item=>row.Data.Responses.Any(response=>
+                response.StatementKey==item.Statement.Key&&!string.IsNullOrWhiteSpace(response.Rationale))));
+            sheets.Add(new("Responses",hasEarlierCriterionNotes
+                ?["Record ID","Standard","Selected criterion","Overall rating","Earlier criterion notes"]
+                :["Record ID","Standard","Selected criterion","Overall rating"],
+                reviews.SelectMany(row=>ProcessExportDigitalCriteria(row).Select(item=>
+                {
+                    var response=row.Data.Responses.FirstOrDefault(x=>x.StatementKey==item.Statement.Key);
+                    var values=new List<string?>{row.RecordId.ToString(),item.Standard.Title,item.Statement.Text,
+                        row.Configuration.RatingOptions.FirstOrDefault(x=>x.Key==response?.RatingKey)?.Label};
+                    if(hasEarlierCriterionNotes)values.Add(response?.Rationale);
+                    return (IReadOnlyList<string?>)values;
+                })).ToArray(),false));
+            var earlierSampleLinks=reviews.SelectMany(row=>row.Data.Responses.Where(response=>ProcessExportDigitalCriteria(row).Any(item=>item.Statement.Key==response.StatementKey)).SelectMany(response=>response.SampleIds.Select(sampleId=>(IReadOnlyList<string?>)new string?[]{row.RecordId.ToString(),
+                row.Configuration.Standards.SelectMany(x=>x.Statements).FirstOrDefault(x=>x.Key==response.StatementKey)?.Text,ProcessExportSampleReference(row,sampleId),row.Data.Samples.FirstOrDefault(x=>x.Id==sampleId)?.Title}))).ToArray();
+            if(earlierSampleLinks.Length>0)sheets.Add(new("Sample links",["Record ID","Selected criterion","Sample reference","Sample"],earlierSampleLinks,false));
+            var proposed=reviews.Where(row=>row.Status=="draft").SelectMany(row=>(row.Data.Digital?.DraftActions??[]).Select(action=>(IReadOnlyList<string?>)new string?[]{
+                row.RecordId.ToString(),row.Configuration.Standards.FirstOrDefault(standard=>standard.Key==action.ThemeKey)?.Title,action.Title,
+                action.OwnerStaffId.HasValue?staff.GetValueOrDefault(action.OwnerStaffId.Value,"Staff member is not in the available directory"):null,
+                action.DueDate?.ToString("yyyy-MM-dd"),"Draft — not assigned"})).ToArray();
+            if(proposed.Length>0)sheets.Add(new("Draft actions",["Record ID","Action theme","Proposed action","Proposed owner","Date to be implemented by","Assignment status"],proposed,false,
+                ["text","text","text","text","date","text"]));
         }
         else
         {
@@ -167,6 +199,16 @@ public sealed partial class SqlFoundationDataStore
         return new ExportWorkbookData(processKey,config.Title,new ExportFilter(academicYear,null,null,null,null,null,null,null,processKey),user.DisplayName,DateTimeOffset.UtcNow,sheets);
     }
 
+    private static string? ProcessExportSampleReference(ProcessRow row,string sampleId)
+    {
+        var index=row.Data.Samples.Select((sample,index)=>(sample,index)).FirstOrDefault(item=>item.sample.Id==sampleId);
+        return index.sample is null?null:$"Sample {index.index+1}";
+    }
+    private static IEnumerable<(ProcessReviewStandard Standard,ProcessReviewStatement Statement)> ProcessExportDigitalCriteria(ProcessRow row)
+    {
+        var selected=ProcessReviewRules.SelectedDigitalStatements(row.Configuration,row.Data).Select(statement=>statement.Key).ToHashSet(StringComparer.Ordinal);
+        return row.Configuration.Standards.SelectMany(standard=>standard.Statements.Where(statement=>selected.Contains(statement.Key)).Select(statement=>(standard,statement)));
+    }
     private static string ProcessExportActionRecordId(ProcessReviewAction action,IReadOnlyList<ProcessRow> reviews)=>
         (reviews.FirstOrDefault(row=>row.RecordId==action.RecordId)??reviews.First(row=>row.AncestorReviewIds?.Contains(action.RecordId)==true)).RecordId.ToString();
     private static string ProcessExportScopeName(ProcessReviewOrgScope scope)=>string.IsNullOrWhiteSpace(scope.ParentName)?scope.Name:$"{scope.ParentName} / {scope.Name}";

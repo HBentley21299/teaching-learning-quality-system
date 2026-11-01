@@ -158,7 +158,8 @@ public sealed partial class SqlFoundationDataStore(
         var scopes = await GetAccessScopesAsync(connection, userAccountId, cancellationToken);
 
         return new CurrentUser(userAccountId, staffId, displayName, userEmail, permissions, scopes)
-        { IsAdministrator = await IsActiveAdministratorAsync(connection, null, userAccountId, cancellationToken) };
+        { IsAdministrator = await IsActiveAdministratorAsync(connection, null, userAccountId, cancellationToken),
+          IsTeachingLearning = await IsActiveTeachingLearningAsync(connection, userAccountId, cancellationToken) };
     }
 
     public Task<IReadOnlyList<ModuleSummary>> GetModulesAsync(CancellationToken cancellationToken) =>
@@ -2059,10 +2060,9 @@ public sealed partial class SqlFoundationDataStore(
         string? academicYear = null)
     {
         var canViewAll = CanViewAllRecords(currentUser);
-        var canIncludeDeleted = includeDeleted && (currentUser.HasPermission(PermissionKeys.ActionsManage)
-                                                   || UcoTlaReviewAccessPolicy.CanManageAll(currentUser));
-        const string sql = """
-            WITH visible_staff AS (
+        var canIncludeDeleted = includeDeleted;
+        var sql = $"""
+            WITH {ActionAuthorityCteSql}, visible_staff AS (
                 SELECT staff_id FROM org.fn_visible_staff(@currentUserAccountId)
             ),
             visible_org_units AS (
@@ -2157,8 +2157,8 @@ public sealed partial class SqlFoundationDataStore(
                 WHERE extension.action_id = a.id
                 ORDER BY extension.created_at DESC
             ) latest_extension
-            WHERE (@includeDeleted = 1 OR a.archived_at IS NULL)
-              AND (r.record_type NOT IN (N'digital_learning_walk',N'activate_growth_review') OR r.record_type IS NULL
+            WHERE (a.archived_at IS NULL OR @includeDeleted = 1 AND {ActionCreatorAuthoritySql})
+              AND ({ActionCreatorAuthoritySql} OR r.record_type NOT IN (N'digital_learning_walk',N'activate_growth_review') OR r.record_type IS NULL
                     OR a.owner_staff_id=@currentStaffId OR r.owner_staff_id=@currentStaffId
                     OR EXISTS(SELECT 1 FROM quality.process_review_action_assignees assigned WHERE assigned.action_id=a.id AND assigned.staff_id=@currentStaffId)
                     OR r.record_type=N'digital_learning_walk' AND (@digitalAll=1 OR @digitalScoped=1 AND EXISTS(
@@ -2166,7 +2166,7 @@ public sealed partial class SqlFoundationDataStore(
                     OR r.record_type=N'activate_growth_review' AND (@activateAll=1 OR @activateScoped=1 AND EXISTS(
                         SELECT 1 FROM visible_org_units scope WHERE scope.org_unit_id=r.org_unit_id OR (r.record_type=N'activate_growth_review' AND EXISTS(SELECT 1 FROM quality.process_review_scopes selected WHERE selected.record_id=r.id AND selected.org_unit_id=scope.org_unit_id)))))
               AND (
-                    r.record_type <> N'uco_tla_review'
+                    {ActionCreatorAuthoritySql} OR r.record_type <> N'uco_tla_review'
                     OR @canManageUco = 1
                     OR a.owner_staff_id = @currentStaffId
                     OR a.subject_staff_id = @currentStaffId
@@ -2177,7 +2177,7 @@ public sealed partial class SqlFoundationDataStore(
                     OR (r.id IS NULL AND a.created_at >= @academicYearStart AND a.created_at < @academicYearEnd)
               )
               AND (
-                    @canViewAll = 1
+                    {ActionCreatorAuthoritySql} OR @canViewAll = 1
                     OR (r.record_type = N'uco_tla_review' AND @canManageUco = 1)
                     OR a.owner_staff_id = @currentStaffId
                     OR a.subject_staff_id = @currentStaffId
@@ -2196,9 +2196,9 @@ public sealed partial class SqlFoundationDataStore(
                         )
                     )
               )
-              AND EXISTS (SELECT 1 FROM quality.fn_liv_action_access(a.id, @currentUserAccountId))
+              AND ({ActionCreatorAuthoritySql} OR EXISTS (SELECT 1 FROM quality.fn_liv_action_access(a.id, @currentUserAccountId)))
               AND (
-                    @canViewAll = 1
+                    {ActionCreatorAuthoritySql} OR @canViewAll = 1
                     OR a.visibility_setting = 'staff_and_management'
                     OR (a.visibility_setting = 'owner_only' AND a.owner_staff_id = @currentStaffId)
                     OR (a.visibility_setting = 'source_editors' AND (
@@ -2217,6 +2217,7 @@ public sealed partial class SqlFoundationDataStore(
             {
                 AddScopeParameters(command, currentUser);
                 command.Parameters.AddWithValue("@includeDeleted", canIncludeDeleted);
+                AddActionAuthorityParameters(command, currentUser);
                 AddProcessParameters(command, currentUser);
                 command.Parameters.AddWithValue("@academicYear", string.IsNullOrWhiteSpace(academicYear) ? DBNull.Value : academicYear);
                 if (AcademicYearPolicy.TryGetBounds(academicYear, out var academicYearStart, out var academicYearEnd))
@@ -2289,6 +2290,8 @@ public sealed partial class SqlFoundationDataStore(
             cancellationToken);
 
         actions = await EnrichActivateActionResponsiblesAsync(actions, cancellationToken);
+        actions = await EnrichQaActionWorkflowLocksAsync(actions, cancellationToken);
+        actions = await EnrichActionAuthorityAsync(actions, currentUser, cancellationToken);
         return actions
             .OrderBy(action => action.IsDeleted)
             .ThenBy(action => action.CompletedDate.HasValue)
@@ -3308,14 +3311,19 @@ public sealed partial class SqlFoundationDataStore(
 
     public async Task<Guid> CreateActionAsync(CreateActionRequest request, CurrentUser currentUser, CancellationToken cancellationToken)
     {
-        if (ProcessReviewRules.IsProcess(request.SourceFormType ?? ""))
-            throw new WorkflowValidationException("Assign this action from its review so its support, success evidence and history are retained.");
-        if (request.SourceRecordId.HasValue)
+        var sourceRecordId = ActionOriginPolicy.RequireSourceRecord(request.SourceRecordId);
+        ActionRecordOrigin origin;
+        await using (var originConnection = await OpenConnectionAsync(cancellationToken))
         {
-            var types=await QueryAsync("SELECT record_type FROM core.records WHERE id=@id AND archived_at IS NULL;",
-                command=>command.Parameters.AddWithValue("@id",request.SourceRecordId.Value),reader=>reader.GetString(0),cancellationToken);
-            if(types.Any(ProcessReviewRules.IsProcess))throw new WorkflowValidationException("Assign this action from its review so its support, success evidence and history are retained.");
+            origin = await ReadActionRecordOriginAsync(originConnection, null, sourceRecordId, cancellationToken);
         }
+        var sourceFormType = ActionOriginPolicy.ResolveForGenericCreation(origin.RecordType, request.SourceFormType);
+        request = request with { SourceFormType = sourceFormType, SubjectStaffId = ActionOriginPolicy.ResolveSubject(origin.SubjectStaffId, request.SubjectStaffId) };
+        if (!currentUser.HasPermission(PermissionKeys.ActionsManage)
+            || !await CanUseActionContextAsync(sourceRecordId, request.SubjectStaffId, currentUser, cancellationToken))
+            throw new UnauthorizedAccessException("You cannot create an action from this originating record.");
+        if (string.IsNullOrWhiteSpace(request.Title) || request.Title.Length > 300 || request.Detail?.Length > 4000)
+            throw new WorkflowValidationException("Enter an action title of up to 300 characters and details of up to 4000 characters.");
         if (string.IsNullOrWhiteSpace(request.ActionTheme))
         {
             throw new WorkflowValidationException("Enter an action theme.");
@@ -3332,9 +3340,12 @@ public sealed partial class SqlFoundationDataStore(
             throw new WorkflowValidationException("The selected owner is not available for this action and your access scope.");
         }
 
-        var sourceSubRecordType = request.SourceSubRecordType
-            ?? (request.LivVisitId.HasValue ? "liv_visit" : request.LivCycleId.HasValue ? "liv_cycle" : null);
+        var sourceSubRecordType = string.IsNullOrWhiteSpace(request.SourceSubRecordType) ? null : request.SourceSubRecordType.Trim().ToLowerInvariant();
+        sourceSubRecordType ??=
+            request.LivVisitId.HasValue ? "liv_visit" : request.LivCycleId.HasValue ? "liv_cycle" : null;
         var sourceSubRecordId = request.SourceSubRecordId ?? request.LivVisitId ?? request.LivCycleId;
+        var sourceSubRecordKey = string.IsNullOrWhiteSpace(request.SourceSubRecordKey) ? null : request.SourceSubRecordKey.Trim();
+        ActionOriginPolicy.ValidateSubRecord(sourceFormType, sourceSubRecordType, sourceSubRecordId, request.LivVisitId, request.LivCycleId, sourceSubRecordKey);
         var linkedLivCycleId = request.LivCycleId
             ?? (string.Equals(sourceSubRecordType, "liv_cycle", StringComparison.OrdinalIgnoreCase)
                 ? sourceSubRecordId
@@ -3346,7 +3357,10 @@ public sealed partial class SqlFoundationDataStore(
 
         try
         {
-            var sourceFormType = request.SourceFormType?.Trim().ToLowerInvariant();
+            var lockedOrigin = await ReadActionRecordOriginAsync(connection, (SqlTransaction)transaction, sourceRecordId, cancellationToken);
+            if (ActionOriginPolicy.ResolveForGenericCreation(lockedOrigin.RecordType, sourceFormType) != sourceFormType
+                || lockedOrigin.SubjectStaffId != origin.SubjectStaffId)
+                throw new WorkflowValidationException("The originating record changed. Reload it before creating the action.");
             if (request.SourceRecordId.HasValue)
             {
                 await using var draftSource = new SqlCommand("""
@@ -3359,16 +3373,6 @@ public sealed partial class SqlFoundationDataStore(
                 if (Convert.ToInt32(await draftSource.ExecuteScalarAsync(cancellationToken)) > 0)
                     throw new WorkflowValidationException("Save actions inside this draft. They are assigned when the form is submitted.");
             }
-            if (string.IsNullOrWhiteSpace(sourceFormType) && request.SourceRecordId.HasValue)
-            {
-                await using var sourceTypeCommand = new SqlCommand(
-                    "SELECT record_type FROM core.records WHERE id = @sourceRecordId AND archived_at IS NULL;",
-                    connection,
-                    (SqlTransaction)transaction);
-                sourceTypeCommand.Parameters.AddWithValue("@sourceRecordId", request.SourceRecordId.Value);
-                sourceFormType = await sourceTypeCommand.ExecuteScalarAsync(cancellationToken) as string;
-            }
-            sourceFormType ??= "standalone";
             await ValidateActionThemeAsync(
                 connection,
                 (SqlTransaction)transaction,
@@ -3386,6 +3390,7 @@ public sealed partial class SqlFoundationDataStore(
                     JOIN quality.liv_records liv ON liv.id = visit.liv_record_id
                     WHERE visit.id = @livVisitId
                       AND liv.record_id = @sourceRecordId
+                      AND (@livCycleId IS NULL OR visit.cycle_id=@livCycleId)
                       AND visit.archived_at IS NULL
                       AND liv.archived_at IS NULL;
                     """,
@@ -3393,14 +3398,14 @@ public sealed partial class SqlFoundationDataStore(
                     (SqlTransaction)transaction);
                 validationCommand.Parameters.AddWithValue("@livVisitId", sourceSubRecordId.Value);
                 validationCommand.Parameters.AddWithValue("@sourceRecordId", ToDbValue(request.SourceRecordId));
+                validationCommand.Parameters.AddWithValue("@livCycleId", ToDbValue(linkedLivCycleId));
                 if (Convert.ToInt32(await validationCommand.ExecuteScalarAsync(cancellationToken)) != 1)
                 {
                     throw new WorkflowValidationException("The selected LIV visit does not belong to the source record.");
                 }
             }
 
-            if (string.Equals(sourceSubRecordType, "liv_cycle", StringComparison.OrdinalIgnoreCase)
-                && sourceSubRecordId.HasValue)
+            if (linkedLivCycleId.HasValue)
             {
                 await using var validationCommand = new SqlCommand(
                     """
@@ -3413,7 +3418,7 @@ public sealed partial class SqlFoundationDataStore(
                     """,
                     connection,
                     (SqlTransaction)transaction);
-                validationCommand.Parameters.AddWithValue("@livCycleId", sourceSubRecordId.Value);
+                validationCommand.Parameters.AddWithValue("@livCycleId", linkedLivCycleId.Value);
                 validationCommand.Parameters.AddWithValue("@sourceRecordId", ToDbValue(request.SourceRecordId));
                 if (Convert.ToInt32(await validationCommand.ExecuteScalarAsync(cancellationToken)) != 1)
                 {
@@ -3457,6 +3462,7 @@ public sealed partial class SqlFoundationDataStore(
                 dueDateCommand.Parameters.AddWithValue("@sourceRecordId", request.SourceRecordId.Value);
                 var sourceRecordType = await dueDateCommand.ExecuteScalarAsync(cancellationToken) as string;
                 if (string.Equals(sourceRecordType, "learning_walk", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(sourceRecordType, "als_learning_walk", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(sourceRecordType, "elevate_environment", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new WorkflowValidationException(
@@ -3493,10 +3499,7 @@ public sealed partial class SqlFoundationDataStore(
                 OUTPUT inserted.id
                 VALUES (
                     @sourceRecordId,
-                    COALESCE(
-                        NULLIF(@sourceFormType, ''),
-                        (SELECT record_type FROM core.records WHERE id = @sourceRecordId),
-                        'standalone'),
+                    @sourceFormType,
                     @sourceSubRecordType,
                     @sourceSubRecordId,
                     @sourceSubRecordKey,
@@ -3533,7 +3536,7 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@sourceFormType", sourceFormType);
                 command.Parameters.AddWithValue("@sourceSubRecordType", ToDbValue(sourceSubRecordType));
                 command.Parameters.AddWithValue("@sourceSubRecordId", ToDbValue(sourceSubRecordId));
-                command.Parameters.AddWithValue("@sourceSubRecordKey", ToDbValue(request.SourceSubRecordKey));
+                command.Parameters.AddWithValue("@sourceSubRecordKey", ToDbValue(sourceSubRecordKey));
                 command.Parameters.AddWithValue("@subjectStaffId", ToDbValue(request.SubjectStaffId));
                 command.Parameters.AddWithValue("@ownerStaffId", request.OwnerStaffId);
                 command.Parameters.AddWithValue("@actionTheme", request.ActionTheme.Trim());
@@ -3578,7 +3581,8 @@ public sealed partial class SqlFoundationDataStore(
                     detail = request.Detail,
                     ownerStaffId = request.OwnerStaffId,
                     dueDate = request.DueDate?.ToString("yyyy-MM-dd"),
-                    sourceFormType = request.SourceFormType,
+                    sourceRecordId,
+                    sourceFormType,
                     sourceSubRecordType,
                     sourceSubRecordId,
                     visibilitySetting,
@@ -3607,7 +3611,8 @@ public sealed partial class SqlFoundationDataStore(
         var canManageVisibleAction = CanManageVisibleAction(currentUser, visibleAction);
         PreventGenericProcessActionMutation(visibleAction);
 
-
+        if(visibleAction is not null)ActionMutationPolicy.ValidateGenericMutation(visibleAction.SourceRecordId,visibleAction.SourceFormType,
+            GenericActionMutation.Update,HasStructuralActionFields(request));
         if (request.OwnerStaffId.HasValue)
         {
             var sourceTypes = await QueryAsync(
@@ -3632,6 +3637,8 @@ public sealed partial class SqlFoundationDataStore(
 
         try
         {
+            await ValidateGenericActionMutationAsync(connection,(SqlTransaction)transaction,actionId,GenericActionMutation.Update,
+                HasStructuralActionFields(request),cancellationToken);
             ActionEditInfo? action;
             await using (var command = new SqlCommand(
                 """
@@ -3669,12 +3676,8 @@ public sealed partial class SqlFoundationDataStore(
                     reader.GetString(12));
             }
 
-            // The assigned owner can progress or complete their own action;
-            // wider edits need actions.manage.
-            var isOwner = currentUser.StaffId == action.OwnerStaffId;
-            var isSourceOwner = currentUser.StaffId.HasValue && currentUser.StaffId == action.SourceOwnerStaffId;
-            var canManage = canManageVisibleAction;
-            if (!isOwner && !isSourceOwner && !canManage)
+            var canManage = canManageVisibleAction && await CanManageActionAsync(connection, (SqlTransaction)transaction, actionId, currentUser, cancellationToken);
+            if (!canManage)
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return FormSubmissionUpdateResult.Forbidden;
@@ -3753,7 +3756,7 @@ public sealed partial class SqlFoundationDataStore(
                         WHEN @reopening = 1 THEN NULL
                         ELSE cancellation_comments END,
                     progress_status = CASE
-                        WHEN progress_status IS NULL THEN NULL
+                        WHEN progress_status IS NULL AND @isCoaching = 0 THEN NULL
                         WHEN @completing = 1 THEN 'completed'
                         WHEN @cancelling = 1 THEN 'closed'
                         WHEN @reopening = 1 THEN 'not_started'
@@ -3786,6 +3789,7 @@ public sealed partial class SqlFoundationDataStore(
                 command.Parameters.AddWithValue("@completing", completing);
                 command.Parameters.AddWithValue("@cancelling", cancelling);
                 command.Parameters.AddWithValue("@reopening", reopening);
+                command.Parameters.AddWithValue("@isCoaching", ActionOriginPolicy.CanonicalSourceType(action.SourceFormType)=="coaching_mentoring");
                 command.Parameters.AddWithValue("@completionNote", ToDbValue(request.CompletionNote));
                 command.Parameters.AddWithValue("@cancellationComments", ToDbValue(request.CancellationComments));
                 command.Parameters.AddWithValue("@userAccountId", ToDbValue(currentUser.UserAccountId));
@@ -3869,6 +3873,7 @@ public sealed partial class SqlFoundationDataStore(
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await ValidateGenericActionMutationAsync(connection,transaction,actionId,GenericActionMutation.Extend,false,cancellationToken);
             ActionExtensionEditInfo? action;
             await using (var command = new SqlCommand(
                 """
@@ -3901,9 +3906,7 @@ public sealed partial class SqlFoundationDataStore(
                     GetStringOrNull(reader, 6));
             }
 
-            var canEdit = canManageVisibleAction
-                || currentUser.StaffId == action.OwnerStaffId
-                || (currentUser.StaffId.HasValue && currentUser.StaffId == action.SourceOwnerStaffId);
+            var canEdit = canManageVisibleAction && await CanManageActionAsync(connection, transaction, actionId, currentUser, cancellationToken);
             if (!canEdit)
             {
                 await transaction.RollbackAsync(cancellationToken);
@@ -4233,6 +4236,8 @@ public sealed partial class SqlFoundationDataStore(
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await ValidateGenericActionMutationAsync(connection,transaction,actionId,GenericActionMutation.Delete,false,cancellationToken);
+        await EnsureCanManageActionAsync(connection,transaction,actionId,currentUser,cancellationToken);
         await using var command = new SqlCommand(
             """
             UPDATE quality.actions
@@ -4283,6 +4288,8 @@ public sealed partial class SqlFoundationDataStore(
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await ValidateGenericActionMutationAsync(connection,transaction,actionId,GenericActionMutation.Restore,false,cancellationToken);
+        await EnsureCanManageActionAsync(connection,transaction,actionId,currentUser,cancellationToken);
         await using var command = new SqlCommand(
             """
             UPDATE quality.actions
@@ -8983,7 +8990,7 @@ public sealed partial class SqlFoundationDataStore(
         || currentUser.HasPermission(PermissionKeys.ActionsManage);
 
     private static bool CanManageVisibleAction(CurrentUser currentUser, ActionSummary? action) =>
-        AccessBoundaryPolicy.CanManageVisibleAction(currentUser, action is not null, action?.SourceFormType);
+        action?.CanManageAction == true;
 
     private static string NormalizeActionVisibility(string? visibilitySetting, bool publishedToStaff)
     {
@@ -9302,6 +9309,7 @@ public sealed partial class SqlFoundationDataStore(
 
     private static bool RequiresLeaderActionOwner(string? sourceFormType)
         => string.Equals(sourceFormType, "learning_walk", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(sourceFormType, "digital_learning_walk", StringComparison.OrdinalIgnoreCase)
             || string.Equals(sourceFormType, "als_learning_walk", StringComparison.OrdinalIgnoreCase)
             || string.Equals(sourceFormType, "elevate_environment", StringComparison.OrdinalIgnoreCase);
 

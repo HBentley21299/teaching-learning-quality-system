@@ -91,7 +91,8 @@ public sealed record QaReviewActivitySummary(
     string TemplateName,
     int DisplayOrder,
     IReadOnlyList<QaQuestionSummary> Questions,
-    bool CanSubmitEvidence = true);
+    bool CanSubmitEvidence = true,
+    bool WrittenCommentaryEnabled = true);
 
 public sealed record QaQuestionSummary(
     Guid Id,
@@ -127,7 +128,8 @@ public sealed record SaveQaReviewRequest(
 public sealed record SaveQaReviewActivityRequest(
     Guid ActivityTypeId,
     Guid TemplateId,
-    IReadOnlyList<Guid> QuestionIds);
+    IReadOnlyList<Guid> QuestionIds,
+    bool WrittenCommentaryEnabled = true);
 
 public sealed record SaveQaQuestionRequest(
     Guid ActivityTypeId,
@@ -194,7 +196,9 @@ public sealed record QaEvidenceDetail(
     string? AdditionalContext,
     Guid? SubjectStaffId,
     IReadOnlyList<QaEvidenceResponseSummary> Responses,
-    IReadOnlyList<QaEvidenceRevisionSummary> Revisions);
+    IReadOnlyList<QaEvidenceRevisionSummary> Revisions,
+    string? WrittenCommentary = null,
+    bool WrittenCommentaryEnabled = true);
 
 public sealed record QaEvidenceResponseSummary(
     Guid ReviewQuestionId,
@@ -228,7 +232,8 @@ public sealed record SaveQaEvidenceRequest(
     IReadOnlyList<SaveQaEvidenceResponseRequest> Responses,
     string? CorrectionReason,
     byte[]? RowVersion = null,
-    string? DeliveryAreaKey = null);
+    string? DeliveryAreaKey = null,
+    string? WrittenCommentary = null);
 
 public sealed record SaveQaEvidenceResponseRequest(
     Guid ReviewQuestionId,

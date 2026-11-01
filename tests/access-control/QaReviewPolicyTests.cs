@@ -106,6 +106,18 @@ public sealed class QaReviewPolicyTests
     }
 
     [Fact]
+    public void WrittenCommentaryIsOptionalAndLimitedWithoutChangingRatingRules()
+    {
+        QaReviewPolicy.ValidateWrittenCommentary(true,null);
+        QaReviewPolicy.ValidateWrittenCommentary(true,new string('x',10000));
+        Assert.Throws<WorkflowValidationException>(()=>QaReviewPolicy.ValidateWrittenCommentary(true,new string('x',10001)));
+        QaReviewPolicy.ValidateWrittenCommentary(false,null);
+        QaReviewPolicy.ValidateWrittenCommentary(false,"Earlier saved notes","Earlier saved notes");
+        Assert.Throws<WorkflowValidationException>(()=>QaReviewPolicy.ValidateWrittenCommentary(false,"New notes"));
+        Assert.Throws<WorkflowValidationException>(()=>QaReviewPolicy.ValidateWrittenCommentary(false,"Changed notes","Earlier notes"));
+    }
+
+    [Fact]
     public void NotApplicableIsRejectedWhenItIsNotEnabled()
     {
         var message = QaReviewPolicy.ValidateResponse(true, false, false, "not_applicable", null, null, true);

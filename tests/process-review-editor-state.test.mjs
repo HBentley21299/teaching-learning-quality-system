@@ -44,6 +44,27 @@ test('dirty detection ignores refreshed concurrency tokens but detects edits to 
   assert.notEqual(helpers.processReviewFingerprint(changed), original);
 });
 
+test('automatic DLW titles follow amended team/date context without replacing historical custom titles', () => {
+  const saved = { title: 'Digital Learning Walk · Earlier Team · 2026-10-30', academicYear: '2026/27', recordDate: '2026-10-30', teamOrgUnitId: 'earlier', teamName: 'Earlier Team', facultyOrgUnitId: 'faculty', facultyName: 'Faculty' };
+  const updated = { ...saved, recordDate: '2026-11-01', teamOrgUnitId: 'new-team' };
+  assert.equal(helpers.digitalLearningWalkTitle(updated, saved, [{ id: 'new-team', name: 'New Team' }]), 'Digital Learning Walk · New Team · 2026-11-01');
+  assert.equal(helpers.digitalLearningWalkTitle({ ...updated, title: 'A named historic walk' }, { ...saved, title: 'A named historic walk' }, []), 'A named historic walk');
+  assert.equal(helpers.digitalLearningWalkTitle(updated, saved, []), 'Digital Learning Walk · Team / area · 2026-11-01');
+});
+
+test('unrated drafts can immediately show the shared Learning Walk scale while rated and submitted reviews remain pinned', () => {
+  const old = { processKey: 'digital_learning_walk', standards: [{ key: 'standard', statements: [{ key: 'statement', text: 'Original wording' }] }], ratingOptions: [] };
+  const current = { ...old, ratingOptions: [{ key: 'secure_practice', label: '3 – Secure Practice', score: 3, colorHex: '#3FAE5A' }] };
+  const saved = { status: 'draft', configuration: old, data: { responses: [] } };
+  assert.equal(helpers.digitalLearningWalkConfiguration(saved, current), current);
+  assert.equal(helpers.digitalLearningWalkConfiguration(null, current), current);
+  assert.equal(helpers.digitalLearningWalkConfiguration({ ...saved, status: 'submitted' }, current), old);
+  assert.equal(helpers.digitalLearningWalkConfiguration({ ...saved, data: { responses: [{ statementKey: 'statement', ratingKey: 'earlier-rating' }] } }, current), old);
+  assert.equal(helpers.digitalLearningWalkConfiguration({ ...saved, configuration: { ...old, ratingOptions: [{ key: 'custom', label: 'Earlier scale' }] } }, current).ratingOptions[0].key, 'custom');
+  const changed = { ...current, standards: [{ key: 'standard', statements: [{ key: 'statement', text: 'Amended wording' }] }] };
+  assert.equal(helpers.digitalLearningWalkConfiguration(saved, changed), old);
+});
+
 test('removing one sample clears every reference to it while retaining ratings and rationale', () => {
   const original = data();
   const result = helpers.removeProcessReviewSample(original, 'first');
@@ -69,41 +90,28 @@ test('preparation targets cross month and year boundaries without changing the c
   assert.equal(helpers.addProcessReviewDays('not-a-date', -7), '');
 });
 
-test('read-only reviewers can move between standards while ratings, sample links and rationale remain disabled', async () => {
-  const react = requireWeb('react');
-  const jsx = requireWeb('react/jsx-runtime');
+test('read-only Digital Learning Walks show the continuous criteria form with editing disabled', async () => {
+  const react = requireWeb('react'), jsx = requireWeb('react/jsx-runtime');
   const { renderToStaticMarkup } = requireWeb('react-dom/server');
-  const componentSource = await readFile(new URL('../apps/web/src/routes/ProcessReviews.tsx', import.meta.url), 'utf8');
+  const componentSource = await readFile(new URL('../apps/web/src/components/DigitalLearningWalkForm.tsx', import.meta.url), 'utf8');
   const componentModule = { exports: {} };
-  let id = 0;
+  const Button = ({ children, icon, variant, busy, ...props }) => react.createElement('button', props, children);
   const modules = {
-    react: { useId: () => `test-${++id}` }, 'react/jsx-runtime': jsx,
-    'lucide-react': new Proxy({}, { get: () => () => null }),
+    react: { useId: () => 'readonly', useRef: value => ({ current: value }), useState: value => [value, () => {}], useEffect() {} }, 'react/jsx-runtime': jsx,
+    'lucide-react': new Proxy({}, { get: () => () => null }), '../design-system/Button': { Button },
+    './WorkflowFeedback': { WorkflowFeedback: () => null }, './useActionOwners': { useActionOwners: () => ({ owners: [], loading: false, error: '', retry() {} }) },
+    '../services/learningWalkDeliveryAreas': { learningWalkDeliveryChoices: () => [] }, '../app/routing': { actionPath: id => `/actions/${id}` },
     '../services/processReviewTypes': helpers
   };
-  const code = ts.transpileModule(componentSource, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX }
-  }).outputText;
-  new Function('require', 'exports', 'module', `${code}\nexports.TestStatements = DigitalStatements;`)(name => modules[name] || {}, componentModule.exports, componentModule);
-  const selected = [];
-  const configuration = {
-    standards: [
-      { key: 'first', title: 'First standard', statements: [{ key: 'question', text: 'A supplied statement' }] },
-      { key: 'last', title: 'Last standard', statements: [{ key: 'last-question', text: 'A final statement' }] }
-    ], ratingOptions: [{ key: 'college-rating', label: 'College rating' }]
-  };
-  const tree = componentModule.exports.TestStatements({ configuration, data: data(), selected: 0,
-    setSelected: value => selected.push(value), onChange: () => assert.fail('Reading must not edit answers'), readOnly: true });
-  const nodes = [];
-  function walk(node) { if (Array.isArray(node)) return node.forEach(walk); if (!node || typeof node !== 'object') return; nodes.push(node); walk(node.props?.children); }
-  walk(tree);
-  const navigation = nodes.filter(node => node.type === 'button');
-  assert.equal(navigation.length, 2);
-  assert.ok(navigation.every(node => !node.props.disabled));
-  navigation[1].props.onClick();
-  assert.deepEqual(selected, [1]);
-  const markup = renderToStaticMarkup(react.createElement(() => tree));
-  assert.match(markup, /<select disabled=""/);
-  assert.match(markup, /type="checkbox" disabled=""/);
-  assert.match(markup, /<textarea[^>]*disabled=""/);
+  new Function('require', 'exports', 'module', ts.transpileModule(componentSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText)(name => modules[name] || {}, componentModule.exports, componentModule);
+  const configuration = { standards: [{ key: 'standard', title: 'Digital standard', statements: [{ key: 'question', text: 'A supplied DLW statement' }] }], ratingOptions: [{ key: 'college-rating', label: 'College rating' }], fieldLabels: {} };
+  const current = { title: 'Review', academicYear: '2026/27', data: { fields: { strengths: 'Saved strengths' }, samples: [{ id: 'sample', title: 'Saved sample', sampleType: 'learner_work', staffIds: [] }], responses: [{ statementKey: 'question', ratingKey: 'college-rating', sampleIds: ['sample'], rationale: 'Saved reasoning' }], digital: { selectedStatementKeys: ['question'], draftActions: [] } } };
+  const tree = componentModule.exports.DigitalLearningWalkForm({ configuration, request: current, detail: null, user: { displayName: 'Reviewer' }, staff: [], orgUnits: [], readOnly: true, saving: false, onChange: () => assert.fail('Reading must not edit answers'), onCancel() {} });
+  const markup = renderToStaticMarkup(tree);
+  assert.match(markup, /Context and focus/); assert.match(markup, /Practice observed/); assert.match(markup, /Actions/);
+  assert.doesNotMatch(markup, /Scope and context|Findings|Good practice observed|Areas for development/);
+  assert.match(markup, /<fieldset class="digital-walk-editable" disabled=""/);
+  assert.match(markup, /aria-pressed="true"/); assert.match(markup, /Saved reasoning/); assert.match(markup, /Earlier evidence · read only|Saved sample/);
+  assert.doesNotMatch(markup, /Linked evidence samples|Add sample/);
+  assert.doesNotMatch(markup, /form sections|>Submit form</);
 });

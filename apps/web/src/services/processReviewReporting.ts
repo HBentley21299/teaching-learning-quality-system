@@ -1,4 +1,4 @@
-import type { ProcessReviewAction, ProcessReviewConfiguration, ProcessReviewSummary } from "./processReviewTypes";
+import type { ProcessReviewAction, ProcessReviewConfiguration, ProcessReviewData, ProcessReviewSummary } from "./processReviewTypes";
 import { compareListValues, matchesListSearch } from "./listQuery";
 
 export type ProcessReviewReportQuery = {
@@ -29,7 +29,7 @@ export function selectProcessReviewRows(rows: readonly ProcessReviewSummary[], q
     && (!query.fromDate || Boolean(row.recordDate && row.recordDate >= query.fromDate))
     && (!query.toDate || Boolean(row.recordDate && row.recordDate <= query.toDate))
     && matchesListSearch(query.search, row.title, row.facultyName, row.teamName, row.ownerName, row.academicYear, row.status,
-      row.selectedSubTeams?.map(team => team.name), row.participants?.map(person => [person.displayName, person.roles]),
+      row.selectedSubTeams?.map(team => team.name), row.participants?.map(person => [person.displayName, person.roles]), row.selectedStandards?.map(standard => standard.title),
       row.isFollowUp ? "Follow-up review" : "Initial review", row.parentReview?.title, row.followUpReviews?.map(review => review.title)))
     .slice().sort((a, b) => {
       const order = query.sort === "title" ? compareListValues(a.title, b.title)
@@ -109,6 +109,24 @@ export function processReviewResponsibleNames(action: ProcessReviewAction): stri
   return action.responsibleStaff?.length ? action.responsibleStaff.map(person => person.displayName) : [action.ownerName];
 }
 
+/** Category selection is authoritative; earlier criterion selections retain their exact pinned subset. */
+export function digitalReviewCriteria(configuration: ProcessReviewConfiguration, data: ProcessReviewData) {
+  const categories = data.digital?.selectedStandardKeys == null ? null : new Set(data.digital.selectedStandardKeys);
+  const selected = data.digital ? new Set(data.digital.selectedStatementKeys) : null;
+  return configuration.standards.map(standard => ({ ...standard,
+    statements: standard.statements.filter(statement => categories ? categories.has(standard.key) : !selected || selected.has(statement.key))
+  })).filter(standard => standard.statements.length > 0);
+}
+
+export function digitalReviewCategoryCoverage(configuration: ProcessReviewConfiguration, data: ProcessReviewData) {
+  const ratingKeys = new Set(configuration.ratingOptions.map(option => option.key));
+  return digitalReviewCriteria(configuration, data).map(standard => ({
+    key: standard.key, title: standard.title, selectedStatementCount: standard.statements.length,
+    statementCount: configuration.standards.find(category => category.key === standard.key)!.statements.length,
+    ratedStatementCount: standard.statements.filter(statement => data.responses.some(response => response.statementKey === statement.key && ratingKeys.has(response.ratingKey ?? ""))).length
+  }));
+}
+
 const fieldLabels: Record<string, string> = {
   scope: "Scope and context", teamsUrl: "Full review in Teams", headOfFacultyStaffId: "Head of faculty",
   initialPlannedDate: "Initial review · planned", initialHeldDate: "Initial review · held",
@@ -126,7 +144,7 @@ const fieldLabels: Record<string, string> = {
   changedPriorities: "Changed priorities", impactEvidence: "Impact evidence", impactLinks: "Impact evidence links",
   actionOutcomes: "Action review outcomes", carryForward: "Priorities for next cycle", escalationIssue: "Escalation · issue and effect",
   escalationSupport: "Escalation · support or decision needed", escalationOutcome: "Escalation · outcome and next steps",
-  strengths: "Strengths and effective practice"
+  strengths: "Strengths and effective practice", development: "Development areas", deliveryAreaName: "Delivery area"
 };
 
 export function processReviewFieldLabel(configuration: ProcessReviewConfiguration, key: string) {

@@ -54,6 +54,54 @@ public sealed class QaFormEntryExportTests
         Assert.Contains("Not seen", actual[0].Rows[0]);
     }
 
+    [Fact]
+    public void Form_commentary_is_exported_once_without_empty_criterion_note_columns_or_configuration_flags()
+    {
+        var detail = Detail("at", "", Guid.NewGuid()) with { WrittenCommentary = "Overall evidence across this form." };
+        detail = detail with { Responses = [detail.Responses[0], detail.Responses[0] with { ReviewQuestionId = Guid.NewGuid(), DisplayOrder = 2 }] };
+        var sheets = QaFormEntryExportBuilder.Build([detail], QaOutcomeLabels.Default);
+        var entries = sheets[0];
+        var row = Assert.Single(entries.Rows);
+        var index = entries.Columns.ToList().IndexOf("Written commentary");
+        Assert.True(index >= 0);
+        Assert.Equal(detail.WrittenCommentary, row[index]);
+        Assert.Single(row, value => value == detail.WrittenCommentary);
+        Assert.DoesNotContain(entries.Columns, column => column.EndsWith("/comment]", StringComparison.Ordinal));
+        Assert.DoesNotContain(sheets[1].Rows, answer => answer[7] == detail.WrittenCommentary);
+        Assert.DoesNotContain(entries.Columns, column => column.Contains("enabled", StringComparison.OrdinalIgnoreCase));
+        Assert.All(sheets, sheet => Assert.All(sheet.Rows, values => Assert.Equal(sheet.Columns.Count, values.Count)));
+    }
+
+    [Fact]
+    public void Historical_criterion_notes_remain_distinct_from_the_overall_commentary()
+    {
+        var detail = Detail("at", "Earlier note about this criterion.", Guid.NewGuid()) with { WrittenCommentary = "New overall commentary." };
+        var sheets = QaFormEntryExportBuilder.Build([detail], QaOutcomeLabels.Default);
+        var entries = sheets[0];
+        var row = Assert.Single(entries.Rows);
+        var priorColumn = entries.Columns.ToList().FindIndex(column => column.EndsWith("/comment]", StringComparison.Ordinal));
+        Assert.True(priorColumn >= 0);
+        Assert.Contains("Earlier criterion notes", entries.Columns[priorColumn]);
+        Assert.Equal("Earlier note about this criterion.", row[priorColumn]);
+        Assert.Equal("New overall commentary.", row[entries.Columns.ToList().IndexOf("Written commentary")]);
+    }
+
+    [Fact]
+    public void Workbook_pdf_includes_the_single_form_commentary_once()
+    {
+        const string commentary = "One overall written judgement.";
+        var detail = Detail("at", "", Guid.NewGuid()) with { WrittenCommentary = commentary };
+        detail = detail with { Responses = [detail.Responses[0], detail.Responses[0] with { ReviewQuestionId = Guid.NewGuid(), DisplayOrder = 2 }] };
+        var workbook = BusinessWorkbookExportBuilder.Build(new ExportWorkbookData("qa-review-report", "QA evidence",
+            new ExportFilter("2026/27", null, null, null, null, null, null, null, null),
+            "Reviewer", DateTimeOffset.UtcNow, QaFormEntryExportBuilder.Build([detail], QaOutcomeLabels.Default)));
+        var file = new QaPdfReportService().CreateDashboardReport(workbook);
+        var raw = System.Text.Encoding.ASCII.GetString(file.Content);
+        Assert.Contains("Written commentary", raw);
+        Assert.Equal(1, raw.Split(commentary, StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain(detail.Evidence.Id.ToString(), raw);
+    }
+
     private static QaEvidenceDetail Detail(string outcome, string comment, Guid question) => new(
         new QaEvidenceSummary(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "Learning walk", "submitted", Guid.NewGuid(), "Faculty", "Team", "Programme", "Level 3", null, Guid.NewGuid(), "Reviewer", DateTimeOffset.UtcNow, 5, 1, DateTimeOffset.UtcNow, 1, [], false, false),
         [], ["Team"], "Course evidence", [], "Strengths", "Improvements", "Actions", null, null,

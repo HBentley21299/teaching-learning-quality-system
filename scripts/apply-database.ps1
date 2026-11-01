@@ -181,7 +181,8 @@ $scripts = @(
     (Join-Path -Path $root -ChildPath "database\migrations\093_form_version_administration.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\094_process_reviews.sql"),
     (Join-Path -Path $root -ChildPath "database\migrations\095_activate_growth_review_workflow.sql"),
-    (Join-Path -Path $root -ChildPath "database\migrations\096_activate_linked_follow_ups.sql")
+    (Join-Path -Path $root -ChildPath "database\migrations\096_activate_linked_follow_ups.sql"),
+    (Join-Path -Path $root -ChildPath "database\migrations\097_qa_form_written_commentary.sql")
 )
 
 if ($ExcludeOfficialStaffData) {

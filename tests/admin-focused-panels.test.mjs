@@ -85,12 +85,12 @@ async function panel(file, exportName, initialProps, responses = {}) {
     '../components/WorkScrutinyCreateForm': { WorkScrutinyResponseField: () => null },
     '../app/history': { writeAppPath: path => calls.push(['writeAppPath', path]) }, '../app/qaAdminNavigation': {}, './QaAdminCentre': {},
     '../services/qaEvidenceSaveQueue': qaEvidenceSaveQueue, '../services/qaOutcomeLabels': { useQaOutcomeLabels: () => ({ below: 'Below', at: 'Meets', above: 'Exceeds', notApplicable: 'Not applicable' }), qaCombinedOutcomeLabel: labels => `${labels.at} or ${labels.above}` },
-    '../components/QaDashboardDataExplorer': {}, '../services/dashboardOrgVisibility': dashboardOrgVisibility,
+    '../components/QaDashboardDataExplorer': {}, '../components/QaReviewIntelligence': { QaReviewIntelligence: () => null }, '../services/dashboardOrgVisibility': dashboardOrgVisibility,
     '../services/learningWalkDeliveryAreas': learningWalkDeliveryAreas,
     '../design-system/Button': { Button },
     '../components/CollapsibleSection': { CollapsibleSection: props => createElement('section', {}, createElement('h2', {}, props.title), props.actions, props.children), Pagination: () => null },
     '../components/UnsavedChangesGuard': { confirmUnsavedNavigation: async () => true, useNavigationDecisionPending: () => navigationDecisionPending, useUnsavedChanges: config => { guards.set(config.label, config); return () => { const current = guards.get(config.label); if (current) guards.set(config.label, { ...current, dirty: false, saving: false }); }; } },
-    './PermissionsAdmin.css': {}, './AdminWorkflowContent.css': {}
+    './PermissionsAdmin.css': {}, './AdminWorkflowContent.css': {}, './QaCommentary.css': {}, './QaHome.css': {}
   };
   const source = await readFile(new URL(`../apps/web/src/routes/${file}`, import.meta.url), 'utf8');
   const output = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
@@ -196,13 +196,101 @@ test('administrative records search business area names and years while status o
 
 test('QA review list supports historical year and owner facets and searching year across the whole permitted list', async () => {
   const base = { status: 'open', theme: 'Quality', ownerName: 'Zoe', teamCount: 1, activityCount: 2, evidenceCount: 0 };
-  const summary = { reviews: [{ ...base, id: 'r2', title: 'Review 10', academicYear: '2026/27', closingDate: '2026-10-01' }, { ...base, id: 'r1', title: 'Review 2', academicYear: '2024/25', closingDate: '2024-10-01', status: 'archived', ownerName: 'Historic owner' }], canManageReviews: false };
+  const summary = { reviews: [{ ...base, id: 'r2', title: 'Review 10', academicYear: '2026/27', closingDate: '2026-10-01' }, { ...base, id: 'r1', title: 'Review 2', academicYear: '2024/25', closingDate: '2024-10-01', status: 'closed', ownerName: 'Historic owner' }], canManageReviews: false };
   const page = await panel('QaHub.tsx', 'QaReviewList', { summary, onNavigate() {} });
   assert.match(text(field(page, 'Academic year').props.children), /2024\/25/);
   assert.match(text(field(page, 'Owner').props.children), /Historic owner/);
-  await page.change(field(page, 'Status'), 'all');
+  await chooseQaReviewView(page, 'All reviews');
   await page.change(page.nodes().find(node => node.props?.['aria-label'] === 'Search reviews'), '2024/25 historic');
   assert.match(page.markup(), /<strong>Review 2/); assert.doesNotMatch(page.markup(), /<strong>Review 10/);
+});
+
+function qaReviewView(page, label) {
+  return page.nodes().find(node => node.type === 'button' && node.props['aria-pressed'] !== undefined && node.props['aria-label']?.startsWith(`${label}:`));
+}
+async function chooseQaReviewView(page, label) {
+  const button = qaReviewView(page, label);
+  assert.ok(button, `Missing review view ${label}`);
+  await button.props.onClick(); await page.settle();
+}
+function qaReviewCards(page) {
+  return page.nodes().filter(node => node.type === 'button' && node.props.className?.split(' ').includes('qa-review-card'));
+}
+function qaHomeReview(id, title, status, extra = {}) {
+  return { id, title, status, theme: 'Quality', academicYear: '2026/27', closingDate: '2026-11-01', ownerName: 'Zoe', teamCount: 1, activityCount: 2, evidenceCount: 0, ...extra };
+}
+
+test('QA homepage starts with open and reopened reviews, keeping closed and draft destinations distinct', async () => {
+  const paths = [];
+  const summary = { canManageReviews: false, reviews: [
+    qaHomeReview('open', 'Open review', 'open', { closingDate: '2020-01-01' }),
+    qaHomeReview('reopened', 'Reopened review', 'reopened'),
+    qaHomeReview('closed', 'Closed review', 'closed', { closingDate: '2030-01-01' }),
+    qaHomeReview('draft', 'Draft review', 'draft')
+  ] };
+  const page = await panel('QaHub.tsx', 'QaReviewList', { summary, onNavigate: path => paths.push(path) });
+  assert.equal(qaReviewView(page, 'Live reviews').props['aria-pressed'], true);
+  assert.equal(qaReviewView(page, 'Live reviews').props['aria-label'], 'Live reviews: 2');
+  assert.equal(qaReviewView(page, 'Closed reviews').props['aria-label'], 'Closed reviews: 1');
+  assert.equal(qaReviewView(page, 'Drafts').props['aria-label'], 'Drafts: 1');
+  assert.equal(qaReviewView(page, 'All reviews').props['aria-label'], 'All reviews: 4');
+  assert.ok(qaReviewCards(page).some(node => text(node).includes('Open review')));
+  assert.ok(qaReviewCards(page).some(node => text(node).includes('Reopened review')));
+  assert.equal(qaReviewCards(page).length, 2, 'saved status, rather than the closing date, determines live availability');
+  for (const card of qaReviewCards(page)) await card.props.onClick();
+  assert.deepEqual(new Set(paths), new Set(['/qa-hub/reviews/open/evidence', '/qa-hub/reviews/reopened/evidence']));
+
+  await chooseQaReviewView(page, 'Closed reviews');
+  assert.equal(qaReviewCards(page).length, 1); assert.match(text(qaReviewCards(page)[0]), /Closed review/);
+  await qaReviewCards(page)[0].props.onClick();
+  assert.equal(paths.at(-1), '/qa-hub/reviews/closed/dashboard');
+
+  await chooseQaReviewView(page, 'Drafts');
+  assert.equal(qaReviewCards(page).length, 1); assert.match(text(qaReviewCards(page)[0]), /Draft review/);
+  await qaReviewCards(page)[0].props.onClick();
+  assert.equal(paths.at(-1), '/qa-hub/reviews/draft/configuration');
+  assert.equal(page.nodes().some(node => node.type === page.Button && text(node) === 'New review'), false);
+  assert.equal(page.calls.length, 0, 'view changes and navigation never change review permissions or write data');
+});
+
+test('QA homepage keeps search, year, owner and sort choices when moving between live and closed reviews', async () => {
+  const summary = { canManageReviews: false, reviews: [
+    qaHomeReview('live-feedback', 'Feedback live', 'open'),
+    qaHomeReview('closed-feedback', 'Feedback closed', 'closed'),
+    qaHomeReview('other-owner', 'Feedback other owner', 'closed', { ownerName: 'Casey' }),
+    qaHomeReview('other-year', 'Feedback previous year', 'closed', { academicYear: '2024/25' }),
+    qaHomeReview('other-theme', 'Attendance closed', 'closed')
+  ] };
+  const page = await panel('QaHub.tsx', 'QaReviewList', { summary, onNavigate() {} });
+  await page.change(field(page, 'Academic year'), '2026/27');
+  await page.change(field(page, 'Owner'), 'Zoe');
+  await page.change(page.nodes().find(node => node.props?.['aria-label'] === 'Search reviews'), 'feedback');
+  await page.change(page.nodes().find(node => node.props?.['aria-label'] === 'Sort by'), 'title-asc');
+  assert.equal(qaReviewCards(page).length, 1); assert.match(text(qaReviewCards(page)[0]), /Feedback live/);
+
+  await chooseQaReviewView(page, 'Closed reviews');
+  assert.equal(qaReviewCards(page).length, 1); assert.match(text(qaReviewCards(page)[0]), /Feedback closed/);
+  assert.equal(field(page, 'Academic year').props.value, '2026/27');
+  assert.equal(field(page, 'Owner').props.value, 'Zoe');
+  assert.equal(page.nodes().find(node => node.props?.['aria-label'] === 'Search reviews').props.value, 'feedback');
+  assert.equal(page.nodes().find(node => node.props?.['aria-label'] === 'Sort by').props.value, 'title-asc');
+  assert.equal(qaReviewView(page, 'Closed reviews').props['aria-label'], 'Closed reviews: 4', 'view totals describe the permitted source, independently of local filters');
+  assert.match(text(field(page, 'Academic year').props.children), /2024\/25/);
+  assert.match(text(field(page, 'Owner').props.children), /Casey/);
+  await chooseQaReviewView(page, 'Live reviews');
+  assert.equal(qaReviewCards(page).length, 1); assert.match(text(qaReviewCards(page)[0]), /Feedback live/);
+});
+
+test('QA homepage explains an empty live list and offers closed reviews without automatically changing the selected view', async () => {
+  const summary = { canManageReviews: false, reviews: [qaHomeReview('closed', 'Previous findings', 'closed')] };
+  const page = await panel('QaHub.tsx', 'QaReviewList', { summary, onNavigate() {} });
+  assert.equal(qaReviewView(page, 'Live reviews').props['aria-pressed'], true);
+  assert.equal(qaReviewCards(page).length, 0);
+  assert.match(page.markup(), /[Nn]o live reviews/);
+  assert.equal(qaReviewView(page, 'Drafts'), undefined);
+  await page.click('View closed reviews');
+  assert.equal(qaReviewView(page, 'Closed reviews').props['aria-pressed'], true);
+  assert.equal(qaReviewCards(page).length, 1); assert.match(text(qaReviewCards(page)[0]), /Previous findings/);
 });
 
 test('QA action search includes assignees and completion notes, not only action titles', async () => {
@@ -669,7 +757,7 @@ function qaEvidenceFixture(status = 'draft', canEdit = true) {
   return { evidence: { id: 'evidence', reviewId: 'review', reviewActivityId: 'activity', teamOrgUnitId: 'team', activityAt: '2026-10-01T09:00:00Z', activityName: 'Learning Walk', teamName: 'Team', reviewerName: 'Reviewer', status, versionNumber: 1, rowVersion: 'v1', canEdit, canRemove: false, deliveryAreaKey: 'classroom' }, teamOrgUnitIds: ['team'], teamNames: ['Team'], responses: [{ reviewQuestionId: 'question', questionText: 'Clear explanations', isRequired: true, outcome: 'at' }], revisions: [] };
 }
 function qaSaved(detail, request, submit, rowVersion) {
-  return { ...structuredClone(detail), evidence: { ...detail.evidence, status: submit ? 'submitted' : detail.evidence.status, rowVersion }, responses: detail.responses.map((question, index) => ({ ...question, ...request.responses[index] })) };
+  return { ...structuredClone(detail), writtenCommentary: request.writtenCommentary, evidence: { ...detail.evidence, status: submit ? 'submitted' : detail.evidence.status, rowVersion }, responses: detail.responses.map((question, index) => ({ ...question, ...request.responses[index] })) };
 }
 async function qaEvidencePanel(detail, saveQaEvidence = () => ({ ok: false, message: 'Save rejected' })) {
   const timers = new Map(), previousSet = window.setTimeout, previousClear = window.clearTimeout, paths = [];
@@ -679,6 +767,7 @@ async function qaEvidencePanel(detail, saveQaEvidence = () => ({ ok: false, mess
   const page = await panel('QaHub.tsx', 'QaEvidenceEditor', { evidenceId: 'evidence', reviews: [], onNavigate: path => paths.push(path), onSubmitted: async () => { submitted++; } }, { qaEvidence: detail, learningWalkDeliveryAreas: [{ key: 'classroom', name: 'Classroom', isActive: true }], saveQaEvidence });
   return { page, timers, paths, submitted: () => submitted,
     async edit(patch) { page.nodes().find(node => node.props?.question?.reviewQuestionId === 'question').props.onChange(patch); await page.settle(); },
+    async editCommentary(value) { await page.change(page.nodes().find(node => node.type === 'textarea' && node.props['aria-label'] === 'Written commentary'), value); },
     async autosave() { const [id, callback] = [...timers][0]; timers.delete(id); callback(); await page.settle(); },
     finish() { page.unmount(); window.setTimeout = previousSet; window.clearTimeout = previousClear; }
   };
@@ -688,16 +777,16 @@ test('QA evidence exit pauses autosave and discards only unsaved edits while kee
   const detail = qaEvidenceFixture();
   const view = await qaEvidencePanel(detail, (_review, _id, request, submit) => ({ ok: true, data: qaSaved(detail, request, submit, 'v2') }));
   try {
-    await view.edit({ outcome: 'above', comment: 'Already autosaved' }); await view.autosave();
-    await view.edit({ comment: 'Do not save this edit' }); assert.equal(view.timers.size, 1);
+    await view.edit({ outcome: 'above' }); await view.editCommentary('Already autosaved'); await view.autosave();
+    await view.editCommentary('Do not save this edit'); assert.equal(view.timers.size, 1);
     await view.page.navigationPending(true); assert.equal(view.timers.size, 0);
     const guard = view.page.guards.get('QA evidence');
     assert.equal(guard.submission, true); assert.equal(guard.discardLabel, 'Discard unsaved changes');
     assert.match(guard.discardMessage, /retained as a draft/); assert.match(guard.discardMessage, /does not remove/);
     guard.onDiscard(); await view.page.settle();
     assert.equal(view.page.guards.get('QA evidence').dirty, false);
-    const criterion = view.page.nodes().find(node => node.props?.question?.reviewQuestionId === 'question');
-    assert.equal(criterion.props.response.comment, 'Already autosaved'); assert.equal(view.timers.size, 0);
+    const commentary = view.page.nodes().find(node => node.type === 'textarea' && node.props['aria-label'] === 'Written commentary');
+    assert.equal(commentary.props.value, 'Already autosaved'); assert.equal(view.timers.size, 0);
     assert.equal(view.page.calls.filter(call => call[0] === 'saveQaEvidence').length, 1);
     assert.deepEqual(view.paths, []);
   } finally { view.finish(); }
@@ -708,12 +797,12 @@ test('QA exit submit flushes the real save queue and preserves the originally re
   const view = await qaEvidencePanel(detail, (_review, _id, request, submit) => new Promise(resolve => writes.push({ request: structuredClone(request), submit, resolve })));
   try {
     await view.edit({ outcome: 'above' }); await view.autosave();
-    await view.edit({ comment: 'Newest queued answer' }); await view.page.navigationPending(true);
+    await view.editCommentary('Newest queued answer'); await view.page.navigationPending(true);
     const submitted = view.page.guards.get('QA evidence').onSubmit(); await view.page.settle();
     assert.equal(writes.length, 1);
     writes[0].resolve({ ok: true, data: qaSaved(detail, writes[0].request, false, 'v2') }); await view.page.settle();
     assert.equal(writes.length, 2); assert.equal(writes[1].submit, true);
-    assert.equal(writes[1].request.rowVersion, 'v2'); assert.equal(writes[1].request.responses[0].comment, 'Newest queued answer');
+    assert.equal(writes[1].request.rowVersion, 'v2'); assert.equal(writes[1].request.writtenCommentary, 'Newest queued answer');
     writes[1].resolve({ ok: true, data: qaSaved(detail, writes[1].request, true, 'v3') });
     assert.equal(await submitted, true); await view.page.settle();
     assert.equal(view.submitted(), 1); assert.deepEqual(view.paths, [], 'the shared guard owns the pending Home/back/logout destination');
@@ -734,6 +823,94 @@ test('QA exit submit retains rejected edits and is never offered for read-only o
     try { assert.equal(readonly.page.guards.get('QA evidence').onSubmit, undefined); assert.equal(readonly.page.guards.get('QA evidence').submission, false); }
     finally { readonly.finish(); }
   }
+});
+
+function qaCommentarySetupFixture(status = 'draft') {
+  const questions = ['a', 'b'].map(key => ({ id: `question-${key}`, activityTypeId: `activity-${key}`, questionTag: 'general', questionText: `Criterion ${key.toUpperCase()}`, isActive: true, sourceStatus: 'active', displayOrder: 1 }));
+  const activities = ['a', 'b'].map(key => ({ id: `activity-${key}`, name: `Form ${key.toUpperCase()}`, description: `Process ${key.toUpperCase()}`, isActive: true, templates: [{ id: `template-${key}`, name: `Template ${key.toUpperCase()}`, isActive: true }, { id: `template-${key}-alternate`, name: 'Alternate template', isActive: true }] }));
+  const existing = { review: { id: 'review', title: 'Review', theme: 'Theme', academicYear: '2026/27', status, closingDate: '2026-11-30', rowVersion: 'v1' }, ownerStaffId: 'owner', questionTag: 'general', scope: [{ scopeType: 'team', orgUnitId: 'team' }], activities: activities.map((activity, index) => ({ id: `chosen-${index}`, name: activity.name, activityTypeId: activity.id, templateId: activity.templates[0].id, questions: [questions[index]], writtenCommentaryEnabled: index === 1 })) };
+  return { questions, props: { existing, user: { staffId: 'owner' }, orgUnits: [{ id: 'faculty', name: 'Faculty', orgUnitType: 'faculty', isActive: true }, { id: 'team', parentOrgUnitId: 'faculty', name: 'Team', orgUnitType: 'team', isActive: true }], staff: [{ id: 'owner', displayName: 'Owner' }], academicYears: [{ academicYear: '2026/27', isCurrent: true }], activities, onCancel() {}, onSaved() {} } };
+}
+
+test('QA setup switches commentary independently for each form and preserves settings across template changes and save', async () => {
+  const { questions, props } = qaCommentarySetupFixture();
+  const page = await panel('QaHub.tsx', 'QaReviewEditor', props, { qaQuestions: questions, updateQaReview: { ok: true } });
+  const switches = () => page.nodes().filter(node => node.type === 'input' && node.props.role === 'switch');
+  assert.deepEqual(switches().map(node => node.props.checked), [false, true]);
+  assert.equal(page.guards.get('QA review').dirty, false);
+  await page.change(switches()[0], true); await page.change(switches()[1], false);
+  await page.change(page.nodes().find(node => node.type === 'select' && node.props.value === 'template-a'), 'template-a-alternate');
+  assert.equal(await page.saveGuard('QA review'), true);
+  const saved = page.calls.find(call => call[0] === 'updateQaReview')[2];
+  assert.deepEqual(saved.activities.map(activity => activity.writtenCommentaryEnabled), [true, false]);
+  assert.equal(saved.activities[0].templateId, 'template-a-alternate');
+  assert.deepEqual(saved.activities.map(activity => activity.questionIds), [['question-a'], ['question-b']]);
+  assert.match(page.markup(), /one optional commentary box for the whole form/);
+  page.unmount();
+});
+
+test('newly selected QA forms start with commentary enabled while published settings stay read only and survive metadata saves', async () => {
+  const draft = qaCommentarySetupFixture(); draft.props.existing.activities = [draft.props.existing.activities[0]];
+  const page = await panel('QaHub.tsx', 'QaReviewEditor', draft.props, { qaQuestions: draft.questions, updateQaReview: { ok: true } });
+  const add = page.nodes().find(node => node.type === 'button' && node.props.className?.startsWith('qa-activity-option') && text(node.props.children).startsWith('Form B'));
+  await add.props.onClick(); await page.settle();
+  const next = page.nodes().find(node => node.type === 'input' && node.props['aria-label'] === 'Written commentary for Form B');
+  assert.equal(next.props.checked, true);
+  assert.equal(await page.saveGuard('QA review'), true);
+  assert.deepEqual(page.calls.find(call => call[0] === 'updateQaReview')[2].activities.map(activity => activity.writtenCommentaryEnabled), [false, true]);
+  page.unmount();
+
+  const published = qaCommentarySetupFixture('open');
+  const frozen = await panel('QaHub.tsx', 'QaReviewEditor', published.props, { updateQaReview: { ok: true } });
+  assert.equal(frozen.nodes().filter(node => node.type === 'input' && node.props.role === 'switch').length, 0);
+  assert.match(frozen.markup(), /Disabled for this form/); assert.match(frozen.markup(), /Enabled · one optional commentary box per form/);
+  await frozen.change(frozen.nodes().find(node => node.type === 'input' && node.props.placeholder === 'For example, Autumn curriculum quality review'), 'Updated review title');
+  assert.equal(await frozen.saveGuard('QA review'), true);
+  assert.deepEqual(frozen.calls.find(call => call[0] === 'updateQaReview')[2].activities.map(activity => activity.writtenCommentaryEnabled), [false, true]);
+  assert.equal(frozen.calls.some(call => call[0] === 'qaQuestions'), false);
+  frozen.unmount();
+});
+
+test('QA evidence has one optional overall commentary box and autosaves it without changing earlier criterion or form notes', async () => {
+  const detail = qaEvidenceFixture();
+  detail.writtenCommentaryEnabled = true; detail.writtenCommentary = '';
+  detail.contextualNotes = 'Earlier context'; detail.keyStrengths = 'Earlier strengths'; detail.evidenceLinks = ['https://college.example/evidence'];
+  detail.responses = [detail.responses[0], { ...detail.responses[0], reviewQuestionId: 'another', questionText: 'Second criterion' }];
+  detail.responses[0].comment = 'Earlier criterion evidence';
+  const view = await qaEvidencePanel(detail, (_review, _id, request, submit) => ({ ok: true, data: qaSaved(detail, request, submit, 'v2') }));
+  try {
+    assert.equal(view.page.nodes().filter(node => node.type === 'textarea').length, 1);
+    assert.equal((view.page.markup().match(/<textarea/g) ?? []).length, 1);
+    assert.match(view.page.markup(), /Earlier commentary · read only|Earlier criterion evidence|Earlier context|Earlier strengths/);
+    assert.doesNotMatch(view.page.markup(), /Evidence notes/);
+    const field = view.page.nodes().find(node => node.type === 'textarea');
+    assert.equal(field.props.maxLength, 10000); assert.equal(field.props.required, undefined);
+    await view.editCommentary('One narrative for the complete form'); await view.autosave();
+    const saved = view.page.calls.find(call => call[0] === 'saveQaEvidence')[3];
+    assert.equal(saved.writtenCommentary, 'One narrative for the complete form');
+    assert.equal(saved.responses[0].comment, 'Earlier criterion evidence');
+    assert.equal(saved.contextualNotes, 'Earlier context'); assert.equal(saved.keyStrengths, 'Earlier strengths');
+    assert.deepEqual(saved.evidenceLinks, ['https://college.example/evidence']);
+    assert.equal(view.page.guards.get('QA evidence').dirty, false);
+  } finally { view.finish(); }
+});
+
+test('disabled QA commentary has no box and read-only evidence cannot edit its overall commentary', async () => {
+  const disabled = qaEvidenceFixture(); disabled.writtenCommentaryEnabled = false;
+  disabled.responses[0].comment = 'Earlier note is retained';
+  const view = await qaEvidencePanel(disabled);
+  try {
+    assert.equal((view.page.markup().match(/<textarea/g) ?? []).length, 0);
+    assert.match(view.page.markup(), /Earlier note is retained/);
+    assert.equal(view.page.calls.some(call => call[0] === 'saveQaEvidence'), false);
+  } finally { view.finish(); }
+  const detail = qaEvidenceFixture('submitted', false); detail.writtenCommentary = 'Submitted overall commentary';
+  const frozen = await qaEvidencePanel(detail);
+  try {
+    const box = frozen.page.nodes().find(node => node.type === 'textarea' && node.props['aria-label'] === 'Written commentary');
+    assert.equal(box.props.disabled, true); assert.equal(box.props.value, 'Submitted overall commentary');
+    assert.equal(frozen.page.guards.get('QA evidence').onSave, undefined);
+  } finally { frozen.finish(); }
 });
 
 test('QA review setup guard saves through its real endpoint without publishing or redirecting the pending exit', async () => {

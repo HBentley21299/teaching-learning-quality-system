@@ -424,7 +424,12 @@ public sealed partial class SqlFoundationDataStore
                    action.completed_date,
                    action.created_at,
                    faculty.code faculty_code,
-                   team.code team_code
+                   team.code team_code,
+                   record.title source_record_title,
+                   record.record_date source_record_date,
+                   (SELECT assignee.display_name_snapshot AS [name]
+                    FROM quality.process_review_action_assignees assignee WHERE assignee.action_id=action.id
+                    ORDER BY assignee.display_name_snapshot FOR JSON PATH) responsible_names_json
             FROM quality.actions action
             LEFT JOIN core.records record ON record.id = action.source_record_id
             LEFT JOIN people.staff subject_staff ON subject_staff.id = action.subject_staff_id
@@ -510,7 +515,10 @@ public sealed partial class SqlFoundationDataStore
                     reader.GetFieldValue<DateTimeOffset>(11),
                     GetStringOrNull(reader, 12),
                     GetStringOrNull(reader, 13),
-                    false);
+                    false,
+                    GetStringOrNull(reader, 14),
+                    GetDateOnlyOrNull(reader, 15),
+                    JsonSerializer.Deserialize<JsonElement[]>(reader.GetString(16))?.Select(item => item.GetProperty("name").GetString()!).ToArray());
             },
             cancellationToken);
     }

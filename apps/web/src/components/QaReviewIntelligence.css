@@ -1,0 +1,67 @@
+.qa-intelligence { min-width: 0; }
+.qa-intelligence .panel { min-width: 0; }
+.qa-intelligence-outcomes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .7rem; }
+.qa-intelligence-outcomes .dashboard-visual-metric { border-block-start: 3px solid var(--dashboard-visual-tone); }
+.qa-intelligence-context { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
+.qa-intelligence-context > p, .qa-intelligence-note { color: var(--text-muted); font-size: .8rem; line-height: 1.6; }
+.qa-intelligence-context > p { margin: 0; max-width: 60rem; }
+.qa-intelligence-context > button { flex-shrink: 0; }
+.qa-intelligence-two-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.qa-intelligence-controls { display: grid; grid-template-columns: minmax(12rem, 1.5fr) repeat(4, minmax(8rem, 1fr)); gap: .8rem; margin-bottom: 1rem; }
+.qa-intelligence-controls > label { display: grid; align-content: start; gap: .4rem; min-width: 0; }
+.qa-intelligence-controls > label > span { font-size: .8rem; font-weight: 600; }
+.qa-intelligence-controls input, .qa-intelligence-controls select { min-width: 0; width: 100%; box-sizing: border-box; }
+.qa-intelligence-search { position: relative; }
+.qa-intelligence-search > svg { position: absolute; inset-inline-start: .7rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+.qa-intelligence .qa-intelligence-search > input { padding-inline-start: 2rem; }
+.qa-intelligence-selection-summary { display: flex; align-items: center; gap: 1.5rem; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 1.2rem; margin: 1rem 0; background: var(--surface-subtle, var(--surface)); }
+.qa-intelligence-selection-summary > div:last-child { flex: 1; min-width: 0; }
+.qa-intelligence-selection-summary h3 { margin: .4rem 0; }
+.qa-intelligence-selection-summary p { color: var(--text-muted); }
+.qa-intelligence-selection-summary .eyebrow { margin-top: 0; }
+.qa-intelligence-selection-summary .qa-intelligence-note { margin-bottom: 0; }
+.qa-intelligence-outcome-mix { display: flex; min-height: .65rem; border-radius: 1rem; overflow: hidden; background: var(--surface-muted); }
+.qa-intelligence-outcome-mix > span { min-height: .65rem; transition: width 180ms ease; }
+.qa-intelligence-outcome-mix > .is-below { background: var(--danger-text); }
+.qa-intelligence-outcome-mix > .is-at { background: var(--teal); }
+.qa-intelligence-outcome-mix > .is-above { background: var(--success-text); }
+.qa-intelligence-outcome-mix > small { padding: .25rem .5rem; color: var(--text-muted); font-size: .75rem; }
+.qa-intelligence-selection { padding: .7rem .9rem; border: 1px solid var(--teal); border-radius: var(--radius-sm); background: var(--teal-softer); text-align: left; color: var(--text); cursor: pointer; font: inherit; font-size: .85rem; }
+.qa-intelligence-selection > span { color: var(--teal-text); font-weight: 600; margin-inline-start: .5rem; }
+.qa-intelligence-criteria { display: grid; gap: .6rem; margin-bottom: 1rem; }
+.qa-intelligence-criterion { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.qa-intelligence-criterion > summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; }
+.qa-intelligence-criterion > summary::marker { color: var(--teal); }
+.qa-intelligence-criterion > summary > span:first-child { display: grid; gap: .3rem; min-width: 0; }
+.qa-intelligence-criterion strong { color: var(--text); font-size: .9rem; line-height: 1.5; }
+.qa-intelligence-criterion small { color: var(--text-muted); font-size: .75rem; line-height: 1.5; }
+.qa-intelligence-criterion-count { display: grid; gap: .3rem; flex-shrink: 0; text-align: right; font-size: .85rem; color: var(--teal-text); }
+.qa-intelligence-criterion-detail { border-top: 1px solid var(--line); padding: 1rem; }
+.qa-intelligence-counts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: .9rem; gap: .8rem; }
+.qa-intelligence-counts > span { display: grid; gap: .3rem; }
+.qa-intelligence-counts > span > strong { font-size: 1.1rem; }
+.qa-intelligence-counts em { font-style: normal; font-size: .7rem; color: var(--text-muted); }
+.qa-intelligence-highlights { display: grid; gap: .75rem; }
+.qa-intelligence-highlights > button { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: .75rem; padding: 1rem; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); font: inherit; color: var(--text); cursor: pointer; }
+.qa-intelligence-highlights > button > span:nth-child(2) { display: grid; gap: .45rem; }
+.qa-intelligence-highlights strong { font-size: .9rem; line-height: 1.5; }
+.qa-intelligence-highlights small { color: var(--text-muted); font-size: .75rem; line-height: 1.5; }
+.qa-intelligence-highlights > button[aria-pressed="true"] { border-color: var(--teal); background: var(--teal-softer); }
+.qa-intelligence-rank { display: grid; place-items: center; width: 1.6rem; height: 1.6rem; font-size: .75rem; font-weight: 700; border-radius: 50%; background: var(--teal-soft); color: var(--teal-text); }
+.qa-intelligence-rank.is-attention { color: var(--warning-text); background: var(--warning-bg, var(--surface-muted)); }
+.qa-intelligence-empty { color: var(--text-muted); padding: 1rem; border: 1px dashed var(--line); border-radius: var(--radius-sm); line-height: 1.6; }
+.qa-intelligence-coverage-gap { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: .5rem; }
+.qa-intelligence-coverage-gap h3 { font-size: .9rem; }
+.qa-intelligence-coverage-gap p { color: var(--text-muted); font-size: .85rem; line-height: 1.6; }
+.qa-intelligence-timeline { display: flex; align-items: stretch; gap: .5rem; overflow-x: auto; padding: .4rem .2rem .8rem; }
+.qa-intelligence-timeline > button { flex: 1 0 4.5rem; max-width: 7rem; min-height: 12rem; display: grid; grid-template-rows: 1fr auto auto; align-items: end; justify-items: center; gap: .4rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); padding: .8rem .5rem; cursor: pointer; font: inherit; }
+.qa-intelligence-day-track { height: 7rem; width: 100%; display: flex; justify-content: center; align-items: flex-end; border-radius: .3rem; background: var(--surface-muted); }
+.qa-intelligence-day-track > i { width: 70%; background: var(--teal); border-radius: .3rem; transition: height 180ms ease; }
+.qa-intelligence-timeline small { font-size: .7rem; line-height: 1.5; color: var(--text-muted); }
+.qa-intelligence-timeline > button[aria-pressed="true"] { border-color: var(--teal); background: var(--teal-softer); }
+.qa-intelligence-day-detail { min-height: 3rem; color: var(--text-muted); font-size: .85rem; line-height: 1.6; }
+.qa-intelligence button:focus-visible, .qa-intelligence summary:focus-visible, .qa-intelligence input:focus-visible, .qa-intelligence select:focus-visible, .qa-intelligence-explorer:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+@media (max-width: 1100px) { .qa-intelligence-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); } .qa-intelligence-outcomes { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 800px) { .qa-intelligence-two-column { grid-template-columns: minmax(0, 1fr); } .qa-intelligence-context { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 600px) { .qa-intelligence-outcomes, .qa-intelligence-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); } .qa-intelligence-controls > label:first-child { grid-column: 1 / -1; } .qa-intelligence-selection-summary { flex-direction: column; align-items: stretch; gap: 1rem; padding: 1rem; } .qa-intelligence-selection-summary .dashboard-visual-ring { align-self: center; } .qa-intelligence-criterion > summary { align-items: flex-start; flex-direction: column; gap: .6rem; } .qa-intelligence-criterion-count { text-align: left; } .qa-intelligence-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .qa-intelligence-highlights > button { padding: .8rem; } .qa-intelligence .section-heading { flex-wrap: wrap; } }
+@media (prefers-reduced-motion: reduce) { .qa-intelligence-outcome-mix > span, .qa-intelligence-day-track > i { transition: none; } }

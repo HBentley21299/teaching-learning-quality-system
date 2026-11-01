@@ -89,3 +89,52 @@ test('evidence links reject executable URLs and embedded credentials', () => {
   assert.equal(reporting.processReviewEvidenceHref('https://person:secret@example.com/file'), null);
   assert.equal(reporting.processReviewEvidenceHref('https://example.com/evidence'), 'https://example.com/evidence');
 });
+
+test('earlier DLW criterion selections retain their exact pinned subset and partial coverage', () => {
+  const framework = configuration({ standards: [
+    { key: 'agency', title: 'Pinned learner agency', statements: [{ key: 'agency_one', text: 'Selected statement' }, { key: 'agency_two', text: 'Unselected statement' }] },
+    { key: 'safety', title: 'Digital safety', statements: [{ key: 'safety_one', text: 'Another unselected statement' }] }
+  ] });
+  const original = structuredClone(framework);
+  const data = Object.freeze({ fields: {}, samples: [], responses: [], digital: Object.freeze({ selectedStandardKeys: null, selectedStatementKeys: ['agency_one', 'invalid'], draftActions: [] }) });
+  const result = reporting.digitalReviewCriteria(framework, data);
+  assert.deepEqual(result.map(group => [group.title, group.statements.map(statement => statement.text)]), [['Pinned learner agency', ['Selected statement']]]);
+  assert.deepEqual(framework, original);
+  assert.deepEqual(reporting.digitalReviewCategoryCoverage(framework, data), [{ key: 'agency', title: 'Pinned learner agency', selectedStatementCount: 1, statementCount: 2, ratedStatementCount: 0 }]);
+  assert.deepEqual(reporting.digitalReviewCriteria(framework, { ...data, digital: { selectedStatementKeys: [], draftActions: [] } }), []);
+});
+
+test('DLW category selection includes every pinned child despite a stale criterion subset and reports missing ratings', () => {
+  const framework = configuration({ standards: [
+    { key: 'agency', title: 'Pinned learner agency', statements: [{ key: 'agency_one', text: 'First included statement' }, { key: 'agency_two', text: 'Required missing statement' }] },
+    { key: 'safety', title: 'Pinned digital safety', statements: [{ key: 'safety_one', text: 'Included safety statement' }] },
+    { key: 'creation', title: 'Creation', statements: [{ key: 'creation_one', text: 'Outside this review' }] }
+  ], ratingOptions: [{ key: 'secure', label: '3 – Secure Practice' }] });
+  const data = Object.freeze({ fields: {}, samples: [], responses: [
+    { statementKey: 'agency_one', ratingKey: 'secure', sampleIds: [] },
+    { statementKey: 'safety_one', ratingKey: 'outside_scale', sampleIds: [] },
+    { statementKey: 'creation_one', ratingKey: 'secure', sampleIds: [] }
+  ], digital: Object.freeze({ selectedStandardKeys: ['safety', 'agency'], selectedStatementKeys: ['agency_one', 'creation_one'], draftActions: [] }) });
+  const original = structuredClone(data);
+  assert.deepEqual(reporting.digitalReviewCriteria(framework, data).map(category => [category.title, category.statements.map(statement => statement.key)]), [
+    ['Pinned learner agency', ['agency_one', 'agency_two']], ['Pinned digital safety', ['safety_one']]
+  ]);
+  assert.deepEqual(reporting.digitalReviewCategoryCoverage(framework, data), [
+    { key: 'agency', title: 'Pinned learner agency', selectedStatementCount: 2, statementCount: 2, ratedStatementCount: 1 },
+    { key: 'safety', title: 'Pinned digital safety', selectedStatementCount: 1, statementCount: 1, ratedStatementCount: 0 }
+  ]);
+  assert.deepEqual(data, original);
+  const empty = { ...data, digital: { ...data.digital, selectedStandardKeys: [] } };
+  assert.deepEqual(reporting.digitalReviewCriteria(framework, empty), []);
+  assert.deepEqual(reporting.digitalReviewCategoryCoverage(framework, empty), []);
+});
+
+test('DLW report search includes pinned selected category titles', () => {
+  const rows = [review('agency', { selectedStandards: [{ key: 'agency', title: 'Learner Agency & Ownership', statementCount: 3, selectedStatementCount: 3 }] }), review('safety', { selectedStandards: [{ key: 'safety', title: 'Digital Citizenship & Safety', statementCount: 5, selectedStatementCount: 5 }] })];
+  assert.deepEqual(reporting.selectProcessReviewRows(rows, query({ search: 'citizenship' })).map(row => row.recordId), ['safety']);
+});
+
+test('legacy DLW records without a selection retain all of their configured criteria', () => {
+  const framework = configuration({ standards: [{ key: 'agency', title: 'Agency', statements: [{ key: 'one', text: 'First' }, { key: 'two', text: 'Second' }] }] });
+  assert.equal(reporting.digitalReviewCriteria(framework, { fields: {}, samples: [], responses: [] })[0].statements.length, 2);
+});

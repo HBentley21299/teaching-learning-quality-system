@@ -117,6 +117,8 @@ export type ActionSummary = {
   parentActionId?: string;
   academicYear: string;
   isDeleted: boolean;
+  sourceWorkflowLocked?: boolean;
+  canManageAction?: boolean;
 };
 
 export type UcoTlaStaffOption = {
@@ -359,6 +361,7 @@ export type QaReviewActivitySummary = {
   displayOrder: number;
   questions: QaQuestionSummary[];
   canSubmitEvidence?: boolean;
+  writtenCommentaryEnabled?: boolean;
 };
 
 export type QaEvidenceSummary = {
@@ -416,7 +419,7 @@ export type SaveQaReviewRequest = {
   plannedOpenDate?: string;
   closingDate: string;
   teamOrgUnitIds: string[];
-  activities: { activityTypeId: string; templateId: string; questionIds: string[] }[];
+  activities: { activityTypeId: string; templateId: string; questionIds: string[]; writtenCommentaryEnabled?: boolean }[];
   rowVersion?: string;
 };
 
@@ -450,6 +453,8 @@ export type QaEvidenceDetail = {
   subjectStaffId?: string;
   responses: QaEvidenceResponseSummary[];
   revisions: QaEvidenceRevisionSummary[];
+  writtenCommentary?: string | null;
+  writtenCommentaryEnabled?: boolean;
 };
 
 export type SaveQaEvidenceRequest = {
@@ -471,6 +476,7 @@ export type SaveQaEvidenceRequest = {
   responses: { reviewQuestionId: string; outcome?: string; comment?: string; notApplicableReason?: string }[];
   correctionReason?: string;
   rowVersion?: string;
+  writtenCommentary?: string | null;
 };
 
 export type QaDashboardBreakdown = { key: string; label: string; below: number; at: number; above: number; notApplicable: number; notSeen?: number; rated: number; atOrAbovePercentage: number };
@@ -562,10 +568,12 @@ export type CreateQaActionGroupRequest = {
 export type DashboardActionSummary = Pick<ActionSummary,
   | "id"
   | "sourceRecordId"
+  | "sourceRecordTitle"
   | "sourceFormType"
   | "subjectStaffName"
   | "ownerStaffId"
   | "ownerStaffName"
+  | "responsibleStaffNames"
   | "actionTheme"
   | "title"
   | "statusKey"
@@ -576,7 +584,7 @@ export type DashboardActionSummary = Pick<ActionSummary,
   | "facultyCode"
   | "teamCode"
   | "isDeleted"
->;
+> & { sourceRecordDate?: string | null };
 
 export type ActionVisibility = "owner_only" | "staff_and_management" | "management_only" | "source_editors";
 
@@ -1587,6 +1595,7 @@ export type CoachingPreviousActionSummary = {
   intendedImpact?: string;
   latestProgressUpdate?: string;
   latestImpactObserved?: string;
+  canManageAction?: boolean;
 };
 
 export type CoachingLookupOption = {
@@ -1665,6 +1674,7 @@ export type CoachingSessionAction = {
   reviewDate?: string;
   status: CoachingActionStatus;
   parentActionId?: string;
+  canManageAction?: boolean;
 };
 
 export type CoachingActionReview = {

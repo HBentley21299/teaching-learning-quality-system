@@ -5,11 +5,12 @@ import { writeAppPath } from "../app/history";
 import { accessibleQaAdminSections, qaAdminPath, qaAdminSectionFromPath } from "../app/qaAdminNavigation";
 import { QaAdminCentre } from "./QaAdminCentre";
 import { QaEvidenceSaveQueue } from "../services/qaEvidenceSaveQueue";
-import { QaOutcomeLabelsContext, defaultQaOutcomeLabels, useQaOutcomeLabels, qaCombinedOutcomeLabel } from "../services/qaOutcomeLabels";
+import { QaOutcomeLabelsContext, defaultQaOutcomeLabels, useQaOutcomeLabels } from "../services/qaOutcomeLabels";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Accessibility, AlertTriangle, Archive, ArrowLeft, Building2, CalendarRange, Check, CheckCircle2, ClipboardCheck, ClipboardList, Eye, FileCheck2, FileSearch, Footprints, ListChecks, MapPin, MessageCircle, Monitor, Plus, RotateCcw, Search, ShieldCheck, Target, Users, X } from "lucide-react";
 import { CollapsibleSection } from "../components/CollapsibleSection";
 import { QaDashboardDataExplorer } from "../components/QaDashboardDataExplorer";
+import { QaReviewIntelligence } from "../components/QaReviewIntelligence";
 import { Button } from "../design-system/Button";
 import { ReportButton } from "../components/ExportButtons";
 import { api } from "../services/api";
@@ -17,14 +18,14 @@ import { AdminListSort } from "../components/AdminListSort";
 import { distinctListValues, matchesListSearch, sortListRows } from "../services/listQuery";
 import { dashboardVisibleUnitIds } from "../services/dashboardOrgVisibility";
 import { learningWalkDeliveryChoices, type LearningWalkDeliveryArea } from "../services/learningWalkDeliveryAreas";
+import "./QaCommentary.css";
+import "./QaHome.css";
 import type {
   AcademicYearSummary,
   CurrentUser,
   OrgUnitSummary,
   QaActivityTypeSummary,
   QaActionGroupSummary,
-  QaDashboardBreakdown,
-  QaDashboardQuestionBreakdown,
   QaDashboardSummary,
   QaEvidenceDetail,
   QaEvidenceResponseSummary,
@@ -226,42 +227,52 @@ export function QaHub({ user, orgUnits, staff, academicYears, onReturnToElevate 
 
 function QaReviewList({ summary, onNavigate }: { summary: QaHubSummary; onNavigate: (path: string) => void }) {
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("active");
+  const [status, setStatus] = useState("live");
   const [year, setYear] = useState("");
   const [owner, setOwner] = useState("");
   const [sort, setSort] = useState("closing-desc");
+  const live = summary.reviews.filter(review => review.status === "open" || review.status === "reopened");
+  const closed = summary.reviews.filter(review => review.status === "closed");
+  const drafts = summary.reviews.filter(review => review.status === "draft");
+  const views = [
+    { key: "live", label: "Live reviews", count: live.length, help: "Open for evidence", description: "Open and reopened reviews accepting evidence. Select a review to get started." },
+    { key: "closed", label: "Closed reviews", count: closed.length, help: "Findings and reports", description: "Closed reviews retained for their evidence, findings and reports." },
+    ...(summary.canManageReviews || drafts.length ? [{ key: "draft", label: "Drafts", count: drafts.length, help: "Review setup", description: "Reviews being prepared. Evidence collection starts after publication." }] : []),
+    { key: "all", label: "All reviews", count: summary.reviews.length, help: "All available statuses", description: "All reviews available to you, with their current status shown on each card." }
+  ];
+  const view = views.find(item => item.key === status) ?? views[0];
   const reviews = sortListRows(summary.reviews.filter((review) => {
-    const statusMatches = status === "all" || status === "active" && review.status !== "archived" || status === "open" && review.status === "reopened" || review.status === status;
+    const statusMatches = view.key === "all" || view.key === "live" && (review.status === "open" || review.status === "reopened") || review.status === view.key;
     const queryMatches = matchesListSearch(query, review.title, review.theme, review.ownerName, review.academicYear, review.status, review.closingDate);
     return statusMatches && queryMatches && (!year || review.academicYear === year) && (!owner || review.ownerName === owner);
   }), review => sort.startsWith("title") ? review.title : sort.startsWith("owner") ? review.ownerName : sort.startsWith("status") ? review.status : Date.parse(review.closingDate), sort.endsWith("desc") ? "desc" : "asc", review => review.id);
+  const filtered = Boolean(query.trim() || year || owner);
   return (
     <>
       <section className="route-header qa-heading">
-        <div><p className="eyebrow">Quality assurance</p><h1>QA Hub</h1><p>Choose a review to contribute evidence or explore findings. Multiple reviews can run at the same time.</p></div>
+        <div><p className="eyebrow">Quality assurance</p><h1>QA Hub</h1><p>Start with a live review to contribute evidence. Closed reviews remain available for findings and reports.</p></div>
         {summary.canManageReviews ? <div className="toolbar"><Button icon={Plus} onClick={() => onNavigate("/qa-hub/reviews/new")} variant="primary">New review</Button></div> : null}
       </section>
-      <section className="qa-kpi-grid compact" aria-label="QA Review counts">
-        <article className="stat-card"><span>Open reviews</span><strong>{summary.openReviewCount}</strong></article>
-        <article className="stat-card"><span>Available to me</span><strong>{summary.accessibleReviewCount}</strong></article>
-        <article className="stat-card"><span>Visible reviews</span><strong>{summary.reviews.length}</strong></article>
-      </section>
-      <section className="panel qa-review-list">
+      <nav className="qa-home-review-tabs" aria-label="Review status">
+        {views.map(item => <button type="button" key={item.key} aria-label={`${item.label}: ${item.count}`} aria-pressed={view.key === item.key} className={`qa-home-review-view qa-home-review-view-${item.key}`} onClick={() => setStatus(item.key)}><span>{item.label}</span><strong>{item.count}</strong><small>{item.help}</small></button>)}
+      </nav>
+      <section className={`panel qa-review-list qa-review-list-${view.key}`} aria-label={view.label}>
+        <div className="qa-home-list-heading"><div><h2>{view.label}</h2><p>{view.description}</p></div><span role="status">{reviews.length} of {view.count} shown</span></div>
         <div className="filter-toolbar qa-filter-toolbar">
           <label className="search-box"><Search size={16} aria-hidden="true" /><input aria-label="Search reviews" onChange={(event) => setQuery(event.target.value)} placeholder="Search title, theme or owner" value={query} /></label>
-          <label className="qa-filter-field"><span>Status</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="active">Current and historical</option><option value="draft">Draft</option><option value="open">Open</option><option value="reopened">Reopened</option><option value="closed">Closed</option><option value="archived">Archived</option><option value="all">All</option></select></label>
           <label className="qa-filter-field"><span>Academic year</span><select value={year} onChange={event => setYear(event.target.value)}><option value="">All years</option>{distinctListValues(summary.reviews.map(review => review.academicYear)).reverse().map(value => <option key={value}>{value}</option>)}</select></label>
           <label className="qa-filter-field"><span>Owner</span><select value={owner} onChange={event => setOwner(event.target.value)}><option value="">All owners</option>{distinctListValues(summary.reviews.map(review => review.ownerName)).map(value => <option key={value}>{value}</option>)}</select></label>
           <AdminListSort value={sort} onChange={setSort} options={[["closing-desc","Closing date: newest first"],["closing-asc","Closing date: oldest first"],["title-asc","Review: A–Z"],["owner-asc","Owner: A–Z"],["status-asc","Status: A–Z"]]} />
         </div>
-        {reviews.length === 0 ? <p className="empty-state">No QA Reviews match these filters.</p> : (
+        {reviews.length === 0 ? <div className="qa-home-empty"><h3>{filtered ? `No ${view.label.toLowerCase()} match these filters` : view.key === "live" ? "No live reviews available" : `No ${view.label.toLowerCase()} available`}</h3><p>{filtered ? "Change or clear the search, year and owner filters to see more reviews." : view.key === "live" ? "There are currently no open or reopened reviews available to you." : "Reviews will appear here when they are available to you."}</p><div className="toolbar">{filtered ? <Button onClick={() => { setQuery(""); setYear(""); setOwner(""); }}>Clear filters</Button> : view.key === "live" && closed.length ? <Button onClick={() => setStatus("closed")}>View closed reviews</Button> : null}</div></div> : (
           <div className="qa-review-cards">
             {reviews.map((review) => (
-              <button className="qa-review-card" key={review.id} onClick={() => onNavigate(qaReviewPath(review))} type="button">
+              <button className={`qa-review-card${review.status === "open" || review.status === "reopened" ? " is-live" : ""}`} key={review.id} onClick={() => onNavigate(qaReviewPath(review))} type="button">
                 <span className={`status-pill status-${review.status}`}>{qaStatusLabel(review.status)}</span>
                 <strong>{review.title}</strong><span>{review.theme}</span>
-                <small>{review.academicYear} · closes {new Date(`${review.closingDate}T00:00:00`).toLocaleDateString()} · {review.ownerName}</small>
+                <small>{review.academicYear} · {review.status === "open" || review.status === "reopened" ? "Closes" : "Closing date"} {new Date(`${review.closingDate}T00:00:00`).toLocaleDateString("en-GB")} · {review.ownerName}</small>
                 <span className="qa-card-counts"><span>{qaCount(review.teamCount, "team")}</span><span>{qaCount(review.activityCount, "activity", "activities")}</span><span>{qaCount(review.evidenceCount, "submission")}</span></span>
+                <span className="qa-home-card-link">{review.status === "draft" ? "Continue setup" : review.status === "closed" || review.status === "archived" ? "View findings and reports" : "Open live review"}<span aria-hidden="true"> →</span></span>
               </button>
             ))}
           </div>
@@ -374,7 +385,7 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
     plannedOpenDate: existing?.review.plannedOpenDate,
     closingDate: existing?.review.closingDate ?? "",
     teamOrgUnitIds: existingTeamIds,
-    activities: existing?.activities.map((activity) => ({ activityTypeId: activity.activityTypeId, templateId: activity.templateId, questionIds: activity.questions.map((question) => question.id) })) ?? [],
+    activities: existing?.activities.map((activity) => ({ activityTypeId: activity.activityTypeId, templateId: activity.templateId, questionIds: activity.questions.map((question) => question.id), writtenCommentaryEnabled: activity.writtenCommentaryEnabled !== false })) ?? [],
     rowVersion: existing?.review.rowVersion
   }));
   const [message, setMessage] = useState("");
@@ -515,7 +526,8 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
     update("activities", selected ? form.activities.filter((item) => item.activityTypeId !== activity.id) : [...form.activities, {
       activityTypeId: activity.id,
       templateId: activity.templates.find((template) => template.isActive)?.id ?? "",
-      questionIds: taggedQuestionIds(activity.id)
+      questionIds: taggedQuestionIds(activity.id),
+      writtenCommentaryEnabled: true
     }]);
   }
 
@@ -626,7 +638,7 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
             {published ? <details className="qa-retained-scope"><summary>{existingTeamIds.length} existing team allocations retained</summary><ul>{existing!.scope.filter((scope) => scope.scopeType === "team").map((scope) => <li key={scope.orgUnitId}>{scope.parentName} · {scope.name}</li>)}</ul></details> : null}
           </section>
 
-          {published ? <section className="panel qa-builder-section"><h2>Published activities and questions</h2><p>These questions remain unchanged for every team, including new allocations.</p>{existing!.activities.map((activity) => <details className="qa-retained-scope" key={activity.id}><summary>{activity.name} · {activity.questions.length} criteria</summary><ol>{activity.questions.map((question) => <li key={question.id}>{question.questionText}</li>)}</ol></details>)}</section> : <section className="panel qa-builder-section">
+          {published ? <section className="panel qa-builder-section"><h2>Published activities and questions</h2><p>These questions and commentary settings remain unchanged for every team, including new allocations.</p>{existing!.activities.map((activity) => <details className="qa-retained-scope" key={activity.id}><summary>{activity.name} · {activity.questions.length} criteria</summary><p className="qa-published-commentary"><strong>Written commentary</strong><span>{activity.writtenCommentaryEnabled !== false ? "Enabled · one optional commentary box per form" : "Disabled for this form"}</span></p><ol>{activity.questions.map((question) => <li key={question.id}>{question.questionText}</li>)}</ol></details>)}</section> : <section className="panel qa-builder-section">
             <div className="qa-builder-step-heading">
               <span className="qa-step-number">3</span>
               <div><h2>Review activities</h2><p>Select the evidence activities to include. Questions are snapshotted when the review opens.</p></div>
@@ -646,6 +658,7 @@ function QaReviewEditor({ user, orgUnits, staff, academicYears, activities, exis
                 <details key={selected.activityTypeId} open>
                   <summary><span>{activity?.name}</span><small>{selected.questionIds.length} of {activityQuestions.length} criteria selected</small></summary>
                   <label><span>Question template</span><select onChange={(event) => update("activities", form.activities.map((item) => item.activityTypeId === selected.activityTypeId ? { ...item, templateId: event.target.value } : item))} value={selected.templateId}>{activity?.templates.filter((template) => template.isActive).map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+                  <label className="qa-commentary-toggle"><span><strong>Written commentary</strong><small>Include one optional commentary box for the whole form.</small></span><input type="checkbox" role="switch" aria-label={`Written commentary for ${activity?.name ?? "this form"}`} checked={selected.writtenCommentaryEnabled !== false} disabled={saving} onChange={event => update("activities", form.activities.map(item => item.activityTypeId === selected.activityTypeId ? { ...item, writtenCommentaryEnabled: event.target.checked } : item))} /></label>
                   <div className="qa-activity-question-toolbar"><div><strong>Questions included</strong><span>Uncheck any criteria that are not needed for this activity.</span></div><Button disabled={activityQuestions.length === 0} onClick={() => setAllActivityQuestions(selected.activityTypeId, !allSelected)} variant="quiet">{allSelected ? "Clear all" : "Select all"}</Button></div>
                   {activityQuestions.length === 0 ? <p className="empty-state">No active questions match this question set.</p> : (
                     <div className="qa-question-select-list">{sortListRows(activityQuestions.filter(question => matchesListSearch(setupSearch, question.questionText, question.guidance, question.themeOrWeek, question.questionTag, activity?.name)), question => setupSort === "configured" ? question.displayOrder : question.questionText, setupSort.endsWith("desc") ? "desc" : "asc", question => question.id).map((question) => (
@@ -818,7 +831,7 @@ function QaReviewWorkspace({
             </div>
           </section>
           {review.capabilities.canExport ? <nav className="dashboard-section-tabs" aria-label="QA dashboard content"><button type="button" className={dashboardView === "summary" ? "is-active" : ""} aria-pressed={dashboardView === "summary"} onClick={() => setDashboardView("summary")}>Summary</button><button type="button" className={dashboardView === "data" ? "is-active" : ""} aria-pressed={dashboardView === "data"} onClick={() => setDashboardView("data")}>Form data</button></nav> : null}
-          {dashboardView === "data" && review.capabilities.canExport ? <QaDashboardDataExplorer reviewId={id} academicYear={review.academicYear} facultyOrgUnitId={dashboardFacultyId || undefined} teamOrgUnitId={dashboardTeamId || undefined} onOpenEvidence={evidenceId => onNavigate(`/qa-hub/evidence/${evidenceId}`)} /> : dashboard ? <QaDashboard dashboard={dashboard} /> : <LoadingState label="Loading dashboard" />}
+          {dashboardView === "data" && review.capabilities.canExport ? <QaDashboardDataExplorer reviewId={id} academicYear={review.academicYear} facultyOrgUnitId={dashboardFacultyId || undefined} teamOrgUnitId={dashboardTeamId || undefined} onOpenEvidence={evidenceId => onNavigate(`/qa-hub/evidence/${evidenceId}`)} /> : dashboard ? <QaReviewIntelligence dashboard={dashboard} scopeKey={dashboardRequestScope} selectedTeamId={dashboardTeamId} teamOptions={dashboardTeams.map(team => ({ id: team.orgUnitId, name: team.name }))} onSelectTeam={setDashboardTeamId} onOpenFormData={review.capabilities.canExport ? () => setDashboardView("data") : undefined} /> : <LoadingState label="Loading dashboard" />}
         </div>
       ) : null}
       {section === "actions" ? <QaReviewActions actionGroups={actionGroups} actionOptions={actionOptions} canCreate={review.capabilities.canManageActions} onChanged={load} reviewId={id} /> : null}
@@ -950,91 +963,6 @@ function QaActionGroupCards({ groups, onClose, onReview, onOpenReview, filterabl
   );
 }
 
-function QaDashboard({ dashboard }: { dashboard: QaDashboardSummary }) {
-  const labels = useQaOutcomeLabels();
-  return (
-    <div className="route-stack">
-      <section className="qa-kpi-grid"><article className="stat-card"><span>Submissions</span><strong>{dashboard.evidenceCount}</strong></article><article className="stat-card"><span>Rated responses</span><strong>{dashboard.ratedCount}</strong></article><article className="stat-card"><span>Teams with evidence</span><strong>{dashboard.teamCount}</strong></article><article className="stat-card"><span>{qaCombinedOutcomeLabel(labels)}</span><strong>{dashboard.ratedCount ? `${dashboard.atOrAbovePercentage}%` : "No rated data"}</strong></article></section>
-      <section className="panel"><div className="section-heading"><div><h2>Outcome distribution</h2><p>Compare the outcomes recorded across this review. Not seen and not applicable responses are shown separately and excluded from rated percentages.</p></div>{dashboard.snapshotVersion ? <span className="status-pill">Closure snapshot {dashboard.snapshotVersion}</span> : null}</div><div className="qa-outcome-summary"><span className="outcome-not_seen">Not seen <strong>{dashboard.notSeenCount ?? 0}</strong></span><span className="outcome-below">{labels.below} <strong>{dashboard.belowCount}</strong></span><span className="outcome-at">{labels.at} <strong>{dashboard.atCount}</strong></span><span className="outcome-above">{labels.above} <strong>{dashboard.aboveCount}</strong></span><span>{labels.notApplicable} <strong>{dashboard.notApplicableCount}</strong></span></div></section>
-      <QaProcessDashboard processes={dashboard.byActivity} questions={dashboard.questions} />
-      <QaCriteriaHighlights questions={dashboard.questions} />
-      {dashboard.teamsWithoutEvidence.length ? <section className="panel"><h2>Zero coverage</h2><p>{dashboard.teamsWithoutEvidence.join(", ")}</p></section> : null}
-    </div>
-  );
-}
-
-function QaCriteriaHighlights({ questions }: { questions: QaDashboardQuestionBreakdown[] }) {
-  const labels = useQaOutcomeLabels();
-  const rated = questions.filter((question) => question.rated > 0);
-  const strongest = [...rated].sort((left, right) =>
-    right.at + right.above - (left.at + left.above)
-    || (right.at + right.above) / right.rated - (left.at + left.above) / left.rated
-    || right.rated - left.rated).slice(0, 3);
-  const concerns = [...rated].sort((left, right) =>
-    right.below - left.below
-    || right.below / right.rated - left.below / left.rated
-    || right.rated - left.rated).slice(0, 3);
-  const cards = (items: QaDashboardQuestionBreakdown[], kind: "strong" | "concern") => items.length ? items.map((question, index) => {
-    const count = kind === "strong" ? question.at + question.above : question.below;
-    const percentage = outcomePercentage(count, question.rated);
-    return <article className={`qa-highlight-card is-${kind}`} key={`${kind}-${question.questionId}`}><span className="qa-highlight-rank">{index + 1}</span><div><small>{question.activityLabel}{question.themeOrWeek ? ` · ${question.themeOrWeek}` : ""}</small><h3>{question.questionText}</h3><p><strong>{count}/{question.rated}</strong> responses · {percentage}% {kind === "strong" ? qaCombinedOutcomeLabel(labels) : labels.below}</p><QaDistributionBar above={question.above} at={question.at} below={question.below} label={question.questionText} rated={question.rated} /></div></article>;
-  }) : <p className="empty-state">No rated criteria are available yet.</p>;
-  return <section className="qa-highlight-grid"><div className="panel"><div className="section-heading"><div><p className="eyebrow">Top three</p><h2>Strongest criteria</h2><p>Questions with the highest number of {qaCombinedOutcomeLabel(labels)} responses, then the strongest proportion.</p></div></div><div className="qa-highlight-list">{cards(strongest, "strong")}</div></div><div className="panel"><div className="section-heading"><div><p className="eyebrow">Bottom three</p><h2>Concern criteria</h2><p>Questions with the highest number of {labels.below} responses, then the highest proportion.</p></div></div><div className="qa-highlight-list">{cards(concerns, "concern")}</div></div></section>;
-}
-
-function outcomePercentage(value: number, rated: number) {
-  return rated === 0 ? 0 : Math.round(value * 1000 / rated) / 10;
-}
-
-function QaDistributionBar({ below, at, above, rated, label }: { below: number; at: number; above: number; rated: number; label: string }) {
-  const labels = useQaOutcomeLabels();
-  const belowPercentage = outcomePercentage(below, rated);
-  const atPercentage = outcomePercentage(at, rated);
-  const abovePercentage = outcomePercentage(above, rated);
-  return (
-    <div aria-label={rated === 0 ? `${label}: No rated responses` : `${label}: ${belowPercentage}% ${labels.below}, ${atPercentage}% ${labels.at} and ${abovePercentage}% ${labels.above}`} className="qa-distribution-bar" role="img">
-      <span className="is-below" style={{ width: `${belowPercentage}%` }} />
-      <span className="is-at" style={{ width: `${atPercentage}%` }} />
-      <span className="is-above" style={{ width: `${abovePercentage}%` }} />
-      {rated === 0 ? <span className="is-empty">No rated responses</span> : null}
-    </div>
-  );
-}
-
-function QaProcessDashboard({ processes, questions }: { processes: QaDashboardBreakdown[]; questions: QaDashboardQuestionBreakdown[] }) {
-  const labels = useQaOutcomeLabels();
-  return (
-    <section className="panel qa-process-dashboard">
-      <div className="section-heading"><div><h2>QA processes and questions</h2><p>Expand a process to drill down into every criterion and its outcome distribution.</p></div></div>
-      <div className="qa-process-breakdowns">
-        {processes.map((process) => {
-          const processQuestions = questions.filter((question) => question.activityKey === process.key);
-          const belowPercentage = outcomePercentage(process.below, process.rated);
-          const atPercentage = outcomePercentage(process.at, process.rated);
-          const abovePercentage = outcomePercentage(process.above, process.rated);
-          return (
-            <details className="qa-process-breakdown" key={process.key}>
-              <summary>
-                <div className="qa-process-summary-heading"><div><strong>{process.label}</strong><span>{process.rated} rated responses · {processQuestions.length} questions{process.notSeen ? ` · ${process.notSeen} Not seen` : ""}{process.notApplicable ? ` · ${process.notApplicable} ${labels.notApplicable}` : ""}</span></div><div className="qa-process-summary-counts"><span className="is-below"><strong>{process.below}</strong> · {process.rated ? `${belowPercentage}%` : "—"} {labels.below}</span><span className="is-at"><strong>{process.at}</strong> · {process.rated ? `${atPercentage}%` : "—"} {labels.at}</span><span className="is-above"><strong>{process.above}</strong> · {process.rated ? `${abovePercentage}%` : "—"} {labels.above}</span></div></div>
-                <QaDistributionBar above={process.above} at={process.at} below={process.below} label={process.label} rated={process.rated} />
-              </summary>
-              <div className="qa-question-breakdowns">
-                {processQuestions.map((question) => (
-                  <article className="qa-question-breakdown" key={question.questionId}>
-                    <div className="qa-question-breakdown-heading"><div>{question.themeOrWeek ? <span className="qa-criterion-theme">{question.themeOrWeek}</span> : null}<h3>{question.questionText}</h3></div><span>{question.rated} rated{question.notSeen ? ` · ${question.notSeen} Not seen` : ""}{question.notApplicable ? ` · ${question.notApplicable} ${labels.notApplicable}` : ""}</span></div>
-                    <QaDistributionBar above={question.above} at={question.at} below={question.below} label={question.questionText} rated={question.rated} />
-                    <div className="qa-question-outcome-stats"><span className="is-below"><small>{labels.below}</small><strong>{question.below}</strong><em>{question.rated ? `${question.belowPercentage}%` : "—"}</em></span><span className="is-at"><small>{labels.at}</small><strong>{question.at}</strong><em>{question.rated ? `${question.atPercentage}%` : "—"}</em></span><span className="is-above"><small>{labels.above}</small><strong>{question.above}</strong><em>{question.rated ? `${question.abovePercentage}%` : "—"}</em></span></div>
-                  </article>
-                ))}
-              </div>
-            </details>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
 function QaNewEvidence({ activityId, detail, onCancel, onCreated }: { activityId: string; detail: QaReviewDetail; onCancel: () => void; onCreated: (id: string) => void }) {
   const activity = detail.activities.find((item) => item.id === activityId)!;
   const teams = detail.scope.filter((scope) => scope.scopeType === "team");
@@ -1128,7 +1056,7 @@ function QaEvidenceEditor({ evidenceId, reviews, onNavigate, onSubmitted }: { ev
         subjectStaffId: next.subjectStaffId, activityAt: next.evidence.activityAt, sampleSize: next.evidence.sampleSize,
         contextualNotes: next.contextualNotes, evidenceLinks: next.evidenceLinks, keyStrengths: next.keyStrengths,
         areasForImprovement: next.areasForImprovement, recommendedActions: next.recommendedActions,
-        additionalContext: next.additionalContext, rowVersion: next.evidence.rowVersion,
+        additionalContext: next.additionalContext, writtenCommentary: next.writtenCommentary, rowVersion: next.evidence.rowVersion,
         responses: next.responses.map(response => ({ reviewQuestionId: response.reviewQuestionId, outcome: response.outcome, comment: response.comment, notApplicableReason: response.notApplicableReason }))
       };
       queue.current = new QaEvidenceSaveQueue({
@@ -1209,10 +1137,27 @@ function QaEvidenceEditor({ evidenceId, reviews, onNavigate, onSubmitted }: { ev
       {deliveryAreaError ? <div className="notice-row" role="alert">{deliveryAreaError}<Button onClick={() => setDeliveryAreaAttempt(value => value + 1)}>Try again</Button></div> : null}
       <div className="entry-section"><h2>Course and delivery context</h2><div className="entry-field-grid"><label className="entry-field"><span>Delivery area <strong>Required to submit</strong></span><select disabled={!detail.evidence.canEdit || finalizing || !deliveryAreasLoaded} value={request.deliveryAreaKey ?? ""} onChange={(event) => update("deliveryAreaKey", event.target.value)}><option value="">{deliveryAreasLoaded ? "Select delivery area" : "Loading delivery areas…"}</option>{learningWalkDeliveryChoices(deliveryAreas, detail.evidence.deliveryAreaKey, detail.evidence.deliveryAreaName).map((area) => <option key={area.key} value={area.key} disabled={!area.isActive && area.key !== detail.evidence.deliveryAreaKey}>{area.name}{area.isActive ? "" : " (retired)"}</option>)}</select></label></div><small>Uses the shared LIV and Learning Walk delivery-area list.</small></div>
       <div className="qa-criteria-list">{detail.responses.map((question, index) => <QaCriterion key={question.reviewQuestionId} question={question} response={request.responses[index]} disabled={!detail.evidence.canEdit || finalizing} onChange={(patch) => updateResponse(index, patch)} />)}</div>
+      {detail.writtenCommentaryEnabled !== false ? <div className="entry-section qa-form-commentary"><h2>Written commentary</h2><p className="muted-copy">Record any overall evidence, observations or context for this form.</p><label className="entry-field"><span>Commentary <small>Optional</small></span><textarea aria-label="Written commentary" disabled={!detail.evidence.canEdit || finalizing} maxLength={10000} rows={5} value={request.writtenCommentary ?? ""} onChange={event => update("writtenCommentary", event.target.value)} /></label></div> : null}
+      <QaEarlierCommentary detail={detail} />
       <div className="toolbar qa-evidence-actions">{detail.evidence.canRemove ? <Button disabled={saving} icon={X} onClick={() => void remove()} variant="danger">Remove</Button> : null}<span className="button-spacer" />{detail.evidence.canEdit ? <Button disabled={saving} onClick={() => void save(false)}>{detail.evidence.status === "submitted" ? "Save correction" : "Save draft"}</Button> : null}{detail.evidence.canEdit && detail.evidence.status === "draft" ? <Button disabled={finalizing} icon={Check} onClick={() => void save(true)} variant="primary">Submit evidence</Button> : null}</div>
       {detail.revisions.length ? <details className="qa-revisions"><summary>Revision history ({detail.revisions.length})</summary><ul className="timeline-list">{detail.revisions.map((revision) => <li key={revision.versionNumber}><strong>Revision {revision.versionNumber}</strong><span>{revision.createdBy} · {new Date(revision.createdAt).toLocaleString()}</span>{revision.reason ? <small>{revision.reason}</small> : null}</li>)}</ul></details> : null}
     </section>
   );
+}
+
+function QaEarlierCommentary({ detail }: { detail: QaEvidenceDetail }) {
+  const earlierFields: [string, string | null | undefined][] = [
+    ["Contextual notes", detail.contextualNotes], ["Key strengths", detail.keyStrengths], ["Areas for improvement", detail.areasForImprovement],
+    ["Recommended actions", detail.recommendedActions], ["Additional context", detail.additionalContext],
+    ...(detail.writtenCommentaryEnabled === false ? [["Written commentary", detail.writtenCommentary] as [string, string | null | undefined]] : [])
+  ];
+  const fields = earlierFields.filter(([, value]) => value?.trim());
+  const responses = detail.responses.filter(response => response.comment?.trim());
+  if (!fields.length && !responses.length) return null;
+  return <details className="qa-earlier-commentary"><summary>Earlier commentary · read only</summary><p className="muted-copy">These notes were saved in earlier fields. They are retained with their original wording.</p><dl>
+    {fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+    {responses.map(response => <div key={response.reviewQuestionId}><dt>{response.questionText}</dt><dd>{response.comment}</dd></div>)}
+  </dl></details>;
 }
 
 function QaCriterion({ question, response, disabled, onChange }: { question: QaEvidenceResponseSummary; response: SaveQaEvidenceRequest["responses"][number]; disabled: boolean; onChange: (patch: Partial<SaveQaEvidenceRequest["responses"][number]>) => void }) {
@@ -1244,7 +1189,6 @@ function QaCriterion({ question, response, disabled, onChange }: { question: QaE
       </div>
       {showNotSeen ? <p className="qa-not-seen-help">Not seen means there was insufficient evidence to make a judgement. It has no score and is excluded from rated percentages.</p> : null}
       {response.outcome === "not_applicable" ? <label className="qa-not-applicable-reason"><span>Reason for {labels.notApplicable}</span><textarea disabled={disabled} onChange={(event) => onChange({ notApplicableReason: event.target.value })} required rows={2} value={response.notApplicableReason ?? ""} /></label> : null}
-      <label className="qa-not-applicable-reason"><span>Evidence notes <small>Optional</small></span><textarea disabled={disabled} onChange={(event) => onChange({ comment: event.target.value })} rows={2} value={response.comment ?? ""} /></label>
     </fieldset>
   );
 }

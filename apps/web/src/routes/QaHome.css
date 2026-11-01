@@ -1,0 +1,19 @@
+.qa-home-review-tabs { display: flex; flex-wrap: wrap; gap: .75rem; }
+.qa-hub .qa-home-review-view { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .3rem .8rem; flex: 1 1 11rem; min-width: 0; padding: 1rem 1.1rem; text-align: left; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: var(--text); cursor: pointer; }
+.qa-home-review-view > span { font-weight: 700; }
+.qa-home-review-view > strong { font-size: 1.5rem; line-height: 1.2; }
+.qa-home-review-view > small { grid-column: 1 / -1; color: var(--text-muted); }
+.qa-hub .qa-home-review-view[aria-pressed="true"] { background: var(--teal-soft); border-color: var(--teal); box-shadow: inset 0 0 0 1px var(--teal); }
+.qa-home-review-view[aria-pressed="true"] > span, .qa-home-review-view[aria-pressed="true"] > strong { color: var(--teal-text); }
+.qa-hub .qa-home-review-view:hover { border-color: var(--teal); }
+.qa-hub .qa-home-review-view:focus-visible, .qa-hub .qa-review-card:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+.qa-home-list-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.qa-home-list-heading h2 { margin: 0 0 .4rem; }
+.qa-home-list-heading p { margin: 0; color: var(--text-muted); }
+.qa-home-list-heading > span { flex: 0 0 auto; color: var(--text-muted); font-size: .85rem; padding-top: .3rem; }
+.qa-hub .qa-review-card.is-live { border-inline-start: 4px solid var(--teal); }
+.qa-hub .qa-review-card > .qa-home-card-link { color: var(--teal-text); font-weight: 600; margin-top: .4rem; }
+.qa-home-empty { border: 1px dashed var(--line-strong); border-radius: var(--radius-md); padding: 1.5rem; margin-top: .5rem; }
+.qa-home-empty h3 { margin: 0 0 .5rem; }
+.qa-home-empty p { color: var(--text-muted); margin: 0 0 1rem; }
+@media (max-width: 600px) { .qa-home-review-tabs { gap: .6rem; } .qa-hub .qa-home-review-view { flex-basis: calc(50% - .6rem); padding: .85rem; } .qa-home-list-heading { flex-direction: column; gap: .5rem; } }

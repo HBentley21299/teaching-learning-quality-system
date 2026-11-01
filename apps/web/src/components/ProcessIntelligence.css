@@ -1,0 +1,40 @@
+.process-intelligence { display: grid; gap: 1rem; min-width: 0; }
+.process-intelligence-heading { display: flex; justify-content: space-between; align-items: start; gap: 1rem; padding: .3rem 0; }
+.process-intelligence-heading h2 { margin: .25rem 0; font-size: clamp(1.35rem, 2.1vw, 1.85rem); }
+.process-intelligence-heading p, .process-intelligence header p { color: var(--text-muted); line-height: 1.55; font-size: .84rem; margin: .4rem 0 0; }
+.process-intelligence .eyebrow { display: flex; align-items: center; gap: .4rem; color: var(--teal); font-size: .7rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.process-intelligence-selection { display: inline-flex; gap: .45rem; align-items: center; border-radius: 2rem; padding: .6rem .8rem; background: var(--surface-muted); color: var(--text-muted); font-size: .76rem; max-width: 21rem; overflow-wrap: anywhere; }
+.process-intelligence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; min-width: 0; }
+.process-intelligence-grid > .panel, .process-intelligence-register { min-width: 0; padding: 1.15rem; }
+.process-intelligence h3 { font-size: 1.05rem; margin: .3rem 0; }
+.process-intelligence-progress > div { display: flex; align-items: center; gap: 1.5rem; margin-top: 1rem; }
+.process-intelligence-progress > div > p { color: var(--text-muted); line-height: 1.6; font-size: .84rem; }
+.process-intelligence-progress .dashboard-visual-ring { flex-shrink: 0; }
+.process-intelligence-progress > small, .process-intelligence-attention > div > small { color: var(--text-muted); display: block; font-size: .75rem; line-height: 1.5; margin-top: .6rem; }
+.process-intelligence-chart header { margin-bottom: 1rem; }
+.process-intelligence-more { margin-top: .6rem; }
+.process-intelligence-more > summary { color: var(--teal); cursor: pointer; padding: .65rem; font-size: .8rem; border-radius: .5rem; }
+.process-intelligence-attention > div { display: grid; gap: .3rem; margin-top: .8rem; }
+.process-intelligence-attention > div > button { display: flex; justify-content: space-between; align-items: center; width: 100%; text-align: left; border: 1px solid transparent; background: var(--surface-muted); padding: .75rem; gap: .8rem; border-radius: .7rem; color: var(--text); cursor: pointer; }
+.process-intelligence-attention button strong, .process-intelligence-attention button small { display: block; overflow-wrap: anywhere; }
+.process-intelligence-attention button strong { font-size: .83rem; }
+.process-intelligence-attention button small { color: var(--text-muted); margin-top: .2rem; line-height: 1.4; font-size: .73rem; }
+.process-intelligence-attention > div > button:hover { border-color: var(--teal); }
+.process-intelligence-register > header { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
+.process-intelligence-filters { display: grid; grid-template-columns: minmax(9rem, .8fr) minmax(12rem, 1.6fr) minmax(9rem, 1fr) minmax(12rem, 1fr); gap: .75rem; margin-top: 1rem; }
+.process-intelligence-filters .entry-field { min-width: 0; display: grid; gap: .35rem; align-content: start; }
+.process-intelligence-filters .entry-field > span:first-child { font-size: .76rem; font-weight: 650; color: var(--text-muted); }
+.process-intelligence-filters select, .process-intelligence-search { min-width: 0; width: 100%; border: 1px solid var(--line); border-radius: .6rem; min-height: 2.6rem; background: var(--surface); color: var(--text); font: inherit; font-size: .8rem; padding: .55rem; }
+.process-intelligence-search { display: flex; gap: .4rem; align-items: center; }
+.process-intelligence .process-intelligence-search input[type="search"] { width: 100%; min-width: 0; min-height: 0; border: 0; outline: 0; box-shadow: none; padding: 0; background: transparent; color: inherit; font: inherit; }
+.process-intelligence-search:focus-within, .process-intelligence :is(button, a, summary, select, .table-shell):focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.process-intelligence-table { max-width: 100%; overflow-x: auto; border-radius: .75rem; }
+.process-intelligence-table table { min-width: 780px; width: 100%; }
+.process-intelligence-table td { vertical-align: top; max-width: 26rem; overflow-wrap: anywhere; }
+.process-intelligence-table td small { display: block; font-size: .75rem; color: var(--text-muted); line-height: 1.5; margin-top: .3rem; }
+.process-intelligence-table a { color: var(--teal); font-weight: 650; text-underline-offset: .2rem; }
+.process-intelligence-table .process-intelligence-record-link { display: inline-block; margin-top: .4rem; font-size: .75rem; }
+.process-intelligence-empty { color: var(--text-muted); padding: 1rem 0; font-size: .84rem; }
+@media (max-width: 1100px) { .process-intelligence-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .process-intelligence-grid { grid-template-columns: minmax(0, 1fr); } .process-intelligence-heading, .process-intelligence-register > header { flex-direction: column; } .process-intelligence-grid > .panel, .process-intelligence-register { padding: .9rem; } .process-intelligence-progress > div { gap: .9rem; } }
+@media (max-width: 420px) { .process-intelligence-filters { grid-template-columns: minmax(0, 1fr); } .process-intelligence-progress > div { flex-direction: column; align-items: start; } }

@@ -11,7 +11,7 @@ export const formFamilies = [
   { key: "als_liv", label: "ALS LIV", lists: ["als_liv_delivery_area", "als_liv_course_level", "als_liv_visit_focus_area", "als_liv_development_opportunity", "action_theme_als_liv"], settings: "Practitioner areas" },
   { key: "probation", label: "Probation observation", lists: ["action_theme_probation_observation"] },
   { key: "uco", label: "UCO TLA review", lists: ["action_theme_uco_tla_review"] },
-  { key: "actions", label: "Standalone actions", lists: ["action_theme_standalone"] },
+  { key: "actions", label: "Earlier unlinked actions", lists: ["action_theme_standalone"] },
   { key: "all_lists", label: "All shared lists", lists: [] }
 ] satisfies Array<{ key: string; label: string; templateModule?: string; lists: string[]; settings?: string }>;
 

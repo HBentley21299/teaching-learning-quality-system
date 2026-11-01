@@ -422,6 +422,7 @@ function CoachingSessionEditor({
   const hasOtherFocus = form.primaryFocusKey === "other" || form.secondaryFocusKey === "other";
   const hasOtherSupport = form.supportTypes.includes("other");
   const maxActions = configuration?.maxActionsPerSession ?? 3;
+  const hasUnmanagedActiveActions = previousActions.some(action => action.canManageAction !== true && !["completed", "closed"].includes(action.status));
 
   function update<K extends keyof SaveCoachingSessionRequest>(key: K, value: SaveCoachingSessionRequest[K]) {
     onChange({ ...form, [key]: value });
@@ -434,6 +435,7 @@ function CoachingSessionEditor({
   }
 
   function updateReview(actionId: string, changes: Partial<CoachingActionReview>) {
+    if (!editable || previousActions.find(action => action.actionId === actionId)?.canManageAction !== true) return;
     const existing = form.actionReviews.find((item) => item.actionId === actionId);
     const next = existing
       ? form.actionReviews.map((item) => item.actionId === actionId ? { ...item, ...changes } : item)
@@ -458,10 +460,12 @@ function CoachingSessionEditor({
   }
 
   function updateAction(index: number, changes: Partial<CoachingSessionAction>) {
+    if (!editable || form.actions[index]?.id && form.actions[index].canManageAction !== true) return;
     update("actions", form.actions.map((action, actionIndex) => actionIndex === index ? { ...action, ...changes } : action));
   }
 
   function removeAction(index: number) {
+    if (!editable || form.actions[index]?.id) return;
     update("actions", form.actions.filter((_, actionIndex) => actionIndex !== index).map((action, actionIndex) => ({ ...action, actionOrder: actionIndex + 1 })));
   }
 
@@ -528,6 +532,8 @@ function CoachingSessionEditor({
                         {action.intendedImpact ? <p><strong>{content.field("intendedImpact", "Intended impact").label}:</strong> {action.intendedImpact}{content.field("intendedImpact", "Intended impact").helpText ? <small>{content.field("intendedImpact", "Intended impact").helpText}</small> : null}</p> : null}
                       </div>
                     ) : null}
+                    {action.canManageAction !== true ? <p className="muted-copy">Action review is read-only. Its creator, their management hierarchy, Admin or Teaching &amp; Learning can update it.</p> : null}
+                    <fieldset disabled={action.canManageAction !== true} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
                     <div className="coaching-form-grid coaching-form-grid-2">
                       <TextAreaField label={content.field("progressUpdate", "Progress, evidence or update").label} prompt={content.field("progressUpdate", "Progress, evidence or update").helpText} onChange={(value) => updateReview(action.actionId, { progressUpdate: value })} rows={2} value={review?.progressUpdate} />
                       <TextAreaField label={content.field("impactObserved", "Impact observed").label} prompt={content.field("impactObserved", "Impact observed").helpText} onChange={(value) => updateReview(action.actionId, { impactObserved: value })} rows={2} value={review?.impactObserved} />
@@ -539,6 +545,7 @@ function CoachingSessionEditor({
                         <ActionFields validationError={validationError} action={review.revisedAction} coachName={coachName} index={0} staffName={staffName} onChange={(changes) => updateReview(action.actionId, { revisedAction: { ...review.revisedAction!, ...changes } })} />
                       </div>
                     ) : null}
+                    </fieldset>
                   </article>
                 );
               })}
@@ -578,15 +585,17 @@ function CoachingSessionEditor({
               {form.actions.map((action, index) => (
                 <article className="coaching-action-card" key={action.id ?? index}>
                   <div className="coaching-action-card-heading"><strong>Action {index + 1}</strong><button className="icon-button" disabled={Boolean(action.id)} onClick={() => removeAction(index)} title={action.id ? "Published actions cannot be removed" : "Remove action"} type="button"><Trash2 size={16} aria-hidden="true" /></button></div>
-                  <ActionFields validationError={validationError} action={action} coachName={coachName} index={index} staffName={staffName} onChange={(changes) => updateAction(index, changes)} />
+                  {action.id && action.canManageAction !== true ? <p className="muted-copy">This saved action is read-only for your account.</p> : null}
+                  <fieldset disabled={Boolean(action.id) && action.canManageAction !== true} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><ActionFields validationError={validationError} action={action} coachName={coachName} index={index} staffName={staffName} onChange={(changes) => updateAction(index, changes)} /></fieldset>
                 </article>
               ))}
             </div>
           )}
           <label className="coaching-cycle-close">
-            <input checked={form.closeCycle} onChange={(event) => update("closeCycle", event.target.checked)} type="checkbox" />
+            <input checked={form.closeCycle} disabled={hasUnmanagedActiveActions} onChange={(event) => update("closeCycle", event.target.checked)} type="checkbox" />
             <span><strong>Complete this session and close the coaching cycle</strong><small>All carried actions must be completed or closed. A new action is not required when the cycle is formally closed.</small></span>
           </label>
+          {hasUnmanagedActiveActions ? <p className="muted-copy">An action creator or their management hierarchy must resolve the read-only carried actions before this cycle can close. You can still save the session.</p> : null}
         </CoachingSection>
       </fieldset>
 
@@ -744,8 +753,10 @@ function validateCompletion(form: SaveCoachingSessionRequest, previousActions: C
   if (!form.conversationSummary?.trim()) return { id: "coaching-conversation", message: "Add the conversation summary." };
   if (form.supportTypes.includes("other") && !form.supportOtherText?.trim()) return { id: "coaching-support-other", message: "Describe the support type selected as Other." };
   if (form.actions.length > maxActions) return { id: "coaching-actions-section", message: `This session can contain no more than ${maxActions} actions.` };
-  const unreviewed = previousActions.find(action => !form.actionReviews.find(review => review.actionId === action.actionId)?.reviewOutcome);
+  const unreviewed = previousActions.find(action => action.canManageAction === true && !form.actionReviews.find(review => review.actionId === action.actionId)?.reviewOutcome);
   if (unreviewed) return { id: `coaching-review-${unreviewed.actionId}`, message: "Record a review outcome for every active action." };
+  const unmanagedActive = form.closeCycle ? previousActions.find(action => action.canManageAction !== true && !["completed", "closed"].includes(action.status)) : undefined;
+  if (unmanagedActive) return { id: `coaching-review-${unmanagedActive.actionId}`, message: "Ask the action creator or their management hierarchy to resolve the read-only action before closing this cycle." };
   const unclosed = form.closeCycle ? form.actionReviews.find(review => review.reviewOutcome && !["completed", "closed_without_completion"].includes(review.reviewOutcome)) : undefined;
   if (unclosed) return { id: `coaching-review-${unclosed.actionId}`, message: "Complete or close every previous action before closing the coaching cycle." };
   const actions = [...form.actions, ...form.actionReviews.filter(review => review.reviewOutcome === "revised" && review.revisedAction).map(review => review.revisedAction!)].filter(action => action.actionText.trim());

@@ -53,24 +53,7 @@ public sealed partial class SqlFoundationDataStore
                     reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3)),
                 cancellationToken);
 
-        var rubric = await QueryAsync(
-            """
-            SELECT descriptor.id, descriptor.descriptor_key, descriptor.visible_wording,
-                   descriptor.guidance_text, descriptor.display_order,
-                   descriptor.colour_classification, descriptor.colour_hex
-            FROM quality.elevate_practice_rubric_descriptors descriptor
-            JOIN quality.elevate_practice_frameworks framework ON framework.id = descriptor.framework_id
-            WHERE framework.is_active = 1
-              AND framework.archived_at IS NULL
-              AND descriptor.is_active = 1
-              AND descriptor.archived_at IS NULL
-            ORDER BY descriptor.display_order;
-            """,
-            null,
-            reader => new CoachingRubricOptionSummary(
-                reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                reader.GetInt32(4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6)),
-            cancellationToken);
+        var rubric = await ReadCurrentPracticeRubricAsync(cancellationToken);
 
         var maxActions = await QueryAsync(
             """
@@ -89,6 +72,26 @@ public sealed partial class SqlFoundationDataStore
             rubric,
             maxActions.FirstOrDefault(3));
     }
+
+    // Learning Walks and Digital Learning Walks use the same active, administrator-managed descriptors.
+    private Task<IReadOnlyList<CoachingRubricOptionSummary>> ReadCurrentPracticeRubricAsync(CancellationToken cancellationToken) => QueryAsync(
+            """
+            SELECT descriptor.id, descriptor.descriptor_key, descriptor.visible_wording,
+                   descriptor.guidance_text, descriptor.display_order,
+                   descriptor.colour_classification, descriptor.colour_hex
+            FROM quality.elevate_practice_rubric_descriptors descriptor
+            JOIN quality.elevate_practice_frameworks framework ON framework.id = descriptor.framework_id
+            WHERE framework.is_active = 1
+              AND framework.archived_at IS NULL
+              AND descriptor.is_active = 1
+              AND descriptor.archived_at IS NULL
+            ORDER BY descriptor.display_order;
+            """,
+            null,
+            reader => new CoachingRubricOptionSummary(
+                reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.GetInt32(4), GetStringOrNull(reader, 5), GetStringOrNull(reader, 6)),
+            cancellationToken);
 
     public async Task<int> UpdateCoachingConfigurationAsync(
         UpdateCoachingConfigurationRequest request,
@@ -218,7 +221,7 @@ public sealed partial class SqlFoundationDataStore
         var nextSessionNumber = selectedCycle is null ? 1 : selectedCycle.SessionCount + 1;
         var previousActions = selectedCycle is null
             ? []
-            : await GetCoachingPreviousActionsAsync(selectedCycle.Id, null, null, cancellationToken);
+            : await GetCoachingPreviousActionsAsync(selectedCycle.Id, null, null, currentUser, cancellationToken);
 
         return new CoachingContextSummary(
             staffRows[0].Id,
@@ -345,7 +348,7 @@ public sealed partial class SqlFoundationDataStore
         }
 
         var row = rows[0];
-        var previousActions = await GetCoachingPreviousActionsAsync(row.CycleId, row.SessionNumber, row.Id, cancellationToken);
+        var previousActions = await GetCoachingPreviousActionsAsync(row.CycleId, row.SessionNumber, row.Id, currentUser, cancellationToken);
         var actionReviews = await QueryAsync(
             """
             SELECT review.action_id, review.review_outcome, review.progress_update, review.impact_observed,
@@ -412,6 +415,11 @@ public sealed partial class SqlFoundationDataStore
                 GetGuidOrNull(reader, 10)),
             cancellationToken);
 
+        var manageableActions = await GetManageableCoachingActionIdsAsync(actions.Where(action => action.Id.HasValue).Select(action => action.Id!.Value)
+            .Concat(actionReviews.Where(review => review.RevisedAction?.Id is not null).Select(review => review.RevisedAction!.Id!.Value)), currentUser, cancellationToken);
+        actions = actions.Select(action => action with { CanManageAction = action.Id.HasValue && manageableActions.Contains(action.Id.Value) }).ToArray();
+        actionReviews = actionReviews.Select(review => review with { RevisedAction = review.RevisedAction is null ? null : review.RevisedAction with
+            { CanManageAction = review.RevisedAction.Id.HasValue && manageableActions.Contains(review.RevisedAction.Id.Value) } }).ToArray();
         var canEdit = currentUser.HasPermission(PermissionKeys.CoachingManage)
             || row.CreatedByUserAccountId == currentUser.UserAccountId
             || row.CoachStaffId == currentUser.StaffId;
@@ -599,7 +607,7 @@ public sealed partial class SqlFoundationDataStore
             await UpdateCoachingSessionAsync(
                 connection, transaction, targetSessionId, request, currentUser.UserAccountId.Value, cancellationToken);
             await ValidateCoachingActionReviewCoverageAsync(
-                connection, transaction, cycleId, sessionNumber, request, cancellationToken);
+                connection, transaction, cycleId, sessionNumber, request, currentUser, cancellationToken);
             await SaveCoachingSessionActionsAsync(
                 connection, transaction, targetSessionId, recordId, request.StaffId, coachStaffId,
                 request.Actions ?? [], request.Status, currentUser, cancellationToken);
@@ -720,6 +728,7 @@ public sealed partial class SqlFoundationDataStore
         Guid cycleId,
         int? beforeSessionNumber,
         Guid? reviewSessionId,
+        CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
         if (beforeSessionNumber is <= 1)
@@ -727,7 +736,7 @@ public sealed partial class SqlFoundationDataStore
             return [];
         }
 
-        return await QueryAsync(
+        var actions = await QueryAsync(
             """
             SELECT action.id, action.title, COALESCE(action.owner_context, 'staff'),
                    CASE
@@ -795,6 +804,8 @@ public sealed partial class SqlFoundationDataStore
                 GetStringOrNull(reader, 9),
                 GetStringOrNull(reader, 10)),
             cancellationToken);
+        var manageable = await GetManageableCoachingActionIdsAsync(actions.Select(action => action.ActionId), currentUser, cancellationToken);
+        return actions.Select(action => action with { CanManageAction = manageable.Contains(action.ActionId) }).ToArray();
     }
 
     private async Task<CoachingCoachRow> ResolveCoachAsync(
@@ -1027,6 +1038,7 @@ public sealed partial class SqlFoundationDataStore
         Guid cycleId,
         int sessionNumber,
         SaveCoachingSessionRequest request,
+        CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
         if (!request.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) || sessionNumber <= 1)
@@ -1067,9 +1079,13 @@ public sealed partial class SqlFoundationDataStore
             .Where(review => !string.IsNullOrWhiteSpace(review.ReviewOutcome))
             .GroupBy(review => review.ActionId)
             .ToDictionary(group => group.Key, group => group.Last().ReviewOutcome!, EqualityComparer<Guid>.Default);
-        if (expected.Any(actionId => !submitted.ContainsKey(actionId)))
+        foreach (var actionId in expected)
         {
-            throw new WorkflowValidationException("Record a review outcome for every active action before completing this session.");
+            var canManage = await CanManageActionAsync(connection, transaction, actionId, currentUser, cancellationToken);
+            if (!canManage && request.CloseCycle)
+                throw new WorkflowValidationException("An active action must be resolved by its creator, their management hierarchy, Teaching & Learning or an Administrator before closing the coaching cycle.");
+            if (canManage && !submitted.ContainsKey(actionId))
+                throw new WorkflowValidationException("Record a review outcome for every active action you can manage before completing this session.");
         }
 
         if (request.CloseCycle && !CoachingCycleWorkflow.CanCloseCycle(submitted.Values))
@@ -1123,6 +1139,9 @@ public sealed partial class SqlFoundationDataStore
                 await validateCommand.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            if (await PreserveUnmanagedCoachingReviewAsync(connection, transaction, sessionId, review, staffId, coachStaffId, sessionStatus, currentUser, cancellationToken))
+                continue;
+
             Guid? existingRevisedActionId = null;
             await using (var existingCommand = new SqlCommand(
                 """
@@ -1162,6 +1181,7 @@ public sealed partial class SqlFoundationDataStore
             }
             else if (existingRevisedActionId.HasValue)
             {
+                await EnsureCanManageActionAsync(connection, transaction, existingRevisedActionId.Value, currentUser, cancellationToken);
                 await using var archiveRevised = new SqlCommand(
                     """
                     UPDATE quality.actions
@@ -1263,6 +1283,7 @@ public sealed partial class SqlFoundationDataStore
             await actionCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        await EnsureCanRemoveCoachingReviewsAsync(connection, transaction, sessionId, submittedActionIds, currentUser, cancellationToken);
         await using var removeCommand = new SqlCommand(
             """
             DELETE FROM quality.coaching_action_reviews
@@ -1295,22 +1316,6 @@ public sealed partial class SqlFoundationDataStore
         CancellationToken cancellationToken)
     {
         var existing = new HashSet<Guid>();
-        await using (var shiftCommand = new SqlCommand(
-            """
-            UPDATE quality.actions
-            SET source_display_order = source_display_order + 1000
-            WHERE source_sub_record_type = 'coaching_session'
-              AND source_sub_record_id = @sessionId
-              AND parent_action_id IS NULL
-              AND archived_at IS NULL;
-            """,
-            connection,
-            transaction))
-        {
-            shiftCommand.Parameters.AddWithValue("@sessionId", sessionId);
-            await shiftCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
         await using (var existingCommand = new SqlCommand(
             """
             SELECT id
@@ -1349,6 +1354,7 @@ public sealed partial class SqlFoundationDataStore
 
         foreach (var removed in existing.Except(retained))
         {
+            await EnsureCanManageActionAsync(connection, transaction, removed, currentUser, cancellationToken);
             await using var archiveCommand = new SqlCommand(
                 """
                 UPDATE quality.actions
@@ -1382,6 +1388,12 @@ public sealed partial class SqlFoundationDataStore
         CurrentUser currentUser,
         CancellationToken cancellationToken)
     {
+        var savedAction = await ReadCoachingActionSnapshotAsync(connection, transaction, actionId, cancellationToken);
+        if (savedAction is not null && !await CanManageActionAsync(connection, transaction, actionId, currentUser, cancellationToken))
+        {
+            if (CoachingActionIsUnchanged(savedAction, request, sessionId, staffId, coachStaffId, parentActionId, sessionStatus)) return;
+            await EnsureCanManageActionAsync(connection, transaction, actionId, currentUser, cancellationToken);
+        }
         var progressStatus = request.Status.ToLowerInvariant();
         var centralStatus = CoachingCycleWorkflow.GetCentralActionStatus(progressStatus);
         var isComplete = centralStatus == "complete";

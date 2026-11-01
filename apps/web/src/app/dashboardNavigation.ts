@@ -2,8 +2,8 @@ export type DashboardSection = "summary" | "data" | "actions" | "coverage";
 export const dashboardDescriptions: Record<string, string> = {
   overview: "Activity, practice outcomes and follow-up across the college.",
   learning_walk: "Walks, delivery areas, teaching themes and recorded practice.",
-  digital_learning_walk: "Team and area digital reviews, statement ratings and linked evidence samples.",
-  activate_growth_review: "Faculty growth review cycles, dated Teams summaries, native actions and impact.",
+  digital_learning_walk: "Digital review categories, statement ratings, team reach and follow-up actions.",
+  activate_growth_review: "Named growth reviews, Skills Scan results, meeting notes, linked follow-ups and actions.",
   liv: "Named staff, review cycles, visits, discussions and follow-up.",
   als_learning_walk: "ALS learning walks, focus areas and practice outcomes.",
   als_liv: "ALS staff reviews, practitioner areas, visits and follow-up.",

@@ -22,9 +22,9 @@ const action = (id = 'action-a', overrides = {}) => ({
 });
 function text(node) { return Array.isArray(node) ? node.map(text).join('') : node?.props ? text(node.props.children) : node == null || typeof node === 'boolean' ? '' : String(node); }
 
-async function panel({ initialAction = action(), getAction = () => initialAction, saveAction = (_id, request) => ({ ok: true, data: { ...initialAction, ...request, rowVersion: 'saved-version' } }), revision = 'register-v1', onChanged = async () => {} } = {}) {
+async function panel({ initialAction = action(), getAction = () => initialAction, saveAction = (_id, request) => ({ ok: true, data: { ...initialAction, ...request, rowVersion: 'saved-version' } }), revision = 'register-v1', onChanged = async () => {}, ...extraProps } = {}) {
   let cursor = 0, tree, needsRender = true, mounted = true;
-  let props = { actionId: initialAction.actionId, revision, onChanged };
+  let props = { actionId: initialAction.actionId, revision, onChanged, ...extraProps };
   const slots = [], effects = [], loads = [], saves = [], registered = [];
   const hooks = {
     useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = { value: typeof initial === 'function' ? initial() : initial }; return [slots[index].value, next => { const value = typeof next === 'function' ? next(slots[index].value) : next; if (!Object.is(value, slots[index].value)) { slots[index].value = value; needsRender = true; } }]; },
@@ -65,7 +65,8 @@ async function panel({ initialAction = action(), getAction = () => initialAction
     markup: () => renderToStaticMarkup(tree),
     editor: () => registered.at(-1),
     async change(label, value) { const input = control(label); assert.ok(input, `Missing input ${label}`); input.props.onChange({ target: { value } }); await settle(); },
-    async save() { const save = nodes().find(node => node.type === Button && /Save dated update|Saving…/.test(text(node.props.children))); assert.ok(save, 'Missing save action'); assert.equal(Boolean(save.props.disabled), false, 'Save should be available for an edited action'); save.props.onClick(); await settle(); },
+    async save() { const save = nodes().find(node => node.type === Button && /Save dated update|Saving…|Confirm close action|Confirm extension|Confirm reopen action/.test(text(node.props.children))); assert.ok(save, 'Missing save action'); assert.equal(Boolean(save.props.disabled), false, 'Save should be available for an edited action'); save.props.onClick(); await settle(); },
+    async click(label) { const button = nodes().find(node => node.type === Button && text(node.props.children) === label); assert.ok(button, `Missing button ${label}`); button.props.onClick(); await settle(); },
     renderBeforeEffects(next) { props = { ...props, ...next }; render(); return renderToStaticMarkup(tree); },
     async rerender(next) { props = { ...props, ...next }; needsRender = true; await settle(); },
     unmount() { mounted = false; slots.forEach(slot => slot.cleanup?.()); }
@@ -179,7 +180,7 @@ test('Activate actions show the streamlined context and retain every responsible
   assert.match(page.markup(), /First Colleague; Second Colleague/);
   assert.match(page.markup(), /Impact measures/);
   assert.doesNotMatch(page.markup(), /Impact assessment|Support required|Teams links here/);
-  await page.change('Progress update', 'Both colleagues reviewed the revised resources.');
+  await page.change('Distance travelled and outcome', 'Both colleagues reviewed the revised resources.');
   await page.save();
   assert.deepEqual(page.saves[0].request.responsibleStaffIds, ['owner-shared', 'second-person']);
   assert.equal(page.saves[0].request.impactAreaKey, 'digital_teaching');
@@ -188,7 +189,9 @@ test('Activate actions show the streamlined context and retain every responsible
 
 test('changing an Activate review date keeps both native and central action dates aligned', async () => {
   const page = await panel({ initialAction: action('activate', { processKey: 'activate_growth_review', reviewDate: '2027-01-15' }) });
-  await page.change('Review date', '2027-02-12');
+  await page.click('Extend action');
+  await page.change('Distance travelled and outcome', 'The revised resources are in use; learner feedback will be reviewed next month.');
+  await page.change('New review date', '2027-02-12');
   await page.save();
   assert.equal(page.saves.length, 0);
   assert.match(page.markup(), /Explain why the review date/);
@@ -196,6 +199,51 @@ test('changing an Activate review date keeps both native and central action date
   await page.save();
   assert.equal(page.saves[0].request.reviewDate, '2027-02-12');
   assert.equal(page.saves[0].request.dueDate, '2027-02-12');
+  assert.equal(page.saves[0].request.progress, 'extended');
+});
+
+test('native follow-up closure records distance travelled against the original action and current review context', async () => {
+  let refreshed = 0;
+  const page = await panel({ initialAction: action('previous', { processKey: 'activate_growth_review', responsibleStaffIds: ['first', 'second'] }), reviewRecordId: 'follow-up-review', initialOutcome: 'close', onChanged: async () => { refreshed++; } });
+  await page.save();
+  assert.equal(page.saves.length, 0); assert.match(page.markup(), /Record the distance travelled and outcome/);
+  await page.change('Distance travelled and outcome', 'The agreed resources are now used independently by learners, meeting the impact measures.');
+  await page.save();
+  assert.equal(page.saves.length, 1); assert.equal(page.saves[0].id, 'previous');
+  assert.equal(page.saves[0].request.reviewRecordId, 'follow-up-review');
+  assert.equal(page.saves[0].request.progress, 'complete');
+  assert.deepEqual(page.saves[0].request.responsibleStaffIds, ['first', 'second']);
+  assert.equal(page.saves[0].request.rowVersion, 'row-previous-1'); assert.equal(refreshed, 1);
+  assert.equal(page.editor().dirty, false);
+});
+
+test('native extension rejects unchanged or earlier dates and retains conflicting follow-up notes', async () => {
+  const page = await panel({ initialAction: action('extend', { processKey: 'activate_growth_review', reviewDate: '2027-01-15' }), reviewRecordId: 'follow-up-review', initialOutcome: 'extend', saveAction: () => ({ ok: false, message: 'Reload this changed action before saving.' }) });
+  await page.change('Distance travelled and outcome', 'Practice has improved; a further cycle will test consistency.');
+  await page.save(); assert.equal(page.saves.length, 0); assert.match(page.markup(), /after the current review date/);
+  await page.change('New review date', '2027-01-10'); await page.save(); assert.equal(page.saves.length, 0);
+  await page.change('New review date', '2027-02-15'); await page.change('Reason for changing the review date', 'Allow a further teaching cycle.'); await page.save();
+  assert.equal(page.saves.length, 1); assert.equal(page.saves[0].request.progress, 'extended');
+  assert.equal(page.control('Distance travelled and outcome').props.value, 'Practice has improved; a further cycle will test consistency.');
+  assert.equal(page.control('New review date').props.value, '2027-02-15');
+  assert.equal(page.editor().dirty, true); assert.match(page.markup(), /Reload this changed action/);
+});
+
+test('read-only action viewers cannot trigger an outcome even when the form itself is accessible', async () => {
+  const page = await panel({ initialAction: action('readonly', { processKey: 'activate_growth_review', canEdit: false }), initialOutcome: 'close', reviewRecordId: 'follow-up-review' });
+  assert.match(page.markup(), /Only the action creator, their management hierarchy/);
+  const fieldset = page.nodes().find(node => node.type === 'fieldset'); assert.equal(fieldset.props.disabled, true);
+  await page.click('Close action');
+  assert.equal(page.editor().dirty, false); assert.equal(page.saves.length, 0);
+});
+
+test('a failed action reload removes stale edit capability and outcome controls', async () => {
+  const page = await panel({ initialAction: action('revoked', { processKey: 'activate_growth_review' }), getAction: (_id, count) => { if (count > 1) throw new Error('This action is no longer available.'); return action('revoked', { processKey: 'activate_growth_review' }); } });
+  assert.match(page.markup(), /Close action/);
+  await page.click('Reload latest action');
+  assert.match(page.markup(), /This action is no longer available/);
+  assert.doesNotMatch(page.markup(), /Close action|Extend action|Distance travelled and outcome/);
+  assert.equal(page.editor().dirty, false); assert.equal(page.saves.length, 0);
 });
 
 test('earlier Activate support and dated impact evidence remain readable without reintroducing impact inputs', async () => {

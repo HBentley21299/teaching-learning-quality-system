@@ -134,4 +134,121 @@ public sealed class ProcessReviewRulesTests
         ProcessReviewRules.ValidateAction(action,config);
         Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateAction(action with{ImpactAreaKey=config.ActionThemes[0].Key},config));
     }
+
+    [Fact]
+    public void Digital_focus_selection_validates_only_selected_criteria_and_does_not_mutate_the_input()
+    {
+        var config=ProcessReviewRules.DefaultConfiguration(ProcessReviewRules.Digital) with{RatingOptions=[new("a","College A"),new("b","College B")]};
+        var selected=new[]{config.Standards[0].Statements[0].Key,config.Standards[1].Statements[0].Key};
+        var excluded=config.Standards[2].Statements[0].Key;
+        var data=Empty with{Digital=new(selected,[]),Samples=[new("sample","Evidence","learner_work",null,null,[],null,null)],
+            Responses=[new(selected[0],"a",["sample"],null),new(excluded,"old-unselected-rating",["old-unselected-sample"],"Hidden prior input"),new(selected[1],"b",["sample"],null)]};
+        var formal=new SaveProcessReviewRequest("Digital Learning Walk","2026/27",Guid.NewGuid(),Guid.NewGuid(),new DateOnly(2026,10,30),data,true);
+        ProcessReviewRules.ValidateSave(formal,config);
+        var normalized=ProcessReviewRules.NormalizeDigitalData(data,config);
+        Assert.Equal(2,normalized.Responses.Count);Assert.Equal(3,data.Responses.Count);
+        Assert.Equal(selected,ProcessReviewRules.SelectedDigitalStatements(config,normalized).Select(statement=>statement.Key));
+        Assert.DoesNotContain(normalized.Responses,response=>response.StatementKey==excluded);
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(formal with{Data=normalized with{Digital=new([],[])}},config));
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(formal with{Data=normalized with{Digital=new([selected[0],selected[0]],[])}},config));
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(formal with{Data=normalized with{Digital=new(["unknown-criterion"],[])}},config));
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(formal with{Data=normalized with{Digital=null}},config));
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(Draft(data with{Activate=new(false,[],[],[],new Dictionary<string,decimal?>())}),config));
+    }
+
+    [Theory]
+    [InlineData("criterion_notes")]
+    [InlineData("ratings_only")]
+    public void Digital_ratings_do_not_require_rationale_even_when_an_earlier_configuration_required_it(string evidenceMode)
+    {
+        var config=ProcessReviewRules.DefaultConfiguration(ProcessReviewRules.Digital) with
+        {
+            RatingOptions=[new("level_1","1 – Emerging")],
+            Settings=new Dictionary<string,string>{{"evidenceMode",evidenceMode},{"requireSamplePerRating","true"},{"requireRationale","true"}}
+        };
+        var standard=config.Standards[0];
+        var data=Empty with{Digital=new(standard.Statements.Select(statement=>statement.Key).ToArray(),[],[standard.Key]),
+            Responses=standard.Statements.Select(statement=>new ProcessReviewResponse(statement.Key,"level_1",[],null)).ToArray()};
+        var formal=new SaveProcessReviewRequest("Walk","2026/27",Guid.NewGuid(),Guid.NewGuid(),new DateOnly(2026,10,30),data,true);
+        ProcessReviewRules.ValidateSave(formal,config);
+        var earlier=data with{Responses=data.Responses.Select((response,index)=>index==0?response with{Rationale="Earlier saved reasoning"}:response).ToArray()};
+        var normalized=ProcessReviewRules.NormalizeDigitalData(earlier,config);
+        Assert.Equal("Earlier saved reasoning",normalized.Responses[0].Rationale);
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(formal with{Data=data with{Responses=data.Responses.Skip(1).ToArray()}},config));
+        // Earlier clients without typed focus metadata can also submit a complete ratings-only form.
+        ProcessReviewRules.ValidateSave(formal with{Data=Empty with{Responses=config.Standards.SelectMany(category=>category.Statements)
+            .Select(statement=>new ProcessReviewResponse(statement.Key,"level_1",[],null)).ToArray()}},config);
+    }
+
+    [Fact]
+    public void Digital_category_selection_expands_every_child_and_cannot_submit_a_partial_statement_payload()
+    {
+        var config=ProcessReviewRules.DefaultConfiguration(ProcessReviewRules.Digital) with{RatingOptions=[new("level_1","1 – Emerging")]};
+        var categories=new[]{config.Standards[0].Key,config.Standards[1].Key};
+        var statements=config.Standards.Take(2).SelectMany(standard=>standard.Statements).Select(statement=>statement.Key).ToArray();
+        var data=Empty with{Digital=new([statements[0]],[],categories),Responses=[new(statements[0],"level_1",[],"Evidence")]};
+        var normalized=ProcessReviewRules.NormalizeDigitalData(data,config);
+        Assert.Equal(statements,normalized.Digital!.SelectedStatementKeys);Assert.Single(data.Digital!.SelectedStatementKeys);
+        Assert.Equal(statements,ProcessReviewRules.SelectedDigitalStatements(config,data).Select(statement=>statement.Key));
+        Assert.Equal(new[]{3,4},ProcessReviewRules.SelectedDigitalStandards(config,data).Select(standard=>standard.SelectedStatementCount));
+        var formal=new SaveProcessReviewRequest("Walk","2026/27",Guid.NewGuid(),Guid.NewGuid(),new DateOnly(2026,10,30),data,true);
+        var failure=Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(formal,config));
+        Assert.Contains("every statement in the selected categories",failure.Message);
+        // Complete responses succeed even if an old client sends a stale flattened key list.
+        ProcessReviewRules.ValidateSave(formal with{Data=data with{Responses=statements.Select(key=>new ProcessReviewResponse(key,"level_1",[],null)).ToArray()}},config);
+        var outside=config.Standards[2].Statements[0].Key;
+        normalized=ProcessReviewRules.NormalizeDigitalData(data with{Responses=[..data.Responses,new(outside,"retired",[],"Historical input")]},config);
+        Assert.Single(normalized.Responses);Assert.Equal(categories,normalized.Digital!.SelectedStandardKeys);
+    }
+
+    [Fact]
+    public void Digital_category_selection_rejects_invalid_categories_and_explicit_empty_does_not_fall_back_to_old_keys()
+    {
+        var config=ProcessReviewRules.DefaultConfiguration(ProcessReviewRules.Digital) with{RatingOptions=[new("level_1","1 – Emerging")]};
+        var standard=config.Standards[0];var statement=standard.Statements[0].Key;
+        foreach(var categories in new[]{new[]{"unknown"},new[]{standard.Key,standard.Key},new[]{""},new[]{" "}})
+            Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(Draft(Empty with{Digital=new([statement],[],categories)}),config));
+        var empty=Empty with{Digital=new([statement],[],[]),Responses=[new(statement,"level_1",[],null)]};
+        ProcessReviewRules.ValidateSave(Draft(empty),config);
+        var normalized=ProcessReviewRules.NormalizeDigitalData(empty,config);
+        Assert.Empty(normalized.Digital!.SelectedStatementKeys);Assert.Empty(normalized.Responses);
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(new("Walk","2026/27",Guid.NewGuid(),Guid.NewGuid(),new DateOnly(2026,10,30),empty,true),config));
+    }
+
+    [Fact]
+    public void Earlier_partial_digital_focus_remains_exact_until_categories_are_explicitly_selected()
+    {
+        var config=ProcessReviewRules.DefaultConfiguration(ProcessReviewRules.Digital) with{RatingOptions=[new("old","Earlier scale")]};
+        var key=config.Standards[0].Statements[0].Key;
+        var json="""{"fields":{},"samples":[],"responses":[{"statementKey":"$statement","ratingKey":"old","sampleIds":[],"rationale":"Original evidence"}],"digital":{"selectedStatementKeys":["$statement"],"draftActions":[]}}""".Replace("$statement",key,StringComparison.Ordinal);
+        var data=System.Text.Json.JsonSerializer.Deserialize<ProcessReviewData>(json,new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        var normalized=ProcessReviewRules.NormalizeDigitalData(data,config);
+        Assert.Null(normalized.Digital!.SelectedStandardKeys);Assert.Equal(new[]{key},normalized.Digital.SelectedStatementKeys);
+        Assert.Equal(data.Responses,normalized.Responses);Assert.Single(ProcessReviewRules.SelectedDigitalStatements(config,normalized));
+        var category=Assert.Single(ProcessReviewRules.SelectedDigitalStandards(config,normalized));Assert.Equal(3,category.StatementCount);Assert.Equal(1,category.SelectedStatementCount);
+        ProcessReviewRules.ValidateSave(new("Earlier walk","2026/27",Guid.NewGuid(),Guid.NewGuid(),new DateOnly(2026,10,30),normalized,true),config);
+        normalized=ProcessReviewRules.NormalizeDigitalData(data with{Digital=data.Digital! with{SelectedStandardKeys=[config.Standards[0].Key]}},config);
+        Assert.Equal(3,normalized.Digital!.SelectedStatementKeys.Count);Assert.Single(normalized.Responses);
+    }
+
+    [Fact]
+    public void Four_field_digital_actions_can_be_partial_in_a_draft_and_need_no_fabricated_success_evidence()
+    {
+        var config=ProcessReviewRules.DefaultConfiguration(ProcessReviewRules.Digital) with{RatingOptions=[new("a","College category")]};
+        var selected=config.Standards[0].Statements[0].Key;
+        var partial=new DigitalLearningWalkDraftAction(Guid.NewGuid(),"","");
+        var data=Empty with{Digital=new([selected],[partial]),Samples=[new("sample","Evidence","learner_work",null,null,[],null,null)],Responses=[new(selected,"a",["sample"],null)]};
+        ProcessReviewRules.ValidateSave(Draft(data),config);
+        var formal=new SaveProcessReviewRequest("Walk","2026/27",Guid.NewGuid(),Guid.NewGuid(),new DateOnly(2026,10,30),data,true);
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(formal,config));
+        var complete=partial with{Title="Improve the resources",ThemeKey=config.Standards[0].Key,OwnerStaffId=Staff,DueDate=new DateOnly(2026,12,1)};
+        ProcessReviewRules.ValidateSave(formal with{Data=data with{Digital=new([selected],[complete])}},config);
+        var earlier=complete with{DueDate=formal.RecordDate!.Value.AddDays(-1)};
+        ProcessReviewRules.ValidateSave(Draft(data with{Digital=new([selected],[earlier])}),config);
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(formal with{Data=data with{Digital=new([selected],[earlier])}},config));
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateSave(Draft(data with{Digital=new([selected],[partial,partial])}),config));
+        var native=new SaveProcessReviewActionRequest(complete.Title,complete.ThemeKey,Staff,complete.DueDate!.Value,"","");
+        ProcessReviewRules.ValidateAction(native with{Progress="complete"},config);
+        Assert.Throws<WorkflowValidationException>(()=>ProcessReviewRules.ValidateAction(native with{ImpactStatus="demonstrated"},config));
+    }
 }
