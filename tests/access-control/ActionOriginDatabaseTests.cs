@@ -12,6 +12,44 @@ namespace TLQS.AccessControl.Tests;
 public sealed class ActionOriginDatabaseTests
 {
     [AccountAdministrationDatabaseFact]
+    public async Task Dashboard_actions_keep_ordinary_actions_without_assignees_and_shared_responsible_names_once()
+    {
+        await using var db=await OriginDatabase.CreateAsync();
+        await db.SeedNativeMutationActions();
+        await db.Execute("""
+            CREATE TABLE core.academic_years(academic_year_key nvarchar(7),start_date date,end_date date,is_active bit,archived_at datetimeoffset NULL);
+            INSERT core.academic_years VALUES(N'2026/27','2026-08-01','2027-07-31',1,NULL);
+            ALTER TABLE core.records ADD record_date date NULL;
+            ALTER TABLE quality.process_review_action_assignees ADD display_name_snapshot nvarchar(300) NULL;
+            """);
+        await db.Execute("""
+            UPDATE core.records SET record_date='2026-10-01';
+            UPDATE quality.actions SET created_at='2026-10-01T10:00:00+00:00';
+            """);
+        await db.Execute("CREATE FUNCTION org.fn_dashboard_process_unit_visible(@unit uniqueidentifier,@key nvarchar(100))RETURNS bit AS BEGIN RETURN 1;END;");
+        var ordinary=Guid.NewGuid();
+        await db.Execute($"""
+            UPDATE core.records SET record_type=N'activate_growth_review' WHERE id='{db.NativeRecord}';
+            UPDATE quality.actions SET source_form_type=N'activate_growth_review' WHERE id='{db.CurrentUcoAction}';
+            INSERT quality.actions(id,source_record_id,source_form_type,owner_staff_id,action_theme,title,status_lookup_value_id,
+                due_date,original_due_date,visibility_setting,published_to_staff,created_by_user_account_id,created_at)
+            SELECT '{ordinary}','{db.CpdRecord}',N'cpd_event','{db.Staff}',N'Assessment',N'Apply professional learning',id,
+                '2026-12-01','2026-12-01',N'staff_and_management',1,'{db.Account}','2026-10-01T10:00:00+00:00'
+            FROM core.lookup_values WHERE lookup_type_id=(SELECT id FROM core.lookup_types WHERE lookup_key=N'action_status') AND value_key=N'open';
+            """);
+        var expectedNames=Enumerable.Range(1,12).Select(n=>$"Responsible colleague {n:00}").ToArray();
+        foreach(var name in expectedNames)
+            await db.Execute($"INSERT quality.process_review_action_assignees(action_id,staff_id,display_name_snapshot)VALUES('{db.CurrentUcoAction}',NEWID(),N'{name}');");
+        var user=db.User() with{Permissions=new HashSet<string>{PermissionKeys.ReportsViewAll}};
+        var rows=await db.Store().GetDashboardActionsAsync("2026/27",user,CancellationToken.None,"actions");
+        Assert.Equal(5,rows.Count);
+        Assert.Equal(rows.Count,rows.Select(row=>row.Id).Distinct().Count());
+        Assert.Empty(Assert.Single(rows,row=>row.Id==ordinary).ResponsibleStaffNames!);
+        Assert.Equal(expectedNames,Assert.Single(rows,row=>row.Id==db.CurrentUcoAction).ResponsibleStaffNames);
+        Assert.All(rows.Where(row=>row.Id!=db.CurrentUcoAction),row=>Assert.Empty(row.ResponsibleStaffNames!));
+    }
+
+    [AccountAdministrationDatabaseFact]
     public async Task New_actions_resolve_a_real_origin_and_reject_missing_forged_archived_and_native_sources()
     {
         await using var db = await OriginDatabase.CreateAsync(); var store = db.Store(); var user = db.User();

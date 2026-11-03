@@ -518,7 +518,7 @@ public sealed partial class SqlFoundationDataStore
                     false,
                     GetStringOrNull(reader, 14),
                     GetDateOnlyOrNull(reader, 15),
-                    JsonSerializer.Deserialize<JsonElement[]>(reader.GetString(16))?.Select(item => item.GetProperty("name").GetString()!).ToArray());
+                    JsonSerializer.Deserialize<JsonElement[]>(GetStringOrNull(reader, 16) ?? "[]")?.Select(item => item.GetProperty("name").GetString()!).ToArray());
             },
             cancellationToken);
     }
